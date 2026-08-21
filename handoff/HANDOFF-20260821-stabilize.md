@@ -182,8 +182,8 @@ sudo ./.venv/bin/python frlgtrade.py --live --verbose \
 ## 7. 로드맵/백로그 (코드화 우선순위 순)
 
 ### Phase A — 안정화 코어 (P0)
-- [ ] D-1: ldn.scan 타임아웃 래핑 (VM hang 방지)
-- [ ] C-1: free_radio vif 완전 정리 (rename 포함)
+- [x] D-1: ldn.scan 타임아웃 래핑 (VM hang 방지) — ✅ 2026-08-22, 커밋 5fb729f (fail_after(30) + TooSlowError 시 재시도, 오픈코드 ox-alpha 위임)
+- [x] C-1: free_radio vif 완전 정리 (rename 포함) — ✅ 2026-08-22, 커밋 6f747af (대상 phy 전체 netdev 삭제, 타 어댑터 미대상)
 
 ### Phase B — 환경 면역 (P1)
 - [ ] C-3: NM wlx* 전체 unmanaged 설정 (배포 스크립트)

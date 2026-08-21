@@ -43,6 +43,7 @@
 
 ## 다음 단계
 
+0. **P0 안정화 코어 완료 (2026-08-22)**: D-1(ldn.scan fail_after(30) 타임아웃, 커밋 5fb729f) + C-1(free_radio phy 전체 netdev 정리, 커밋 6f747af) — 오픈코드(ox-alpha) 위임, 테스트 9건 통과. **⚠️ Mac 로컬 emu 리포에만 커밋됨 — VM 동기화(tar+scp) 전까지 VM 미적용**
 1. **Phase 2a 완료 (2026-08-21)**: RemoteTransport + 공용 릴레이(`relay/server.py`) + FSM 훅(`_notify_remote`/`apply_remote`) — 테스트 9개 전부 통과 (relay 4 + fsm 5)
 2. **2b (LAN 2브리지)**: 카드 2대 준비 완료 (8188EU + 8192EU, rtl8xxxu 동일 드라이버, 모니터 TX 검증됨). VM 복제 + 릴레이 경유 트레이드가 다음 마일스톤
 3. Phase 3: 세션 ID 매칭 + 클라이언트
