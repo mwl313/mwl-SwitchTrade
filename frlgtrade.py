@@ -19,9 +19,11 @@ OFFLINE self-check (replays a captured host stream through the full RX stack - n
 """
 
 import argparse
+import json
 import os
 import sys
 import time
+import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from frlgsim import crypto as cryptomod, mon as monmod, linkplayer, trade, sim as simmod  # noqa
@@ -103,12 +105,48 @@ def make_engine(args, lg):
     return eng
 
 
+def create_relay_session(relay_url, lg):
+    """role=host with no --session-id: ask the relay to mint a fresh 6-char session id via the
+    standard urllib (no extra deps). Returns the session id string."""
+    req = urllib.request.Request(f"{relay_url}/session/create", method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = resp.read().decode("utf-8")
+    except Exception as e:
+        sys.exit(f"could not create relay session at {relay_url}/session/create: {e}")
+    try:
+        data = json.loads(body)
+        sid = data["session_id"]
+    except (json.JSONDecodeError, KeyError):
+        sys.exit(f"relay /session/create returned an unexpected response: {body!r}")
+    lg(f"[live] relay: created session {sid} at {relay_url}")
+    return sid
+
+
 def run_live(args, lg):
-    lg(f"[live] scanning for FRLG LDN network (nickname={args.ot})...")
     comm_id = int(args.comm_id, 16) if args.comm_id else None
     password = bytes.fromhex(args.password) if args.password else None   # None -> built-in
-    t = tmod.LiveTransport(password=password, nickname=args.ot, keys_path=args.keys,
-                           local_comm_id=comm_id, phyname=args.phy, log=lg).start()
+    if args.relay_url:
+        # Remote relay mode: a leader-leader EMU bridge session over the relay WebSocket. The
+        # RemoteTransport still inherits LiveTransport's LDN join/data plane; the relay is the
+        # game-semantic state channel between the two peers. Host leads (and mints a session id if
+        # none is supplied); a guest must name the host's existing session.
+        role = args.role
+        session_id = args.session_id
+        if role == "host" and not session_id:
+            session_id = create_relay_session(args.relay_url, lg)
+        elif role == "guest" and not session_id:
+            sys.exit("--session-id is required when --role=guest "
+                     "(join the host's existing relay session)")
+        relay_url = f"{args.relay_url}/session/{session_id}/ws?role={role}"
+        lg(f"[live] relay mode: role={role} session={session_id}")
+        t = tmod.RemoteTransport(relay_url=relay_url, session_id=session_id, role=role,
+                                 password=password, nickname=args.ot, keys_path=args.keys,
+                                 local_comm_id=comm_id, phyname=args.phy, log=lg).start()
+    else:
+        lg(f"[live] scanning for FRLG LDN network (nickname={args.ot})...")
+        t = tmod.LiveTransport(password=password, nickname=args.ot, keys_path=args.keys,
+                               local_comm_id=comm_id, phyname=args.phy, log=lg).start()
     pc = cryptomod.PiaCrypto(t.ssid)
     engine = make_engine(args, lg)
     # Pia CONNECTION layer (S0): Net 0x11->0x12, Session(13) join, RTT keepalive. WITHOUT this the
@@ -375,6 +413,17 @@ def main():
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--live", action="store_true", help="join the real Switch")
     mode.add_argument("--replay", metavar="CAPTURE", help="offline: replay a capture's host stream")
+    ap.add_argument("--relay-url", metavar="BASE", default="",
+                    help="(live) remote relay base URL (e.g. http://127.0.0.1:8788). Given, run in "
+                         "remote relay mode: a leader-leader EMU bridge session over the relay "
+                         "WebSocket instead of the local LDN data plane.")
+    ap.add_argument("--session-id", metavar="SID", default="",
+                    help="(live) relay session ID (6 characters) to attach to. Required for "
+                         "--role=guest; --role=host auto-creates a session when omitted.")
+    ap.add_argument("--role", choices=("host", "guest"), default="guest",
+                    help="(live) relay role: host leads the session (auto-creates one if "
+                         "--session-id is omitted); guest joins the host's existing --session-id. "
+                         "Default guest.")
     ap.add_argument("--password", default="", help="LDN passphrase as hex (live); default = "
                     "the built-in 64-byte emulator passphrase (shared by FRLG/RSE)")
     ap.add_argument("--phy", default="phy0", help="wifi phy for the LDN join (live)")
