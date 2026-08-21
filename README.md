@@ -35,9 +35,11 @@
 
 - [x] 리서치 1차 완료 (2026-08-20)
 - [x] 킥오프 문서화
-- [ ] **Phase 0**: 환경 준비 + PoC 재현 (frlg-ldn-trade 로컬 데모)
-- [ ] Phase 1: 코드 분석 + 트랜스포트 확장 지점 식별
-- [ ] Phase 2: PC↔PC 브리지 프로토타입 (LAN → 인터넷)
+- [x] **Phase 0**: 환경 준비 + PoC 재현 — ✅ 트레이드 2세션 연속 성공 (2026-08-21, 마일스톤 M0 달성)
+- [x] Phase 1: 코드 분석 + 트랜스포트 확장 지점 식별 (~90% — RemoteTransport 확장점 확정·구현)
+- [x] Phase 2a: 릴레이 인프라 완성 (RemoteTransport + relay/server.py + FSM 훅, 테스트 9건 통과)
+- [ ] Phase 2b: LAN 2브리지 실기 테스트 (진행 중 — `docs/07-2b-테스트-실측-20260821.md`)
+- [ ] Phase 2c: 인터넷 (NAT 통과) 트레이드
 - [ ] Phase 3: 세션 시스템 + 클라이언트
 - [ ] Phase 4: 확장 (배틀, Gen 2)
 
