@@ -378,7 +378,18 @@ class LiveTransport:
         async def main():
             keys = ldn.load_keys(self.keys_path)
             self.info("Scanning for the FRLG network...")
-            networks = await ldn.scan(keys, phyname=self.phyname)
+            # D-1 (2026-08-22): ldn.scan은 커널 레벨 blocking으로 VM 전체 hang을 유발한
+            # 전례 3회 (handoff/HANDOFF-20260821-stabilize.md 5.1, docs/09-testing-audit D-1).
+            # with_timeout은 deprecated라 fail_after 사용. TooSlowError 시 _err을 남기고
+            # _ready.set() 후 return 하면 start()의 재시도(attempts=3)가 자동으로 이어진다.
+            try:
+                with trio.fail_after(30):
+                    networks = await ldn.scan(keys, phyname=self.phyname)
+            except trio.TooSlowError:
+                self._err = "LDN scan timed out after 30s - radio/driver stuck (see docs/09 D-1)"
+                self.log(f"[live] {self._err}")
+                self._ready.set()
+                return
             joinable = [n for n in networks
                         if n.accept_policy != ldn.ACCEPT_NONE
                         and n.num_participants < n.max_participants]
