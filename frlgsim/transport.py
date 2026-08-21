@@ -429,6 +429,19 @@ class LiveTransport:
                 info = network.info()
                 self.ssid = info.ssid
                 self.iface = self.ifname
+                # MWL (2026-08-21): systemd-udev renames our station vif on this distro
+                # (ldnclient -> wlx<MAC>); sockets bind by NAME, so resolve the live
+                # interface on this phy after a successful join.
+                try:
+                    import glob
+                    for p in glob.glob(f"/sys/class/ieee80211/{self.phyname}/device/net/*"):
+                        name = p.rsplit("/", 1)[-1]
+                        if name != self.ifname:
+                            self.iface = name
+                            self.log(f"[live] udev renamed vif: {self.ifname} -> {name}")
+                            break
+                except Exception:
+                    pass
                 # The host is participant 0 (the network creator); its IP fixes the 169.254.X subnet
                 # [ldn/__init__.py NetworkInfo.participants; the bridge's network_nodes]. Each
                 # ParticipantInfo carries ip_address + mac_address (the 6-byte LDN MAC = the Pia
