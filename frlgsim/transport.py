@@ -474,6 +474,10 @@ class LiveTransport:
     SCENE_ID = 0
     APPLICATION_VERSION = 1
 
+    # WP-D (H-1): 다음 attempt 시작 전 이전 ldn 스레드를 회수하기 위한 유예 시간(초). grace
+    # 내에도 is_alive()면 라디오 상태를 알 수 없으므로 남은 재시도를 포기한다 (아래 start()).
+    THREAD_JOIN_GRACE = 15
+
     def __init__(self, password=None, nickname="EMU", keys_path="~/.switch/prod.keys",
                  local_comm_id=None, scene_id=None, app_version=None,
                  phyname="phy0", ifname="ldnclient", log=print, target_bssid=None):
@@ -511,15 +515,22 @@ class LiveTransport:
         self._err = None
 
     # -- LDN join runs in a trio thread that keeps the connection alive -------
-    def start(self, timeout=30, attempts=3, settle=1.5):
+    def start(self, timeout=45, attempts=3, settle=1.5):
         """Join the LDN network, retrying transient failures. The LDN/nl80211 layer flakes
         intermittently (radio busy, association timeout, a stale vif racing the fresh join) - the
         SAME failure the bridge hits as 'connection failed'. Rather than make the user re-run, we
         free the radio and retry up to `attempts` times, logging each attempt's FULLY-UNWRAPPED
         cause (see _format_join_error) so persistent problems are still diagnosable instead of
-        hidden behind trio's opaque ExceptionGroup."""
+        hidden behind trio's opaque ExceptionGroup.
+
+        WP-D (H-1) 예산 계층: 외부 예산(timeout=45, _ready.wait) > 내부 예산(스캔 fail_after 20)
+        이 되도록 기본값을 30->45로 확대했다 - 같은 30s 예산이 겹치던 구버전은 경계 overlap 시
+        늙은 스레드와 새 attempt가 충돌할 수 있었다."""
         last_err = None
         for attempt in range(1, attempts + 1):
+            # WP-D (H-1): free_radio는 이전 attempt의 스레드가 완전히 join된 '후에만' 호출한다 -
+            # 아직 라디오를 만지는 스레드가 살아 있는 상태에서 vif를 지우면 그 스레드의 nl80211
+            # 작업과 충돌한다. 첫 attempt 전에는 살아있는 스레드가 없으므로 안전하다.
             free_radio({self.phyname}, self.log)        # clear the radio before each join attempt
             self._err = None
             self._ready.clear()
@@ -539,8 +550,19 @@ class LiveTransport:
                     self.log(f"[live] LDN join succeeded on attempt {attempt}/{attempts}.")
                 return self
             self._stop.set()
+            # WP-D (H-1): 다음 attempt를 시작하기 전에 이전 스레드가 반드시 끝나야 한다. grace
+            # 내에도 is_alive()면(커널 blocking hang으로 _stop 플래그를 못 보는 상태) 늙은 스레드와
+            # 새 attempt가 같은 phy를 두고 충돌하므로, 남은 시도를 포기한다. 라디오 상태를 알 수
+            # 없으므로 free_radio/light_cleanup 같은 섣부른 정리도 하지 않고 즉시 실패한다 -
+            # 정리는 외부 워치독(run_trade.sh timeout 900)과 다음 실행의 pre-setup에 맡긴다.
             if self._thread is not None:
-                self._thread.join(timeout=2)            # let an abandoned attempt unwind/disconnect
+                self._thread.join(timeout=self.THREAD_JOIN_GRACE)
+                if self._thread.is_alive():
+                    raise RuntimeError(
+                        "radio thread still alive - radio state unknown "
+                        f"(join grace {self.THREAD_JOIN_GRACE}s exceeded after attempt "
+                        f"{attempt}/{attempts}; 커널 blocking hang 의심 - 라디오 정리는 "
+                        "외부 워치독/재실행 pre-setup에 위임)")
             if attempt < attempts:
                 self.log(f"[live] retrying LDN join in {settle}s "
                          f"(attempt {attempt + 1}/{attempts})...")
@@ -564,11 +586,17 @@ class LiveTransport:
             # 전례 3회 (handoff/HANDOFF-20260821-stabilize.md 5.1, docs/09-testing-audit D-1).
             # with_timeout은 deprecated라 fail_after 사용. TooSlowError 시 _err을 남기고
             # _ready.set() 후 return 하면 start()의 재시도(attempts=3)가 자동으로 이어진다.
+            # WP-D (H-1): ①예산 계층 — 내부 스캔 예산(20s) < 외부 start() _ready.wait(45s)로
+            # 축소했다. 구버전은 양쪽 다 30s라 경계 overlap 시 늙은 스레드가 살아 있는 채 새
+            # attempt가 시작될 수 있었다. ②한계 — fail_after는 trio checkpoint에서만 발동하므로
+            # 커널 blocking hang(스캔이 커널 호출에서 못 빠져나오는 상태)에는 무력하다. 즉 이
+            # 타임아웃은 커널 blocking hang의 근본 방어가 아님 — 외부 timeout 워치독(래퍼
+            # run_trade.sh의 timeout 900, 단독 스캔용 scan_phy.py) 병행 필수.
             try:
-                with trio.fail_after(30):
+                with trio.fail_after(20):
                     networks = await ldn.scan(keys, phyname=self.phyname)
             except trio.TooSlowError:
-                self._err = "LDN scan timed out after 30s - radio/driver stuck (see docs/09 D-1)"
+                self._err = "LDN scan timed out after 20s - radio/driver stuck (see docs/09 D-1)"
                 self.log(f"[live] {self._err}")
                 self._ready.set()
                 return
