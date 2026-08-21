@@ -105,3 +105,29 @@ E, F 독립 / H 마지막
 
 ---
 *계획 수립: 2026-08-22, 옥스 알파(opencode plan) + 아리아 통합. 실행 승인: 주인님 (2026-08-22)*
+
+## 6. 실행 결과 요약 (2026-08-22, WP-H 기록)
+
+| WP | 결과 | 리포 | 커밋 |
+|---|---|---|---|
+| A | ✅ 플랜 저장 + ldn 0.0.17 소스 스냅샷 고정 | 프로젝트 | `955248a` |
+| B | ✅ C-4(CRITICAL-1) 재구현 — `_wlan` 요청 프록시 ATTR_MAC 주입 + b-lite 불일치 예외→재시도 + MED③ 로그 가드, 테스트 9건 신규 | emu | `e91c6ac` |
+| C | ⚠️ **별도 커밋 없음** — H-2 pin race는 WP-D(ba10d61)의 join-grace 직렬화로 구조적 차단. `_ASSOC_TARGET` 세대 토큰화는 미구현(잔여 과제) | emu | ba10d61에 흡수 |
+| D | ✅ H-1 타임아웃 예산 계층화(스캔 fail_after 20 < start 45) + 재시도 전 join grace 15s·alive 시 잔여 포기 + D-1 주석 갱신 | emu | `ba10d61` |
+| E | ✅ MEDIUM② free_radio 삭제 결과 정직 로그(removed/FAILED 구분 + sudo 힌트 1회), 테스트 6건 신규 | emu | `b500543` |
+| F | ✅ MEDIUM① detect_phy 결정적 선택(자연 정렬 최솟값 + 복수 후보 경고 + roots 파라미터화), 테스트 5건 신규 | emu | `8c21eba` |
+| G | ✅ CRITICAL-2 래퍼 v6(`scripts/run_trade.sh`) + docs/04 v6 기준 갱신(v5 폐기) — VM 배포 후 적용 | 프로젝트 | `8e3d5f7` |
+| H | ✅ 문서 수렴(STATUS/handoff/플랜 본 절) + ldn 업스트림 diff 초안(`docs/research/ldn-bssid-upstream-draft.md`) | 프로젝트 | (본 커밋) |
+
+**Mac 오프라인 회귀**: 29건 전부 통과 (relay 4 + FSM 5 + bssid 9 + free_radio 6 + detect_phy 5 — 2026-08-22 실실행).
+
+### 실기 검증 대기 (§5 체크리스트 — 스위치 켤 때)
+
+전제: emu(stabilize HEAD) + scripts/ tar+scp → VM 동기화 (**현재 미동기화**), 래퍼 v6 설치.
+- **B**: --target-bssid 조인 성공 + dmesg assoc MAC == 대상 BSSID, 2스위치 자기 스위치만 연결
+- **C(흡수)**: 조인 타임아웃 유도 → 재시도 attempt에서 pinning 유지
+- **D**: 스캔 방해 → TooSlowError → 재시도 → VM 생존(SSH 유지)
+- **E/H-3**: 연속 join ×3(kill 포함) → 잔류 vif 0, removed/FAILED 로그 정직
+- **F**: 카드 2개 동시장착 → 올바른 phy 선택 경고 로그
+- **G**: 래퍼 v6 경로 무관 실행 / 818b 리셋 자동감지 / --phy 미지정 / 종료 후 iface up 유지
+- 잔여 과제: WP-C 세대 토큰화(미구현), H-3 attempt 2~3 monitor 사전셋업 검증

@@ -114,6 +114,7 @@ Switch(닌텐도) 간 포켓몬 FRLG 트레이드를 **인터넷으로 중계**�
 - 위치: `ldn.scan` 호출부 (`emu/frlgsim/transport.py` `_run_ldn`)
 - 증상: 스캔 실행 시 VM CPU 점유 hang (TCP 22 open + SSH 배너 없음), 재부팅만 복구. **3회 재발**
 - 수정 방향: `trio.with_timeout`(30s) 래핑 + 실패 시 graceful 처리 (VM 사망 = 서비스 불가)
+- **상태 갱신 (2026-08-22)**: D-1 커밋 5fb729f(fail_after + TooSlowError 재시도) 적용 후 Audit H-1로 잔여 위험 지적 — fail_after는 checkpoint에서만 발동(**커널 blocking hang 근본 방어 아님**) + 스캔 30s == start 예산 30s 경계 overlap. WP-D(ba10d61)에서 예산 계층화(스캔 fail_after 20 < start 기본 45) + 재시도 전 이전 스레드 join(grace 15s, 초과 시 남은 시도 포기). 외부 워치독(run_trade.sh timeout 900) 병행 필수. **⚠️ Mac 오프라인 검증만 — 실기 검증 대기**
 
 ### 5.2 🔴 [P0] stale/renamed vif 잔류 → EBUSY / Match already configured
 - 위치: `free_radio()` (`transport.py`) — LDN_VIFS 이름 기준이라 **udev rename된 vif(wlx<MAC>)를 못 지움**
@@ -130,6 +131,7 @@ Switch(닌텐도) 간 포켓몬 FRLG 트레이드를 **인터넷으로 중계**�
 - 위치: `ldn.connect_network` (외부 라이브러리 — SSID+채널만 사용, BSSID 미지원)
 - 증상: host가 "스위치 A 선택"해도 같은 SSID+채널의 스위치 B에 assoc → 거부(status 1). dmesg로 MAC 확인됨
 - 수정 방향: ldn 패치 또는 transport에서 BSSID 지정 (NL80211_ATTR_MAC) — `--target-bssid` 옵션
+- **상태 갱신 (2026-08-22)**: 최초 구현(87bd4fe, args/kwargs 주입)은 ldn 0.0.17이 attrs를 `_connect_network` 내부에서 로컬 생성(wlan.py:1336 참조 전달)해 **구조적으로 무효**(Audit CRITICAL-1) → WP-B(e91c6ac)에서 `station._wlan` 요청 프록시 방식으로 재구현 — CONNECT request에 NL80211_ATTR_MAC 실주입 + b-lite(조인 후 `_host_address` 불일치 즉시 예외→재시도) + MED③(pinning 로그는 실제 패치 성공 시만) + ldn 버전 가드. **H-2(pin race)**: 전역 `_ASSOC_TARGET` 단일 슬롯 문제는 별도 토큰화 없이 WP-D(ba10d61)의 join-grace 직렬화로 차단(늙은 스레드 finally가 새 pin을 덮을 타이밍 자체가 제거됨). 업스트림 기여용 diff 초안: `docs/research/ldn-bssid-upstream-draft.md`. **⚠️ Mac 오프라인 검증만 — 실기 검증(2스위치) 대기**
 
 ### 5.5 🟡 [P2] 카드 수신 사망 (silently failing)
 - 위치: 드라이버/카드 수준 (rtl8xxxu)
@@ -187,12 +189,26 @@ sudo ./.venv/bin/python frlgtrade.py --live --verbose \
 
 ### Phase B — 환경 면역 (P1)
 - [x] C-3: NM wlx* 전체 unmanaged 설정 (배포 스크립트) — ✅ 2026-08-22, 프로젝트 리포 커밋 79c2e51 (`scripts/setup-nm-unmanaged.sh`)
-- [x] C-4: BSSID 기반 assoc (--target-bssid) — ✅ 2026-08-22, 커밋 87bd4fe (옵트인 런타임 몽키패치, auto=선택 네트워크 BSSID 사용). **실기 검증은 2스위치 환경 필요 — 미검증**
+- [x] C-4: BSSID 기반 assoc (--target-bssid) — ✅ 2026-08-22, 커밋 87bd4fe (옵트인 런타임 몽키패치, auto=선택 네트워크 BSSID 사용). **→ 같은 날 Audit(CRITICAL-1)으로 args 주입 방식 무효 판정 — WP-B e91c6ac에서 `_wlan` 프록시 방식으로 재구현 (아래 Phase B′)**. 실기 검증은 2스위치 환경 필요 — 미검증
 - [x] C-2: phy 자동 감지 — ✅ 2026-08-22, 커밋 332c69b (--phy 미지정 시 USB ID 0bda:8179/818b 감지, 실패 시 phy0 폴백 없음)
 
+### Phase B′ — Audit 수정 플랜 (2026-08-22, `docs/plan/2026-08-22-audit-fix-plan.md`)
+
+> ⚠️ 전 항목 **Mac 오프라인 검증만 완료** — 실기 검증은 플랜 §5 체크리스트로 스위치 필요.
+
+- [x] WP-A: 플랜 저장 + ldn 0.0.17 소스 스냅샷 고정 — ✅ 프로젝트 리포 커밋 955248a
+- [x] WP-B: C-4 재구현(`_wlan` 요청 프록시 ATTR_MAC 주입 + b-lite 불일치 예외→재시도) + MED③(실제 패치 성공 시만 pinning 로그) — ✅ emu 커밋 e91c6ac, 신규 테스트 9건
+- [x] WP-C(H-2): pin race — ✅ emu ba10d61의 join-grace 직렬화(늙은 스레드 완전 회수 후 다음 attempt)로 구조적 차단. *별도 토큰화 커밋 없음 — `_ASSOC_TARGET` 세대 토큰은 미구현(잔여 과제로 남김)*
+- [x] WP-D: H-1 타임아웃 예산 계층화(스캔 20 < start 45) + 스레드 overlap 가드 — ✅ emu 커밋 ba10d61
+- [x] WP-E: MEDIUM② free_radio 삭제 결과 정직 로그(removed/FAILED + sudo 힌트) + H-3은 실기 체크리스트로 분리 — ✅ emu 커밋 b500543, 신규 테스트 6건
+- [x] WP-F: MEDIUM① detect_phy 결정적 선택(자연 정렬 최솟값 + 복수 후보 경고) — ✅ emu 커밋 8c21eba, 신규 테스트 5건
+- [x] WP-G: CRITICAL-2 래퍼 v6(`scripts/run_trade.sh`) + docs/04 v6 기준 갱신(v5 폐기) — ✅ 프로젝트 리포 커밋 8e3d5f7 (**VM 배포 후 적용**)
+- [x] WP-H: 문서 수렴(STATUS/이 문서/플랜 결과 요약) + ldn 업스트림 diff 초안(`docs/research/ldn-bssid-upstream-draft.md`) — ✅ 프로젝트 리포 (WP-H 커밋)
+- Mac 오프라인 회귀: 29건 전부 통과 (relay 4 + FSM 5 + bssid 9 + free_radio 6 + detect_phy 5)
+
 ### Phase C — 자가 치유 (P2)
-- [ ] C-6: 카드 수신 사망 감지 + 자동 리셋
-- [ ] D-9: 프로세스 자동 정리
+- [ ] C-6: 카드 수신 사망 감지 + 자동 리셋 — 🌱 씨앗만 반영 (래퍼 v6 8e3d5f7의 sysfs authorized 토글 폴백), 감시/자동 리셋 본체는 잔여
+- [ ] D-9: 프로세스 자동 정리 — 🌱 래퍼 수준 우선 반영 (래퍼 v6 8e3d5f7 stale 프로세스 정리), 코드 내장은 잔여
 - [ ] D-8: 몬 초과 안내
 
 ### Phase D — 출시 준비
