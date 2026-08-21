@@ -8,11 +8,18 @@ LiveTransport   - LIVE. Joins the FRLG console's LDN session with kinnay's `ldn`
                   the bridge tooling), then moves UDP :12345 payloads on the 169.254.x interface
                   exactly as the bridge does: a bound UDP socket for TX (SO_BROADCAST)
                   and an AF_PACKET raw socket for RX (so subnet-directed broadcasts aren't dropped).
-                  Requires root + the `netlink`/`ldn`/`trio` deps and the real Switch; it cannot be
-                  exercised offline, so it is written to mirror the proven bridge code path.
+                   Requires root + the `netlink`/`ldn`/`trio` deps and the real Switch; it cannot be
+                   exercised offline, so it is written to mirror the proven bridge code path.
+
+RemoteTransport - LIVE + REMOTE PEER. A LiveTransport that also keeps a relay WebSocket open for
+                  game-semantic state messages (MWLB frames) between two sims behind different
+                  bridges. Inbound frames land only in an inbox queue (remote_poll) - never the
+                  local UDP plane - so remote traffic can't loop back into the broadcast path.
 """
 
+import asyncio
 import json
+import queue
 import socket
 import struct
 import subprocess
@@ -118,7 +125,10 @@ LDN_VIFS = {"ldn", "ldn-mon", "ldn-tap", "ldnclient"}
 
 # --- radio / interface cleanup (the library needs the radio free of stale vifs) -------------
 def _run(cmd):
-    subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except FileNotFoundError:
+        pass                      # best-effort: tool (iw/nmcli/ip) not installed
 
 
 def _iw_del(iface):
@@ -564,3 +574,145 @@ class LiveTransport:
         if self._thread is not None:
             self._thread.join(timeout=2)
         light_cleanup(self.log)                         # delete the LDN vifs on teardown
+
+
+# ---------------------------------------------------------------------------
+class RemoteTransport(LiveTransport):
+    """LiveTransport + a remote peer tunnel over a relay WebSocket.
+
+    Adds a state channel alongside the local UDP :12345 data plane (the LDN join is inherited
+    unchanged): game-semantic messages are framed as [4B magic b"MWLB"][1B msg_type][2B len BE]
+    [payload] and shipped to a relay that pipes bytes between the two peers' sockets
+    (PHASE2_DESIGN.md S4). Inbound frames land ONLY in an inbox queue (drained by remote_poll) -
+    they are never re-injected onto the local data plane, so a relay message can never loop back
+    into the broadcast path (S4.3).
+
+    The WebSocket runs in its own asyncio thread: remote_send() frames queue thread-safely, the
+    loop sends a HEARTBEAT every 30s, and a dropped socket is reconnected up to 3 times.
+    """
+
+    MWLB_MAGIC = b"MWLB"
+    MSG_TRADE_SELECT = 0x01
+    MSG_TRADE_CONFIRM = 0x02
+    MSG_TRADE_CANCEL = 0x03
+    MSG_HEARTBEAT = 0x04
+    MSG_STATE_SYNC = 0x10
+
+    HEARTBEAT_INTERVAL = 30.0
+    RECONNECT_ATTEMPTS = 3
+
+    def __init__(self, relay_url, session_id=None, role="guest", *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.relay_url = relay_url
+        self.session_id = session_id
+        self.role = role
+        self._inbox = queue.Queue()          # inbound remote frames: (msg_type, payload)
+        self._outbox = queue.Queue()         # outbound frames queued from the sim thread
+        self._ws = None                      # live websockets connection (async thread only)
+        self._ws_thread = None
+        self._ws_stop = threading.Event()
+
+    # -- MWLB framing --------------------------------------------------------
+    @classmethod
+    def _build_frame(cls, msg_type, payload=b""):
+        payload = bytes(payload)
+        return (cls.MWLB_MAGIC + bytes([msg_type & 0xFF])
+                + struct.pack("!H", len(payload)) + payload)
+
+    @staticmethod
+    def _parse_frame(data):
+        if not isinstance(data, (bytes, bytearray)) or len(data) < 7:
+            return None
+        if bytes(data[:4]) != b"MWLB":
+            return None
+        msg_type = data[4]
+        length = struct.unpack("!H", data[5:7])[0]
+        if length > len(data) - 7:
+            return None
+        return msg_type, bytes(data[7:7 + length])
+
+    # -- remote channel (sim thread) -----------------------------------------
+    def start_remote(self):
+        """Launch the relay WebSocket thread (independent of the inherited LDN start())."""
+        if self._ws_thread is not None and self._ws_thread.is_alive():
+            return self
+        self._ws_stop.clear()
+        self._ws_thread = threading.Thread(target=self._run_ws_thread,
+                                           name="mwlb-remote-ws", daemon=True)
+        self._ws_thread.start()
+        return self
+
+    def remote_send(self, msg, msg_type):
+        """Frame a game-semantic message and hand it to the relay thread (thread-safe)."""
+        self._outbox.put(self._build_frame(msg_type, msg))
+
+    def remote_poll(self):
+        """Drain the inbox: yields (msg_type, payload) tuples for the sim FSM."""
+        while True:
+            try:
+                yield self._inbox.get_nowait()
+            except queue.Empty:
+                return
+
+    # -- relay WebSocket thread ----------------------------------------------
+    def _run_ws_thread(self):
+        try:
+            asyncio.run(self._ws_main())
+        except Exception as e:
+            self.log(f"[remote] websocket thread crashed: {e}")
+
+    async def _ws_main(self):
+        try:
+            import websockets
+        except ImportError as e:                     # pragma: no cover
+            self.log(f"[remote] missing dep for remote mode: {e}")
+            return
+        attempt = 0
+        while not self._ws_stop.is_set():
+            try:
+                async with websockets.connect(self.relay_url) as ws:
+                    attempt = 0                      # reset once a connect succeeds
+                    self._ws = ws
+                    self.log(f"[remote] websocket connected: {self.relay_url}")
+                    await self._ws_session(ws)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self._ws = None
+                if self._ws_stop.is_set():
+                    break
+                attempt += 1
+                if attempt > self.RECONNECT_ATTEMPTS:
+                    self.log(f"[remote] gave up after {self.RECONNECT_ATTEMPTS} reconnect "
+                             f"attempt(s): {e}")
+                    break
+                self.log(f"[remote] connection lost ({e}); reconnecting "
+                         f"{attempt}/{self.RECONNECT_ATTEMPTS} ...")
+                await asyncio.sleep(1.0)
+
+    async def _ws_session(self, ws):
+        last_hb = time.monotonic()
+        while not self._ws_stop.is_set():
+            while not self._outbox.empty():          # flush frames queued by remote_send()
+                await ws.send(self._outbox.get_nowait())
+            if time.monotonic() - last_hb >= self.HEARTBEAT_INTERVAL:
+                ts = int(time.time()) & 0xFFFFFFFF
+                await ws.send(self._build_frame(self.MSG_HEARTBEAT, struct.pack("!I", ts)))
+                last_hb = time.monotonic()
+            try:
+                msg = await asyncio.wait_for(ws.recv(), timeout=0.1)
+            except asyncio.TimeoutError:
+                continue
+            parsed = self._parse_frame(msg)
+            if parsed is None:
+                continue
+            msg_type, payload = parsed
+            if msg_type == self.MSG_HEARTBEAT:
+                continue
+            self._inbox.put((msg_type, payload))     # inbox ONLY - never the UDP plane
+
+    def stop(self):
+        self._ws_stop.set()
+        super().stop()
+        if self._ws_thread is not None:
+            self._ws_thread.join(timeout=2)
