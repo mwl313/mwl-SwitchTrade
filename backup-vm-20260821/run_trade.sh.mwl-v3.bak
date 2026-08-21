@@ -1,0 +1,37 @@
+#!/bin/bash
+# MWL-SwitchTrade — frlgtrade 실행 래퍼 v3
+# 1. rtl8xxxu 드라이버 재로드 (반복 scan에서 불안정해짐 — 실측 2026-08-20)
+# 2. phy 자동 감지 (재로드마다 phy 번호 변경)
+# 3. 인터페이스 monitor+up+ch1 보장 (EBUSY 방지)
+# 4. 종료 후 up 유지
+echo "[wrapper] reloading rtl8xxxu..."
+sudo modprobe -r rtl8xxxu 2>/dev/null
+sleep 2
+sudo modprobe rtl8xxxu 2>/dev/null
+sleep 3
+
+if ! lsusb 2>/dev/null | grep -q 0bda:8179; then
+    echo "[wrapper] ERROR: RTL8188EUS not found on USB"
+    exit 2
+fi
+
+IFACE=$(iw dev 2>/dev/null | grep Interface | awk '{print $2}')
+PHY=$(iw phy 2>/dev/null | grep Wiphy | head -1 | awk '{print $2}')
+if [ -z "$PHY" ]; then
+    PHY="phy0"
+fi
+if [ -n "$IFACE" ]; then
+    sudo ip link set "$IFACE" down 2>/dev/null
+    sudo iw dev "$IFACE" set type monitor 2>/dev/null
+    sudo ip link set "$IFACE" up 2>/dev/null
+    sudo iw dev "$IFACE" set channel 1 2>/dev/null
+    echo "[wrapper] $IFACE -> monitor/up/ch1"
+fi
+echo "[wrapper] using $PHY"
+sudo /home/aria/ldnvenv/bin/python /home/aria/frlg-ldn-trade/frlgtrade.py --phy "$PHY" "$@"
+RC=$?
+if [ -n "$IFACE" ]; then
+    sudo ip link set "$IFACE" up 2>/dev/null
+    echo "[wrapper] $IFACE restored to up"
+fi
+exit $RC
