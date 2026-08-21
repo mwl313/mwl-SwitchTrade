@@ -157,19 +157,26 @@ def list_phy_ifaces():
 
 
 def free_radio(phys, log=print):
-    """Delete leftover LDN vifs and take any other interface off the radio so the station can
-    grab the channel (fixes SET_CHANNEL -> EBUSY). Brings your normal Wi-Fi down on that adapter
-    for the duration (restore with wifi-init.sh --restore). Needs root."""
+    """Give the target phys a clean MONOPOLY: delete EVERY netdev that lives on them (C-1), not
+    just the known LDN vif names. A failed/crashed/pkill'd run leaks its station vif on the phy,
+    and after a card reset udev renames leaked vifs to wlx<MAC> - which can collide with the
+    wrapper's own monitor vif name - so name-based cleanup cannot catch them; the stale vif then
+    monopolizes the phy and the next join dies with EBUSY / Match already configured / assoc
+    status 1 (docs/09-testing-audit I-1, C-1; the verified manual fix is exactly this "empty the
+    phy" sweep). Scope is strictly the phys passed in: other adapters (built-in Wi-Fi etc.) are
+    NEVER touched. Premise: the run_trade.sh wrapper's pre-setup and the ldn library recreate
+    whatever vifs they need (monitor/up/ch1, ldnclient) on the next join. Needs root."""
     mapping = list_phy_ifaces()
     for phy in {p for p in phys if p}:
-        for iface in mapping.get(phy, []):
-            if iface in LDN_VIFS:
-                _iw_del(iface)
-            else:
-                # MWL (2026-08-21): nmcli managed no + ip link down은 rtl8xxxu에서
-                # 카드 수신을 완전히 죽임 (실측 saw 0). wlx는 래퍼/사전 준비가
-                # monitor/up/ch1로 관리하므로 건드리지 않는다.
-                pass
+        ifaces = mapping.get(phy, [])
+        # Known LDN vifs first (kept from the earlier behavior), then every other netdev on this
+        # phy. MWL (2026-08-22): deleting a wlx* here is intended - a udev-renamed LEAK can carry
+        # the same wlx<card-MAC> name as the wrapper's own monitor vif, so leaving "wlx" alone
+        # would keep the stale station associated; the wrapper re-creates its vif.
+        for iface in ([i for i in ifaces if i in LDN_VIFS]
+                      + [i for i in ifaces if i not in LDN_VIFS]):
+            _iw_del(iface)
+            log(f"[live] freed radio: removed {iface} from {phy}")
     # Belt-and-suspenders: a failed/abandoned join LEAKS its station vif (still associated to the
     # host), and `iw dev` may not map it under the expected phy - a leftover, still-associated
     # `ldnclient` then makes the NEXT association fail with nl80211 status code 1. Delete every
