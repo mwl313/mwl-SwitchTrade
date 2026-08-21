@@ -20,13 +20,16 @@ C-4 (--target-bssid): opt-in BSSID-pinned association. The ldn library's Station
                   sends NL80211_CMD_CONNECT with ONLY SSID + channel, so with two Switches
                   advertising the same SSID+channel the kernel associated with the WRONG console
                   (dmesg-verified; docs/09-testing-audit I-7). When target_bssid is set we
-                  monkeypatch ldn.wlan.Station._connect_network at runtime to add
-                  nl80211.NL80211_ATTR_MAC (= the scanned network's address or an explicit MAC).
-                  target_bssid=None keeps the stock behavior 100% unchanged; any patch failure
-                  falls back to the old SSID+channel association instead of crashing.
+                  monkeypatch ldn.wlan.Station._connect_network at runtime: for the lifetime of the
+                  original connect CM the station's _wlan handle is swapped for a transparent proxy
+                  that adds nl80211.NL80211_ATTR_MAC (= the scanned network's address or an explicit
+                  MAC) to the CONNECT request attrs, then verifies the association really landed on
+                  the pinned BSSID. target_bssid=None keeps the stock behavior 100% unchanged; any
+                  patch failure falls back to the old SSID+channel association instead of crashing.
 """
 
 import asyncio
+import contextlib
 import functools
 import json
 import queue
@@ -131,15 +134,26 @@ def _format_join_error(e):
     return "\n".join(parts)
 
 # --- C-4: BSSID-pinned association (opt-in --target-bssid) ----------------------------------
-# docs/09-testing-audit I-7: ldn's Station._connect_network (wlan.py:1289) puts only
-# NL80211_ATTR_SSID + NL80211_ATTR_WIPHY_FREQ into NL80211_CMD_CONNECT - no BSSID - so with two
-# Switches advertising the same SSID+channel the kernel associated with the WRONG console (the
-# root cause of the two-Switch mis-association incident, confirmed via dmesg). The fix pins the
-# 802.11 association to the host's BSSID by adding nl80211.NL80211_ATTR_MAC at runtime. The ldn
+# docs/09-testing-audit I-7: ldn's Station._connect_network (wlan.py:1289 in the 0.0.17 snapshot)
+# puts only NL80211_ATTR_SSID + NL80211_ATTR_WIPHY_FREQ into NL80211_CMD_CONNECT - no BSSID - so
+# with two Switches advertising the same SSID+channel the kernel associated with the WRONG console
+# (the root cause of the two-Switch mis-association incident, confirmed via dmesg). The fix pins
+# the 802.11 association to the host's BSSID by adding nl80211.NL80211_ATTR_MAC at runtime. The ldn
 # package is patched in place (site-packages must stay untouched) and ONLY when the user opts in;
 # every failure path degrades to the stock SSID+channel association with a warning, never a crash.
+#
+# WP-B mechanism (verified against docs/research/ldn-0.0.17-src/wlan.py): _connect_network(self)
+# takes NO arguments - it builds its attrs dict LOCALLY (wlan.py:1309) and hands it straight to
+# self._wlan.request(NL80211_CMD_CONNECT, attrs) (wlan.py:1336), so an args/kwargs wrapper can
+# never see it. Instead the wrapper swaps station._wlan for a transparent proxy for the lifetime
+# of the original connect CM: the proxy forwards every attribute access to the real wlan object
+# untouched (receive() included - _process_messages consumes it) and only rewrites CONNECT
+# requests by adding ATTR_MAC = the pinned BSSID IN PLACE - the attrs dict is shared by reference
+# with the real request call, so the kernel's connect command carries it.
 
 BSSID_AUTO = "auto"          # sentinel: resolve the BSSID from the selected network's address
+
+_LDN_TESTED_VERSION = "0.0.17"   # the only ldn flow this patch is verified against
 
 # The BSSID the patched _connect_network injects (None = stock behavior). Set by LiveTransport
 # right before the join, cleared when the join context exits; one radio, so a single slot is enough.
@@ -177,55 +191,59 @@ def _mac_str(bssid):
     return ":".join(f"{b:02x}" for b in bssid)
 
 
-def _inject_nlattr(args, kwargs, key, value):
-    """Add {key: value} to the nl80211 attrs mapping among the wrapped call's arguments (the
-    CONNECT attrs dict Station._connect_network fills with SSID/freq). Mutates a mutable mapping
-    in place; for a read-only one, calls the original with a copied+extended replacement. Returns
-    the (args, kwargs) to call with, or None when no attrs mapping is found (library version
-    drift) so the caller can fall back to the stock behavior."""
-    candidates = [(args, i) for i in range(len(args))] + [(kwargs, k) for k in kwargs]
-    for container, k in candidates:
-        m = container[k]
-        if not isinstance(m, Mapping):
-            continue
-        try:
-            m[key] = value
-            return args, kwargs
-        except TypeError:
-            pass                                        # read-only mapping: copy-replace below
-    for container, k in candidates:
-        m = container[k]
-        if not isinstance(m, Mapping):
-            continue
-        try:
-            replacement = dict(m)
-            replacement[key] = value
-            if isinstance(container, tuple):
-                container = list(container)
-                container[k] = replacement
-                return tuple(container), kwargs
-            container[k] = replacement
-            return args, kwargs
-        except Exception:
-            return None
-    return None
+class _WlanProxy:
+    """Transparent forwarding proxy around a Station's real `_wlan` handle (WP-B). Everything not
+    defined here resolves through the original object via __getattr__ - receive() and friends pass
+    through UNMODIFIED (_process_messages depends on them). Only `request` is intercepted: an
+    NL80211_CMD_CONNECT whose attrs is a Mapping gets NL80211_ATTR_MAC = the pinned BSSID added in
+    place before the original request runs."""
+
+    def __init__(self, wlan, bssid, cmd_connect, attr_mac):
+        self._mwl_wlan = wlan
+        self._mwl_bssid = bytes(bssid)
+        self._mwl_cmd_connect = cmd_connect
+        self._mwl_attr_mac = attr_mac
+
+    def __getattr__(self, name):
+        # Only reached for attributes the proxy itself does not define -> pure passthrough.
+        return getattr(self._mwl_wlan, name)
+
+    async def request(self, cmd, *args, **kwargs):
+        if cmd == self._mwl_cmd_connect:
+            attrs = kwargs.get("attrs", args[0] if args else None)
+            if isinstance(attrs, Mapping):
+                attrs[self._mwl_attr_mac] = self._mwl_bssid      # in place: same dict object
+        return await self._mwl_wlan.request(cmd, *args, **kwargs)
 
 
 def install_target_bssid_patch(log=print):
     """C-4: runtime-monkeypatch ldn.wlan.Station._connect_network (site-packages untouched) so the
     NL80211_CMD_CONNECT request also carries nl80211.NL80211_ATTR_MAC = the target BSSID
     (docs/09-testing-audit I-7: SSID+channel assoc joined the WRONG Switch when two consoles
-    advertised the same SSID on the same channel). Installed once per process; the actual BSSID
-    is read at call time from _ASSOC_TARGET, so each join can pin a different console. Any failure
-    (ldn not installed, version drift, unexpected signature) logs ONE warning and leaves the
-    library stock - the association then works exactly as before (never crashes)."""
+    advertised the same SSID on the same channel). Installed once per process; the actual BSSID is
+    read at call time from _ASSOC_TARGET, so each join can pin a different console.
+
+    The wrapper keeps the original asynccontextmanager CM but swaps station._wlan for _WlanProxy
+    while it runs, restoring the real handle afterwards (also on failure). b-lite verification
+    (plan WP-B): once the original CM has entered - i.e. the kernel reported CONNECT complete and
+    ldn stored its ATTR_MAC in station._host_address (wlan.py:1348) - that address must equal the
+    pin, otherwise the join raises immediately so LiveTransport.start()'s attempt loop retries.
+    Any failure (ldn not installed, version drift, unexpected structure) logs ONE warning and
+    leaves the library stock - the association then works exactly as before (never crashes)."""
     if _BSSID_PATCH["installed"]:
         return True
     if _BSSID_PATCH["failed"]:
         return False
     try:
+        import ldn
         import ldn.wlan
         import nl80211
+        # Version guard: the proxy targets the verified 0.0.17 request flow exactly; if upstream
+        # ever ships its own fix or reshapes the flow, auto-invalidate instead of stacking a stale
+        # patch. 0.0.17 itself carries no __version__ attribute, so absence passes the guard.
+        version = getattr(ldn, "__version__", None)
+        if version is not None and str(version) != _LDN_TESTED_VERSION:
+            raise RuntimeError(f"ldn {version} is not the tested {_LDN_TESTED_VERSION}")
         station_cls = ldn.wlan.Station
         orig = station_cls.__dict__.get("_connect_network")
         if orig is None:
@@ -234,28 +252,36 @@ def install_target_bssid_patch(log=print):
         if getattr(orig, "_mwl_bssid_patch", False):    # already ours (re-import/restart guard)
             _BSSID_PATCH["installed"] = True
             return True
+        cmd_connect = nl80211.NL80211_CMD_CONNECT
         attr_mac = nl80211.NL80211_ATTR_MAC
 
         @functools.wraps(orig)
-        def _connect_network_with_bssid(station, *a, **kw):
+        @contextlib.asynccontextmanager
+        async def _connect_network_with_bssid(station):
             bssid = _ASSOC_TARGET["bssid"]
             if not bssid:                               # opt-out / outside a pinned join: stock
-                return orig(station, *a, **kw)
-            injected = _inject_nlattr(a, kw, attr_mac, bytes(bssid))
-            if injected is None:
-                if not _BSSID_PATCH["warned"]:
-                    _BSSID_PATCH["warned"] = True
-                    log(f"[live] --target-bssid: no nl80211 attrs mapping found in "
-                        f"Station._connect_network - associating by SSID+channel as before "
-                        f"(fallback; docs/09-testing-audit I-7)")
-                return orig(station, *a, **kw)
-            return orig(station, *injected[0], **injected[1])
+                async with orig(station):
+                    yield
+                return
+            saved_wlan = station._wlan
+            station._wlan = _WlanProxy(saved_wlan, bssid, cmd_connect, attr_mac)
+            try:
+                async with orig(station):
+                    host = getattr(station, "_host_address", None)   # what we ACTUALLY got
+                    if host is not None and bytes(host) != bytes(bssid):
+                        raise ConnectionError(
+                            f"associated with {_mac_str(bytes(host))} instead of the pinned "
+                            f"BSSID {_mac_str(bytes(bssid))} (docs/09-testing-audit I-7)")
+                    yield
+            finally:
+                station._wlan = saved_wlan              # restore even on failure/exception
 
         _connect_network_with_bssid._mwl_bssid_patch = True
         setattr(station_cls, "_connect_network", _connect_network_with_bssid)
         _BSSID_PATCH["installed"] = True
         log(f"[live] --target-bssid: patched ldn.wlan.Station._connect_network to add "
-            f"NL80211_ATTR_MAC (BSSID-pinned assoc; docs/09-testing-audit I-7)")
+            f"NL80211_ATTR_MAC via a _wlan request proxy (BSSID-pinned assoc; "
+            f"docs/09-testing-audit I-7)")
         return True
     except Exception as e:                              # ImportError on macOS, attr drift, ...
         _BSSID_PATCH["failed"] = True
@@ -587,6 +613,7 @@ class LiveTransport:
             # selected network's address (the scan result carries the host's BSSID); an explicit
             # --target-bssid wins over that. Resolution failure degrades to the stock join.
             bssid = None
+            patched = False
             if self.target_bssid is not None:
                 if self.target_bssid == BSSID_AUTO:
                     try:
@@ -600,7 +627,7 @@ class LiveTransport:
                 else:
                     bssid = self.target_bssid
                 if bssid is not None:
-                    install_target_bssid_patch(self.log)
+                    patched = install_target_bssid_patch(self.log)
             param = ldn.ConnectNetworkParam()
             param.keys = keys
             param.network = net
@@ -613,8 +640,14 @@ class LiveTransport:
             try:
                 _ASSOC_TARGET["bssid"] = bssid        # read by the patched _connect_network
                 if bssid is not None:
-                    self.log(f"[live] pinning association to BSSID {_mac_str(bssid)} "
-                             f"(docs/09-testing-audit I-7)")
+                    if patched:                       # MED③: only claim pinning when it is real
+                        self.log(f"[live] pinning association to BSSID {_mac_str(bssid)} "
+                                 f"(docs/09-testing-audit I-7)")
+                    elif not _BSSID_PATCH["warned"]:  # fallback notice ONCE, not per attempt
+                        _BSSID_PATCH["warned"] = True
+                        self.log(f"[live] --target-bssid: BSSID pinning unavailable - "
+                                 f"associating by SSID+channel as before "
+                                 f"(fallback; docs/09-testing-audit I-7)")
                 async with ldn.connect(param) as network:
                     info = network.info()
                     self.ssid = info.ssid
