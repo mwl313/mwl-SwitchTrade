@@ -5,6 +5,7 @@
 # This covers tests/, utils/, notes/, captures/, .backups/, and venv/.
 /*/
 !/frlgsim/
+!/tests/
 
 # Never publish Pokemon data files (live-trade outputs can carry trainer/account
 # identifiers); covers any stray .pk3/.ek3 at the root or inside frlgsim/ too.
