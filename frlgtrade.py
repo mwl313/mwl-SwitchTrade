@@ -22,6 +22,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import sys
 import time
 import urllib.request
@@ -132,16 +133,37 @@ def _phy_usb_id(dev_path):
     return None
 
 
-def detect_phy(log):
+def detect_phy(log, roots=None):
     """Find the LDN radio's CURRENT wiphy by USB ID (I-5). Returns the wiphy name
-    (e.g. 'phy12') or None - never a guess."""
-    for dev in sorted(glob.glob("/sys/class/ieee80211/*/device")):
-        phy = os.path.basename(os.path.dirname(dev))
-        usbid = _phy_usb_id(dev)
-        if usbid in REALTEK_USB_IDS:
-            log(f"[live] auto-detected {usbid} on {phy}")
-            return phy
-    return None
+    (e.g. 'phy12') or None - never a guess.
+
+    With TWO Realtek radios plugged in (WP-F / docs-09 MEDIUM-1) the old first-match-on-
+    string-sort pick was arbitrary: sorted() put "phy10" before "phy2", and free_radio (C-1)
+    would then tear down the WRONG card's netdevs. So now every candidate is collected and the
+    LOWEST phy NUMBER wins (natural sort: phy2 < phy10), with a loud warning listing all of
+    them so a wrong pick can be overridden with --phy. `roots` defaults to the real sysfs but
+    accepts an injected fake root (tests build one in a tempdir)."""
+    if roots is None:
+        roots = ["/sys/class/ieee80211"]
+    elif isinstance(roots, str):
+        roots = [roots]
+    found = []                                   # [(sortkey, phy, usbid)] - ALL matches, not the first
+    for root in roots:
+        for dev in glob.glob(os.path.join(root, "*", "device")):
+            phy = os.path.basename(os.path.dirname(dev))
+            usbid = _phy_usb_id(dev)
+            if usbid in REALTEK_USB_IDS:
+                m = re.search(r"(\d+)", phy)     # natural sort key: phy2 < phy10
+                found.append(((int(m.group(1)) if m else -1, phy), phy, usbid))
+    found.sort(key=lambda f: f[0])
+    if not found:
+        return None
+    phys = [phy for _, phy, _ in found]
+    if len(phys) > 1:
+        log(f"[live] WARNING: {len(phys)} Realtek radios found ({', '.join(phys)}) - "
+              f"using {phys[0]}. pass --phy to override")
+    log(f"[live] auto-detected {found[0][2]} on {found[0][1]}")
+    return phys[0]
 
 
 def resolve_phy(phy_opt, log):
