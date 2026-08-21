@@ -186,9 +186,9 @@ sudo ./.venv/bin/python frlgtrade.py --live --verbose \
 - [x] C-1: free_radio vif 완전 정리 (rename 포함) — ✅ 2026-08-22, 커밋 6f747af (대상 phy 전체 netdev 삭제, 타 어댑터 미대상)
 
 ### Phase B — 환경 면역 (P1)
-- [ ] C-3: NM wlx* 전체 unmanaged 설정 (배포 스크립트)
-- [ ] C-4: BSSID 기반 assoc (--target-bssid)
-- [ ] C-2: phy 자동 감지
+- [x] C-3: NM wlx* 전체 unmanaged 설정 (배포 스크립트) — ✅ 2026-08-22, 프로젝트 리포 커밋 79c2e51 (`scripts/setup-nm-unmanaged.sh`)
+- [x] C-4: BSSID 기반 assoc (--target-bssid) — ✅ 2026-08-22, 커밋 87bd4fe (옵트인 런타임 몽키패치, auto=선택 네트워크 BSSID 사용). **실기 검증은 2스위치 환경 필요 — 미검증**
+- [x] C-2: phy 자동 감지 — ✅ 2026-08-22, 커밋 332c69b (--phy 미지정 시 USB ID 0bda:8179/818b 감지, 실패 시 phy0 폴백 없음)
 
 ### Phase C — 자가 치유 (P2)
 - [ ] C-6: 카드 수신 사망 감지 + 자동 리셋
