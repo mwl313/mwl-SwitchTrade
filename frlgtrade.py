@@ -19,6 +19,7 @@ OFFLINE self-check (replays a captured host stream through the full RX stack - n
 """
 
 import argparse
+import glob
 import json
 import os
 import sys
@@ -105,6 +106,62 @@ def make_engine(args, lg):
     return eng
 
 
+# The LDN radios (I-5): usbreset/reboot re-enumerates the card and BUMPS the wiphy number
+# (phy0 -> phy1 -> ...), so a hardcoded --phy goes stale. These USB IDs identify the card
+# under /sys/class/ieee80211/<phy>/device wherever it lands.
+REALTEK_USB_IDS = {
+    "0bda:8179": "RTL8188EU",
+    "0bda:818b": "RTL8192EU",
+}
+
+
+def _phy_usb_id(dev_path):
+    """vendor:product of the USB card behind a sysfs device link. The phy's `device` link
+    points at the USB *interface*; idVendor/idProduct live on the parent USB device, so
+    walk up until they appear. None when there is no USB identity (PCI / soft mac)."""
+    p = os.path.realpath(dev_path)
+    while p.count("/") > 2:                      # stop short of the filesystem root
+        try:
+            with open(f"{p}/idVendor") as f:
+                vid = f.read().strip()
+            with open(f"{p}/idProduct") as f:
+                pid = f.read().strip()
+            return f"{vid}:{pid}"
+        except OSError:
+            p = os.path.dirname(p)
+    return None
+
+
+def detect_phy(log):
+    """Find the LDN radio's CURRENT wiphy by USB ID (I-5). Returns the wiphy name
+    (e.g. 'phy12') or None - never a guess."""
+    for dev in sorted(glob.glob("/sys/class/ieee80211/*/device")):
+        phy = os.path.basename(os.path.dirname(dev))
+        usbid = _phy_usb_id(dev)
+        if usbid in REALTEK_USB_IDS:
+            log(f"[live] auto-detected {usbid} on {phy}")
+            return phy
+    return None
+
+
+def resolve_phy(phy_opt, log):
+    """The --phy value for the live transports: the explicit option wins; empty means
+    auto-detect the Realtek radio by USB ID (I-5). No match -> a friendly error listing
+    the wiphys that DO exist; we never fall back to phy0 (a wrong guess joins nothing)."""
+    if phy_opt:
+        return phy_opt
+    phy = detect_phy(log)
+    if phy:
+        return phy
+    wiphys = sorted(os.path.basename(p) for p in glob.glob("/sys/class/ieee80211/*"))
+    raise SystemExit(
+        "--phy not given and no Realtek USB wifi found by USB ID "
+        f"({' or '.join(f'{k} ({v})' for k, v in REALTEK_USB_IDS.items())}).\n"
+        f"Wiphy(s) present on this host: {', '.join(wiphys) if wiphys else '(none)'}.\n"
+        "Check `iw phy`, then pass the card explicitly, e.g.:  --phy phy3"
+    )
+
+
 def create_relay_session(relay_url, lg):
     """role=host with no --session-id: ask the relay to mint a fresh 6-char session id via the
     standard urllib (no extra deps). Returns the session id string."""
@@ -124,6 +181,7 @@ def create_relay_session(relay_url, lg):
 
 
 def run_live(args, lg):
+    phy = resolve_phy(args.phy, lg)   # explicit --phy, else USB-ID auto-detect (I-5)
     comm_id = int(args.comm_id, 16) if args.comm_id else None
     password = bytes.fromhex(args.password) if args.password else None   # None -> built-in
     if args.relay_url:
@@ -142,11 +200,11 @@ def run_live(args, lg):
         lg(f"[live] relay mode: role={role} session={session_id}")
         t = tmod.RemoteTransport(relay_url=relay_url, session_id=session_id, role=role,
                                  password=password, nickname=args.ot, keys_path=args.keys,
-                                 local_comm_id=comm_id, phyname=args.phy, log=lg).start()
+                                 local_comm_id=comm_id, phyname=phy, log=lg).start()
     else:
         lg(f"[live] scanning for FRLG LDN network (nickname={args.ot})...")
         t = tmod.LiveTransport(password=password, nickname=args.ot, keys_path=args.keys,
-                               local_comm_id=comm_id, phyname=args.phy, log=lg).start()
+                               local_comm_id=comm_id, phyname=phy, log=lg).start()
     pc = cryptomod.PiaCrypto(t.ssid)
     engine = make_engine(args, lg)
     # Pia CONNECTION layer (S0): Net 0x11->0x12, Session(13) join, RTT keepalive. WITHOUT this the
@@ -426,7 +484,9 @@ def main():
                          "Default guest.")
     ap.add_argument("--password", default="", help="LDN passphrase as hex (live); default = "
                     "the built-in 64-byte emulator passphrase (shared by FRLG/RSE)")
-    ap.add_argument("--phy", default="phy0", help="wifi phy for the LDN join (live)")
+    ap.add_argument("--phy", default="", help="wifi phy for the LDN join (live); default "
+                    "auto-detects the Realtek USB radio by USB ID (RTL8188EU 0bda:8179 / "
+                    "RTL8192EU 0bda:818b) since usbreset/reboot bumps the wiphy number")
     ap.add_argument("--keys", default="~/.switch/prod.keys", help="Switch prod.keys (live)")
     ap.add_argument("--comm-id", help="LDN local_communication_id (hex) to join (live); "
                     "if omitted, joins the only available network (scan logs candidates)")
