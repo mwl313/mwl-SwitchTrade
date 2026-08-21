@@ -127,6 +127,14 @@ class Sim:
                  our_var=0xc493, compress=False, header_flags=0x50, capture_path=None,
                  linkstate=None, connect_id=None, log=lambda *a: None):
         self.t = transport
+        # Remote channel hook (leader-leader EMU). Enabled only when the transport exposes the
+        # remote state channel (RemoteTransport, or a test MockTransport stub) - duck-typed via the
+        # remote_send/remote_poll capability so ReplayTransport / LiveTransport keep their exact
+        # existing behavior (no remote channel -> self.remote is None -> hooks off). When set, the sim
+        # (a) relays the local host's trade state-changes over remote_send (wired into the engine's
+        # remote_hook below) and (b) drains remote_poll() in tick() and reflects them into the FSM.
+        self.remote = transport if (hasattr(transport, "remote_send")
+                                    and hasattr(transport, "remote_poll")) else None
         self.crypto = pia_crypto
         self.engine = engine
         # Held-keys overworld link-state engine [frlgsim/linkstate.py]. When present, the sim emits a
@@ -151,6 +159,10 @@ class Sim:
         # mid-exchange (the offline MockHost model has no mail/ribbons, so this stays off there).
         if conn is not None and hasattr(engine, "_live"):
             engine._live = True
+        # Remote TX hook: when the transport has the remote state channel, wire the engine's
+        # remote_hook so the local host's trade state-changes (select/confirm/cancel) are relayed.
+        if self.remote is not None and hasattr(engine, "remote_hook"):
+            engine.remote_hook = self._tx_remote
         self.our_ip = our_ip
         self.host_ip = host_ip
         self.broadcast = host_ip.rsplit(".", 1)[0] + ".255"
@@ -288,6 +300,23 @@ class Sim:
         }) + "\n")
 
     # ---- RX ----------------------------------------------------------------
+    def _tx_remote(self, msg_type, payload):
+        """TX hook: relay a local host broadcast (detected by the engine's remote_hook) over the
+        remote state channel. Only fired when the transport is remote-capable (self.remote set)."""
+        self.log(f"[remote] TX msg_type=0x{msg_type:02x} payload={bytes(payload).hex()}")
+        self.remote.remote_send(payload, msg_type)
+
+    def _drain_remote(self):
+        """RX hook: drain inbound remote frames and reflect each into the engine - the remote
+        player's action is performed by the local virtual GBA (the engine synthesizes the equivalent
+        host broadcast). Remote frames are synthesized ONLY into the FSM, never re-injected onto the
+        local transport / broadcast path (loop prevention, PHASE2_DESIGN.md S4.3)."""
+        for msg_type, payload in self.remote.remote_poll():
+            self.log(f"[remote] RX msg_type=0x{msg_type:02x} "
+                     f"payload={bytes(payload).hex() if isinstance(payload, (bytes, bytearray)) else payload!r}")
+            if hasattr(self.engine, "apply_remote"):
+                self.engine.apply_remote(msg_type, payload)
+
     def process_datagram(self, datagram, src_ip):
         if not cryptomod.is_pia(datagram):
             return False
@@ -726,6 +755,10 @@ class Sim:
         self._tick += 1                  # drives the ReliableLink retransmit timers
         for datagram, src_ip in self.t.recv():
             self.process_datagram(datagram, src_ip)
+        # Remote RX hook: reflect any inbound remote frames into the FSM BEFORE we compute this
+        # VBlank's output slot (so a remote selection/confirm/cancel takes effect this tick).
+        if self.remote is not None:
+            self._drain_remote()
         # Supplementary RTT source: feed any round-trips the RTT protocol measured into the reliable RTO
         # (median of the last 7), converting VBlanks->ms. Over this link the host doesn't echo our RTT
         # systime, so this is usually empty and the reliable layer's own clean-ack round-trip is what
