@@ -166,9 +166,10 @@ def free_radio(phys, log=print):
             if iface in LDN_VIFS:
                 _iw_del(iface)
             else:
-                _run(["nmcli", "device", "set", iface, "managed", "no"])
-                _run(["ip", "link", "set", iface, "down"])
-                log(f"[live] freed radio: brought {iface} ({phy}) down")
+                # MWL (2026-08-21): nmcli managed no + ip link down은 rtl8xxxu에서
+                # 카드 수신을 완전히 죽임 (실측 saw 0). wlx는 래퍼/사전 준비가
+                # monitor/up/ch1로 관리하므로 건드리지 않는다.
+                pass
     # Belt-and-suspenders: a failed/abandoned join LEAKS its station vif (still associated to the
     # host), and `iw dev` may not map it under the expected phy - a leftover, still-associated
     # `ldnclient` then makes the NEXT association fail with nl80211 status code 1. Delete every
@@ -395,6 +396,16 @@ class LiveTransport:
                 net = joinable[0]
                 self.log(f"[live] no comm-id match; using the only joinable network "
                          f"(comm_id=0x{net.local_communication_id:016x})")
+            elif net is not None and len(joinable) > 1:
+                # MWL (2026-08-21): two Switch ads share the same comm-id; join the room
+                # with the FEWEST participants so a guest targets the idle console
+                # (leader-leader EMU bridge), not the one already hosting a peer.
+                least = min(joinable, key=lambda n: n.num_participants)
+                if least is not net:
+                    self.log(f"[live] {len(joinable)} joinable with same comm-id; "
+                             f"choosing {least.num_participants}/{least.max_participants} "
+                             f"participants over {net.num_participants}/{net.max_participants}")
+                    net = least
             if net is None:
                 self._err = (f"no joinable FRLG network (saw {len(networks)}, "
                              f"{len(joinable)} joinable) - set --comm-id from the list above")
