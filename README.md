@@ -23,6 +23,9 @@
 | [docs/01-assessment.md](docs/01-assessment.md) | 기술 스택 평가 — 툴체인 조합, 미싱 링크, 리스크 |
 | [docs/02-roadmap.md](docs/02-roadmap.md) | 로드맵 — Phase 0~4 |
 | [docs/03-vm-setup-guide.md](docs/03-vm-setup-guide.md) | 외장하드 VM 셋업 가이드 (Ubuntu Server, 최소 오버헤드) |
+| [docs/04-trade-workflow.md](docs/04-trade-workflow.md) | 트레이드 워크플로우 v1 (검증된 절차) |
+| [docs/05-phase2-design.md](docs/05-phase2-design.md) | Phase 2 상세 설계 — PC↔PC 인터넷 브리지 |
+| [docs/06-distribution.md](docs/06-distribution.md) | 배포 전략 — 리눅스 레이어 분석, WSL2/ESP32 경로 |
 | [docs/research/01-frlg-ldn-trade.md](docs/research/01-frlg-ldn-trade.md) | Tornadus 프로젝트 리서치 |
 | [docs/research/02-gb-link-celio.md](docs/research/02-gb-link-celio.md) | GB-Link/Celio 생태계 리서치 |
 | [docs/research/03-kinnay-ldn.md](docs/research/03-kinnay-ldn.md) | LDN 프로토콜 리서치 |
