@@ -33,6 +33,15 @@ LINKCMD_NAMES = {v: k for k, v in dict(
     READY_CANCEL_TRADE=READY_CANCEL_TRADE, PLAYER_CANCEL_TRADE=PLAYER_CANCEL_TRADE,
     BOTH_CANCEL_TRADE=BOTH_CANCEL_TRADE, PARTNER_CANCEL_TRADE=PARTNER_CANCEL_TRADE).items()}
 
+# Remote state-channel message types [PHASE2_DESIGN.md S4.2]. The trade FSM is the layer that
+# INTERPRETS these game-semantic messages; transport.RemoteTransport only frames/relays them, so
+# these MUST match its MWLB frame msg_type constants (MSG_TRADE_SELECT / MSG_TRADE_CONFIRM /
+# MSG_TRADE_CANCEL). TRADE_SELECT=the partner (leader) picked a mon slot, TRADE_CONFIRM=the partner
+# committed the trade, TRADE_CANCEL=the partner cancelled.
+REMOTE_TRADE_SELECT = 0x01
+REMOTE_TRADE_CONFIRM = 0x02
+REMOTE_TRADE_CANCEL = 0x03
+
 PARTY_SIZE = 6
 # Block counts (= ceil(size/12)) used to classify a completed peer-0 block.
 COUNT_LINKCMD = 2
@@ -448,6 +457,16 @@ class TradeEngine:
         self.done = False
         self.cancelled = False
 
+        # Remote channel hook (leader-leader EMU). None unless the sim wires a callable here; when
+        # set the engine calls it as `remote_hook(msg_type, payload)` whenever the LOCAL host's
+        # leader broadcast (SET_MONS_TO_TRADE / CONFIRM_FINISH_TRADE / *_CANCEL) is processed, so the
+        # sim can relay it over the remote channel [PHASE2_DESIGN.md S3/S4]. None = hooks off (offline
+        # ReplayTransport / plain LiveTransport behavior is byte-for-byte unchanged).
+        self.remote_hook = None
+        # reentrancy guard: while apply_remote() synthesizes a remote broadcast into the FSM we must
+        # NOT re-relay it back out (loop prevention, PHASE2_DESIGN.md S4.3).
+        self._remote_suppress = False
+
         # CHILD-INITIATED standby barriers [link_rfu_2.c:1566-1573]. The child reaches the SAME
         # trade.c / trade_scene.c state the host does and calls SetLinkStandbyCallback() ITSELF, so the
         # engine INITIATEs a barrier at each FSM standby point (a)..(d) so a strict-ROM host parked in
@@ -835,6 +854,7 @@ class TradeEngine:
 
     def _on_linkcmd(self, cmd, cursor):
         self.log(f"<- LINKCMD {LINKCMD_NAMES.get(cmd, hex(cmd))} cursor={cursor}")
+        self._notify_remote(cmd, cursor)
         if cmd == SET_MONS_TO_TRADE:
             # [S6] SET_MONS_TO_TRADE -> partnerCursorPosition = recv[0][1] + PARTY_SIZE; the host
             # then shows the confirm prompt (CB_PRINT_IS_THIS_OKAY, trade.c:1653-1657). We store the
@@ -894,6 +914,47 @@ class TradeEngine:
                 self.log("barrier (d): INITIATE cancel-exit standby [trade.c:2117-2132]")
             else:
                 self.done = True
+
+    # ---- remote channel hooks (leader-leader EMU) ---------------------------
+    def _notify_remote(self, cmd, cursor):
+        """TX hook: relay a LOCAL host (leader) broadcast to the remote peer via the sim-wired
+        remote_hook. Only the three trade state-changes the remote peer's FSM mirrors are relayed -
+        slot select (SET_MONS_TO_TRADE), commit (CONFIRM_FINISH_TRADE), cancel (*_CANCEL)
+        [PHASE2_DESIGN.md S4.2]. Suppressed while apply_remote() synthesizes a remote broadcast
+        itself, so a relayed message is never echoed back (loop prevention, S4.3)."""
+        if self.remote_hook is None or self._remote_suppress:
+            return
+        if cmd == SET_MONS_TO_TRADE:
+            self.remote_hook(REMOTE_TRADE_SELECT, bytes([cursor % PARTY_SIZE]))
+        elif cmd == CONFIRM_FINISH_TRADE:
+            self.remote_hook(REMOTE_TRADE_CONFIRM, b"")
+        elif cmd in (PLAYER_CANCEL_TRADE, BOTH_CANCEL_TRADE, PARTNER_CANCEL_TRADE):
+            self.remote_hook(REMOTE_TRADE_CANCEL, b"")
+
+    def apply_remote(self, msg_type, payload):
+        """RX hook: reflect a REMOTE peer's action into the local FSM as the equivalent LOCAL host
+        (leader) broadcast - the virtual GBA performs the remote player's action on its behalf
+        [PHASE2_DESIGN.md S3.4]. The broadcast is synthesized DIRECTLY into the FSM (never the wire /
+        local socket), so a remote message can never loop back into the local broadcast path (S4.3).
+        HEARTBEAT / STATE_SYNC / unknown types are not trade-FSM inputs and are ignored."""
+        payload = bytes(payload or b"")
+        if msg_type == REMOTE_TRADE_SELECT:
+            cmd, cursor = SET_MONS_TO_TRADE, (payload[0] if payload else 0)
+        elif msg_type == REMOTE_TRADE_CONFIRM:
+            cmd, cursor = CONFIRM_FINISH_TRADE, 0
+        elif msg_type == REMOTE_TRADE_CANCEL:
+            cmd, cursor = PLAYER_CANCEL_TRADE, 0
+        else:
+            return                      # HEARTBEAT / STATE_SYNC / unknown: not trade-FSM inputs
+        action = ("select" if msg_type == REMOTE_TRADE_SELECT
+                  else "confirm" if msg_type == REMOTE_TRADE_CONFIRM else "cancel")
+        self.log(f"remote: peer {action} -> synthesize host "
+                 f"{LINKCMD_NAMES.get(cmd, hex(cmd))} cursor={cursor}")
+        self._remote_suppress = True
+        try:
+            self._on_linkcmd(cmd, cursor)
+        finally:
+            self._remote_suppress = False
 
     # ---- validity gates (S5 select / S6 confirm) ----------------------------
     def _num_other_alive(self, slot):
