@@ -37,6 +37,7 @@
 1. **phy 감지**: `iw phy | grep Wiphy` — USB 리셋마다 번호 증가 (phy0→1→2)
 2. **기존 wlx/ldn vif 삭제**: `iw dev <iface> del` — rtl8xxxu 계열은 phy당 vif 1개 제한 (실측: `Match already configured`/EBUSY 방지)
 3. **NM에서 카드 제외**: `nmcli device set <iface> managed no` (즉시) 또는 unmanaged conf (재부팅) — EBUSY 방지
+   - 영구화(카드 교체 면역): `sudo scripts/setup-nm-unmanaged.sh` 실행 후 **재부팅** — reload/restart 절대 금지 (VM 네트워크 사망)
 4. **채널 고정**: 실행 전 스캔으로 스위치 광고 채널 확인 (1/6/11)
 
 ## 현재 검증 상태 (2026-08-21)
