@@ -148,13 +148,13 @@ class BssidPatchTest(unittest.TestCase):
     def setUp(self):
         self.wlan_mod = _install_fake_modules()
         tmod._BSSID_PATCH.update(installed=False, failed=False, warned=False)
-        tmod._ASSOC_TARGET["bssid"] = None
+        tmod._ASSOC_TARGET.update(bssid=None, token=None)
 
     def tearDown(self):
         for name in ("ldn", "ldn.wlan", "nl80211"):
             sys.modules.pop(name, None)
         tmod._BSSID_PATCH.update(installed=False, failed=False, warned=False)
-        tmod._ASSOC_TARGET["bssid"] = None
+        tmod._ASSOC_TARGET.update(bssid=None, token=None)
 
     # -- 1. CONNECT-only injection -----------------------------------------------
     def test_connect_request_gets_mac_injected(self):
@@ -289,6 +289,34 @@ class BssidPatchTest(unittest.TestCase):
         self.assertIn("patched", logs[0])
         self.assertTrue(tmod.install_target_bssid_patch(logs.append))  # installed guard: True...
         self.assertEqual(len(logs), 1)                                 # ...without a new log
+
+    # -- 7. WP-C (H-2): generation-token slot - a stale attempt's late finally-clear must not
+    #       clobber the pin a newer attempt armed (start() retry race -> silent SSID+channel
+    #       fallback). The proxy reads only ["bssid"], so the token lives beside it.
+    def test_set_set_old_clear_keeps_new(self):
+        t1 = tmod.set_assoc_target(PIN_A)
+        self.assertEqual(tmod._ASSOC_TARGET["bssid"], PIN_A)
+        t2 = tmod.set_assoc_target(PIN_B)                      # retry re-arms the single slot
+        self.assertEqual(tmod._ASSOC_TARGET["bssid"], PIN_B)
+        self.assertIsInstance(t1, int)
+        self.assertNotEqual(t1, t2)                            # generations differ
+        tmod.clear_assoc_target(t1)                            # OLD attempt's finally, late
+        self.assertEqual(tmod._ASSOC_TARGET["bssid"], PIN_B)   # new pin survives untouched
+        self.assertEqual(tmod._ASSOC_TARGET["token"], t2)
+        tmod.clear_assoc_target(t2)                            # only the LIVE token disarms
+        self.assertIsNone(tmod._ASSOC_TARGET["bssid"])
+        self.assertIsNone(tmod._ASSOC_TARGET["token"])
+
+    def test_clear_assoc_target_ignores_token_mismatch(self):
+        tok = tmod.set_assoc_target(PIN_A)
+        for stale in (None, tok - 1, tok + 1, "bogus", PIN_A):
+            tmod.clear_assoc_target(stale)                     # every wrong token: silent no-op
+            self.assertEqual(tmod._ASSOC_TARGET["bssid"], PIN_A)
+            self.assertEqual(tmod._ASSOC_TARGET["token"], tok)
+        tmod.clear_assoc_target(tok)                           # the matching token disarms
+        self.assertIsNone(tmod._ASSOC_TARGET["bssid"])
+        self.assertIsNone(tmod._ASSOC_TARGET["token"])
+        tmod.clear_assoc_target(tok)                           # already disarmed: still a no-op
 
 
 if __name__ == "__main__":
