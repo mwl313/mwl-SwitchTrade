@@ -157,7 +157,32 @@ _LDN_TESTED_VERSION = "0.0.17"   # the only ldn flow this patch is verified agai
 
 # The BSSID the patched _connect_network injects (None = stock behavior). Set by LiveTransport
 # right before the join, cleared when the join context exits; one radio, so a single slot is enough.
-_ASSOC_TARGET = {"bssid": None}
+# WP-C (H-2): every arm/disarm goes through a generation token so a stale attempt thread's late
+# finally-clear can't clobber the pin a newer attempt just armed (retry-race -> silent SSID+channel
+# fallback). Access ONLY via set_assoc_target/clear_assoc_target below.
+_ASSOC_TARGET = {"bssid": None, "token": None}
+
+_ASSOC_TOKENS = iter(range(1, 1 << 62))          # monotonic generation source
+_ASSOC_LOCK = threading.Lock()
+
+
+def set_assoc_target(bssid):
+    """Arm the association pin and return this join's generation token."""
+    with _ASSOC_LOCK:
+        token = next(_ASSOC_TOKENS)
+        _ASSOC_TARGET["bssid"] = bssid
+        _ASSOC_TARGET["token"] = token
+        return token
+
+
+def clear_assoc_target(token):
+    """Disarm the pin only when `token` is still the live generation; stale tokens are ignored."""
+    if token is None:
+        return
+    with _ASSOC_LOCK:
+        if _ASSOC_TARGET["token"] == token:
+            _ASSOC_TARGET["bssid"] = None
+            _ASSOC_TARGET["token"] = None
 
 _BSSID_PATCH = {"installed": False, "failed": False, "warned": False}
 
@@ -692,7 +717,7 @@ class LiveTransport:
             param.ifname = self.ifname                # station iface (like the bridge: ldnclient)
             self.info("Joining the host...")
             try:
-                _ASSOC_TARGET["bssid"] = bssid        # read by the patched _connect_network
+                self._pin_token = set_assoc_target(bssid)   # read by the patched _connect_network
                 if bssid is not None:
                     if patched:                       # MED③: only claim pinning when it is real
                         self.log(f"[live] pinning association to BSSID {_mac_str(bssid)} "
@@ -747,7 +772,7 @@ class LiveTransport:
                     while not self._stop.is_set():
                         await trio.sleep(0.2)
             finally:
-                _ASSOC_TARGET["bssid"] = None         # never leak the pin past this join
+                clear_assoc_target(getattr(self, "_pin_token", None))  # never leak the pin past this join
 
         try:
             trio.run(main)
