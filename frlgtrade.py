@@ -162,6 +162,15 @@ def resolve_phy(phy_opt, log):
     )
 
 
+def _target_bssid_arg(value):
+    """argparse type for --target-bssid (C-4): 'auto' (pin the scanned network's address) or a MAC
+    like 98:41:5c:79:41:38. Rejected values exit before any radio join is attempted."""
+    try:
+        return tmod.normalize_target_bssid(value)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e))
+
+
 def create_relay_session(relay_url, lg):
     """role=host with no --session-id: ask the relay to mint a fresh 6-char session id via the
     standard urllib (no extra deps). Returns the session id string."""
@@ -200,11 +209,13 @@ def run_live(args, lg):
         lg(f"[live] relay mode: role={role} session={session_id}")
         t = tmod.RemoteTransport(relay_url=relay_url, session_id=session_id, role=role,
                                  password=password, nickname=args.ot, keys_path=args.keys,
-                                 local_comm_id=comm_id, phyname=phy, log=lg).start()
+                                 local_comm_id=comm_id, phyname=phy, log=lg,
+                                 target_bssid=args.target_bssid).start()
     else:
         lg(f"[live] scanning for FRLG LDN network (nickname={args.ot})...")
         t = tmod.LiveTransport(password=password, nickname=args.ot, keys_path=args.keys,
-                               local_comm_id=comm_id, phyname=phy, log=lg).start()
+                               local_comm_id=comm_id, phyname=phy, log=lg,
+                               target_bssid=args.target_bssid).start()
     pc = cryptomod.PiaCrypto(t.ssid)
     engine = make_engine(args, lg)
     # Pia CONNECTION layer (S0): Net 0x11->0x12, Session(13) join, RTT keepalive. WITHOUT this the
@@ -487,6 +498,14 @@ def main():
     ap.add_argument("--phy", default="", help="wifi phy for the LDN join (live); default "
                     "auto-detects the Realtek USB radio by USB ID (RTL8188EU 0bda:8179 / "
                     "RTL8192EU 0bda:818b) since usbreset/reboot bumps the wiphy number")
+    ap.add_argument("--target-bssid", dest="target_bssid", type=_target_bssid_arg, default=None,
+                    metavar="MAC|auto",
+                    help="(live, opt-in; C-4) pin the Wi-Fi association to one console by BSSID. "
+                         "With two Switches advertising the same SSID+channel, the stock ldn join "
+                         "(SSID+channel only) associated with the WRONG console (dmesg-verified; "
+                         "docs/09-testing-audit I-7). 'auto' uses the scanned network's address; "
+                         "or give the console's MAC explicitly, e.g. 98:41:5c:79:41:38. Default: "
+                         "off - unchanged SSID+channel association")
     ap.add_argument("--keys", default="~/.switch/prod.keys", help="Switch prod.keys (live)")
     ap.add_argument("--comm-id", help="LDN local_communication_id (hex) to join (live); "
                     "if omitted, joins the only available network (scan logs candidates)")
