@@ -43,9 +43,15 @@
 
 ## 다음 단계
 
-1. **Phase 2 상세설계** (`docs/05-phase2-design.md`) — RemoteTransport + 릴레이 서버
-2. LAN 2브리지 테스트 → 인터넷 (Tailscale 활용) 검증
+1. **Phase 2a 완료 (2026-08-21)**: RemoteTransport + 공용 릴레이(`relay/server.py`) + FSM 훅(`_notify_remote`/`apply_remote`) — 테스트 9개 전부 통과 (relay 4 + fsm 5)
+2. **2b (LAN 2브리지)**: 카드 2대 준비 완료 (8188EU + 8192EU, rtl8xxxu 동일 드라이버, 모니터 TX 검증됨). VM 복제 + 릴레이 경유 트레이드가 다음 마일스톤
 3. Phase 3: 세션 ID 매칭 + 클라이언트
+
+## 코드 구조 (2026-08-21 분리)
+
+- 트랙 A (리더-리더 EMU): `emu/` — frlgsim + RemoteTransport + FSM 훅
+- 트랙 B (리더-조인 프레임 중계): `framerelay/` — 다른 대화에서 개발 (공용 릴레이 사용)
+- 공용: `relay/server.py` — 상세는 `docs/06-code-structure.md`
 
 ## 파일/백업
 
