@@ -303,7 +303,11 @@ def _run(cmd):
 
 
 def _iw_del(iface):
+    """Delete a netdev and HONESTLY report the outcome (WP-E, docs/09 MEDIUM-2): `_run` swallows
+    iw's exit status/output, so a silent EBUSY/EPERM used to be logged as "removed". The only
+    truthful answer is re-querying sysfs after the delete. Returns True iff the iface is gone."""
     _run(["iw", "dev", iface, "del"])
+    return not _iface_exists(iface)
 
 
 def _sysctl(key, val):
@@ -336,8 +340,14 @@ def free_radio(phys, log=print):
     status 1 (docs/09-testing-audit I-1, C-1; the verified manual fix is exactly this "empty the
     phy" sweep). Scope is strictly the phys passed in: other adapters (built-in Wi-Fi etc.) are
     NEVER touched. Premise: the run_trade.sh wrapper's pre-setup and the ldn library recreate
-    whatever vifs they need (monitor/up/ch1, ldnclient) on the next join. Needs root."""
+    whatever vifs they need (monitor/up/ch1, ldnclient) on the next join. Needs root.
+
+    WP-E (docs/09 MEDIUM-2): every delete is VERIFIED by re-reading /sys/class/net afterwards -
+    the log says "removed" only when the netdev is really gone, "FAILED to remove" otherwise,
+    and if every attempt failed a single sudo/root hint is appended (EBUSY etc. used to hide
+    behind an unconditional "removed" line)."""
     mapping = list_phy_ifaces()
+    attempted = failed = 0
     for phy in {p for p in phys if p}:
         ifaces = mapping.get(phy, [])
         # Known LDN vifs first (kept from the earlier behavior), then every other netdev on this
@@ -346,17 +356,33 @@ def free_radio(phys, log=print):
         # would keep the stale station associated; the wrapper re-creates its vif.
         for iface in ([i for i in ifaces if i in LDN_VIFS]
                       + [i for i in ifaces if i not in LDN_VIFS]):
-            _iw_del(iface)
-            log(f"[live] freed radio: removed {iface} from {phy}")
+            # WP-E: verify the deletion instead of assuming it - an EBUSY/EPERM failure must not
+            # masquerade as success in the log.
+            attempted += 1
+            if _iw_del(iface):
+                log(f"[live] freed radio: removed {iface} from {phy}")
+            else:
+                failed += 1
+                log(f"[live] freed radio: FAILED to remove {iface} from {phy}")
     # Belt-and-suspenders: a failed/abandoned join LEAKS its station vif (still associated to the
     # host), and `iw dev` may not map it under the expected phy - a leftover, still-associated
     # `ldnclient` then makes the NEXT association fail with nl80211 status code 1. Delete every
     # known LDN vif by name unconditionally so each join starts from a clean radio.
     for vif in LDN_VIFS:
         if vif in {i for ifs in mapping.values() for i in ifs} or _iface_exists(vif):
+            attempted += 1
             _iw_del(vif)
-            _run(["ip", "link", "del", vif])
-            log(f"[live] freed radio: removed stale LDN vif {vif}")
+            _run(["ip", "link", "del", vif])        # kept: secondary attempt if iw failed
+            if not _iface_exists(vif):              # verdict AFTER both attempts (WP-E)
+                log(f"[live] freed radio: removed stale LDN vif {vif}")
+            else:
+                failed += 1
+                log(f"[live] freed radio: FAILED to remove stale LDN vif {vif}")
+    # WP-E: EVERY delete attempt failing is the signature of a permission problem (iw/ip link del
+    # need root) - say so once instead of leaving a wall of identical FAILED lines unexplained.
+    if attempted > 0 and failed == attempted:
+        log(f"[live] freed radio: all {attempted} delete attempt(s) FAILED - "
+            f"sudo로 실행했는지 확인 (root 권한 필요)")
     _run(["pkill", "-x", "wpa_supplicant"])
     time.sleep(0.3)
 
