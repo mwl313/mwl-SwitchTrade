@@ -118,6 +118,7 @@ def _install_fake_modules(version="0.0.17"):
     ldn_mod = types.ModuleType("ldn")
     ldn_mod.__path__ = []
     ldn_mod.__version__ = version
+    wlan_mod.nl80211 = nl          # what frlgsim.transport resolves (ldn.wlan's module global)
     ldn_mod.wlan = wlan_mod
 
     sys.modules["ldn"] = ldn_mod
