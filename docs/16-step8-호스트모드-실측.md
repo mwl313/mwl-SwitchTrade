@@ -53,3 +53,29 @@
 - 8188EU는 실행 전 authorized 토글이 사실상 필수 (이번에도 시작 직후 수신 사망)
 - "START_AP 성공 리턴" ≠ "beaconing 시작" — 반드시 공중 캡처로 검증할 것
 - **동일 카드에서 hostapd 비콘은 외부 수신 확인됨 → EchoGuard·모니터 캡처 설계 전체와 양립**
+
+---
+
+## ✅ 최종 해결 (같은 날 밤 — beacon head 패치 실기 검증 성공)
+
+### 적용한 패치 3단계
+1. `_build_host_beacon_head()` — hostapd -dd hexdump 역산 조립 (SSID IE + rates + DS params)
+2. `install_beacon_head_override()` — `AccessPoint`(실제 소유 클래스; Station 아님!) 몽키패치,
+   ldn에 __version__ 없어 importlib.metadata 폴백
+3. **hex-string SSID 허용** — 최종 블로커. ldn이 param.ssid.hex()(문자열)를 Station._ssid에
+   그대로 저장해서 bytes 타입체크에 걸려 매번 stock으로 폴백했었음
+
+### 실기 검증 결과 (VM1 host + VM2 스캔)
+```
+BSS a0:47:d7:b0:2b:39          ← VM1의 EMU 방
+  freq: 2437 (CH6 정확)
+  beacon interval: 100 TUs
+  capability: ESS ShortSlotTime (0x0401)   ← 우리가 만든 값 그대로!
+  signal: -37.00 dBm
+  SSID: \xd5xOO6\x91/\x1b<y\x8bDT\xcaPF     ← 실행마다 생성되는 16B 랜덤 SSID
+  Supported rates: 1.0* 2.0* 5.5* 11.0* ...
+  DS Parameter set: channel 6                ← 우리가 넣은 DS IE 그대로!
+```
+
+**호스트 모드(브리지가 FRLG 방을 직접 여는 것) 첫 실기 성공.**
+커밋: 5a68eea(구현) → bf22a85(hex-string 수정). join 경로 무수정.
