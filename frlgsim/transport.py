@@ -156,6 +156,10 @@ def install_beacon_head_override(log=print) -> bool:
                 ssid = getattr(self, "_ssid", None)
                 channel = getattr(self, "_channel", None)
                 addr = self.address()
+                # ldn passes param.ssid.hex() (a STR of hex digits) into create_ap ->
+                # Station stores it as-is; accept both hex strings and raw bytes.
+                if isinstance(ssid, str):
+                    ssid = bytes.fromhex(ssid)
                 if isinstance(ssid, (bytes, bytearray)) and isinstance(channel, int) \
                         and addr is not None:
                     head = _build_host_beacon_head(bytes(ssid), int(channel), bytes(addr))
