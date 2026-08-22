@@ -667,23 +667,31 @@ class LiveTransport:
                 self.log(f"[live] saw network comm_id=0x{n.local_communication_id:016x} "
                          f"scene={n.scene_id} {n.num_participants}/{n.max_participants} "
                          f"accept_policy={getattr(n, 'accept_policy', '?')}")
-            # Prefer an exact FRLG comm-id match; else fall back to the only joinable network.
+            # Prefer an exact comm-id match; otherwise the joinable pool IS the candidate list.
+            # T4 (2026-08-22): the old flow only fell back when EXACTLY ONE network was joinable,
+            # so with two Switches advertising (same comm-id, both 1/6) and no default-id match it
+            # bailed with "no joinable (saw 2, 2 joinable)". Now: matched -> prefer it; unmatched ->
+            # every joinable is a candidate, and >=2 candidates pick the FEWEST participants (the
+            # 8/21 rule, extended to the unmatched path). --target-bssid auto then pins whichever
+            # room we chose, so the least-participant pick cannot mis-associate.
             net = next((n for n in joinable
                         if n.local_communication_id == self.LOCAL_COMMUNICATION_ID), None)
-            if net is None and len(joinable) == 1:
-                net = joinable[0]
-                self.log(f"[live] no comm-id match; using the only joinable network "
-                         f"(comm_id=0x{net.local_communication_id:016x})")
-            elif net is not None and len(joinable) > 1:
-                # MWL (2026-08-21): two Switch ads share the same comm-id; join the room
-                # with the FEWEST participants so a guest targets the idle console
-                # (leader-leader EMU bridge), not the one already hosting a peer.
-                least = min(joinable, key=lambda n: n.num_participants)
-                if least is not net:
-                    self.log(f"[live] {len(joinable)} joinable with same comm-id; "
-                             f"choosing {least.num_participants}/{least.max_participants} "
-                             f"participants over {net.num_participants}/{net.max_participants}")
-                    net = least
+            if net is not None:
+                if len(joinable) > 1:
+                    # MWL (2026-08-21): two Switch ads share the same comm-id; join the room
+                    # with the FEWEST participants so a guest targets the idle console
+                    # (leader-leader EMU bridge), not the one already hosting a peer.
+                    least = min(joinable, key=lambda n: n.num_participants)
+                    if least is not net:
+                        self.log(f"[live] {len(joinable)} joinable with same comm-id; "
+                                 f"choosing {least.num_participants}/{least.max_participants} "
+                                 f"participants over {net.num_participants}/{net.max_participants}")
+                        net = least
+            elif joinable:
+                net = min(joinable, key=lambda n: n.num_participants)
+                self.log(f"[live] no comm-id match; {len(joinable)} joinable candidate(s) - "
+                         f"using comm_id=0x{net.local_communication_id:016x} "
+                         f"({net.num_participants}/{net.max_participants})")
             if net is None:
                 self._err = (f"no joinable FRLG network (saw {len(networks)}, "
                              f"{len(joinable)} joinable) - set --comm-id from the list above")
