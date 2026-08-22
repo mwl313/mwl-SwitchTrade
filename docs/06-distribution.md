@@ -128,11 +128,86 @@ C(ESP32)는 중장기 목표로 유지 — A가 동작하는 동안 병행 리�
 
 ---
 
-## 6. [미결] 다음 액션
+## 6. [확정] 리서치 결과 — WSL2 경로 실증 선례 확인 (2026-08-22)
 
-1. **WSL2 커스텀 커널 빌드 스크립트 + PoC 절차 문서 작성** (이 문서의 검증 체크리스트 기준)
-2. 주인님 Windows PC에서 usbipd-win + 커스텀 커널 PoC 실행
-3. PoC 결과에 따라 배포 1차안 확정 (A vs VirtualBox OVA)
-4. C(ESP32) 타당성 리서치 — 장기 트랙
+### 6.1 결정적 발견: WSL2 + rtl8xxxu 모니터 모드 동작 선례 존재
+
+**출처**: seanhungtw/usb-wifi_monitor-mode_on_WSL2 (GitHub, 2024) + usbipd-win issue #390
+
+| 검증 항목 | 결과 | 우리 프로젝트와의 관계 |
+|---|---|---|
+| **rtl8192eu → rtl8xxxu 드라이버 → WSL2 모니터 모드** | ✅ 동작 (dmesg 실측 로그 포함) | **우리 8188EU와 동일 드라이버 경로** — 8188EU도 rtl8xxxu가 담당 |
+| MT7921au (mt7921u) | ✅ 동작 (5.18에서 드라이버 포팅 필요) | 원작자 README 테스트 카드 RZ616과 같은 계열 |
+| 커스텀 커널 빌드 절차 | 문서화 완료 (Microsoft/config-wsl 기반 menuconfig) | CONFIG_MAC80211=m / CFG80211=m / RTL8XXXU=m |
+| 펌웨어 로딩 트릭 | ✅ 확보 — 커널 소스에 펌웨어 복사 + `CONFIG_EXTRA_FIRMWARE` 내장 (usbipd-win #390 코멘트) | rtl8xxxu는 펌웨어를 커널 빌드에 내장 가능 → 배포 이미지 단순화 |
+| usbipd-win attach | ✅ Microsoft 공식 지원 (커널 ≥ 5.10.60.1) | Windows 측 설치 1회 |
+| iw 모니터 전환 | ✅ `iw dev wlan0 set monitor none` + 채널 설정 | run_trade.sh의 down→set type monitor→up 순서와 동일 |
+
+**해석**: "WSL2에서 무선 브리지"는 이론이 아니라 **이미 실증된 경로**. 우리의 미검증 부분은
+①8188EU 특유의 수신 사망/IQK 이슈가 usbipd 경로에서 어떻게 나오는가 ②ldn 라이브러리의 AP join(스테이션 assoc)이
+WSL2 가상화 환경에서 통과하는가 ③TX 인젝션(framerelay 필수)이다.
+
+### 6.2 커널 구성 요구사항 (PoC 빌드 스펙)
+
+| CONFIG | 값 | 용도 |
+|---|---|---|
+| CONFIG_CFG80211 / MAC80211 | =m | nl80211 스택 (ldn 라이브러리 의존) |
+| CONFIG_RTL8XXXU | =m (+UNTESTED 옵션 확인) | 8188EU/8192EU 공용 드라이버 |
+| CONFIG_TUN | =m | TAP 인터페이스 (LiveTransport 패킷 주입) — WSL2 기본 커널에 없음, 커스텀 빌드에서 추가 |
+| CONFIG_USB_USBNET / USBIP_VHCI | =m/y | usbipd 클라이언트 측 |
+| CONFIG_EXTRA_FIRMWARE | rtlwifi 펌웨어 내장 | 펌웨어 파일 배포 불필요하게 만드는 트릭 |
+
+빌드 환경: microsoft/WSL2-Linux-Kernel 클론 → `cp Microsoft/config-wsl .config` → menuconfig → bzImage.
+배포물 = bzImage 1개(+모듈) + .wslconfig 2줄. 사용자 설치는 스크립트 1번.
+
+### 6.3 환경 차이 리스크 (VM 대비)
+
+| 항목 | VMware VM (현재 검증됨) | WSL2 (PoC 대상) |
+|---|---|---|
+| USB 경로 | VMware 패스스루 (직접) | usbipd-win (TCP/IP-over-Hyper-V 소켓 — 지연·타이밍 다름) |
+| NM | 있음 → unmanaged conf 필수 | 기본 없음(systemd on 시 설치 가능) — EBUSY 클래스 문제 자체가 안 생길 가능성 |
+| udev rename | wlx<MAC> 발생 | 동일 발생 (커널 레벨) — vif 정리 로직 영향 없음 |
+| 카드 수신 사망(IQK/절전) | Windows 절전이 원인 중 하나 | **Windows 호스트 그대로라 절전 변수 유지** — powercfg 예방 설정 여전히 필요 |
+| ldn.scan hang | trio 타임아웃 무력화 실측 | 미지수 — PoC에서 timeout 래퍼(D-1) 선행 적용 후 테스트 |
+
+---
+
+## 7. [방향] 두 트랙과 배포 전략의 접점 (브레인스토밍)
+
+### 7.1 트랙별 배포 요구사항 차이
+
+| 요소 | 트랙 A (EMU 리더-리더) | 트랙 B (framerelay 자연 통신) |
+|---|---|---|
+| 필요한 무선 동작 | 모니터 RX + AP join (스테이션 assoc) + UDP 데이터 | 모니터 RX + **TX 인젝션(radiotap)** |
+| 게임 해석 | frlgsim 필요 | 불필요 (프레임 통째 중계) |
+| ACK 타이밍 민감도 | 낮음 (게임 레벨 재시도) | **높음 (SIFS ACK → 인터넷 왕복 문제, §4 실측 대상)** |
+| WSL2 영향 | usbipd 지연이 assoc/데이터에 영향 가능 | usbipd 지연 + TX 인젝션 성공 여부가 **이중 리스크** |
+
+**브레인스토밍 결론 1**: WSL2 PoC는 **트랙 A 기준으로 먼저** 하는 게 맞아요.
+트랙 A는 이미 VM에서 실기 트레이드 성공 이력이 있어서 "WSL2 환경 차이"만 분리 측정 가능.
+트랙 B는 ACK 타이밍이라는 독자 리스크가 있어서, VM 실측(2대 준비되면)과 WSL2 검증을 섞으면 원인 분리가 어려워져요.
+
+**브레인스토밍 결론 2**: 배포 이미지는 **두 트랙 공통 하부**로 만든다.
+커널(bzImage)+드라이버+펌웨어+usbipd 세팅은 동일하고, 위에 얹는 앱만 달라짐:
+```
+공통 하부: Windows + usbipd-win + WSL2(Ubuntu) + 커스텀 bzImage + ldnvenv
+  ├─ 트랙 A 앱: emu/frlgtrade.py (--relay-url ...)
+  └─ 트랙 B 앱: framerelay/bridge.py (나중)
+```
+즉 WSL2 PoC가 성공하면 **한 번의 검증으로 두 트랙 모두의 배포 기반이 완성**돼요.
+
+**브레인스토밍 결론 3**: 릴레이 서버 위치와 무관.
+relay/server.py는 어차피 Mac mini/클라우드에서 돌고, WSL2 브리지는 WSS 클라이언트만 하므로
+배포 전략은 릴레이 아키텍처 변경을 유발하지 않아요.
+
+### 7.2 PoC 실행 순서 제안 (코드 수정 전 문서 작업)
+
+1. [문서] WSL2 PoC 절차 문서 작성 — 커널 빌드 스크립트 + usbipd 명령 + .wslconfig + 검증 체크리스트 (§6.2 스펙 기준)
+2. [Windows] PoC-1: 커스텀 커널 부팅 확인 (uname -a)
+3. [Windows] PoC-2: 8188EU attach → lsusb/dmesg → modprobe rtl8xxxu → iw phy (monitor 지원)
+4. [Windows] PoC-3: 스캔 found 1 (스위치 리더 광고) — **timeout 래핑 필수**
+5. [Windows] PoC-4: 트랙 A 트레이드 1회 (VM 워크플로우 v1 재현)
+6. 판정: 성공 → 배포 1차안 = WSL2 확정 / 실패 → VirtualBox OVA 폴백 (§5 표)
 
 > 참고: 이 문서의 "배포"는 Phase 2c(인터넷 브리지) 완료 이후 최종 사용자 대상. 현재는 설계 단계.
+> 코드 수정/신규 작성 없음 — 본 섹션은 리서치·설계만 포함 (2026-08-22).
