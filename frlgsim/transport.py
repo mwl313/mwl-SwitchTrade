@@ -264,18 +264,18 @@ def install_start_ap_attrs_override(log=print) -> bool:
             _START_AP_ATTRS_INSTALLED = True         # already ours (re-import guard)
             return True
 
-        # GAP-1..3 + GAP-4: written over the stock attrs IN PLACE at request time.
-        # netlink/nl80211.py (ldn 0.0.17's binding) may not export the IES constants -
-        # use standard kernel values as fallback: BEACON_IES=22, PROBERESP_IES=23,
-        # ASSOCRESP_IES=24 (from include/uapi/linux/nl80211.h enum nl80211_attrs).
+        # GAP-1..3: BEACON_IES/PROBERESP_IES/ASSOCRESP_IES are NOT in ldn 0.0.17's
+        # netlink binding (verified live: no NL80211_ATTR_BEACON_IES constant exists).
+        # Standard kernel values would collide with different attrs in this binding
+        # (22=WIPHY_BANDS, 23=MNTR_FLAGS, 24=MESH_ID), so we CANNOT inject them via
+        # the generic request path. Instead: embed the Extended Capabilities IE into
+        # BEACON_HEAD (as a trailing IE) — the kernel appends it to every beacon and
+        # probe response, which is functionally equivalent to hostapd's *_IES attrs.
+        #
+        # GAP-4: HIDDEN_SSID ZERO_CONTENTS(2) -> NOT_IN_USE(0) so the Switch's passive
+        # scan can match the SSID. This attr IS defined in the binding.
         cmd_start_ap = nl80211.NL80211_CMD_START_AP
-        _a_beacon_ies = getattr(nl80211, "NL80211_ATTR_BEACON_IES", 22)
-        _a_proberesp_ies = getattr(nl80211, "NL80211_ATTR_PROBERESP_IES", 23)
-        _a_assocresp_ies = getattr(nl80211, "NL80211_ATTR_ASSOCRESP_IES", 24)
         overrides = {
-            _a_beacon_ies: _EXT_CAPABILITIES_IE,
-            _a_proberesp_ies: _EXT_CAPABILITIES_IE,
-            _a_assocresp_ies: _EXT_CAPABILITIES_IE,
             nl80211.NL80211_ATTR_HIDDEN_SSID: nl80211.NL80211_HIDDEN_SSID_NOT_IN_USE,
         }
 

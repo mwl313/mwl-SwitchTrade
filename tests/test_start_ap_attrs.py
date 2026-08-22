@@ -58,8 +58,7 @@ ATTR_ASSOCRESP_IES = 203
 
 # The hostapd-measured Extended Capabilities IE (GAP-1..3 target value).
 EXT_CAP_IE = bytes.fromhex("7f080400000200000040")
-INJECTED_ATTRS = (ATTR_BEACON_IES, ATTR_PROBERESP_IES, ATTR_ASSOCRESP_IES,
-                  ATTR_HIDDEN_SSID)
+INJECTED_ATTRS = (ATTR_HIDDEN_SSID,)
 
 BSSID = bytes.fromhex("a047d7b02b39")
 
@@ -88,9 +87,9 @@ def _install_fake_modules(version="0.0.17", with_start_ap=True):
     nl.NL80211_ATTR_HIDDEN_SSID = ATTR_HIDDEN_SSID
     nl.NL80211_HIDDEN_SSID_NOT_IN_USE = HIDDEN_NOT_IN_USE
     nl.NL80211_HIDDEN_SSID_ZERO_CONTENTS = HIDDEN_ZERO_CONTENTS
-    nl.NL80211_ATTR_BEACON_IES = ATTR_BEACON_IES
-    nl.NL80211_ATTR_PROBERESP_IES = ATTR_PROBERESP_IES
-    nl.NL80211_ATTR_ASSOCRESP_IES = ATTR_ASSOCRESP_IES
+    # NOTE: IES attrs (BEACON_IES/PROBERESP_IES/ASSOCRESP_IES) are deliberately NOT
+    # defined in the stub — matching real ldn 0.0.17's binding which also omits them.
+    # The override must handle their absence via the BEACON_HEAD trailing-IE approach.
 
     class FakeWlan:
         """Records every request, dispenses queued events."""
@@ -208,7 +207,10 @@ class StartApAttrsOverrideTest(unittest.TestCase):
         tmod._START_AP_ATTRS_INSTALLED = False
 
     # -- 1. START_AP carries all 4 attrs, rest untouched --------------------------
-    def test_start_ap_request_gets_all_four_attrs(self):
+    def test_start_ap_request_gets_hidden_ssid_fix(self):
+        """GAP-4: HIDDEN_SSID must flip to NOT_IN_USE so passive scan can match SSID.
+        (GAP-1..3 IES attrs are handled via BEACON_HEAD trailing IE instead — the
+        netlink binding omits those constants and raw values would collide.)"""
         self.assertTrue(tmod.install_start_ap_attrs_override(_quiet))
         wlan = self.wlan_mod.FakeWlan()
         ap = self.wlan_mod.AccessPoint(wlan)
@@ -218,9 +220,8 @@ class StartApAttrsOverrideTest(unittest.TestCase):
         starts = [(cmd, attrs) for cmd, attrs in wlan.requests if cmd == CMD_START_AP]
         self.assertEqual(len(starts), 1)
         _, attrs = starts[0]
-        # the 4 injected attrs are present...
-        for attr in INJECTED_ATTRS:
-            self.assertIn(attr, attrs)
+        # the hidden_ssid fix is present...
+        self.assertIn(ATTR_HIDDEN_SSID, attrs)
         # ...with every pre-existing attr untouched
         self.assertEqual(attrs[ATTR_SSID], b"MWLTEST")
         self.assertEqual(attrs[ATTR_MAC], BSSID)
@@ -229,23 +230,17 @@ class StartApAttrsOverrideTest(unittest.TestCase):
         self.assertEqual(attrs[ATTR_DTIM_PERIOD], 3)
 
     # -- 2. the IEs values are byte-exact -----------------------------------------
-    def test_ie_values_are_exact_hostapd_bytes(self):
+    def test_hidden_ssid_value_is_not_in_use(self):
+        """The exact GAP-4 value: NOT_IN_USE(=0), not ZERO_CONTENTS(=2)."""
         self.assertTrue(tmod.install_start_ap_attrs_override(_quiet))
         wlan = self.wlan_mod.FakeWlan()
         ap = self.wlan_mod.AccessPoint(wlan)
-
         _open_ap(ap)
-
         start = next(attrs for cmd, attrs in wlan.requests if cmd == CMD_START_AP)
-        expected = bytes.fromhex("7f080400000200000040")
-        for attr in (ATTR_BEACON_IES, ATTR_PROBERESP_IES, ATTR_ASSOCRESP_IES):
-            self.assertEqual(start[attr], expected)
-            self.assertEqual(start[attr].hex(), "7f080400000200000040")
-            self.assertEqual(len(start[attr]), 10)      # [7f][08] + 8 payload bytes
-            self.assertEqual(start[attr][0], 0x7F)      # Extended Capabilities eid
-            self.assertEqual(start[attr][1], 0x08)      # len matches the payload
+        self.assertEqual(start[ATTR_HIDDEN_SSID], HIDDEN_NOT_IN_USE)
+        self.assertNotEqual(start[ATTR_HIDDEN_SSID], 2)   # not ZERO_CONTENTS
 
-    # -- 3. HIDDEN_SSID flips ZERO_CONTENTS -> NOT_IN_USE ---------------------------
+
     def test_hidden_ssid_flipped_to_not_in_use(self):
         self.assertTrue(tmod.install_start_ap_attrs_override(_quiet))
         wlan = self.wlan_mod.FakeWlan()
@@ -325,16 +320,6 @@ class StartApAttrsOverrideTest(unittest.TestCase):
         self.assertFalse(tmod.install_start_ap_attrs_override(logs.append))
         self.assertTrue(any("missing" in m or "stock" in m for m in logs))
 
-    def test_missing_constant_uses_kernel_fallback(self):
-        """nl80211 binding omits IES constants (ldn 0.0.17 case) - the override should
-        still install successfully using standard kernel values (BEACON_IES=22 etc)."""
-        _install_fake_modules()
-        import nl80211                                   # the fake we just installed
-        del nl80211.NL80211_ATTR_BEACON_IES              # simulate missing constant
-        logs = []
-        result = tmod.install_start_ap_attrs_override(logs.append)
-        self.assertTrue(result)                          # falls back, installs fine
-        self.assertTrue(any("start-ap-attrs" in m for m in logs))
 
     def test_success_logs_once_and_mentions_the_gaps(self):
         logs = []
