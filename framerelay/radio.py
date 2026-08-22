@@ -14,6 +14,7 @@ Linux-only at runtime (AF_PACKET); the module imports cleanly anywhere so offlin
 can exercise the codec/filter helpers with stub sockets.
 """
 
+import errno
 import socket
 import struct
 import time
@@ -112,6 +113,12 @@ def matches_host(info, host_mac):
     return any(a == host_mac for a in (info.addr1, info.addr2, info.addr3) if a is not None)
 
 
+# Consecutive hard recv() errors (anything beyond the benign errno classes below)
+# before MonitorRadio declares the interface dead (audit 10 M-2: ENODEV on USB unplug
+# or a driver wedge used to look exactly like "no traffic").
+MAX_RECV_ERRORS = 5
+
+
 class MonitorRadio:
     """One monitor-mode interface doing both capture and injection.
 
@@ -125,6 +132,7 @@ class MonitorRadio:
         self.host_mac = parse_mac(host_mac) if isinstance(host_mac, str) else host_mac
         self.log = log
         self._sock = None
+        self._recv_errors = 0
 
     def open(self, sock=None):
         """Bind AF_PACKET SOCK_RAW to the monitor iface. PACKET_IGNORE_OUTGOING is set
@@ -154,19 +162,41 @@ class MonitorRadio:
             self._sock = None
 
     def recv(self, timeout=0.05):
-        """Next captured 802.11 frame (radiotap stripped), or None on timeout/empty."""
+        """Next captured 802.11 frame (radiotap stripped), or None on timeout/empty.
+
+        OSError taxonomy (audit 10 M-2): EAGAIN/EWOULDBLOCK/EINTR are benign timing
+        signals - keep polling. Any other errno (ENODEV on USB unplug, driver wedge,
+        ...) logs one line and returns None for this call, but after MAX_RECV_ERRORS
+        consecutive hard errors raises RuntimeError so the caller can stop instead of
+        capturing silence forever.
+        """
         if self._sock is None:
             raise RuntimeError("MonitorRadio.recv() before open()")
         deadline = time.monotonic() + timeout
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                self._recv_errors = 0
                 return None
             self._sock.settimeout(remaining)
             try:
                 data = self._sock.recv(65535)
-            except (TimeoutError, OSError):
+            except (TimeoutError, socket.timeout):
+                self._recv_errors = 0
                 return None
+            except OSError as e:
+                if e.errno in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EINTR):
+                    continue                    # transient - poll again within the window
+                self._recv_errors += 1
+                if self._recv_errors >= MAX_RECV_ERRORS:
+                    self._recv_errors = 0
+                    raise RuntimeError(
+                        f"monitor iface {self.iface}: {MAX_RECV_ERRORS} consecutive "
+                        f"recv errors (interface gone? driver wedged?): {e}") from e
+                self.log(f"[radio] recv error {self._recv_errors}/{MAX_RECV_ERRORS} "
+                         f"({e}); will keep polling")
+                return None
+            self._recv_errors = 0
             frame = strip_radiotap(data)
             if frame:
                 return frame

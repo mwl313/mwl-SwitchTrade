@@ -32,11 +32,22 @@ import time
 from common import mwlb
 from framerelay.radio import is_beacon, mac_str, parse_80211, wrap_radiotap
 
-HEARTBEAT_INTERVAL = 30.0     # keepalive the relay enforces (relay/server.py HEARTBEAT_TIMEOUT)
-RECONNECT_ATTEMPTS = 3        # same budget as Track A's RemoteTransport
+HEARTBEAT_INTERVAL = 10.0     # relay/server.py HEARTBEAT_TIMEOUT is 30.0s - sending at
+                              # exactly the timeout let silent gaps exceed it and the
+                              # relay closed us with 4408 in a loop; 1/3 of the budget
+                              # keeps a missed beat recoverable (audit 10 H-1)
 RADIO_POLL = 0.05             # capture poll quantum
 BEACON_INTERVAL = 0.1         # beacon replay period (docs/07 section 6: 100ms)
+BEACON_TTL = 1.5              # cached beacons older than this are never replayed again -
+                              # a closed room must not haunt the peer's scan list
+                              # indefinitely (audit 10 H-4)
 ECHO_WINDOW = 2.0             # seconds a re-injected hash stays suppressed on capture
+OUTBOX_MAXSIZE = 200          # WS backlog cap: ~10fps beacons during an outage would
+                              # otherwise grow without bound and dump minutes-stale
+                              # frames on reconnect (audit 10 H-2)
+RECONNECT_BACKOFF = 1.0       # seconds before the first reconnect retry...
+RECONNECT_BACKOFF_MAX = 60.0  # ...doubling every failure up to this cap, forever
+                              # (audit 10 H-3: giving up after 3 tries left a zombie)
 
 
 def compose_relay_url(base, session_id, role):
@@ -51,25 +62,34 @@ def compose_relay_url(base, session_id, role):
 
 class BeaconCache:
     """Latest unique host beacons, oldest first, capped. Deduped by content hash so the
-    100ms replay doesn't stack copies of the same beacon captured repeatedly."""
+    100ms replay doesn't stack copies of the same beacon captured repeatedly.
 
-    def __init__(self, capacity=4):
+    Entries carry the time they were cached and expire after `ttl` seconds (audit 10
+    H-4): once a Switch closes its room the last beacons must stop replaying, otherwise
+    the peer keeps seeing a ghost room forever.
+    """
+
+    def __init__(self, capacity=4, ttl=BEACON_TTL):
         self.capacity = capacity
-        self._frames = []            # [(hash, frame)] oldest -> newest
+        self.ttl = ttl
+        self._frames = []            # [(hash, frame, monotonic-added)] oldest -> newest
         self._lock = threading.Lock()
 
     def add(self, frame):
         frame = bytes(frame)
         digest = hashlib.sha1(frame).digest()
+        now = time.monotonic()
         with self._lock:
             self._frames = [e for e in self._frames if e[0] != digest]
-            self._frames.append((digest, frame))
+            self._frames.append((digest, frame, now))
             while len(self._frames) > self.capacity:
                 self._frames.pop(0)
 
     def snapshot(self):
+        now = time.monotonic()
         with self._lock:
-            return [frame for _h, frame in self._frames]
+            self._frames = [e for e in self._frames if now - e[2] <= self.ttl]
+            return [frame for _h, frame, _t in self._frames]
 
     def __len__(self):
         with self._lock:
@@ -85,23 +105,30 @@ class EchoGuard:
         self._seen = {}              # hash -> monotonic time of last injection
         self._lock = threading.Lock()
 
+    def _prune_locked(self, now):
+        """Drop entries past the window. Caller must hold the lock (audit 10 M-1:
+        record()/duplicate() prune as they go so _seen cannot grow without bound)."""
+        cutoff = now - self.window
+        self._seen = {h: t for h, t in self._seen.items() if t >= cutoff}
+
+    def prune(self):
+        with self._lock:
+            self._prune_locked(time.monotonic())
+
     def record(self, frame):
         digest = hashlib.sha1(bytes(frame)).digest()
         now = time.monotonic()
         with self._lock:
+            self._prune_locked(now)
             self._seen[digest] = now
 
     def duplicate(self, frame):
         digest = hashlib.sha1(bytes(frame)).digest()
         now = time.monotonic()
         with self._lock:
+            self._prune_locked(now)
             stamp = self._seen.get(digest)
             return stamp is not None and now - stamp <= self.window
-
-    def prune(self):
-        cutoff = time.monotonic() - self.window
-        with self._lock:
-            self._seen = {h: t for h, t in self._seen.items() if t >= cutoff}
 
 
 class BeaconReplayer(threading.Thread):
@@ -150,8 +177,8 @@ class RelayBridge:
         self.beacon_cache = BeaconCache()
         self.echo_guard = EchoGuard()
         self.stats = {"captured": 0, "relayed_out": 0, "injected": 0,
-                      "dropped_filter": 0, "dropped_echo": 0}
-        self._outbox = queue.Queue()       # MWLB frames waiting for the WS thread
+                      "dropped_filter": 0, "dropped_echo": 0, "dropped_backlog": 0}
+        self._outbox = queue.Queue(maxsize=OUTBOX_MAXSIZE)  # MWLB frames for the WS thread
         self._ws = None                    # live websockets connection (async thread only)
         self._ws_thread = None
         self._beacon_thread = None
@@ -174,7 +201,22 @@ class RelayBridge:
             self.beacon_cache.add(frame)
             if self.verbose:
                 self.log(f"[bridge] beacon cached ({len(self.beacon_cache)} in queue)")
-        self._outbox.put(mwlb.build_frame(mwlb.MSG_FRAME_RELAY, frame))
+        # Audit 10 H-2: the queue is capped; on overflow evict the OLDEST queued frame
+        # and keep this fresh capture ("newest wins") - a reconnect must replay what
+        # the Switch just sent, not minutes-stale ACKs that piled up mid-outage.
+        mwlb_frame = mwlb.build_frame(mwlb.MSG_FRAME_RELAY, frame)
+        try:
+            self._outbox.put_nowait(mwlb_frame)
+        except queue.Full:
+            self.stats["dropped_backlog"] += 1      # counts the evicted head-of-line
+            try:
+                self._outbox.get_nowait()
+            except queue.Empty:
+                pass                                # WS thread drained it in between
+            try:
+                self._outbox.put_nowait(mwlb_frame)
+            except queue.Full:
+                self.stats["dropped_backlog"] += 1  # raced again - count the loss
         self.stats["relayed_out"] += 1
         if self.verbose:
             self.log(f"[bridge] TX relay {len(frame)}B {frame[:16].hex()}...")
@@ -248,8 +290,13 @@ class RelayBridge:
         while not self._stop.is_set():
             try:
                 frame = self.radio.recv(RADIO_POLL)
-            except RuntimeError:
-                break                       # closed underneath us during shutdown
+            except RuntimeError as e:
+                # Shutdown close underneath us, or MonitorRadio's consecutive-error
+                # tripwire (audit 10 M-2) - either way the loop must end loudly, not
+                # as another silent zombie.
+                if not self._stop.is_set():
+                    self.log(f"[bridge] radio loop aborting: {e}")
+                break
             if frame is not None:
                 try:
                     self.on_radio_capture(frame)
@@ -268,11 +315,13 @@ class RelayBridge:
         except ImportError as e:            # pragma: no cover
             self.log(f"[bridge] missing dep for relay mode: {e}")
             return
-        attempt = 0                         # RECONNECT_ATTEMPTS per outage (like Track A)
+        attempt = 0                         # consecutive failures, for the log only
+        backoff = RECONNECT_BACKOFF
         while not self._stop.is_set():
             try:
                 async with websockets.connect(self.relay_url) as ws:
                     attempt = 0             # reset once a connect succeeds
+                    backoff = RECONNECT_BACKOFF
                     self._ws = ws
                     self.log(f"[bridge] websocket connected: {self.relay_url}")
                     await self._ws_session(ws)
@@ -283,13 +332,14 @@ class RelayBridge:
                 if self._stop.is_set():
                     break
                 attempt += 1
-                if attempt > RECONNECT_ATTEMPTS:
-                    self.log(f"[bridge] gave up after {RECONNECT_ATTEMPTS} reconnect "
-                             f"attempt(s): {e}")
-                    break
-                self.log(f"[bridge] connection lost ({e}); reconnecting "
-                         f"{attempt}/{RECONNECT_ATTEMPTS} ...")
-                await asyncio.sleep(1.0)
+                # Audit 10 H-3: retry forever with exponential backoff (1s, 2s, 4s ...
+                # capped at RECONNECT_BACKOFF_MAX). The old "3 attempts then quit"
+                # budget left a silent zombie: WS thread dead, main loop alive, queue
+                # filling up - exactly the state field debugging hates most.
+                self.log(f"[bridge] connection lost ({e}); reconnect attempt "
+                         f"{attempt} in {backoff:.0f}s (retrying indefinitely)")
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2.0, RECONNECT_BACKOFF_MAX)
 
     async def _ws_session(self, ws):
         last_hb = time.monotonic()
