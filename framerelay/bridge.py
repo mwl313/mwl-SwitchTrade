@@ -54,8 +54,14 @@ RECONNECT_BACKOFF_MAX = 60.0  # ...doubling every failure up to this cap, foreve
 def compose_relay_url(base, session_id, role):
     """Build the relay WS endpoint from --relay-url/--session-id/--role. A bare base gets
     the server's path appended; an explicit /session/... URL passes through untouched so
-    operators can pin exotic deployments."""
+    operators can pin exotic deployments. http(s):// bases are rewritten to ws(s):// -
+    operators naturally copy the same URL the relay advertises over HTTP (STEP 9 finding:
+    websockets.connect rejects an http scheme outright)."""
     base = str(base).rstrip("/")
+    if base.startswith("http://"):
+        base = "ws://" + base[len("http://"):]
+    elif base.startswith("https://"):
+        base = "wss://" + base[len("https://"):]
     if "/session/" in base:
         return base
     return f"{base}/session/{session_id}/ws?role={role}"
