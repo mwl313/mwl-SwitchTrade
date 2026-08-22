@@ -31,6 +31,7 @@ import time
 
 from common import mwlb
 from framerelay.radio import is_beacon, mac_str, parse_80211, wrap_radiotap
+from framerelay.rate_limit import TokenBucket
 
 HEARTBEAT_INTERVAL = 10.0     # relay/server.py HEARTBEAT_TIMEOUT is 30.0s - sending at
                               # exactly the timeout let silent gaps exceed it and the
@@ -167,7 +168,8 @@ class RelayBridge:
     threads, sockets or a relay server.
     """
 
-    def __init__(self, radio, relay_url, session_id, role="host", log=print, verbose=False):
+    def __init__(self, radio, relay_url, session_id, role="host", log=print, verbose=False,
+                 rate_fps=None):
         self.radio = radio
         self.relay_url = compose_relay_url(relay_url, session_id, role)
         self.session_id = session_id
@@ -176,14 +178,27 @@ class RelayBridge:
         self.verbose = verbose
         self.beacon_cache = BeaconCache()
         self.echo_guard = EchoGuard()
+        # STEP 6 (docs/12): TokenBucket wired in as the physical last line of defense
+        # against loop storms (docs/13 section 7). V-1 confirmed the EchoGuard byte-equality
+        # premise (scenario A), so this is belt-and-suspenders - but a storm would multiply
+        # through BOTH bridges, so the cap stays on by default. rate_fps=None -> default.
+        if rate_fps is None:
+            self.rate_limiter = TokenBucket(log=self._rate_warn)
+        else:
+            self.rate_limiter = TokenBucket(rate=float(rate_fps), log=self._rate_warn)
         self.stats = {"captured": 0, "relayed_out": 0, "injected": 0,
-                      "dropped_filter": 0, "dropped_echo": 0, "dropped_backlog": 0}
+                      "dropped_filter": 0, "dropped_echo": 0, "dropped_backlog": 0,
+                      "dropped_rate": 0}
         self._outbox = queue.Queue(maxsize=OUTBOX_MAXSIZE)  # MWLB frames for the WS thread
         self._ws = None                    # live websockets connection (async thread only)
         self._ws_thread = None
         self._beacon_thread = None
         self._radio_thread = None
         self._stop = threading.Event()
+
+    def _rate_warn(self, message):
+        """Throttled drop warning from the rate limiter (TokenBucket handles the 1/s cap)."""
+        self.log(message)
 
     # -- data plane: radio -> relay -------------------------------------------
     def on_radio_capture(self, frame):
@@ -195,6 +210,12 @@ class RelayBridge:
             return False
         if self.echo_guard.duplicate(frame):
             self.stats["dropped_echo"] += 1
+            return False
+        # STEP 6: physical loop-storm cap (docs/13 section 7). Checked AFTER filter/echo
+        # so legitimate traffic accounting stays clean; a storm that defeats EchoGuard
+        # still cannot multiply through here.
+        if not self.rate_limiter.allow(len(frame)):
+            self.stats["dropped_rate"] += 1
             return False
         info = parse_80211(frame)
         if is_beacon(info):
@@ -234,6 +255,11 @@ class RelayBridge:
         if msg_type == mwlb.MSG_HEARTBEAT:
             return True                     # consumed, never injected
         if msg_type != mwlb.MSG_FRAME_RELAY:
+            return False
+        # STEP 6: inbound side of the loop-storm cap - a peer bridge that lost its own
+        # limiter must not turn US into an amplifier either.
+        if not self.rate_limiter.allow(len(payload)):
+            self.stats["dropped_rate"] += 1
             return False
         self.echo_guard.record(payload)     # mark BEFORE the air copy can echo back
         if is_beacon(parse_80211(payload)):
@@ -283,7 +309,8 @@ class RelayBridge:
             if t is not None:
                 t.join(timeout=2)
         self.radio.close()
-        self.log(f"[bridge] down: {self.stats}")
+        rl = self.rate_limiter.stats
+        self.log(f"[bridge] down: {self.stats} rate_limiter={rl}")
 
     # -- threads ----------------------------------------------------------------
     def _run_radio_loop(self):

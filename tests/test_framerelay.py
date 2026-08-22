@@ -28,6 +28,7 @@ from common import mwlb                                        # noqa: E402
 from framerelay import radio as radiomod                       # noqa: E402
 from framerelay.bridge import (BeaconCache, BeaconReplayer, EchoGuard,  # noqa: E402
                                RelayBridge, compose_relay_url)
+from framerelay.rate_limit import TokenBucket                  # noqa: E402
 
 HOST_MAC = bytes.fromhex("00ada7117309")       # card A (docs/07 section 3)
 GUEST_MAC = bytes.fromhex("a047d7b02b39")      # card B
@@ -351,6 +352,52 @@ class BridgePipeTest(unittest.TestCase):
         self.assertTrue(app.radio.opened and app.radio.closed)
 
 
+class RateLimitWiringTest(unittest.TestCase):
+    """STEP 6: the TokenBucket is actually wired into both data-plane paths (docs/13 §7)."""
+
+    def _bridge(self, rate_fps):
+        return RelayBridge(FakeRadio(host_mac=HOST_MAC), "ws://relay:8000", "AB12CD",
+                           role="guest", log=_quiet, rate_fps=rate_fps)
+
+    def test_capture_side_caps_and_counts_drops(self):
+        # burst = rate by default, so a 3-frame bucket admits exactly 3 then drops.
+        app = self._bridge(rate_fps=3)
+        results = [app.on_radio_capture(data_to_ap_frame()) for _ in range(6)]
+        self.assertEqual(results.count(True), 3)            # burst admitted
+        self.assertEqual(results.count(False), 3)           # over cap -> dropped
+        self.assertEqual(app.stats["dropped_rate"], 3)
+        self.assertEqual(app.stats["relayed_out"], 3)
+
+    def test_injection_side_caps_too(self):
+        app = self._bridge(rate_fps=2)
+        wire_frame = mwlb.build_frame(mwlb.MSG_FRAME_RELAY, beacon_frame())
+        results = [app.on_ws_message(wire_frame) for _ in range(5)]
+        self.assertEqual(results.count(True), 2)
+        self.assertEqual(results.count(False), 3)
+        self.assertEqual(len(app.radio.sent), 2)            # nothing injected over the cap
+        self.assertEqual(app.stats["dropped_rate"], 3)
+
+    def test_default_rate_is_the_docs_value(self):
+        app = self._bridge(rate_fps=None)
+        self.assertEqual(app.rate_limiter.rate, 200.0)      # docs/13 §7: DEFAULT_RATE_FPS
+
+    def test_healthy_traffic_never_dropped(self):
+        # A realistic second of LDN traffic (~40 frames incl. beacon replay ticks) passes.
+        app = self._bridge(rate_fps=None)
+        for i in range(40):
+            self.assertTrue(app.on_radio_capture(data_to_ap_frame()),
+                            f"frame {i} must not be dropped at default rate")
+        self.assertEqual(app.stats["dropped_rate"], 0)
+
+    def test_stats_line_includes_rate_limiter(self):
+        import io
+        buf = io.StringIO()
+        app = RelayBridge(FakeRadio(host_mac=HOST_MAC), "ws://relay:8000", "AB12CD",
+                          role="guest", log=lambda *a: buf.write(a[0] if a else ""))
+        app.stop()                                          # threads never started - safe
+        self.assertIn("rate_limiter", buf.getvalue())
+
+
 if __name__ == "__main__":
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
@@ -359,6 +406,7 @@ if __name__ == "__main__":
     suite.addTests(loader.loadTestsFromTestCase(BssidFilterTest))
     suite.addTests(loader.loadTestsFromTestCase(BeaconQueueTest))
     suite.addTests(loader.loadTestsFromTestCase(BridgePipeTest))
+    suite.addTests(loader.loadTestsFromTestCase(RateLimitWiringTest))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if result.wasSuccessful():
         print("DONE_MARKER_FRAMERELAY")
