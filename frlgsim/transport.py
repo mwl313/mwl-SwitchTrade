@@ -47,6 +47,123 @@ PROTO_UDP = 17
 PIA_PORT = 12345
 
 
+# ---------------------------------------------------------------------------
+# STEP 8-fix (docs/16): hostapd-style BEACON_HEAD for the HOST path.
+#
+# Measured 2026-08-22: ldn 0.0.17's Station._create_beacon_head emits only
+# [frame control|duration|DA|SA|BSSID|seq][8B timestamp][interval][capability]
+# with NO information elements, and rtl8xxxu then never starts beaconing
+# (the AP was invisible to a second machine's scan while hostapd on the SAME
+# card was found instantly). hostapd's -dd trace shows what the kernel expects:
+# the SSID IE, supported-rates IE and DS-params IE inside BEACON_HEAD itself.
+#
+# _build_host_beacon_head() assembles exactly that structure; install_beacon_
+# head_override() monkey-patches ldn.wlan.Station to use it. Pure byte assembly
+# here so offline tests can verify every IE byte-for-byte.
+# ---------------------------------------------------------------------------
+
+_BEACON_INTERVAL_TU = 100          # same value ldn/hostapd use
+_BEACON_CAPABILITY = 0x0401        # ESS + short preamble (hostapd measured 0x0411 w/ privacy;
+                                   # we advertise an open room like ldn intends)
+_SUPPORTED_RATES_IE = bytes([0x01, 0x08, 0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24])
+
+
+def _build_host_beacon_head(ssid: bytes, channel: int, bssid: bytes) -> bytes:
+    """hostapd-style BEACON_HEAD for the HOST path (docs/16).
+
+    Layout (all offsets verified against hostapd -dd hexdump):
+      [80 00]        frame control: mgmt, subtype beacon
+      [00 00]        duration
+      [ff*6]         DA broadcast
+      [bssid 6B]     SA (= our AP vif MAC)
+      [bssid 6B]     BSSID
+      [00 00]        seq_ctrl
+      [00*8]         timestamp (kernel overwrites)
+      [64 00]        beacon interval, 100 TU LE u16
+      [01 04]        capability LE u16 (ESS)
+      [00 len ssid]  SSID IE
+      [01 08 ...]    Supported Rates IE
+      [03 01 ch]     DS Parameter Set IE
+    """
+    if not isinstance(ssid, (bytes, bytearray)):
+        raise TypeError(f"ssid must be bytes, got {type(ssid).__name__}")
+    ssid = bytes(ssid)
+    if len(ssid) > 32:
+        raise ValueError(f"ssid longer than 32 bytes: {len(ssid)}")
+    if not 1 <= int(channel) <= 14:
+        raise ValueError(f"channel out of range: {channel}")
+    bssid = bytes(bssid)
+    if len(bssid) != 6:
+        raise ValueError(f"bssid must be 6 bytes, got {len(bssid)}")
+
+    mac_header = (
+        bytes([0x80, 0x00])          # frame control
+        + b"\x00\x00"                # duration
+        + b"\xff" * 6                # DA
+        + bssid                      # SA
+        + bssid                      # BSSID
+        + b"\x00\x00"                # seq_ctrl
+    )
+    fixed_fields = (
+        b"\x00" * 8                                          # timestamp placeholder
+        + struct.pack("<H", _BEACON_INTERVAL_TU)             # interval LE
+        + struct.pack("<H", _BEACON_CAPABILITY)              # capability LE
+    )
+    ssid_ie = bytes([0x00, len(ssid)]) + ssid                # WLAN_EID_SSID
+    ds_ie = bytes([0x03, 0x01, int(channel)])                # WLAN_EID_DS_PARAMS
+    return mac_header + fixed_fields + ssid_ie + _SUPPORTED_RATES_IE + ds_ie
+
+
+_BEACON_HEAD_INSTALLED = False
+
+
+def install_beacon_head_override(log=print) -> bool:
+    """Monkey-patch ldn.wlan.Station._create_beacon_head to the hostapd-style builder.
+
+    Idempotent (a second call is a no-op), guarded (missing ldn/attrs -> stock fallback),
+    and reports the outcome via `log`. Returns True when this call installed the override.
+    """
+    global _BEACON_HEAD_INSTALLED
+    if _BEACON_HEAD_INSTALLED:
+        return False
+    try:
+        import ldn as _ldn_mod
+        from ldn import wlan as _wlan
+
+        version = getattr(_ldn_mod, "__version__", None)
+        if version is None:
+            log("[beacon-head] ldn without __version__ - keeping stock beacon head")
+            return False
+        station_cls = getattr(_wlan, "Station", None)
+        if station_cls is None or not hasattr(station_cls, "_create_beacon_head"):
+            log("[beacon-head] ldn.wlan.Station._create_beacon_head missing - stock kept")
+            return False
+
+        stock_method = station_cls._create_beacon_head
+
+        def _patched(self):
+            try:
+                ssid = getattr(self, "_ssid", None)
+                channel = getattr(self, "_channel", None)
+                addr = self.address()
+                if isinstance(ssid, (bytes, bytearray)) and isinstance(channel, int) \
+                        and addr is not None:
+                    head = _build_host_beacon_head(bytes(ssid), int(channel), bytes(addr))
+                    return head
+            except Exception as e:                       # noqa: BLE001 - never break START_AP
+                log(f"[beacon-head] override failed ({e}) - falling back to stock")
+            return stock_method(self)
+
+        station_cls._create_beacon_head = _patched
+        _BEACON_HEAD_INSTALLED = True
+        log("[beacon-head] Station._create_beacon_head overridden "
+            "(hostapd-style IEs, docs/16)")
+        return True
+    except Exception as e:                           # noqa: BLE001
+        log(f"[beacon-head] install failed: {e} - stock beacon head kept")
+        return False
+
+
 _PIA_HDR = 0x5C     # Pia 6.16-6.41 LDN system header (sysCommVer 21/22); the game payload follows it
 
 
@@ -1351,6 +1468,13 @@ class HostTransport:
             param.phyname_monitor = self.phyname
             param.ifname = self.ifname               # AP vif (like the bridge: ldn)
             param.ifname_monitor = self.ifname_monitor
+            # STEP 8-fix (docs/16): ldn 0.0.17's stock _create_beacon_head emits timestamp+
+            # capability only - no SSID/rates/DS IEs - and rtl8xxxu then never starts beaconing
+            # (measured: same card, hostapd AP was found instantly by the VM2 scan while the
+            # ldn AP was invisible). Rebuild the head hostapd-style and hand it to the kernel.
+            if install_beacon_head_override(self.log):
+                self.info("beacon head override installed (hostapd-style IEs)")
+
             self.info("Opening the FRLG room (create_network/AP)...")
             try:
                 async with ldn.create_network(param) as network:
