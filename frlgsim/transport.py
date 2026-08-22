@@ -149,6 +149,13 @@ def install_beacon_head_override(log=print) -> bool:
             log("[beacon-head] AccessPoint._create_beacon_head missing - stock kept")
             return False
 
+        # nl80211.py may not export BEACON_IES/PROBERESP_IES/ASSOCRESP_IES constants
+        # (ldn 0.0.17's netlink binding omits them). Use the standard kernel values:
+        # NL80211_ATTR_BEACON_IES=22, PROBERESP_IES=23, ASSOCRESP_IES=24.
+        _ATTR_BEACON_IES = getattr(nl80211, "NL80211_ATTR_BEACON_IES", 22)
+        _ATTR_PROBERESP_IES = getattr(nl80211, "NL80211_ATTR_PROBERESP_IES", 23)
+        _ATTR_ASSOCRESP_IES = getattr(nl80211, "NL80211_ATTR_ASSOCRESP_IES", 24)
+
         stock_method = station_cls._create_beacon_head
 
         def _patched(self):
@@ -261,11 +268,17 @@ def install_start_ap_attrs_override(log=print) -> bool:
             return True
 
         # GAP-1..3 + GAP-4: written over the stock attrs IN PLACE at request time.
+        # netlink/nl80211.py (ldn 0.0.17's binding) may not export the IES constants -
+        # use standard kernel values as fallback: BEACON_IES=22, PROBERESP_IES=23,
+        # ASSOCRESP_IES=24 (from include/uapi/linux/nl80211.h enum nl80211_attrs).
         cmd_start_ap = nl80211.NL80211_CMD_START_AP
+        _a_beacon_ies = getattr(nl80211, "NL80211_ATTR_BEACON_IES", 22)
+        _a_proberesp_ies = getattr(nl80211, "NL80211_ATTR_PROBERESP_IES", 23)
+        _a_assocresp_ies = getattr(nl80211, "NL80211_ATTR_ASSOCRESP_IES", 24)
         overrides = {
-            nl80211.NL80211_ATTR_BEACON_IES: _EXT_CAPABILITIES_IE,
-            nl80211.NL80211_ATTR_PROBERESP_IES: _EXT_CAPABILITIES_IE,
-            nl80211.NL80211_ATTR_ASSOCRESP_IES: _EXT_CAPABILITIES_IE,
+            _a_beacon_ies: _EXT_CAPABILITIES_IE,
+            _a_proberesp_ies: _EXT_CAPABILITIES_IE,
+            _a_assocresp_ies: _EXT_CAPABILITIES_IE,
             nl80211.NL80211_ATTR_HIDDEN_SSID: nl80211.NL80211_HIDDEN_SSID_NOT_IN_USE,
         }
 
