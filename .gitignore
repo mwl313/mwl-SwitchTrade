@@ -2,3 +2,4 @@
 # emu는 별도 git 리포 (tornadus 포크) — 여기서 제외
 /emu/
 __pycache__/
+/logs/
