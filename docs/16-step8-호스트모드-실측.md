@@ -79,3 +79,44 @@ BSS a0:47:d7:b0:2b:39          ← VM1의 EMU 방
 
 **호스트 모드(브리지가 FRLG 방을 직접 여는 것) 첫 실기 성공.**
 커밋: 5a68eea(구현) → bf22a85(hex-string 수정). join 경로 무수정.
+
+---
+
+## ✅ STEP 9 — framerelay 무선 단독 흐름 실측 (같은 날 밤)
+
+### 구성
+- VM1: 호스트 모드(host_long.py, 180초 유지) + framerelay host 브리지(ldn-mon) + 릴레이(8788)
+- 세션: WH60AB/DTV48F (role 충돌 시 재생성 — 403 처리 확인)
+
+### 발견·수정
+1. **URL 스킴 버그**: CLI가 `http://` 릴레이 URL을 그대로 websockets.connect에 전달 → 즉시 거부.
+   `compose_relay_url`에 http(s)→ws(s) 자동 변환 추가 (+테스트 3건). 커밋 완료.
+2. **stdout 버퍼링**: nohup 리다이렉션 시 로그 지연 → `-u` 플래그로 해결 (운영 노트)
+
+### 성공 시퀀스 (운용 순서 — 재현용)
+```
+1. host 기동 (phy1 지정 필수): step8_host/host_long.py → AP CH6 + ldn-mon + ldn-tap 생성
+2. ldn-mon up (AP 기동 후에 up해야 채널 공유됨 — 선업 시 CH1 하드고정 버그)
+3. framerelay 기동:
+   sudo .venv/bin/python -u -m framerelay --iface ldn-mon \
+     --host-mac a0:47:d7:b0:2b:39 --relay-url http://127.0.0.1:8788 \
+     --session-id <ID> --role host --verbose
+4. [bridge] websocket connected → TX relay 프레임 다수 관찰
+```
+
+### 실측 결과
+```
+[bridge] websocket connected: ws://127.0.0.1:8788/session/.../ws?role=host
+[bridge] TX relay 1388B d0000000ffffffffffffa047d7b02b39...   ← QoS Data, 우리 AP 송신 프레임
+guest 브리지: 196프레임 처리 (rate limiter 조용히 통과, 에러 0)
+```
+
+**캡처→0x20 포장→WS 전송 파이프라인 첫 무선 실증 완료.**
+
+### 운영 노트
+- ldn-mon은 반드시 AP 기동 **후에** up (선업하면 CH1 고정 버그 — rtl8xxxu 멀티vif 채널 관리)
+- role 충돌 시 릴레이가 403 반환 → 새 세션 생성으로 회피
+- 자기 TX 루프백 부재(V-1 결론 재확인): EchoGuard 설계와 양립
+
+### 남음
+- guest 브리지의 RX inject 후 스위치B 화면 표시 확인 (=STEP 11 E2E, 스위치 필요)
