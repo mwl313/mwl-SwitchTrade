@@ -278,6 +278,17 @@ class BridgePipeTest(unittest.TestCase):
         pinned = "ws://r:8000/session/AB12CD/ws?role=guest"
         self.assertEqual(compose_relay_url(pinned, "AB12CD", "host"), pinned)
 
+    def test_http_scheme_rewritten_to_ws(self):
+        # STEP 9 finding: operators copy the relay's HTTP URL; websockets.connect
+        # rejects an http scheme, so compose must rewrite it.
+        self.assertEqual(compose_relay_url("http://r:8000", "AB12CD", "host"),
+                         "ws://r:8000/session/AB12CD/ws?role=host")
+        self.assertEqual(compose_relay_url("https://relay.example.com", "AB12CD", "guest"),
+                         "wss://relay.example.com/session/AB12CD/ws?role=guest")
+        pinned_https = "https://r:8000/session/AB12CD/ws?role=host"
+        self.assertEqual(compose_relay_url(pinned_https, "AB12CD", "host"),
+                         "wss://r:8000/session/AB12CD/ws?role=host")
+
     # -- injection side -------------------------------------------------------------
     def test_ws_frame_injects_with_fresh_radiotap(self):
         app = self._bridge()
