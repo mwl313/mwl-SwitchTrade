@@ -262,7 +262,10 @@ def install_target_bssid_patch(log=print):
     try:
         import ldn
         import ldn.wlan
-        import nl80211
+        # ldn 0.0.17 imports nl80211 from the netlink package (wlan.py:16 "from netlink import
+        # nl80211, route") - there is NO top-level nl80211 module. Importing the same object that
+        # the Station's request() call resolves guarantees identical constant values.
+        import netlink.nl80211 as nl80211
         # Version guard: the proxy targets the verified 0.0.17 request flow exactly; if upstream
         # ever ships its own fix or reshapes the flow, auto-invalidate instead of stacking a stale
         # patch. 0.0.17 itself carries no __version__ attribute, so absence passes the guard.
