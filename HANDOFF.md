@@ -67,14 +67,14 @@ sudo .venv/bin/python frlgtrade.py --mode host ...
 | 항목 | 오프라인 | 실기 |
 |---|---|---|
 | framerelay 데이터플레인(캡처→0x20→WS→주입) | ✅ 23케이스 | ❌ 미실측 |
-| radiotap 8B TX 헤더 주입 성공 | ✅ (구현) | ⚠️ 8/21 부분 실측 → V-1로 확정 필요 |
-| EchoGuard 바이트 동등성 전제 | ❓ 가정 상태 | ❌ **V-1 미실측 — 최우선** |
-| 호스트 모드(create_network) | ✅ 컴파일+회귀만 | ❌ 미실측 |
+| radiotap 8B TX 헤더 주입 성공 | ✅ (구현) | ✅ **V-1로 확정 (2026-08-22)** — 주입↔재캡처 바이트 완전 일치 8/8회 |
+| EchoGuard 바이트 동등성 전제 | ✅ **시나리오 A 확정** (`fd99200`) | ✅ **V-1 완료** — 드라이버 FCS 덮어쓰기 없음(rtl8xxxu+커널 7.0). 카드/커널 변경 시 재실행 |
+| 호스트 모드(create_network) | ✅ 컴파일+회귀만 | ❌ 미실측 (STEP 7 AP+monitor 실측이 선행) |
 | 비콘 TTL/백오프/outbox cap | ✅ | ❌ (장애 주입 테스트 필요) |
 
 ## 4. 알려진 미해결 이슈
 
-1. **V-1 (최우선)**: 주입↔재캡처 바이트 동등성 미실측 → EchoGuard 시나리오 A/B/C 미확정 (docs/13参照)
+1. ~~V-1~~ → ✅ **해소 (2026-08-22)**: 시나리오 A 확정. STEP 6은 "rate limiter를 bridge.py에 연결"로 재정의됨 (EchoGuard 재구현 불필요)
 2. **CanTradeSelectedMon 게이트**: T4 E2E에서 양쪽 EMU가 자기 파티 기준으로 취소 판정 (EMU 트랙 한계 — framerelay와 무관하나 회귀 테스트 시 참고)
 3. RX decrypt FAILED 간헐 관찰 (VM1+8192EU, Pia 확립 초기)
 4. 8188EU 수신 사망 잦음 → authorized 토글 복구 절차 확립됨. card-watch.sh 감시 권장
@@ -83,16 +83,17 @@ sudo .venv/bin/python frlgtrade.py --mode host ...
 
 ## 5. 🎯 앞으로 이 리포에서 해야 할 일 (끝까지 — 순서대로)
 
-### STEP 5 — V-1 실측 (카드 1개, 스위치 불필요, VM1만) ⭐ 최우선
-- **무엇을**: 카드 A로 프레임 주입 → 같은/다른 모니터 인터페이스로 재캡처 → hexdump 대조
-- **어떻게**: tcpdump `-y IEEE802_11_RADIO`. 주입은 `MonitorRadio.send()`, 캡처는 별도 vif
-- **판정**: (a) 바이트 완전 일치 → EchoGuard 시나리오 A (현행 유지) / (b) FCS 4B 차이 → B (radiotap Flags 파싱+FCS 절단) / (c) padding 변형 → C ((type,subtype,addr1..3,seq_ctrl) 튜플 해시)
-- **산출물**: 측정 기록을 mwl-SwitchTrade docs에 추가 + 아래 STEP 6 착수 근거
+### STEP 5 — ✅ V-1 실측 완료 (2026-08-22, `fd99200`)
+- **결과: 시나리오 A 확정** — 같은 카드 위 모니터 vif 2개(vif_tx/vif_rx)로 주입→재캡처 8/8회 바이트 완전 일치
+- 드라이버(rtl8xxxu)는 모니터 주입 시 FCS를 계산·덮어쓰지 않음 (틀린 FCS도 그대로 통과 확인)
+- 캡처 radiotap에 FCS-present 비트 없음. PACKET_IGNORE_OUTGOING 지원(커널 7.0)
+- 상세 기록: mwl-SwitchTrade docs/13 §0
+- **파급**: STEP 6 재정의 — EchoGuard 재구현 불필요 → "rate limiter를 bridge.py에 연결"로 변경
 
-### STEP 6 — EchoGuard 최종 구현 + rate limiter 연결
-- V-1 결과에 따라 `radio.py`(FCS 절단) 및 `bridge.py`(해시 키) 수정
-- `rate_limit.py`를 bridge.py에 연결 (현재 의도적으로 미연결 상태 — 커밋 `3836984` 메시지 참조)
-- 테스트 보강 후 커밋. 오프라인 테스트 전부 통과 필수
+### STEP 6 — rate limiter 연결 (재정의됨) ⬜ 다음
+- ~~EchoGuard 최종 구현~~ 불필요 (시나리오 A = 현행 sha1 유지)
+- 남은 것: `rate_limit.py`(TokenBucket, 커밋 `3836984`)를 `bridge.py`에 연결 — on_radio_capture/on_ws_message 경로에 안전망으로 삽입 + 테스트 보강
+- 오프라인 테스트 전부 통과 필수
 
 ### STEP 7 — AP+monitor 동시 vif 실측 (VM1, 8192EU)
 - `iw phy` valid interface combinations 확인 → create_network(AP) + monitor 공존 확인
