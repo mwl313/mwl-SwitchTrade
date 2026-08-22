@@ -132,11 +132,21 @@ def install_beacon_head_override(log=print) -> bool:
 
         version = getattr(_ldn_mod, "__version__", None)
         if version is None:
+            # ldn 0.0.17 has no module __version__ - fall back to the installed dist name.
+            try:
+                from importlib.metadata import version as _pkgver
+                version = _pkgver("ldn")
+            except Exception:                        # noqa: BLE001
+                pass
+        if version is None:
             log("[beacon-head] ldn without __version__ - keeping stock beacon head")
             return False
-        station_cls = getattr(_wlan, "Station", None)
-        if station_cls is None or not hasattr(station_cls, "_create_beacon_head"):
-            log("[beacon-head] ldn.wlan.Station._create_beacon_head missing - stock kept")
+        station_cls = getattr(_wlan, "AccessPoint", None)
+        if station_cls is None:
+            log("[beacon-head] ldn.wlan.AccessPoint missing - keeping stock beacon head")
+            return False
+        if not hasattr(station_cls, "_create_beacon_head"):
+            log("[beacon-head] AccessPoint._create_beacon_head missing - stock kept")
             return False
 
         stock_method = station_cls._create_beacon_head
