@@ -69,6 +69,11 @@ kinnay/LDN에 호스트 모드가 완전히 구현돼 있음 (소스 확인 완�
 
 ## 4. 잔여 작업 풀 리스트 (실행 순서 + 하드웨어 티어)
 
+> **상태 갱신 2026-08-22 저녁**: STEP 1~5 완료. STEP 6은 "EchoGuard 재구현"에서
+> "**rate limiter를 bridge.py에 연결**"로 재정의됨 — V-1 실측(docs/13 §0)으로 시나리오 A가
+> 확정되어 EchoGuard 자체 변경은 불필요해졌기 때문. 커밋 `3836984`에서 의도적으로 미연결로
+> 남겨둔 안전망(TokenBucket)만 연결하면 됨.
+
 ### 하드웨어 티어
 | 티어 | 필요한 것 |
 |---|---|
@@ -77,20 +82,20 @@ kinnay/LDN에 호스트 모드가 완전히 구현돼 있음 (소스 확인 완�
 | 💻💻 T2 | VM1+VM2+카드 둘 다 |
 | 🎮 T3 | 스위치 A·B 포함 전부 |
 
-### STEP 1~4: 🔥 지금 바로 (T0) ← 오프코드 위임 대상
-| # | 작업 | 내용 |
+### STEP 1~4: 🔥 지금 바로 (T0) — ✅ **전부 완료**
+| # | 작업 | 상태 |
 |---|---|---|
-| 1 | framerelay audit 청소 (D-2~D-6) | heartbeat 30→10s / outbox cap+drop-oldest / 좀비 재접속 백오프 / 비콘 TTL / websockets 의존성 등 (docs/10 H-1~4, M-1~6) |
-| 2 | application_data 인코더 (H-1) ⭐ | RFU 비콘 생성기 — 디코더(_dump_beacon) 역산. 검증은 실측 hexdump(GIRL/DESTROY 비콘) 대조 |
-| 3 | 호스트 모드 CLI 코드부 (H-2) | frlgtrade `--mode host`: create_network() 경로 |
-| 4 | EchoGuard 설계 확정 준비 | V-1 결과별 분기 설계 초안 |
+| 1 | framerelay audit 청소 (D-2~D-6) | ✅ `0185cf8` — heartbeat 10s/outbox cap/무한 백오프/비콘 TTL/prune/errno 분류/websockets |
+| 2 | application_data 인코더 (H-1) | ✅ `b4f329e` — frlgsim/beacon.py + roundtrip 테스트 |
+| 3 | 호스트 모드 CLI (H-2) | ✅ `0c8d7c8` — HostTransport + --mode host (join 경로 무수정, **실기 미검증**) |
+| 4 | EchoGuard 설계 확정 준비 | ✅ `ffa79d9` — docs/13 분기표 + rate_limit.py(15테스트, 미연결) |
 
 ### STEP 5~7: 💻 VM1 필요
 | # | 작업 | 판정 |
 |---|---|---|
-| 5 | V-1 주입↔재캡처 바이트 동등성 ⭐ | FCS/padding 실체 → EchoGuard 설계 확정 |
-| 6 | EchoGuard 구현 (D-1) | V-1 결과 반영 |
-| 7 | H-3 AP+모니터 동시 vif 실측 | 8192EU에서 vif 2개 + 채널 유지 |
+| 5 | V-1 주입↔재캡처 바이트 동등성 ⭐ | ✅ **완료 (`fd99200`)** — **시나리오 A 확정**: 바이트 완전 일치(8/8회), 드라이버 FCS 덮어쓰기 없음(rtl8xxxu+커널 7.0). 카드/커널 변경 시 재실행 |
+| 6 | ~~EchoGuard 재구현~~ → **rate limiter 연결** (재정의) | ⬜ 다음 — 시나리오 A 확정으로 재구현 불필요, TokenBucket→bridge 연결+테스트만 |
+| 7 | H-3 AP+모니터 동시 vif 실측 | ⬜ 8192EU에서 vif 2개 + 채널 유지 (호스트 모드 전제) |
 
 ### STEP 8~9: 💻💻 VM2 추가
 | # | 작업 | 판정 |
@@ -122,9 +127,17 @@ kinnay/LDN에 호스트 모드가 완전히 구현돼 있음 (소스 확인 완�
 ## 진행 전략
 
 ```
-[지금] STEP 1~4 (Mac) ─▶ [VM1] 5~7 ─▶ [VM2] 8~9 ─▶ [스위치] 10~13 ─▶ 13+ 프로덕션
-                                              │
-                              11 통과=목표① / 12 통과=목표②
+[완료] STEP 1~5 (Mac+VM1) ─▶ [다음] 6(rate limiter 연결)+7(AP+monitor) ─▶ [VM2] 8~9 ─▶ [스위치] 10~13 ─▶ 13+ 프로덕션
+                                        │
+                        11 통과=목표① / 12 통과=목표② (목표①은 EMU 동결로 framerelay에 흡수됨)
 ```
 
 **핵심**: STEP 8에서 스위치 없이 브로드캐스트를 검증할 수 있어서, 스위치 켜는 순간엔 거의 확정된 상태로 최종 확인만 남음.
+
+## 5. 리포 구조 (2026-08-22 확정)
+
+| 리포 | 역할 |
+|---|---|
+| **mwl313/mwl-SwitchTrade** (이 리포) | 문서·릴레이 서버·WSL2 배포 인프라·스크립트 |
+| **mwl313/frlg-ldn-trade-emu** (emu/) | **동작 코드 본체** — framerelay(메인) + EMU(동결·폴백). `emu/README_MWL.md` + `emu/HANDOFF.md` 필독 |
+| ~~MWL-SwitchTrade-v2~~ | ❌ 삭제됨 (2026-08-22) — 고유 내용 0 확인 후 제거, framerelay는 원본 emu에서 개발됐었음 |
