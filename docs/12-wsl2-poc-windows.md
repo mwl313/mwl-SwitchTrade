@@ -87,31 +87,16 @@ sudo apt install linux-tools-generic hwdata usbutils wireless-tools iw
 ```
 > 기본 WSL2 커널엔 Wi-Fi 드라이버가 없어 wlan 인터페이스는 안 생김 — 정상. G2는 Step 5에서.
 
-### Step 3 — 커스텀 커널 빌드 (약 30분~1시간)
-```bash
-sudo apt install build-essential flex bison libssl-dev libelf-dev dwarves bc git
-git clone https://github.com/microsoft/WSL2-Linux-Kernel.git
-cd WSL2-Linux-Kernel
-git checkout $(git describe --tags $(git rev-list --tags --max-count=1))
-cp Microsoft/config-wsl .config
-
-# 펌웨어 커널 내장 (배포 시 펌웨어 파일 불필요 — usbipd-win #390 트릭)
-mkdir -p firmware/rtlwifi
-wget https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/rtlwifi/rtl8188eufw.bin \
-     -O firmware/rtlwifi/rtl8188eufw.bin
-# 8192EU 병행 시: rtl8192eu_nic.bin도 같은 방식 추가
-scripts/config --enable CONFIG_EXTRA_FIRMWARE \
-               --set-str CONFIG_EXTRA_FIRMWARE_DIR "$(pwd)/firmware" \
-               --set-str CONFIG_EXTRA_FIRMWARE "rtlwifi/rtl8188eufw.bin"
-
-# framerelay 필수 모듈 (TUN은 framerelay에 불필요 — EMU 병행 시에만 추가)
-scripts/config --module CONFIG_CFG80211 --module CONFIG_MAC80211 \
-               --module CONFIG_RTL8XXXU --enable CONFIG_RTL8XXXU_UNTESTED
-make olddefconfig
-make -j$(nproc) && make modules_install
-cp arch/x86/boot/bzImage /mnt/c/Users/<윈도우계정>/bzImage-wsl-st
-```
-> ⚠️ 알려진 리스크: usbipd-win #1022 — usbip 경유 펌웨어 다운로드 타이밍 실패 사례. Step 5 dmesg로 확인.
+### Step 3 — 커널 확보: GitHub Actions 원격 빌드 ⭐ (주인님 PC 디스크 1GB 이하)
+- 로컬 빌드(12GB 필요)는 주인님 PC 용량 문제로 폐기 → **원격 빌드로 전환** (2026-08-22 결정)
+- 리포: **github.com/mwl313/wsl2-kernel-build** (공개, 아리아 운영) — Actions가 microsoft/WSL2-Linux-Kernel을 받아
+  rtl8xxxu 모듈 + 펌웨어 내장(CONFIG_EXTRA_FIRMWARE: rtl8188eufw.bin/rtl8192eu_nic.bin) + usbip 클라이언트 모듈까지 빌드
+- 실행: `gh workflow run build-kernel.yml` (아리아) → 소요 ~20분 → Artifacts에서 다운로드
+  - 산출물: `bzImage-wsl-st` + `modules-<KVER>.tar.gz` + `README-install.txt`
+- 주인님 PC 필요 용량: **결과 파일 ~300MB만**
+- 워크플로우 소스: `scripts/wsl2/github-build/.github/workflows/build-kernel.yml` (MWL-SwitchTrade 리포 내 관리)
+- (참고) 로컬 빌드 대안 스크립트도 유지: `scripts/wsl2/build_kernel.sh` — 용량 여유 생기면 사용 가능
+- ⚠️ 알려진 리스크: usbipd-win #1022 — usbip 경유 펌웨어 다운로드 타이밍 실패 사례. Step 5 dmesg로 확인.
 
 ### Step 4 — 커널 교체 + 부팅 (G1)
 ```powershell
