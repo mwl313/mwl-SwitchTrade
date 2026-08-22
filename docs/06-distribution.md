@@ -214,14 +214,20 @@ relay/server.py는 어차피 Mac mini/클라우드에서 돌고, WSL2 브리지�
 
 ---
 
-## 8. [확정] 배포 방향 최종 결정 (2026-08-22 업데이트)
+## 8. [확정] 배포 방향 최종 결정 (2026-08-22 업데이트 — 프로덕션 트랙 framerelay 기반)
 
 | 항목 | 결정 |
 |---|---|
-| 웹앱 배포 | ❌ **포기** — 브라우저는 무선 카드 제어 불가(모니터/AP/TAP 모두 웹 API 부재) + LDN은 근접 무선이라 클라우드 브리지 물리적으로 불가 |
-| **1차** | **Windows — WSL2 커스텀 커널 경로** (§4 길 A) |
-| 2차 | macOS — **Windows PoC 성공 시에만 착수** (UTM/Fusion 헤드리스 VM 이미지) |
+| 프로덕션 트랙 | **framerelay (트랙 B, 투명 중계)** — 2026-08-22 방향 전환. EMU는 검증·폴백 트랙 |
+| 웹앱 배포 | ❌ 포기 — 브라우저 무선 제어 불가 + LDN 근접성 물리 벽 |
+| **1차** | **Windows — WSL2 커스텀 커널 경로** (framerelay 기준 게이트) |
+| 2차 | macOS — **Windows PoC 성공 시에만 착수** (UTM/Fusion 헤드리스 VM) |
 | 폴백 | VirtualBox OVA |
 
-- PoC 실행 절차·게이트(G1~G4)·패키징 계획: **`docs/12-wsl2-poc-windows.md`**
-- 웹앱 검토 기록(불가 근거): 이전 논의 요약 — 컨트롤 플레인으로는 유효했으나 스코프아웃 확정 (2026-08-22)
+- PoC 실행 절차·게이트(G1~G6)·패키징 계획: **`docs/12-wsl2-poc-windows.md`** — framerelay 기준 개정판
+- framerelay 구조/로드맵: `docs/12-framerelay-구조와-로드맵.md` (PoC는 그 STEP 16)
+- **framerelay 배포 특이점**:
+  - 무선 요구 = 모니터 RX + TX 인젝션(radiotap 8B) — AP 조인/TAP 불필요 → WSL2 커널 CONFIG 단순화
+  - 최대 신규 리스크 = SIFS ACK × 릴레이 왕복 + usbipd 지연 가산 (EMU의 assoc 리스크와 대체)
+  - 카드 매트릭스: 베이스 모드 = 8188EU/8192EU 모두 OK / 호스트 모드 = **8192EU 필수**(AP 지원, 8/22 실측)
+  - 배포 번들에서 frlgsim 제외 가능 (게임 해석 없음 — 프레임 통째 중계)

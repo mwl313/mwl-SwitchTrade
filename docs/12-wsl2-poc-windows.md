@@ -1,41 +1,62 @@
-# 12 — Windows 배포 PoC 절차서 (WSL2 커스텀 커널)
+# 12 — Windows 배포 PoC 절차서 (WSL2 × framerelay)
 
-> 작성: 2026-08-22 | 상태: [확정] PoC 절차 v1 — 코드 수정 없음, 실기 실행 대기
-> 상위 문서: `docs/06-distribution.md` (배포 전략 전체)
+> 작성: 2026-08-22 | 개정: 2026-08-22 — **프로덕션 트랙 framerelay 기반으로 전면 개정** (구: EMU 기준)
+> 상위 문서: `docs/06-distribution.md` (전략), `docs/12-framerelay-구조와-로드맵.md` (framerelay 로드맵 — 이 문서는 그 STEP 16의 실행 절차서)
+> 코드 수정 없음 — 실기 실행 대기
 
-## 0. [확정] 결정 사항 (2026-08-22)
+## 0. [확정] 결정 사항
 
 | 항목 | 결정 |
 |---|---|
-| 웹앱 배포 | ❌ **포기** — 브라우저 무선 제어 불가 + LDN 근접성(물리 벽) |
-| 1차 배포 | **Windows — WSL2 커스텀 커널** (본 문서의 PoC로 검증) |
-| 2차 배포 | **macOS** — Windows 성공 시에만 착수 (UTM/Fusion 헤드리스 VM 이미지) |
-| 폴백 | VirtualBox OVA (WSL2 No-Go 시) |
+| 프로덕션 트랙 | **framerelay (트랙 B, 투명 중계)** — 2026-08-22 방향 전환. EMU는 검증·폴백 트랙으로 유지 |
+| 웹앱 배포 | ❌ 포기 — 브라우저 무선 제어 불가 + LDN 근접성 물리 벽 |
+| 1차 배포 | **Windows — WSL2 커스텀 커널** (본 문서) |
+| 2차 배포 | **macOS** — Windows 성공 시에만 착수 (UTM/Fusion 헤드리스 VM) |
+| 폴백 | VirtualBox OVA |
 
-## 1. PoC 목표와 판정 기준
+### framerelay가 배포에 미치는 차이 (EMU 대비)
 
-**목표**: 일반 Windows PC에서 "설치 스크립트 1번 + 동글 꽂기"로 LDN 브리지가 동작함을 증명.
-
-| 게이트 | 검증 내용 | 통과 기준 | 실패 시 |
+| 요소 | EMU (구 플랜) | framerelay (본 플랜) | 배포 영향 |
 |---|---|---|---|
-| G1 | 커스텀 커널 부팅 | `uname -a`가 빌드한 커널 표시 | 빌드 재시도 (난이도 낮음) |
-| G2 | 카드 인식 + 모니터 지원 | `lsusb` 0bda:8179 + `iw phy` monitor 목록에 존재 | 펌웨어/CONFIG 재점검 |
-| G3 | 스캔 성공 | 스위치 리더 광고 found ≥ 1 (**timeout 래핑 필수**) | ⚠️ 이후 게이트 전면 재평가 |
-| G4 | assoc + 트레이드 1회 | 트랙 A 워크플로우 v1 완주, received .pk3 생성 | 환경 변수 분리 분석 후 재시도 |
+| 무선 동작 | 모니터 RX + AP 조인 + TAP 주입 | 모니터 RX + **TX 인젝션(radiotap)** | 조인 단계 자체가 없음 → assoc 타이밍 리스크 소멸 |
+| TAP/TUN | 필수 (UDP 데이터 플레인) | **불필요** (AF_PACKET만 사용) | 커널 CONFIG 단순화 |
+| 최대 리스크 | assoc 타이밍 | **SIFS ACK × 인터넷 왕복** + usbipd 지연 가산 | G6의 핵심 관찰 항목 |
+| 카드 요구 | 8188EU OK | 베이스 = 모니터 RX/TX 카드(8188EU/8192EU 모두 실측 OK) / **호스트 모드 = 8192EU 필수** (AP 미지원: 8188EU — 8/22 VM 실측) | 카드 매트릭스 §2 |
+| 게임 해석 | frlgsim 필요 | 불필요 (프레임 통째 중계, 암호화도 스위치끼리) | 배포 번들에서 frlgsim 제외 가능 |
 
-**Go/No-Go**: G4까지 통과 = WSL2 배포 1차안 확정. G2까지 되고 G3~G4 실패 = 원인 분석 1회 후 OVA 폴백 판단.
+## 1. PoC 게이트 (framerelay 기준)
+
+**목표**: 일반 Windows PC에서 "설치 스크립트 1번 + 동글 꽂기"로 framerelay 브리지가 동작함을 증명.
+
+| 게이트 | 검증 내용 | 통과 기준 | 필요 하드웨어 | 실패 시 |
+|---|---|---|---|---|
+| G1 | 커스텀 커널 부팅 | `uname -a`가 빌드 커널 표시 | — | 빌드 재시도 (난이도 낮음) |
+| G2 | 카드 인식 + 모니터 지원 | `lsusb` 0bda:8179/818b + `iw phy` monitor | 동글 1개 | 펌웨어/CONFIG 재점검 |
+| G3 | **RX 캡처** | 스위치 리더 광고 비콘 캡처 (**timeout 래핑 필수** — VM hang 교훈 D-1) | 동글 1개 + 스위치 | 이후 게이트 재평가 |
+| G4 | **TX 인젝션** ⭐ | 자기가 주입한 프레임 재캡처 → 바이트 동등성 (V-1 방식, radiotap 8B 헤더) — **카드 1개로 검증 가능** | 동글 1개 | 드라이버/헤더 분석 |
+| G5 | framerelay 루프 | `bridge.py` × 2 + 릴레이 MWLB 왕복이 실무선에서 동작 | **동글 2개** (같은 PC에 attach) 또는 동글1+스위치1 | — |
+| G6 | **framerelay E2E** 🏆 | 로드맵 STEP 12와 동일 게이트: B 화면에 "A의 방" 표시 + 조인. **ACK 유실률 관찰 필수** | 동글 2개 + 스위치 2대 | 플랜 B (관리프레임만 중계 + 데이터 Pia 우회 — 07-framerelay-design §4) |
+
+**Go/No-Go**:
+- G4 통과 = **WSL2 무선 기반(RX+TX) 확정** → 배포 패키징 착수 가능 (framerelay 앱 코드 완성과 독립)
+- G5/G6 = framerelay 개발 진행(로드맵 STEP 6~12)에 종속 — WSL2가 "그저 또 하나의 무선 백엔드"로 흡수되는지 확인하는 게이트
+- G2까지만 되고 G3~G4 실패 = 원인 분석 1회 후 OVA 폴백 판단
+
+**WSL2 PoC의 전략적 위치**: 로드맵 STEP 16이지만, **G1~G4는 framerelay 앱 개발과 독립이라 선행 실행 가능**.
+VM(검증)과 WSL2(배포)의 무선 결과를 조기에 대조해두면 STEP 10~13(스위치 실기)을 VM/WSL2 어느 쪽으로든 유연하게 돌릴 수 있어요.
 
 ## 2. 사전 요구사항
 
-| 항목 | 요구 | 확인 방법 |
+| 항목 | 요구 | 비고 |
 |---|---|---|
-| Windows | 10 (22H2+) / 11 — 관리자 권한 가능 | — |
-| 가상화 | BIOS에서 VT-x/SVM 활성 | 작업관리자 > 성능 > CPU "가상화: 사용" |
-| RTL8188EU 동글 | 0bda:8179 (8192EU 0bda:818b도 가능 — rtl8xxxu 공용) | `usbipd list` |
-| 디스크 | 커널 빌드용 ~15GB (WSL2 내) | — |
-| ⚠️ VMware 공존 | **주인님 PC에는 VMware VM(V1/V2)이 있음** — WSL2 활성(Hyper-V 플랫폼) 시 VMware 15.5+는 공존 가능하지만 성능 저하(Ultra-light 모드) 발생 가능 | PoC 중 VM 성능 변화 관찰 필요 |
+| Windows | 10 (22H2+) / 11 — 관리자 권한 | 가상화(VT-x/SVM) 활성 확인 |
+| 동글 (베이스 모드) | 모니터 RX+TX — **8188EU(0bda:8179) 또는 8192EU(0bda:818b)** | 둘 다 rtl8xxxu, VM 실측 완료 |
+| 동글 (호스트 모드, 선택) | **8192EU만** — AP 지원 (8188EU는 AP 없음, 8/22 실측) | 브리지가 방을 여는 모드(로드맵 H-2/STEP 8~10)를 쓸 경우 |
+| 동글 수량 | **2개 권장** — G5를 스위치 없이 같은 PC에서 루프백 검증 | +1만 원 수준 |
+| 디스크 | 커널 빌드 ~15GB (WSL2 내) | |
+| ⚠️ VMware 공존 | 주인님 PC에 VMware VM(V1/V2) 존재 — Hyper-V 플랫폼 활성 시 공존 가능하나 성능 저하 가능 | PoC 중 V1/V2 성능 관찰 |
 
-**Windows 절전 예방 (PoC 전 필수 — 카드 수신 사망 예방, VM 실측과 동일):**
+**Windows 절전 예방 (PoC 전 필수 — 카드 수신 사망 예방):**
 ```powershell
 # 관리자 PowerShell
 powercfg /SETACVALUEINDEX SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0
@@ -47,105 +68,120 @@ powercfg /SETACTIVE SCHEME_CURRENT
 ### Step 1 — WSL2 + Ubuntu 설치 (약 15분)
 ```powershell
 # 관리자 PowerShell
-wsl --install          # 기본 Ubuntu, 자동으로 Hyper-V 플랫폼 활성
+wsl --install          # 기본 Ubuntu + Hyper-V 플랫폼 활성
 # 재부팅 1회 (최초 1회만) → Ubuntu 초기 계정 설정
-wsl --version          # WSL 버전 확인 (2.x)
+wsl --version
 ```
 
 ### Step 2 — usbipd-win + 카드 attach (기본 커널로 lsusb까지만, 약 10분)
 ```powershell
 winget install usbipd
 usbipd list                      # 동글 BUSID 확인 (예: 2-3)
-usbipd bind --hardware-id <BUSID>        # 구버전은 --busid
+usbipd bind --hardware-id <BUSID>
 usbipd attach --wsl --hardware-id <BUSID>
 ```
 ```bash
-# WSL2 안에서
-lsusb                            # 0bda:8179 보이면 OK (드라이버 없어도 lsusb엔 보임)
+# WSL2 안
+lsusb                            # 0bda:8179 / 0bda:818b 확인
 sudo apt install linux-tools-generic hwdata usbutils wireless-tools iw
 ```
-> 참고: 기본 WSL2 커널엔 Wi-Fi 드라이버가 없어서 wlan 인터페이스는 안 생김 — 정상.
+> 기본 WSL2 커널엔 Wi-Fi 드라이버가 없어 wlan 인터페이스는 안 생김 — 정상. G2는 Step 5에서.
 
-### Step 3 — 커스텀 커널 빌드 (약 30분~1시간, WSL2 안에서)
+### Step 3 — 커스텀 커널 빌드 (약 30분~1시간)
 ```bash
 sudo apt install build-essential flex bison libssl-dev libelf-dev dwarves bc git
 git clone https://github.com/microsoft/WSL2-Linux-Kernel.git
 cd WSL2-Linux-Kernel
-git checkout $(git describe --tags $(git rev-list --tags --max-count=1))  # 최신 안정 태그
+git checkout $(git describe --tags $(git rev-list --tags --max-count=1))
 cp Microsoft/config-wsl .config
 
-# 펌웨어 준비 (커널에 내장 — 배포 시 펌웨어 파일 따로 안 줘도 되게 하는 트릭)
+# 펌웨어 커널 내장 (배포 시 펌웨어 파일 불필요 — usbipd-win #390 트릭)
 mkdir -p firmware/rtlwifi
 wget https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/rtlwifi/rtl8188eufw.bin \
      -O firmware/rtlwifi/rtl8188eufw.bin
+# 8192EU 병행 시: rtl8192eu_nic.bin도 같은 방식 추가
 scripts/config --enable CONFIG_EXTRA_FIRMWARE \
                --set-str CONFIG_EXTRA_FIRMWARE_DIR "$(pwd)/firmware" \
                --set-str CONFIG_EXTRA_FIRMWARE "rtlwifi/rtl8188eufw.bin"
-# 8192EU도 함께면: rtl8192eu_nic.bin 추가
 
+# framerelay 필수 모듈 (TUN은 framerelay에 불필요 — EMU 병행 시에만 추가)
 scripts/config --module CONFIG_CFG80211 --module CONFIG_MAC80211 \
-               --module CONFIG_RTL8XXXU --module CONFIG_TUN \
-               --enable CONFIG_RTL8XXXU_UNTESTED
+               --module CONFIG_RTL8XXXU --enable CONFIG_RTL8XXXU_UNTESTED
 make olddefconfig
 make -j$(nproc) && make modules_install
 cp arch/x86/boot/bzImage /mnt/c/Users/<윈도우계정>/bzImage-wsl-st
 ```
-> ⚠️ `CONFIG_EXTRA_FIRMWARE_DIR`은 절대경로 문자열로 커널에 새겨짐 — 빌드 머신 경로여도 무방(빌드 시 번들링).
-> ⚠️ 알려진 리스크: usbipd-win #1022 — usbip 경유 펌웨어 다운로드 타이밍 실패 사례. G2에서 dmesg로 확인.
+> ⚠️ 알려진 리스크: usbipd-win #1022 — usbip 경유 펌웨어 다운로드 타이밍 실패 사례. Step 5 dmesg로 확인.
 
-### Step 4 — 커널 교체 + 부팅 (G1, 약 5분)
+### Step 4 — 커널 교체 + 부팅 (G1)
 ```powershell
-# C:\Users\<계정>\.wslconfig 생성
+# C:\Users\<계정>\.wslconfig
 [wsl2]
 kernel=C:\\Users\\<계정>\\bzImage-wsl-st
 ```
 ```powershell
-wsl --shutdown; wsl   # 재시작 후
+wsl --shutdown; wsl
 ```
 ```bash
-uname -a              # 빌드한 커널 버전이면 G1 통과
+uname -a    # 빌드 커널이면 G1 통과
 ```
 
 ### Step 5 — 모듈 로드 + 모니터 확인 (G2)
 ```bash
-# usbipd re-attach 필요할 수 있음 (PowerShell: usbipd attach --wsl ...)
+# PowerShell에서 re-attach 필요할 수 있음
 sudo modprobe cfg80211 mac80211 rtl8xxxu
 lsmod | grep -E 'rtl8xxxu|mac80211|cfg80211'
-dmesg | tail -20      # "RTL8188EU ... Loading firmware rtlwifi/rtl8188eufw.bin" 확인
-iw phy                # "monitor: supported" 있으면 G2 통과
+dmesg | tail -20      # "Loading firmware rtlwifi/rtl8188eufw.bin" + IQK 에러 관찰
+iw phy                # "monitor" 지원 확인 → G2 통과
 ```
+> WSL2에는 NetworkManager 기본 부재 → EBUSY/unmanaged 문제 클래스가 애초에 없음 (VM 대비 장점).
+> udev rename(wlx<MAC>)은 동일 발생 — iface 이름은 `iw dev`로 확인.
 
-### Step 6 — 스캔 PoC (G3) — ⚠️ timeout 래핑 필수
-- VM 실측교훈(D-1): ldn.scan이 커널 레벨 hang을 일으킬 수 있음 → **반드시 외부 `timeout 60` + 백그라운드**로 실행
-- 스위치: 디렉트 코너 → 트레이드 → 리더 진입
-- `scan_phy.py` 템플릿(switch-ldn-trade 스킬) 사용, phy 이름은 `iw phy` 출력 기준으로
-- WSL2에는 NM(NetworkManager)이 기본 없음 → EBUSY/unmanaged 문제 클래스가 애초에 없을 것 (장점)
-- udev rename(wlx<MAC>)은 동일 발생 — iface 이름은 `iw dev`로 직접 확인
+### Step 6 — RX 캡처 PoC (G3) — ⚠️ timeout 래핑 필수
+- 스위치: 디렉트 코너 → 트레이드 → 리더 진입 (LDN 광고)
+- 모니터 iface를 ch 1/6/11 순회하며 tcpdump/AF_PACKET로 비콘 캡처 → `--host-mac`(스위치 MAC) 확인
+- **반드시 외부 `timeout 60` + 백그라운드 실행** (ldn.scan 커널 hang 교훈 — VM 3회 실측)
+- 성공 기준: 스위치 비콘 수신 + comm_id 디코드(선택)
 
-### Step 7 — 트랙 A 트레이드 1회 (G4)
-- 릴레이: Mac mini(`relay/server.py`) 또는 같은 PC의 두 번째 WSL 인스턴스
-- `emu/frlgtrade.py --relay-url http://<릴레이IP>:8788 --role host --session-id <SID> ...` — VM 워크플로우 v1 그대로
-- 몬 파일/키는 VM 백업(`backup-vm-20260821/`)에서 복사
-- **run_trade.sh v6는 VMware 의존 부분(카드 리셋 sysfs 경로 등)이 있어 그대로 안 먹힐 수 있음** → 첫 트레이드는 래퍼 없이 직접 실행하고, 성공 후 WSL2용 래퍼 변형을 별도로 만들 것
+### Step 7 — TX 인젝션 PoC (G4) ⭐ framerelay 핵심 게이트
+- V-1 방식(VM 실측 절차) 동일 적용: **캡처한 실제 프레임 1개를 그대로 재주입 → 재캡처 → 바이트 동등성 대조**
+- radiotap 8B 헤더(`00 00 08 00 00 00 00 00`) 부착 필수 — VM 실측에서 헤더 없으면 드라이버가 조용히 폐기
+- 카드 1개로 가능 (자기 주입 프레임을 자기가 수신 — EchoGuard가 다루는 그 현상 자체가 검증 신호)
+- 성공 기준: 주입 프레임의 재캡처율 + FCS/padding 차이 기록 (V-1의 WSL2 버전 실측 데이터)
 
-### Step 8 — 세션 유지성 확인 (배포 전제)
+### Step 8 — framerelay 루프 (G5) — 동글 2개 구성
+- PowerShell에서 동글 2개 각각 bind/attach (같은 WSL2 인스턴스)
+- 릴레이: Mac mini(`relay/server.py:8788`) 또는 같은 PC
+- `framerelay/__main__.py` × 2 (`--role host/guest`, `--host-mac`은 테스트용 더미 MAC)
+- 성공 기준: A→릴레이→B 프레임 왕복 + BeaconReplayer 재주입 관찰 (스위치 없이 파이프라인 검증)
+
+### Step 9 — framerelay E2E (G6) 🏆 — 로드맵 STEP 12와 동일 게이트
+- 스위치 A(리더) + 스위치 B(참가) + 동글 2개
+- 성공 기준: B 화면에 "A의 방" 표시 → 조인 → 트레이드
+- **ACK 유실률 관찰이 1차 관찰 포인트**: SIFS ACK가 인터넷 왕복(릴레이가 같은 PC면 로컬 왕복) + usbipd 지연을 견디는지
+- 릴레이를 같은 PC에서 돌리면 "usbipd 지연만" 분리 측정 가능 → Mac mini 릴레이로 바꾸면 "인터넷 왕복 가산" 분리 측정 (2단계 측정 권장)
+
+### Step 10 — 세션 유지성 (배포 전제)
 ```powershell
-usbipd bind --hardware-id <BUSID>   # 1회
+usbipd bind --hardware-id <BUSID>
 usbipd attach --wsl --hardware-id <BUSID> --auto-attach   # 재부팅 후 자동 재연결
 ```
-- Windows 재부팅 → auto-attach로 카드 복귀되는지 확인
-- 카드 수신 사망(IQK) 발생 시: PowerShell detach/attach 사이클 스크립트가 VM의 usbreset 대체품 (배포 패키징 때 자동화)
+- Windows 재부팅 → auto-attach 복귀 확인
+- 카드 수신 사망(IQK) 시: **PowerShell detach/attach 사이클**이 VM의 usbreset 대체품 — 배포 패키징 때 자동화
 
-## 4. 성공 후 배포 패키징 계획 (PoC 다음 단계)
+## 4. 성공 후 배포 패키징 계획 (framerelay 기준)
 
 | 구성요소 | 형태 |
 |---|---|
-| installer.ps1 | 사전 진단(가상화 활성·Windows 버전) → WSL 설치 → usbipd 설치 → 커널/모듈/펌웨어 배치 → .wslconfig → auto-attach 등록 |
-| 커널 번들 | bzImage + 모듈 tar (버전 고정, GitHub Release 첨부) |
-| WSL2 래퍼 | run_trade.sh v6의 WSL2 변형 (카드 리셋 = usbipd 사이클 호출) |
-| 제거 스크립트 | 원상복구 보장 (주인님 원칙: 설치물은 깨끗이 지워져야 함) |
+| installer.ps1 | 사전 진단(가상화·Windows 버전) → WSL/usbipd 설치 → 커널 번들 배치 → .wslconfig → auto-attach 등록 |
+| 커널 번들 | bzImage + 모듈 tar + 내장 펌웨어 (버전 고정, GitHub Release) |
+| 브리지 런처 | `framerelay/__main__.py` 래퍼 — **스위치 MAC 자동 감지**(비콘 캐시에서 추출, 수동 `--host-mac` 폴백), 카드 자동 감지(8179/818b), 릴레이 URL/세션 입력 |
+| 카드 사망 자동복구 | RX 카운터 감시 → PowerShell usbipd detach/attach 사이클 (VM의 C-6에 상응) |
+| 제거 스크립트 | 원상복구 보장 (설치물은 깨끗이 지워져야 함) |
+| 호스트 모드 옵션 | 8192EU 사용자 한정 — 브리지가 방 개설(로드맵 H-2). 설치기가 카드 AP 지원 여부를 감지해 노출 |
 
 ## 5. macOS 2차 게이트 (조건부)
 
-Windows G4 통과 시에만 착수. 방식: UTM 또는 VMware Fusion(개인 무료) 헤드리스 VM + ARM64 Ubuntu + rtl8xxxu(메인라인 ARM 지원) + USB 패스스루.
-미검증 리스크: Apple Silicon USB 패스스루 품질(QEMU 흔들림) × 8188EU 민감성 조합. Intel Mac은 Windows와 거의 동일 구조.
+Windows G6 통과 시에만 착수. UTM/Fusion(개인 무료) 헤드리스 VM + ARM64 Ubuntu + rtl8xxxu(메인라인 ARM 지원).
+미검증 리스크: Apple Silicon USB 패스스루 품질 × 8188EU 민감성. Intel Mac은 Windows와 거의 동일 구조.
+framerelay는 TX 인젝션이 필수라, USB 패스스루 품질이 EMU 때보다 더 결정적 — 2차 게이트에서 G4(인젝션)부터 재검증.
