@@ -14,6 +14,12 @@ LIVE (needs the Switch, root, and the ldn/trio/netlink deps):
     sudo -E python3 frlgtrade.py --live --password PASS dummy.pk3 trademon.pk3 -o received.pk3
     sudo -E python3 frlgtrade.py --live --trades 6 a.pk3 b.pk3 c.pk3 d.pk3 e.pk3 f.pk3
 
+HOST (STEP 3 - docs/12-framerelay-구조와-로드맵.md §3 호스트 모드; the bridge OPENS the room and
+the Switch scans+joins IT; needs an AP-capable radio - VM1's RTL8192EU yes, 8188EU no):
+    sudo -E python3 frlgtrade.py --live --mode host dummy.pk3 trademon.pk3 -o received.pk3
+The room advertises the measured FRLG identity (comm id 0x01006fa0233f8000 / scene 22287 /
+RFU search beacon via frlgsim.beacon); --relay-url/--session-id/--role combine as usual.
+
 OFFLINE self-check (replays a captured host stream through the full RX stack - no Switch):
     python3 frlgtrade.py --replay capture.jsonl dummy.pk3 trademon.pk3
 """
@@ -215,7 +221,42 @@ def run_live(args, lg):
     phy = resolve_phy(args.phy, lg)   # explicit --phy, else USB-ID auto-detect (I-5)
     comm_id = int(args.comm_id, 16) if args.comm_id else None
     password = bytes.fromhex(args.password) if args.password else None   # None -> built-in
-    if args.relay_url:
+    if args.mode == "host":
+        # STEP 3 호스트 모드 (docs/12-framerelay-구조와-로드맵.md §3): open OUR OWN FRLG room via
+        # ldn.create_network (NL80211_CMD_START_AP + beacon; wlan.py:1572 _start_ap) and let the
+        # Switch scan+join US. Everything AFTER the transport is UNCHANGED: Pia/engine/sim run
+        # exactly as in join mode - HostTransport prefills LiveTransport-compatible attributes
+        # and switches host_mac/host_ip to the joined Switch dynamically from the participant
+        # list (the Pia layer still re-learns its true constant id off the wire).
+        if args.target_bssid:
+            lg("[live] WARNING: --target-bssid has no effect in host mode (we are the AP)")
+        if args.comm_id:
+            lg("[live] WARNING: --comm-id ignored in host mode "
+               "(advertising the measured FRLG id 0x01006fa0233f8000)")
+        if args.relay_url:
+            # Relay combination: same session semantics as the join path below (host mints /
+            # guest names a session), but over a HOSTING transport.
+            role = args.role
+            session_id = args.session_id
+            if role == "host" and not session_id:
+                session_id = create_relay_session(args.relay_url, lg)
+            elif role == "guest" and not session_id:
+                sys.exit("--session-id is required when --role=guest "
+                         "(join the host's existing relay session)")
+            relay_url = f"{args.relay_url}/session/{session_id}/ws?role={role}"
+            lg(f"[live] relay mode: role={role} session={session_id}")
+            t = tmod.HostRemoteTransport(relay_url=relay_url, session_id=session_id,
+                                         role=role, password=password, nickname=args.ot,
+                                         keys_path=args.keys, phyname=phy, log=lg).start()
+            # T4 fix parity: start_remote() launches the WS thread SEPARATELY from start()
+            # (see the join-path comment below for why it must be explicit).
+            t.start_remote()
+            lg("[live] relay websocket thread started")
+        else:
+            lg(f"[live] opening FRLG room for the Switch to join (nickname={args.ot})...")
+            t = tmod.HostTransport(password=password, nickname=args.ot, keys_path=args.keys,
+                                   phyname=phy, log=lg).start()
+    elif args.relay_url:
         # Remote relay mode: a leader-leader EMU bridge session over the relay WebSocket. The
         # RemoteTransport still inherits LiveTransport's LDN join/data plane; the relay is the
         # game-semantic state channel between the two peers. Host leads (and mints a session id if
@@ -510,6 +551,13 @@ def main():
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--live", action="store_true", help="join the real Switch")
     mode.add_argument("--replay", metavar="CAPTURE", help="offline: replay a capture's host stream")
+    ap.add_argument("--mode", choices=("join", "host"), default="join",
+                    help="(live) join=scan+JOIN the Switch's room (default - the legacy flow, "
+                         "unchanged); host=open OUR OWN FRLG room via ldn create_network "
+                         "(NL80211_CMD_START_AP; wlan.py:1572 _start_ap) and let the Switch "
+                         "scan+join us [docs/12-framerelay-구조와-로드맵.md §3]. Needs an "
+                         "AP-capable radio (VM1's RTL8192EU: yes; 8188EU: no). Combinable with "
+                         "--relay-url/--session-id/--role")
     ap.add_argument("--relay-url", metavar="BASE", default="",
                     help="(live) remote relay base URL (e.g. http://127.0.0.1:8788). Given, run in "
                          "remote relay mode: a leader-leader EMU bridge session over the relay "
