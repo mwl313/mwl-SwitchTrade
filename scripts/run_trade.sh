@@ -33,7 +33,16 @@
 set -euo pipefail
 
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly EMU_DIR="${EMU_DIR:-$SCRIPT_DIR/../emu}"
+if [[ -z ${EMU_DIR:-} ]]; then
+    if [[ -f "$SCRIPT_DIR/../emu/frlgtrade.py" ]]; then
+        EMU_DIR="$SCRIPT_DIR/../emu"
+    elif [[ -f "/home/aria/emu/frlgtrade.py" ]]; then
+        EMU_DIR="/home/aria/emu"          # VM 표준 배포 위치 (~/에 래퍼를 놓을 때)
+    else
+        echo "ERROR: emu/frlgtrade.py not found — set EMU_DIR" >&2; exit 2
+    fi
+fi
+readonly EMU_DIR
 readonly EMU_PY="$EMU_DIR/frlgtrade.py"
 readonly WATCHDOG_TIMEOUT=900                  # 15분 — 트레이드 1세션 실측 러닝타임의 충분한 상한
 
