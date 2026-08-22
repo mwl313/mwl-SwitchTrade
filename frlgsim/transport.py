@@ -178,6 +178,121 @@ def install_beacon_head_override(log=print) -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# STEP B4 (docs/plan/18-b2-gap분석.md): the 4 remaining hostapd-vs-ldn START_AP
+# attr gaps on the HOST path. hostapd on the SAME rtl8xxxu card beacons fine;
+# ldn 0.0.17's AccessPoint._start_ap (wlan.py:1572) differs in exactly 4 attrs:
+#   GAP-1  NL80211_ATTR_BEACON_IES    missing (hostapd: Extended Capabilities IE)
+#   GAP-2  NL80211_ATTR_PROBERESP_IES missing (same IE)
+#   GAP-3  NL80211_ATTR_ASSOCRESP_IES missing (same IE)
+#   GAP-4  NL80211_ATTR_HIDDEN_SSID   = ZERO_CONTENTS(2) vs hostapd NOT_IN_USE(0)
+#          (hidden mode suppresses the SSID in beacons - passive scans can't match)
+# ---------------------------------------------------------------------------
+
+# hostapd-measured Extended Capabilities IE (docs/plan/18-b2-gap분석.md GAP-1..3):
+# [7f][08] 04 00 00 02 00 00 00 40 - 10 bytes, exactly what hostapd sends as
+# beacon_ies/proberesp_ies/assocresp_ies on this card.
+_EXT_CAPABILITIES_IE = bytes.fromhex("7f080400000200000040")
+
+_START_AP_ATTRS_INSTALLED = False
+
+
+class _StartApAttrsProxy:
+    """Transparent forwarding proxy around an AccessPoint's real `_wlan` handle (STEP B4,
+    same mechanism as C-4's _WlanProxy): every attribute - receive() included - resolves
+    through the original object; ONLY request() is intercepted, and only for
+    NL80211_CMD_START_AP, whose attrs get the hostapd-parity overrides written IN PLACE
+    so the original call carries them."""
+
+    def __init__(self, wlan, cmd_start_ap, overrides):
+        self._mwl_wlan = wlan
+        self._mwl_cmd_start_ap = cmd_start_ap
+        self._mwl_overrides = dict(overrides)
+
+    def __getattr__(self, name):
+        # Only reached for attributes the proxy itself does not define -> pure passthrough
+        # (the stock CM waits for the START_AP event on receive()).
+        return getattr(self._mwl_wlan, name)
+
+    async def request(self, cmd, *args, **kwargs):
+        if cmd == self._mwl_cmd_start_ap:
+            attrs = kwargs.get("attrs", args[0] if args else None)
+            if isinstance(attrs, Mapping):
+                attrs.update(self._mwl_overrides)       # in place: same dict object
+        return await self._mwl_wlan.request(cmd, *args, **kwargs)
+
+
+def install_start_ap_attrs_override(log=print) -> bool:
+    """Monkey-patch ldn.wlan.AccessPoint._start_ap so the HOST path's START_AP request
+    carries the 4 hostapd-parity attrs ldn omits (GAP-1..4 above).
+
+    Mechanism: _start_ap builds its attrs dict LOCALLY (wlan.py:1580) and hands it
+    straight to self._wlan.request(NL80211_CMD_START_AP, attrs) (wlan.py:1598), so an
+    args/kwargs wrapper can never see it. Instead - the C-4 _WlanProxy pattern - the
+    wrapper swaps the AccessPoint's _wlan handle for a transparent forwarding proxy for
+    the lifetime of the original CM; the proxy rewrites ONLY NL80211_CMD_START_AP
+    requests (attrs updated IN PLACE, by reference) and forwards everything else -
+    receive() included - untouched. The real handle is restored afterwards, also on
+    failure.
+
+    Idempotent (a second call is a no-op), guarded (missing ldn/constants -> stock
+    fallback with ONE warning), reports the outcome via `log`. Returns True when this
+    call has the override in effect."""
+    global _START_AP_ATTRS_INSTALLED
+    if _START_AP_ATTRS_INSTALLED:
+        return False
+    try:
+        from ldn import wlan as _wlan
+
+        # Resolve the SAME nl80211 object the Station's request() call sees (ldn.wlan's
+        # module global) so constants always match - real netlink on Linux, the test
+        # stubs' fake nl80211 offline (same resolution as install_target_bssid_patch).
+        nl80211 = getattr(_wlan, "nl80211", None)
+        if nl80211 is None:
+            raise ImportError("ldn.wlan has no nl80211 reference (library version drift?)")
+        ap_cls = getattr(_wlan, "AccessPoint", None)
+        if ap_cls is None or not hasattr(ap_cls, "_start_ap"):
+            log("[start-ap-attrs] ldn.wlan.AccessPoint._start_ap missing - "
+                "stock START_AP attrs kept")
+            return False
+        stock_start_ap = ap_cls._start_ap
+        if getattr(stock_start_ap, "_mwl_start_ap_attrs_patch", False):
+            _START_AP_ATTRS_INSTALLED = True         # already ours (re-import guard)
+            return True
+
+        # GAP-1..3 + GAP-4: written over the stock attrs IN PLACE at request time.
+        cmd_start_ap = nl80211.NL80211_CMD_START_AP
+        overrides = {
+            nl80211.NL80211_ATTR_BEACON_IES: _EXT_CAPABILITIES_IE,
+            nl80211.NL80211_ATTR_PROBERESP_IES: _EXT_CAPABILITIES_IE,
+            nl80211.NL80211_ATTR_ASSOCRESP_IES: _EXT_CAPABILITIES_IE,
+            nl80211.NL80211_ATTR_HIDDEN_SSID: nl80211.NL80211_HIDDEN_SSID_NOT_IN_USE,
+        }
+
+        @functools.wraps(stock_start_ap)
+        @contextlib.asynccontextmanager
+        async def _start_ap_with_attrs(ap):
+            saved_wlan = ap._wlan
+            ap._wlan = _StartApAttrsProxy(saved_wlan, cmd_start_ap, overrides)
+            try:
+                async with stock_start_ap(ap):
+                    yield
+            finally:
+                ap._wlan = saved_wlan               # restore even on failure/exception
+
+        _start_ap_with_attrs._mwl_start_ap_attrs_patch = True
+        ap_cls._start_ap = _start_ap_with_attrs
+        _START_AP_ATTRS_INSTALLED = True
+        log("[start-ap-attrs] AccessPoint._start_ap patched "
+            "(BEACON_IES/PROBERESP_IES/ASSOCRESP_IES + HIDDEN_SSID=NOT_IN_USE, "
+            "docs/plan/18-b2 GAP-1..4)")
+        return True
+    except Exception as e:                           # noqa: BLE001
+        log(f"[start-ap-attrs] install failed ({type(e).__name__}: {e}) - "
+            f"stock START_AP attrs kept")
+        return False
+
+
 _PIA_HDR = 0x5C     # Pia 6.16-6.41 LDN system header (sysCommVer 21/22); the game payload follows it
 
 
@@ -1502,6 +1617,10 @@ class HostTransport:
             # ldn AP was invisible). Rebuild the head hostapd-style and hand it to the kernel.
             if install_beacon_head_override(self.log):
                 self.info("beacon head override installed (hostapd-style IEs)")
+            # STEP B4 (docs/plan/18-b2-gap분석.md): the 4 remaining hostapd-vs-ldn
+            # START_AP attr gaps (beacon/proberesp/assocresp IEs + hidden SSID mode).
+            if install_start_ap_attrs_override(self.log):
+                self.info("START_AP attrs override installed (beacon_ies/proberesp_ies/assocresp_ies + hidden_ssid)")
 
             self.info("Opening the FRLG room (create_network/AP)...")
             try:
