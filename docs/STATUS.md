@@ -53,9 +53,15 @@
 
 ## 다음 단계 (순서대로)
 
-1. **STEP 6 (재정의)**: rate_limit.py → bridge.py 연결 (EchoGuard 재구현은 V-1 시나리오 A로 불필요) — T0
-2. **STEP 7**: AP+monitor 동시 vif 실측 (VM1, 8192EU) — 호스트 모드 전제 검증
-3. **STEP 8~9**: 호스트 모드 브로드캐스트 검증 (VM1+VM2, 스위치 불필요) 🎯
+> **2026-08-22 밤 갱신**: STEP 6~9 완료!
+> - STEP 6: rate limiter bridge 연결 (`1fef24c`)
+> - STEP 7: AP+monitor 공존 PASS (`93d2277`, docs/15)
+> - STEP 8: 호스트 모드 방 개설 + beacon head 패치로 **EMU 방 VM2 스캔 발견** (`bf22a85`, docs/16)
+> - STEP 9: framerelay 캡처→0x20→WS 파이프라인 첫 무선 실증 (`46b492d`, docs/16)
+
+1. ~~STEP 6~~ ✅ / ~~STEP 7~~ ✅ / ~~STEP 8~~ ✅ / ~~STEP 9~~ ✅
+2. **STEP 10**: 호스트 모드 + 스위치A 조인 (스위치 필요) — 방 리스트에 EMU 표시 확인
+3. **STEP 11**: 🏆 framerelay E2E (스위치 A·B) — B 화면에 "A의 방" = 목표② 달성
 4. **α트랙**: WSL2 무선 기반 검증 G1~G4 (동글 1개, GitHub Actions 커널 빌드 산출물)
 5. **STEP 10~13**: 스위치 실기 (호스트 모드 → framerelay E2E 🏆 → 안정성 5종)
 6. 프로덕션: γ(GUI 셸) / δ(릴레이 운영) / β(installer)
