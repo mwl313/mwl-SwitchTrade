@@ -123,11 +123,15 @@ class InstallOverrideTest(unittest.TestCase):
         global _BEACON_HEAD_INSTALLED
         import frlgsim.transport as t
         t._BEACON_HEAD_INSTALLED = False                       # reset per-test
+        if hasattr(t, "_START_AP_ATTRS_INSTALLED"):
+            t._START_AP_ATTRS_INSTALLED = False                # reset sibling override
 
     def tearDown(self):
         global _BEACON_HEAD_INSTALLED
         import frlgsim.transport as t
         t._BEACON_HEAD_INSTALLED = False
+        if hasattr(t, "_START_AP_ATTRS_INSTALLED"):
+            t._START_AP_ATTRS_INSTALLED = False
         sys.modules.pop("ldn", None)
         sys.modules.pop("ldn.wlan", None)
 

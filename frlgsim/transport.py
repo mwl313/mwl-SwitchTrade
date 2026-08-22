@@ -150,11 +150,8 @@ def install_beacon_head_override(log=print) -> bool:
             return False
 
         # nl80211.py may not export BEACON_IES/PROBERESP_IES/ASSOCRESP_IES constants
-        # (ldn 0.0.17's netlink binding omits them). Use the standard kernel values:
-        # NL80211_ATTR_BEACON_IES=22, PROBERESP_IES=23, ASSOCRESP_IES=24.
-        _ATTR_BEACON_IES = getattr(nl80211, "NL80211_ATTR_BEACON_IES", 22)
-        _ATTR_PROBERESP_IES = getattr(nl80211, "NL80211_ATTR_PROBERESP_IES", 23)
-        _ATTR_ASSOCRESP_IES = getattr(nl80211, "NL80211_ATTR_ASSOCRESP_IES", 24)
+        # (ldn 0.0.17's netlink binding omits them). These are only needed by the
+        # separate START_AP attrs override, not here. No nl80211 reference required.
 
         stock_method = station_cls._create_beacon_head
 

@@ -325,14 +325,16 @@ class StartApAttrsOverrideTest(unittest.TestCase):
         self.assertFalse(tmod.install_start_ap_attrs_override(logs.append))
         self.assertTrue(any("missing" in m or "stock" in m for m in logs))
 
-    def test_install_failure_missing_constant(self):
+    def test_missing_constant_uses_kernel_fallback(self):
+        """nl80211 binding omits IES constants (ldn 0.0.17 case) - the override should
+        still install successfully using standard kernel values (BEACON_IES=22 etc)."""
         _install_fake_modules()
         import nl80211                                   # the fake we just installed
-        del nl80211.NL80211_ATTR_BEACON_IES              # structural drift in constants
+        del nl80211.NL80211_ATTR_BEACON_IES              # simulate missing constant
         logs = []
-        self.assertFalse(tmod.install_start_ap_attrs_override(logs.append))
-        self.assertTrue(any("failed" in m for m in logs))
-        self.assertFalse(hasattr(self.wlan_mod.AccessPoint, "_mwl_start_ap_attrs_patch"))
+        result = tmod.install_start_ap_attrs_override(logs.append)
+        self.assertTrue(result)                          # falls back, installs fine
+        self.assertTrue(any("start-ap-attrs" in m for m in logs))
 
     def test_success_logs_once_and_mentions_the_gaps(self):
         logs = []
