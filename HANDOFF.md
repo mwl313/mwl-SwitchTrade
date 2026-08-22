@@ -90,10 +90,13 @@ sudo .venv/bin/python frlgtrade.py --mode host ...
 - 상세 기록: mwl-SwitchTrade docs/13 §0
 - **파급**: STEP 6 재정의 — EchoGuard 재구현 불필요 → "rate limiter를 bridge.py에 연결"로 변경
 
-### STEP 6 — rate limiter 연결 (재정의됨) ⬜ 다음
-- ~~EchoGuard 최종 구현~~ 불필요 (시나리오 A = 현행 sha1 유지)
-- 남은 것: `rate_limit.py`(TokenBucket, 커밋 `3836984`)를 `bridge.py`에 연결 — on_radio_capture/on_ws_message 경로에 안전망으로 삽입 + 테스트 보강
-- 오프라인 테스트 전부 통과 필수
+### STEP 6 — ✅ rate limiter 연결 완료 (2026-08-22, `1fef24c`)
+- ~~EchoGuard 재구현~~ 불필요 (V-1 시나리오 A 확정 — 현행 sha1 유지)
+- 완료: TokenBucket을 bridge.py 양방향 데이터 경로(capture→relay / ws→inject)에 연결
+  - 기본 200fps (docs/13 §7), 드롭 시 stats["dropped_rate"] 카운트 + 1/s 스로틀 경고
+  - CLI `--rate-fps` 오버라이드, stop() 종료 로그에 limiter 통계 포함
+  - 테스트 23→28케이스 (양방향 캡·정상 트래픽 통과·stats 라인 검증)
+- 전체 회귀: 7개 스위트 전부 통과
 
 ### STEP 7 — AP+monitor 동시 vif 실측 (VM1, 8192EU)
 - `iw phy` valid interface combinations 확인 → create_network(AP) + monitor 공존 확인
