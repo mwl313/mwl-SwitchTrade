@@ -43,6 +43,8 @@ def build_parser():
                              "guest beside Switch B(participant)")
     parser.add_argument("--host-mac", required=True,
                         help="LOCAL Switch's MAC (= LDN soft-AP BSSID) used as the capture filter")
+    parser.add_argument("--rate-fps", type=float, default=None,
+                        help="loop-storm cap in frames/s (default: 200, docs/13 section 7)")
     parser.add_argument("--verbose", action="store_true",
                         help="per-frame hex logs (default: milestones + stats only)")
     return parser
@@ -57,7 +59,7 @@ def main(argv=None):
         return 2
     radio = MonitorRadio(args.iface, host_mac=host_mac)
     app = RelayBridge(radio, args.relay_url, args.session_id,
-                      role=args.role, verbose=args.verbose)
+                      role=args.role, verbose=args.verbose, rate_fps=args.rate_fps)
     try:
         app.start()
     except RuntimeError as e:               # AF_PACKET missing / bind failed etc.
