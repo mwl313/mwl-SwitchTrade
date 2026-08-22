@@ -33,6 +33,7 @@ import contextlib
 import functools
 import json
 import queue
+import secrets
 import socket
 import struct
 import subprocess
@@ -1055,6 +1056,492 @@ class RemoteTransport(LiveTransport):
             if msg_type == self.MSG_HEARTBEAT:
                 continue
             self._inbox.put((msg_type, payload))     # inbox ONLY - never the UDP plane
+
+    def stop(self):
+        self._ws_stop.set()
+        super().stop()
+        if self._ws_thread is not None:
+            self._ws_thread.join(timeout=2)
+
+
+# ---------------------------------------------------------------------------
+# STEP 3 호스트 모드 (docs/12-framerelay-구조와-로드맵.md §3 "신규 발견: 호스트 모드").
+# The classes below are ADDITIVE: LiveTransport (the join path) and RemoteTransport are
+# untouched, so the legacy join flow keeps byte-identical behavior.
+# ---------------------------------------------------------------------------
+class RelayChannel:
+    """The MWLB relay-WebSocket state channel of RemoteTransport, extracted as a mixin for
+    host-mode use.
+
+    This is a VERBATIM port of RemoteTransport's WS layer (framing constants, heartbeat,
+    reconnect policy) - that layer is LDN-agnostic (it touches only relay_url/_inbox/
+    _outbox/_ws* attributes, never the radio or sockets), so hosting and joining can share
+    its exact audited behavior. It lives OUTSIDE RemoteTransport on purpose: sim.py
+    duck-types a remote-capable transport via hasattr(remote_send)/hasattr(remote_poll),
+    so plain HostTransport must NOT carry these methods - only HostRemoteTransport does,
+    keeping the remote hooks OFF in direct host mode (PHASE2_DESIGN.md S4/S4.3).
+    """
+
+    MWLB_MAGIC = b"MWLB"
+    MSG_TRADE_SELECT = 0x01
+    MSG_TRADE_CONFIRM = 0x02
+    MSG_TRADE_CANCEL = 0x03
+    MSG_HEARTBEAT = 0x04
+    MSG_STATE_SYNC = 0x10
+
+    HEARTBEAT_INTERVAL = 30.0
+    RECONNECT_ATTEMPTS = 3
+
+    # -- MWLB framing --------------------------------------------------------
+    @classmethod
+    def _build_frame(cls, msg_type, payload=b""):
+        payload = bytes(payload)
+        return (cls.MWLB_MAGIC + bytes([msg_type & 0xFF])
+                + struct.pack("!H", len(payload)) + payload)
+
+    @staticmethod
+    def _parse_frame(data):
+        if not isinstance(data, (bytes, bytearray)) or len(data) < 7:
+            return None
+        if bytes(data[:4]) != b"MWLB":
+            return None
+        msg_type = data[4]
+        length = struct.unpack("!H", data[5:7])[0]
+        if length > len(data) - 7:
+            return None
+        return msg_type, bytes(data[7:7 + length])
+
+    # -- remote channel (sim thread) -----------------------------------------
+    def start_remote(self):
+        """Launch the relay WebSocket thread."""
+        if getattr(self, "_ws_thread", None) is not None and self._ws_thread.is_alive():
+            return self
+        self._ws_stop.clear()
+        self._ws_thread = threading.Thread(target=self._run_ws_thread,
+                                           name="mwlb-remote-ws", daemon=True)
+        self._ws_thread.start()
+        return self
+
+    def remote_send(self, msg, msg_type):
+        """Frame a game-semantic message and hand it to the relay thread (thread-safe)."""
+        self._outbox.put(self._build_frame(msg_type, msg))
+
+    def remote_poll(self):
+        """Drain the inbox: yields (msg_type, payload) tuples for the sim FSM."""
+        while True:
+            try:
+                yield self._inbox.get_nowait()
+            except queue.Empty:
+                return
+
+    # -- relay WebSocket thread ----------------------------------------------
+    def _run_ws_thread(self):
+        try:
+            asyncio.run(self._ws_main())
+        except Exception as e:
+            self.log(f"[remote] websocket thread crashed: {e}")
+
+    async def _ws_main(self):
+        try:
+            import websockets
+        except ImportError as e:                     # pragma: no cover
+            self.log(f"[remote] missing dep for remote mode: {e}")
+            return
+        attempt = 0
+        while not self._ws_stop.is_set():
+            try:
+                async with websockets.connect(self.relay_url) as ws:
+                    attempt = 0                      # reset once a connect succeeds
+                    self._ws = ws
+                    self.log(f"[remote] websocket connected: {self.relay_url}")
+                    await self._ws_session(ws)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self._ws = None
+                if self._ws_stop.is_set():
+                    break
+                attempt += 1
+                if attempt > self.RECONNECT_ATTEMPTS:
+                    self.log(f"[remote] gave up after {self.RECONNECT_ATTEMPTS} reconnect "
+                             f"attempt(s): {e}")
+                    break
+                self.log(f"[remote] connection lost ({e}); reconnecting "
+                         f"{attempt}/{self.RECONNECT_ATTEMPTS} ...")
+                await asyncio.sleep(1.0)
+
+    async def _ws_session(self, ws):
+        last_hb = time.monotonic()
+        while not self._ws_stop.is_set():
+            while not self._outbox.empty():          # flush frames queued by remote_send()
+                await ws.send(self._outbox.get_nowait())
+            if time.monotonic() - last_hb >= self.HEARTBEAT_INTERVAL:
+                ts = int(time.time()) & 0xFFFFFFFF
+                await ws.send(self._build_frame(self.MSG_HEARTBEAT, struct.pack("!I", ts)))
+                last_hb = time.monotonic()
+            try:
+                msg = await asyncio.wait_for(ws.recv(), timeout=0.1)
+            except asyncio.TimeoutError:
+                continue
+            parsed = self._parse_frame(msg)
+            if parsed is None:
+                continue
+            msg_type, payload = parsed
+            if msg_type == self.MSG_HEARTBEAT:
+                continue
+            self._inbox.put((msg_type, payload))     # inbox ONLY - never the UDP plane
+
+
+class HostTransport:
+    """Host mode: OPEN our own FRLG room with kinnay's ``ldn.create_network()`` and let a real
+    Switch scan + join US - the reverse of LiveTransport (which scans + joins the console).
+
+    Wire path (docs/12-framerelay-구조와-로드맵.md §3 "신규 발견: 호스트 모드 (방 브로드캐스트)",
+    all verified against the ldn 0.0.17 source):
+      * ``create_network(param)``   ldn/__init__.py:1953 - starts AP + monitor + TAP;
+      * ``Station.create``          wlan.py:1436         - registers mgmt-frame handlers;
+      * ``_start_ap``               wlan.py:1572         - the actual broadcast:
+        NL80211_CMD_START_AP + hand-assembled beacon (BEACON_HEAD/TAIL), 100 ms interval.
+    Hardware premise (2026-08-22 measured): VM1's RTL8192EU supports AP mode; the RTL8188EU
+    does NOT - hosting requires the 8192EU.
+
+    Identity we advertise (docs/12 §3, all measured off a real Switch advertisement):
+      * local_communication_id = 0x01006fa0233f8000 (FRLG emulator title, 실측값),
+      * scene_id = 22287, max_participants = 8, channel = 6,
+      * application_data = frlgsim.beacon.build_application_data(...): the RFU search beacon -
+        [0x5C Pia system header][base85-encoded 24 B record] with a random-or-given trainer id
+        and a random nonzero RFU session id (STEP 2 encoder),
+      * password = GBA_APP_PASSPHRASE (the shared emulator passphrase).
+
+    Data plane: create_network gives us the ``ldn-tap`` TUN device carrying Ethernet/IP; WE are
+    participant 0 at ``169.254.{X}.1`` [ldn/__init__.py APNetwork: participant.ip_address =
+    f"169.254.{network_id}.{index+1}", first joiner lands on .2]. So the exact LiveTransport
+    socket pattern works unchanged: a bound UDP :12345 TX socket (SO_BROADCAST) plus an
+    AF_PACKET RX socket on the tap.
+
+    LiveTransport-compatible attributes (so sim/frlgtrade run UNCHANGED): ssid / our_ip /
+    our_mac / broadcast / iface are filled at ready. host_ip/host_mac semantics differ by
+    necessity: at ready they point at OURSELVES (we ARE participant 0, mirroring how
+    LiveTransport reads parts[0]), then _track_peer() polls the participant list every 0.5 s
+    and switches them to the joined Switch dynamically (sticky). Because the sim captures
+    host_ip once at construction - i.e. BEFORE the human has walked the Switch into joining -
+    send() retargets unicasts addressed to that stale placeholder (.1 = us) to the live peer.
+    The Pia layer re-learns the peer's TRUE constant id off the wire regardless
+    [pia_connect.parse_net_conn_request], so this bridge is only about IP routing.
+
+    Untestable offline (needs Linux + root + an AP-capable radio); mirrors the proven join
+    code path shape (free_radio -> trio thread -> tune_iface -> sockets). Live validation is
+    docs/12 STEP 8~13. NOTE: the game-level seat direction (who leads the FRLG link when the
+    Switch joins OUR room) is exactly what those steps will measure - this transport only
+    provides the plumbing.
+    """
+
+    # FRLG identity to ADVERTISE (measured; deliberately different from LiveTransport's
+    # class constant, which is the id the JOIN path matches scans against).
+    LOCAL_COMMUNICATION_ID = 0x01006FA0233F8000
+    SCENE_ID = 22287
+    MAX_PARTICIPANTS = 8
+    APPLICATION_VERSION = 1
+
+    IFNAME_TAP = "ldn-tap"           # CreateNetworkParam.ifname_tap default (our data plane)
+    PEER_POLL_INTERVAL = 0.5         # seconds between participant-list polls (trio task)
+
+    # WP-D (H-1, join path): same grace rule - a thread stuck in a kernel call cannot see
+    # _stop; past this grace the radio state is unknown, so fail loudly instead of touching it.
+    THREAD_JOIN_GRACE = 15
+
+    def __init__(self, password=None, nickname="EMU", keys_path="~/.switch/prod.keys",
+                 phyname="phy0", ifname="ldn", ifname_monitor="ldn-mon", channel=6,
+                 trainer_id=None, log=print):
+        self.info = getattr(log, "info", log)   # clean milestone sink (default-mode narration)
+        self.password = password if password else GBA_APP_PASSPHRASE
+        self.nickname = nickname
+        self.keys_path = keys_path
+        self.phyname = phyname
+        self.ifname = ifname                    # AP vif (CreateNetworkParam.ifname)
+        self.ifname_monitor = ifname_monitor    # advertisement/beacon monitor vif
+        self.channel = channel                  # fixed ch6 default; must be a valid 2.4G ch
+        if trainer_id is not None and not 0 <= trainer_id <= 0xFFFF:
+            raise ValueError(f"trainer_id {trainer_id:#x} does not fit u16")
+        # Random per run otherwise: the beacon TID is cosmetic (the Switch shows it in the room
+        # list); a fresh value each run keeps rooms distinguishable, like the join path's random
+        # nonzero connect id.
+        self.trainer_id = (trainer_id if trainer_id is not None
+                           else secrets.randbelow(0x10000))
+        self.rfu_session_id = secrets.randbelow(0xFFFF) + 1     # nonzero, same rationale
+        self.log = log
+        self.ssid = None             # generated by create_network (16 random bytes) if unset
+        self.our_ip = None           # 169.254.X.1 - we are participant 0
+        self.host_ip = None          # the joined Switch's ip (== our_ip until one joins)
+        self.our_mac = None          # the AP vif MAC = our Pia connection GUID
+        self.host_mac = None         # the joined Switch's MAC (== our_mac until one joins)
+        self.app_data = None         # OUR advertisement beacon (the STEP 2 encoder output)
+        self.iface = None            # the tap netdev the sockets bind to
+        self.broadcast = None        # 169.254.X.255
+        self._peer = None            # (mac, ip) once the Switch has joined (sticky)
+        self._network = None         # live ldn APNetwork handle (participant polling)
+        self._tx = None
+        self._rx = None
+        self._thread = None
+        self._ready = threading.Event()
+        self._stop = threading.Event()
+        self._err = None
+
+    # -- LDN host runs in a trio thread that keeps the network alive ----------
+    def start(self, timeout=45):
+        """Open the room; return once it is being advertised (NOT once the Switch joined -
+        that is human-paced and tracked dynamically afterwards). Mirrors LiveTransport.start()'s
+        budgeting: external timeout budget > what the trio thread needs, fully-unwrapped errors,
+        and a loud failure instead of a silent half-open radio."""
+        free_radio({self.phyname}, self.log)     # stale vifs monopolize the phy (join-path I-1/C-1)
+        self._err = None
+        self._ready.clear()
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run_ldn, daemon=True)
+        self._thread.start()
+        if not self._ready.wait(timeout):
+            self._stop.set()                     # ask the thread to unwind
+            if self._thread is not None:
+                self._thread.join(timeout=self.THREAD_JOIN_GRACE)
+                if self._thread.is_alive():
+                    raise RuntimeError(
+                        "radio thread still alive - radio state unknown "
+                        f"(host grace {self.THREAD_JOIN_GRACE}s exceeded after the "
+                        f"{timeout}s start timeout; 커널 blocking hang 의심)")
+            light_cleanup(self.log)
+            raise RuntimeError(f"LDN create_network timed out after {timeout}s - "
+                               "the AP never came up (radio busy? another NM/wpa_supplicant "
+                               "holding the phy? run with sudo; docs/12 §3)")
+        if self._err:
+            light_cleanup(self.log)              # remove any vif a failed open leaked
+            raise RuntimeError(f"LDN create_network failed:\n{self._err}")
+        tune_iface(self.iface, self.our_ip, self.broadcast, self.log)
+        self._setup_sockets()
+        return self
+
+    def _run_ldn(self):
+        try:
+            import trio
+            import ldn
+        except ImportError as e:                     # pragma: no cover
+            self._err = f"missing dep for live mode: {e}"
+            self._ready.set()
+            return
+
+        async def main():
+            # Lazy import: beacon.py imports transport._PIA_HDR, so a module-level import here
+            # would be circular (transport <- beacon <- transport).
+            from frlgsim import beacon
+            keys = ldn.load_keys(self.keys_path)
+            self.app_data = beacon.build_application_data(
+                self.trainer_id, self.nickname, self.rfu_session_id)
+            _dump_beacon(self.app_data, self.log)    # diagnostics parity: decode OUR ad
+            param = ldn.CreateNetworkParam()
+            param.keys = keys
+            param.local_communication_id = self.LOCAL_COMMUNICATION_ID
+            param.scene_id = self.SCENE_ID
+            param.max_participants = self.MAX_PARTICIPANTS
+            param.application_data = self.app_data   # the RFU search beacon (STEP 2 encoder)
+            param.accept_policy = ldn.ACCEPT_ALL     # the Switch must be able to authenticate
+            param.password = self.password           # 64-byte emulator passphrase
+            param.channel = self.channel             # ch6 (is_valid_channel-checked upstream)
+            param.name = self.nickname.encode()
+            param.app_version = self.APPLICATION_VERSION
+            param.phyname = self.phyname             # both vifs live on the SAME radio
+            param.phyname_monitor = self.phyname
+            param.ifname = self.ifname               # AP vif (like the bridge: ldn)
+            param.ifname_monitor = self.ifname_monitor
+            self.info("Opening the FRLG room (create_network/AP)...")
+            try:
+                async with ldn.create_network(param) as network:
+                    self._network = network
+                    info = network.info()
+                    parts = list(getattr(info, "participants", []) or [])
+                    us = parts[0] if parts else None
+                    self.ssid = bytes(info.ssid)
+                    # We are participant 0: ip 169.254.X.1, MAC = the AP interface's address
+                    # [ldn/__init__.py APNetwork.__init__].
+                    self.our_ip = getattr(us, "ip_address", None) or "169.254.21.1"
+                    self.our_mac = (bytes(info.address) if info.address is not None
+                                    else b"\x00" * 6)
+                    # LiveTransport-compat prefill: host_* START as ourselves (what a joiner
+                    # would read from parts[0]); _track_peer() moves them to the Switch.
+                    self.host_ip = self.our_ip
+                    self.host_mac = self.our_mac
+                    self.broadcast = self.our_ip.rsplit(".", 1)[0] + ".255"
+                    self.iface = self._require_tap()
+                    self.log(f"[live] hosting ssid={self.ssid.hex()} "
+                             f"us={self.our_ip}/{self.our_mac.hex()} "
+                             f"broadcast={self.broadcast} comm_id="
+                             f"0x{self.LOCAL_COMMUNICATION_ID:016x} scene={self.SCENE_ID} "
+                             f"ch={self.channel}")
+                    self.info("Room is open - waiting for the Switch to scan and join...")
+                    self._ready.set()
+                    while not self._stop.is_set():
+                        await trio.sleep(self.PEER_POLL_INTERVAL)
+                        self._track_peer()
+            finally:
+                self._network = None
+
+        try:
+            trio.run(main)
+        except BaseException as e:                     # pragma: no cover
+            # Same unwrapping as the join path: trio hides leaf causes behind ExceptionGroup.
+            self._err = _format_join_error(e)
+            self.log(f"[live] LDN create_network FAILED:\n{self._err}")
+            self._ready.set()
+
+    def _require_tap(self):
+        """Verify the tap data-plane netdev exists before we depend on it. Unlike the mac80211
+        vifs it is created by TUNSETIFF with its EXACT name (no udev wlx<MAC> rename - that
+        bit the station iface, MWL 2026-08-21), but a clear early error still beats a cryptic
+        bind failure later."""
+        if _iface_exists(self.IFNAME_TAP):
+            return self.IFNAME_TAP
+        raise RuntimeError(
+            f"tap netdev {self.IFNAME_TAP} not found although create_network returned - "
+            "the room is half-open (TUN support? stale state?); aborting")
+
+    def _track_peer(self):
+        """Dynamic host_* tracking (runs inside the trio loop): the FIRST connected non-self
+        participant IS 'the console' [APNetwork._register_participant assigns .2..]. Sticky by
+        design - when the Switch later leaves, the trade session is over anyway, so we keep the
+        last known values (and just log) rather than yanking host_* back mid-teardown."""
+        net = self._network
+        info = net.info() if net is not None else None
+        if info is None:
+            return
+        parts = list(getattr(info, "participants", []) or [])
+        peer = next((p for p in parts if getattr(p, "connected", False)
+                     and bytes(p.mac_address) != bytes(self.our_mac)), None)
+        if peer is None:
+            if self._peer is not None:
+                self.log("[live] peer left the room (link teardown) - keeping last host_*")
+                self._peer = None
+            return
+        mac, ip = bytes(peer.mac_address), peer.ip_address
+        if self._peer == (mac, ip):
+            return
+        first = self._peer is None
+        self._peer = (mac, ip)
+        self.host_mac, self.host_ip = mac, ip
+        if first:
+            self.log(f"[live] PEER JOINED our room (the Switch): {ip}/{mac} "
+                     f"({info.num_participants}/{info.max_participants}) - host_* now target "
+                     f"it; Pia handshake proceeds as usual")
+        else:
+            self.log(f"[live] peer changed: {ip}/{mac}")
+
+    # -- data plane (same pattern as LiveTransport, bound to the tap) ---------
+    def _setup_sockets(self):
+        tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        tx.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        tx.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        tx.bind(("0.0.0.0", PIA_PORT))
+        self._tx = tx
+        rx = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_IP))
+        rx.bind((self.iface, 0))
+        rx.setblocking(False)
+        try:
+            rx.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8 * 1024 * 1024)
+            got = rx.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+            self.log(f"[live] rx socket SO_RCVBUF = {got} bytes "
+                     f"(raise net.core.rmem_max if lower than requested 8 MiB)")
+        except OSError as e:
+            self.log(f"[live] could not enlarge rx SO_RCVBUF: {e}")
+        self._rx = rx
+
+    def send(self, datagram, dst_ip):
+        dst = self.broadcast if dst_ip in (self.broadcast, "255.255.255.255") else dst_ip
+        # Placeholder redirect: the sim captured host_ip BEFORE the Switch joined (= our own
+        # .1). Retarget such unicasts to the live peer so the game stream reaches the console
+        # (broadcasts need no fix - they already go to .255).
+        if dst == self.our_ip and self._peer is not None:
+            dst = self._peer[1]
+        try:
+            self._tx.sendto(datagram, (dst, PIA_PORT))
+        except OSError as e:
+            self.log(f"[live] sendto failed: {e}")
+
+    def _accept_dst(self, dst_ip):
+        """Same acceptance rules as the join path: addressed to us, any link-local subnet
+        broadcast (robust subnet resolution), or the global broadcast - so the Switch's
+        outreach (Net 0x11 etc.) is never missed."""
+        return (dst_ip == self.our_ip
+                or (dst_ip.startswith("169.254.") and dst_ip.endswith(".255"))
+                or dst_ip in ("255.255.255.255",))
+
+    def recv(self):
+        out = []
+        if self._rx is None:
+            return out
+        while True:
+            try:
+                data = self._rx.recv(65535)
+            except (BlockingIOError, OSError):
+                break
+            parsed = self._parse_udp(data)
+            if parsed is None:
+                continue
+            src_ip, src_port, dst_ip, dst_port, payload = parsed
+            if src_ip == self.our_ip or dst_port != PIA_PORT or not self._accept_dst(dst_ip):
+                continue
+            out.append((payload, src_ip))
+        return out
+
+    @staticmethod
+    def _parse_udp(frame):
+        if len(frame) < 14 + 20 + 8 or struct.unpack_from("!H", frame, 12)[0] != ETH_P_IP:
+            return None
+        ip = frame[14:]
+        if (ip[0] >> 4) != 4 or ip[9] != PROTO_UDP:
+            return None
+        ihl = (ip[0] & 0x0F) * 4
+        src_ip = socket.inet_ntoa(ip[12:16])
+        dst_ip = socket.inet_ntoa(ip[16:20])
+        udp = ip[ihl:]
+        if len(udp) < 8:
+            return None
+        src_port, dst_port, ulen = struct.unpack_from("!HHH", udp, 0)
+        payload = udp[8:][:max(0, ulen - 8)] if ulen >= 8 else udp[8:]
+        return src_ip, src_port, dst_ip, dst_port, payload
+
+    def stop(self):
+        """Tear down: signal the trio loop (the create_network context exit sends
+        DISCONNECT_NETWORK_DESTROYED to peers [APNetwork._destroy_network]), close the
+        sockets, then sweep any leftover vifs off the radio."""
+        self._stop.set()
+        for s in (self._tx, self._rx):
+            try:
+                if s:
+                    s.close()
+            except OSError:
+                pass
+        if self._thread is not None:
+            self._thread.join(timeout=5)     # give the library's AP/tap teardown a moment
+        light_cleanup(self.log)
+
+
+class HostRemoteTransport(RelayChannel, HostTransport):
+    """HostTransport + the relay state channel - ``--mode host`` combined with --relay-url.
+
+    The relay pair topology stays leader-leader (PHASE2_DESIGN.md S4): this bridge HOSTS the
+    LDN room for a Switch while syncing game-semantic MWLB frames with the remote EMU peer
+    over the relay WebSocket (inherited verbatim from the audited RemoteTransport layer via
+    RelayChannel). Only instantiated for relay runs, so sim.py's duck-typing enables the
+    remote hooks exactly when a remote peer actually exists.
+    """
+
+    def __init__(self, relay_url, session_id=None, role="guest", *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.relay_url = relay_url
+        self.session_id = session_id
+        self.role = role
+        self._inbox = queue.Queue()          # inbound remote frames: (msg_type, payload)
+        self._outbox = queue.Queue()         # outbound frames queued from the sim thread
+        self._ws = None                      # live websockets connection (async thread only)
+        self._ws_thread = None
+        self._ws_stop = threading.Event()
 
     def stop(self):
         self._ws_stop.set()
