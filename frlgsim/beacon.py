@@ -89,6 +89,9 @@ _OBSERVED_HEADER_FIELDS = {
     1: b"\x5c",
     2: b"\x16\x00",
     4: b"\x58",
+    # STEP 10 fix (docs/17): byte-level diff vs a real Switch advertisement showed the
+    # console always sets these; our all-zero room was invisible to the Switch's scan.
+    21: b"\x01\x01",               # D1: unknown flag pair - Switch always sets 0x0101
 }
 
 
