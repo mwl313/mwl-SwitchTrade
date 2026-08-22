@@ -233,6 +233,12 @@ def run_live(args, lg):
                                  password=password, nickname=args.ot, keys_path=args.keys,
                                  local_comm_id=comm_id, phyname=phy, log=lg,
                                  target_bssid=args.target_bssid).start()
+        # T4 fix (2026-08-22): start_remote() is a SEPARATE method from start() - without this
+        # call the relay WebSocket thread never launches, so the two bridges never sync and each
+        # side trades its own EMU independently (observed live in T4: zero [remote] lines on the
+        # host, guest CANCEL queued but never sent, no WS upgrade in relay.log).
+        t.start_remote()
+        lg("[live] relay websocket thread started")
     else:
         lg(f"[live] scanning for FRLG LDN network (nickname={args.ot})...")
         t = tmod.LiveTransport(password=password, nickname=args.ot, keys_path=args.keys,
