@@ -1469,9 +1469,17 @@ class HostTransport:
             # invisible to the Switch's scan; a dummy profile-derived value satisfies
             # whatever non-zero check the client does without pretending to be a console.
             partner_stub = b"\x00\x00\x00\x00" + struct.pack("<H", 0x1584) + b"\x00\x00"
+            # STEP 10 fix D2 (docs/17): the Switch embeds its owner nickname as a TLV at
+            # header offset 26: [0x03][0x01][nickname bytes...] - measured "Min" (3 chars).
+            # Without it the room is invisible to the console's scan filter.
+            nick = self.nickname.encode("ascii", errors="replace")[:16]
+            header_overrides = {
+                26: b"\x03\x01" + nick,     # field ID + flag + nickname
+            }
             self.app_data = beacon.build_application_data(
                 self.trainer_id, self.nickname, self.rfu_session_id,
-                partner_data=partner_stub)
+                partner_data=partner_stub,
+                header=beacon.build_pia_header(overrides=header_overrides))
             _dump_beacon(self.app_data, self.log)    # diagnostics parity: decode OUR ad
             param = ldn.CreateNetworkParam()
             param.keys = keys
