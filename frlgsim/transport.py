@@ -31,6 +31,7 @@ C-4 (--target-bssid): opt-in BSSID-pinned association. The ldn library's Station
 import asyncio
 import contextlib
 import functools
+import glob
 import json
 import queue
 import secrets
@@ -1556,8 +1557,19 @@ class HostTransport:
             self.log(f"[ap-engine] unavailable ({e}) - using ldn fallback")
             return None
         try:
+            # The engine needs an EXISTING netdev to drive (hostapd does not create one).
+            # Prefer the udev-renamed station iface (wlx<MAC>) when present; else the first
+            # wlan* vif. Never 'ldn' - that name belongs to the ldn fallback's AP vif which
+            # does not exist on this path (live finding: hostapd failed with "nl80211
+            # driver initialization failed" when handed a nonexistent iface).
+            import glob as _glob
+            candidates = sorted(_glob.glob("/sys/class/net/wlx*")) + \
+                sorted(_glob.glob("/sys/class/net/wlan*"))
+            if not candidates:
+                raise RuntimeError("no wlan netdev for hostapd to drive")
+            ap_iface = candidates[0].rsplit("/", 1)[-1]
             engine = HostapdApEngine(
-                iface=self.ifname,                   # the AP vif (ldn naming kept)
+                iface=ap_iface,
                 ssid=(self.ssid.hex() if isinstance(self.ssid, (bytes, bytearray))
                       else secrets.token_hex(16)),
                 channel=self.channel,
