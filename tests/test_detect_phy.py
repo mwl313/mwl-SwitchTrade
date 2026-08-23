@@ -33,9 +33,12 @@ import frlgtrade  # noqa: E402
 def _mk_usb_radio(root, phy, vid, pid, iface=True):
     """Fake sysfs under `root`: <root>/ieee80211/<phy>/device -> a USB device dir carrying the
     idVendor/idProduct pair. iface=True (the kernel's real shape) points the link one level
-    deeper, at the USB *interface* dir (1-3:1.0) which has NO idVendor/idProduct - forcing
+    deeper, at the USB *interface* dir which has NO idVendor/idProduct - forcing
     _phy_usb_id to walk up to the parent USB device to find its identity."""
-    usbdev = os.path.join(root, "devices", "usb1", "1-3")
+    # Give every fake wiphy its own USB device. Reusing one parent silently made
+    # multi-radio tests overwrite each other's VID:PID pair.
+    usb_name = f"1-{phy.removeprefix('phy')}"
+    usbdev = os.path.join(root, "devices", "usb1", usb_name)
     os.makedirs(usbdev, exist_ok=True)
     with open(os.path.join(usbdev, "idVendor"), "w") as f:
         f.write(vid + "\n")
@@ -43,7 +46,7 @@ def _mk_usb_radio(root, phy, vid, pid, iface=True):
         f.write(pid + "\n")
     target = usbdev
     if iface:
-        target = os.path.join(usbdev, "1-3:1.0")
+        target = os.path.join(usbdev, f"{usb_name}:1.0")
         os.makedirs(target, exist_ok=True)
     phydir = os.path.join(root, "ieee80211", phy)
     os.makedirs(phydir, exist_ok=True)
@@ -84,7 +87,7 @@ class DetectPhyTest(unittest.TestCase):
 
         self.assertEqual(phy, "phy2")             # the old string sort picked phy10 here
         joined = "\n".join(logs)
-        self.assertIn("WARNING: 2 Realtek radios found (phy2, phy10) - using phy2. "
+        self.assertIn("WARNING: 2 matching USB radios found (phy2, phy10) - using phy2. "
                       "pass --phy to override", joined)
         self.assertEqual(joined.count("WARNING"), 1)
         self.assertIn("auto-detected 0bda:818b on phy2", joined)
@@ -99,7 +102,7 @@ class DetectPhyTest(unittest.TestCase):
     # -- 4. USB interface -> parent device walk --------------------------------------
     def test_usb_interface_symlink_walks_up_to_parent_device(self):
         _mk_usb_radio(self.sysfs, "phy7", "0bda", "8179", iface=True)
-        iface_dir = os.path.join(self.sysfs, "devices", "usb1", "1-3", "1-3:1.0")
+        iface_dir = os.path.join(self.sysfs, "devices", "usb1", "1-7", "1-7:1.0")
         self.assertFalse(os.path.exists(os.path.join(iface_dir, "idVendor")),
                          "precondition: the interface dir itself carries NO USB identity")
 
@@ -118,7 +121,27 @@ class DetectPhyTest(unittest.TestCase):
                                         os.path.join(chroot, "ieee80211")])
 
         self.assertEqual(phy, "phy4")             # lowest NUMBER across ALL roots
-        self.assertIn("WARNING: 2 Realtek radios found (phy4, phy9)", "\n".join(logs))
+        self.assertIn("WARNING: 2 matching USB radios found (phy4, phy9)", "\n".join(logs))
+
+    # -- 6. health-gate-selected profile: future USB IDs work without source edits -------
+    def test_selected_usb_id_accepts_profile_added_card(self):
+        _mk_usb_radio(self.sysfs, "phy12", "1234", "abcd")
+        _mk_usb_radio(self.sysfs, "phy1", "0bda", "818b")
+        logs = []
+
+        phy = frlgtrade.detect_phy(
+            logs.append,
+            roots=os.path.join(self.sysfs, "ieee80211"),
+            selected_usb_id="1234:abcd",
+        )
+
+        self.assertEqual(phy, "phy12")
+        self.assertIn("auto-detected 1234:abcd on phy12", "\n".join(logs))
+        self.assertNotIn("WARNING", "\n".join(logs))
+
+    def test_selected_usb_id_rejects_malformed_value(self):
+        with self.assertRaisesRegex(ValueError, "invalid selected USB ID"):
+            frlgtrade.detect_phy(lambda _: None, roots=[], selected_usb_id="not-an-id")
 
 
 if __name__ == "__main__":

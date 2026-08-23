@@ -139,8 +139,8 @@ def _phy_usb_id(dev_path):
     return None
 
 
-def detect_phy(log, roots=None):
-    """Find the LDN radio's CURRENT wiphy by USB ID (I-5). Returns the wiphy name
+def detect_phy(log, roots=None, selected_usb_id=None):
+    """Find the selected LDN radio's CURRENT wiphy by USB ID (I-5). Returns the wiphy name
     (e.g. 'phy12') or None - never a guess.
 
     With TWO Realtek radios plugged in (WP-F / docs-09 MEDIUM-1) the old first-match-on-
@@ -148,7 +148,13 @@ def detect_phy(log, roots=None):
     would then tear down the WRONG card's netdevs. So now every candidate is collected and the
     LOWEST phy NUMBER wins (natural sort: phy2 < phy10), with a loud warning listing all of
     them so a wrong pick can be overridden with --phy. `roots` defaults to the real sysfs but
-    accepts an injected fake root (tests build one in a tempdir)."""
+    accepts an injected fake root (tests build one in a tempdir). The WSL hardware gate exports
+    SWITCHTRADE_USB_ID, allowing profile-added cards without another source-code registry edit."""
+    selected_usb_id = (selected_usb_id or os.environ.get("SWITCHTRADE_USB_ID", "")).lower()
+    if selected_usb_id and not re.fullmatch(r"[0-9a-f]{4}:[0-9a-f]{4}", selected_usb_id):
+        raise ValueError(f"invalid selected USB ID: {selected_usb_id!r}")
+    supported_ids = {selected_usb_id} if selected_usb_id else set(REALTEK_USB_IDS)
+
     if roots is None:
         roots = ["/sys/class/ieee80211"]
     elif isinstance(roots, str):
@@ -158,7 +164,7 @@ def detect_phy(log, roots=None):
         for dev in glob.glob(os.path.join(root, "*", "device")):
             phy = os.path.basename(os.path.dirname(dev))
             usbid = _phy_usb_id(dev)
-            if usbid in REALTEK_USB_IDS:
+            if usbid in supported_ids:
                 m = re.search(r"(\d+)", phy)     # natural sort key: phy2 < phy10
                 found.append(((int(m.group(1)) if m else -1, phy), phy, usbid))
     found.sort(key=lambda f: f[0])
@@ -166,7 +172,7 @@ def detect_phy(log, roots=None):
         return None
     phys = [phy for _, phy, _ in found]
     if len(phys) > 1:
-        log(f"[live] WARNING: {len(phys)} Realtek radios found ({', '.join(phys)}) - "
+        log(f"[live] WARNING: {len(phys)} matching USB radios found ({', '.join(phys)}) - "
               f"using {phys[0]}. pass --phy to override")
     log(f"[live] auto-detected {found[0][2]} on {found[0][1]}")
     return phys[0]
@@ -178,13 +184,14 @@ def resolve_phy(phy_opt, log):
     the wiphys that DO exist; we never fall back to phy0 (a wrong guess joins nothing)."""
     if phy_opt:
         return phy_opt
-    phy = detect_phy(log)
+    selected_usb_id = os.environ.get("SWITCHTRADE_USB_ID", "")
+    phy = detect_phy(log, selected_usb_id=selected_usb_id)
     if phy:
         return phy
     wiphys = sorted(os.path.basename(p) for p in glob.glob("/sys/class/ieee80211/*"))
     raise SystemExit(
-        "--phy not given and no Realtek USB wifi found by USB ID "
-        f"({' or '.join(f'{k} ({v})' for k, v in REALTEK_USB_IDS.items())}).\n"
+        "--phy not given and no selected USB wifi found by USB ID "
+        f"({selected_usb_id or ' or '.join(f'{k} ({v})' for k, v in REALTEK_USB_IDS.items())}).\n"
         f"Wiphy(s) present on this host: {', '.join(wiphys) if wiphys else '(none)'}.\n"
         "Check `iw phy`, then pass the card explicitly, e.g.:  --phy phy3"
     )
