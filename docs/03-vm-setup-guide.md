@@ -168,11 +168,9 @@ lsusb | grep -i realtek
 6. **모니터 모드 실측 (성공 확인됨)**:
 ```bash
 sudo apt install -y iw tcpdump
-sudo ip link set wlx00ada7117309 down   # 인터페이스명은 lsusb MAC 기반 (wlx...)
-sudo iw dev wlx00ada7117309 set type monitor
-sudo ip link set wlx00ada7117309 up
-sudo iw dev wlx00ada7117309 set channel 1
-sudo timeout 10 tcpdump -i wlx00ada7117309 -c 15
+sudo /home/aria/scripts/radio-health-gate.sh \
+  --iface wlx00ada7117309 --target-channel 1 -- \
+  timeout -s INT 10 tcpdump -i wlx00ada7117309 -c 15
 # → Beacon/Probe Request 수신 확인 (0 dropped). VM+패스스루에서 모니터 모드 실동작 검증됨
 ```
 7. LDN 파이썬 환경:

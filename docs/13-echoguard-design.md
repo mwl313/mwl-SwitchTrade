@@ -78,7 +78,8 @@ V-1: 카드 A 주입 → 모니터 재캡처 hexdump 대조 (tcpdump `-y IEEE802
 
 카드 1개, 스위치 불필요 (docs/10 §실기검증 V-1).
 
-1. 모니터 인터페이스에서 tcpdump 캡처 시작: `tcpdump -i <mon> -y IEEE802_11_RADIO -XX`
+1. RX health gate를 포함해 캡처 시작:
+   `sudo scripts/radio-health-gate.sh --iface <mon> --target-channel 1 -- tcpdump -i <mon> -y IEEE802_11_RADIO -XX`
 2. 브리지 또는 수동 스크립트로 임의 프레임 주입 (`wrap_radiotap` 8B TX 헤더 + bare frame)
 3. 주입한 bare frame 바이트와 재캡처에서 radiotap 헤더를 벗긴 802.11 프레임을 hexdump 대조
 

@@ -26,7 +26,8 @@
 | 캡처 도구 | tcpdump (pcap), tshark (오프라인 분석) | |
 | 화면 기록 | 스마트폰 카메라 또는 캡처카드 | 타임라인 정렬용 |
 
-⚠️ 카드 수신 사망(8188EU 특유) 대비: `authorized` 토글 스크립트 상시 준비.
+⚠️ 모든 캡처는 `scripts/radio-health-gate.sh`로 시작한다. RX 0이면 게이트가 해당 USB
+장치를 한 번 리셋하고 재검증하며, 그래도 0이면 캡처를 시작하지 않는다.
 
 ## 2. 캡처 정보 체크리스트 (빠짐없이)
 
@@ -78,8 +79,8 @@
 ## 3. 캡처 절차 (순서 엄수)
 
 ```
-[사전] VM2 부팅 → 카드 생존 확인 → monitor 모드 CH6 고정
-[1] tcpdump 시작 (pcap 저장) ← 반드시 스위치 조작 '전'에
+[사전] VM2 부팅 → discovery hop(1/6/11)으로 LDN 채널 확인
+[1] health gate → 확인된 채널 고정 → tcpdump 시작 ← 반드시 스위치 조작 '전'에
 [2] advert_check 병행 실행 (실시간 디코딩 확인용)
 [3] 주인님: 스위치 A 리더 그룹 생성
 [4] 주인님: 스위치 B 조인 → 트레이드 완주
@@ -91,8 +92,11 @@
 ### 명령어 스니펫
 
 ```bash
-# VM2 — 캡처 시작 (raw pcap)
-sudo tcpdump -i <IFACE> -I -e -s 0 -w /tmp/golden_$(date +%H%M%S).pcap 'type mgt or type data' &
+# VM2 — 확인된 LDN 채널에 고정하고 캡처 시작 (전용 터미널, Ctrl-C로 정상 종료)
+sudo /home/aria/scripts/radio-health-gate.sh \
+  --iface <IFACE> --target-channel <LDN_CHANNEL> -- \
+  tcpdump -i <IFACE> -I -e -s 0 -w /tmp/golden_$(date +%H%M%S).pcap \
+  'type mgt or type data'
 
 # VM2 — 실시간 광고 디코딩 (별도 터미널)
 sudo timeout --signal=INT 60s .venv/bin/python -m frlgsim.advert_check \

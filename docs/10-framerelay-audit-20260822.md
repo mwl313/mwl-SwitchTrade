@@ -55,7 +55,7 @@ L-1 stats 3스레드 동시 += (표시용 경미) / L-2 pinned URL role 쿼리 �
 
 | # | 항목 | 방법 |
 |---|---|---|
-| V-1 | ⭐ **주입↔재캡처 바이트 동등성(FCS/padding/radiotap Flags)** — C-1의 진위 | 카드 A 주입→모니터 재캡처 hexdump 대조 (tcpdump `-y IEEE802_11_RADIO`) |
+| V-1 | ⭐ **주입↔재캡처 바이트 동등성(FCS/padding/radiotap Flags)** — C-1의 진위 | `radio-health-gate.sh -- <tcpdump...>` 통과 후 카드 A 주입→모니터 재캡처 hexdump 대조 (`-y IEEE802_11_RADIO`) |
 | V-2 | 대상 커널 PACKET_IGNORE_OUTGOING 실제 효과 (echo 경로 자체 발생 여부) | 커널 버전 확인 + 주입 시 셀프 캡처 관측 |
 | V-3 | 100ms 스테일 비콘 재생의 스위치 해석: 스캔 표시·TSF 동기·조인 후 전력관리 이상 | 2대 실측 (방 안/밖 분리) — cadence 100ms vs 실측 LDN 비콘 간격 비교 |
 | V-4 | 릴레이 RTT(50~200ms) 하 유니캐스트 ACK/SIFS 리스크 — 조인 핸드셰이크 통과 여부 | §7 절차 5~6 관찰 + 재전송률 캡처 분석 |

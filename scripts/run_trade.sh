@@ -6,9 +6,8 @@
 #   1. emu 탐색을 SCRIPT_DIR 기준으로 변경: $SCRIPT_DIR/../emu/frlgtrade.py 우선.
 #      v5는 구 클론 경로 /home/aria/frlg-ldn-trade/frlgtrade.py 하드코딩 → 최신 패치 무시.
 #      EMU_DIR 환경변수 오버라이드 지원 — 클론/배포 위치 무관 동작.
-#   2. 카드 리셋 자동 감지: lsusb에서 0bda:8179(RTL8188EU) / 0bda:818b(RTL8192EU)를
-#      찾아 감지된 ID로 usbreset. 못 찾으면 sysfs idVendor/idProduct 역탐색 후
-#      authorized 토글(0 → 2초 → 1). v5는 0bda:8179 하드코딩(현재 카드는 818b와 불일치).
+#   2. radio-health-gate.sh가 실제 RX를 먼저 확인하고, RX 0일 때만 USB 리셋한다.
+#      정상 카드를 매 실행마다 리셋하지 않는다(WSL2 USB/IP detach 및 재열거 리스크 방지).
 #   3. --phy 강제 전달 제거 — frlgtrade의 C-2 USB ID 자동감지에 위임.
 #      사용자가 --phy를 인자로 직접 넘기면 "$@" 경유로 그대로 전달됨.
 #      (v5의 phy0 폴백은 금지된 폴백 — 틀린 phy로 조인 시도하면 아무것도 잡히지 않음)
@@ -17,6 +16,7 @@
 #   6. 종료 후 카드 인터페이스 up 복구 유지.
 #   7. --dry-run: 카드 감지 / emu 경로 / phy 상태만 출력하고 실행하지 않음
 #      (Mac 오프라인 검증용 — Mac엔 카드가 없으므로 "미감지"가 정상 출력).
+#   8. radio-health-gate.sh로 실제 RX를 확인한 뒤에만 frlgtrade 시작.
 #
 # *** 적용은 VM 배포 후 ***: 이 스크립트는 프로젝트 리포에서 관리되며 tar+scp로 VM에
 # 배포해야 실제 트레이드에 쓰인다 (plan §5.0). VM에 남은 구 v5 래퍼는 폐기 — 사용 금지.
@@ -44,6 +44,7 @@ if [[ -z ${EMU_DIR:-} ]]; then
 fi
 readonly EMU_DIR
 readonly EMU_PY="$EMU_DIR/frlgtrade.py"
+readonly HEALTH_GATE="$SCRIPT_DIR/radio-health-gate.sh"
 readonly WATCHDOG_TIMEOUT=900                  # 15분 — 트레이드 1세션 실측 러닝타임의 충분한 상한
 
 msg() { printf '%s\n' "$*"; }
@@ -65,14 +66,6 @@ EOF
 }
 
 # --- 카드 감지 -------------------------------------------------------------------------------
-
-lsusb_card_id() {
-    # lsusb에서 Realtek LDN 카드 ID(0bda:8179 | 0bda:818b)를 찾으면 출력, 없으면 실패.
-    command -v lsusb >/dev/null 2>&1 || return 1
-    local id
-    id="$(lsusb 2>/dev/null | awk '/0bda:(8179|818b)/{print $6; exit}')" || true
-    [[ -n $id ]] && printf '%s\n' "$id"
-}
 
 find_card_dev() {
     # sysfs 역탐색: idVendor/idProduct로 USB 장치 디렉터리를 찾아 출력 (lsusb 부재/무검칠 때의 폴백).
@@ -118,33 +111,6 @@ usb_id_of_syspath() {
         fi
         p="$(dirname "$p")"
     done
-    return 1
-}
-
-# --- 카드 리셋 -------------------------------------------------------------------------------
-
-reset_card() {
-    # *** modprobe -r rtl8xxxu 등 드라이버 재로드는 절대 금지 ***
-    #   드라이버 재로드는 카드 "수신"을 사망시킨다 (2026-08-21 2회 실측, docs/04-trade-workflow #4).
-    #   유일한 즉시 복구는 USB 레벨 리셋(usbreset 또는 sysfs authorized 토글)이다.
-    local id dev
-    if id="$(lsusb_card_id)"; then
-        if command -v usbreset >/dev/null 2>&1; then
-            msg "[reset] lsusb 감지: $id → usbreset"
-            usbreset "$id"
-            sleep 3                       # v5 실측: 리셋 후 재열거 안정화 대기 (docs/04 §4-1)
-            return 0
-        fi
-        msg "[reset] usbreset 미설치 — sysfs authorized 토글로 대체"
-    fi
-    if dev="$(find_card_dev)"; then
-        msg "[reset] sysfs 역탐색 감지: $dev → authorized 토글 (0 → 2s → 1)"
-        echo 0 > "$dev/authorized"
-        sleep 2
-        echo 1 > "$dev/authorized"
-        sleep 3                           # 재열거 안정화
-        return 0
-    fi
     return 1
 }
 
@@ -195,7 +161,7 @@ resolve_python() {
 }
 
 dry_run_report() {
-    local id dev phy
+    local dev phy
     msg "== run_trade.sh v6 --dry-run (실행하지 않음) =="
     msg "emu 경로   : $EMU_PY"
     if [[ -f $EMU_PY ]]; then
@@ -208,15 +174,6 @@ dry_run_report() {
         msg "             찾음 ✓"
     else
         msg "             PATH에 없음 ✗"
-    fi
-    if id="$(lsusb_card_id)"; then
-        msg "카드(lsusb): $id 감지 ✓"
-    else
-        if command -v lsusb >/dev/null 2>&1; then
-            msg "카드(lsusb): 미감지 — 카드 미연결이면 정상"
-        else
-            msg "카드(lsusb): lsusb 없음(비-Linux) — Mac 오프라인 검증이라면 정상 출력"
-        fi
     fi
     if dev="$(find_card_dev)"; then
         msg "카드(sysfs): $dev 감지 ✓"
@@ -257,7 +214,8 @@ main() {
 
     cleanup_stale
 
-    reset_card || die "Realtek USB 카드(0bda:8179/0bda:818b) 미감지 — 연결 상태 확인 후 재시도"
+    [[ -x $HEALTH_GATE ]] || die "RX health gate 미발견/실행불가: $HEALTH_GATE"
+    "$HEALTH_GATE" --target-channel "${RADIO_TARGET_CHANNEL:-6}"
 
     trap restore_ifaces_up EXIT
 

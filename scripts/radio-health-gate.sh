@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+# Verify that a Realtek LDN radio can receive before starting a capture command.
+# Usage: sudo radio-health-gate.sh [--iface IFACE] [--target-channel N] [-- COMMAND...]
+
+set -euo pipefail
+
+HEALTH_CHANNELS="${RADIO_HEALTH_CHANNELS:-1,6,11}"
+TARGET_CHANNEL="${RADIO_TARGET_CHANNEL:-6}"
+RX_TIMEOUT="${RADIO_HEALTH_TIMEOUT:-2}"
+IFACE=""
+DRY_RUN=0
+
+msg() { printf '%s\n' "$*"; }
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+    cat <<'EOF'
+Usage:
+  sudo radio-health-gate.sh [options] [-- COMMAND...]
+
+Options:
+  --iface IFACE          Realtek radio interface (required when multiple cards exist)
+  --health-channels CSV  Receive-test channels (default: 1,6,11)
+  --target-channel N     Channel left configured for COMMAND (default: 6)
+  --timeout SECONDS      Per-channel receive timeout (default: 2)
+  --dry-run              Detect and report only; do not change the radio
+  -h, --help             Show this help
+
+The selected interface is exported to COMMAND as SWITCHTRADE_IFACE.
+EOF
+}
+
+usb_id_of_iface() {
+    local p
+    p="$(readlink -f "/sys/class/net/$1/device" 2>/dev/null)" || return 1
+    while [[ $p == /sys/* ]]; do
+        if [[ -r $p/idVendor && -r $p/idProduct ]]; then
+            printf '%s:%s\n' "$(<"$p/idVendor")" "$(<"$p/idProduct")"
+            return 0
+        fi
+        p="$(dirname "$p")"
+    done
+    return 1
+}
+
+find_card_ifaces() {
+    local name id
+    for name in /sys/class/net/*; do
+        name="$(basename "$name")"
+        id="$(usb_id_of_iface "$name")" || continue
+        case $id in
+            0bda:8179|0bda:818b) printf '%s\n' "$name" ;;
+        esac
+    done
+}
+
+select_iface() {
+    local cards=()
+    if [[ -n $IFACE ]]; then
+        [[ -d /sys/class/net/$IFACE ]] || die "interface not found: $IFACE"
+        case "$(usb_id_of_iface "$IFACE" || true)" in
+            0bda:8179|0bda:818b) return 0 ;;
+            *) die "$IFACE is not a supported Realtek radio" ;;
+        esac
+    fi
+    mapfile -t cards < <(find_card_ifaces)
+    (( ${#cards[@]} > 0 )) || die "no Realtek 0bda:8179/818b radio found"
+    (( ${#cards[@]} == 1 )) || die "multiple radios found; pass --iface (${cards[*]})"
+    IFACE="${cards[0]}"
+}
+
+card_busdev() {
+    local p
+    p="$(readlink -f "/sys/class/net/$IFACE/device")"
+    while [[ $p == /sys/* ]]; do
+        if [[ -r $p/busnum && -r $p/devnum ]]; then
+            printf '%03d/%03d\n' "$((10#$(<"$p/busnum")))" "$((10#$(<"$p/devnum")))"
+            return 0
+        fi
+        p="$(dirname "$p")"
+    done
+    return 1
+}
+
+reject_stale_capture() {
+    local pid cmd
+    command -v pgrep >/dev/null 2>&1 || return 0
+    while read -r pid; do
+        [[ -r /proc/$pid/cmdline ]] || continue
+        cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline")"
+        [[ " $cmd " == *" -i $IFACE "* ]] && die "tcpdump already owns $IFACE (pid $pid): $cmd"
+    done < <(pgrep -x tcpdump || true)
+}
+
+configure_monitor() {
+    local type
+    type="$(iw dev "$IFACE" info 2>/dev/null | awk '$1=="type"{print $2; exit}')"
+    if [[ $type != monitor ]]; then
+        ip link set "$IFACE" down
+        iw dev "$IFACE" set type monitor
+    fi
+    ip link set "$IFACE" up
+}
+
+has_rx() {
+    local channel
+    IFS=',' read -ra channels <<< "$HEALTH_CHANNELS"
+    for channel in "${channels[@]}"; do
+        iw dev "$IFACE" set channel "$channel"
+        if timeout -s INT "$RX_TIMEOUT" tcpdump -q -i "$IFACE" -n -s 96 -c 1 \
+                -w /dev/null >/dev/null 2>&1; then
+            msg "[health] RX alive on channel $channel"
+            return 0
+        fi
+    done
+    return 1
+}
+
+reset_card() {
+    local mac busdev tries
+    command -v usbreset >/dev/null 2>&1 || die "usbreset is required to recover a dead radio"
+    mac="$(<"/sys/class/net/$IFACE/address")"
+    busdev="$(card_busdev)" || die "cannot resolve USB bus/device for $IFACE"
+    msg "[health] RX dead; resetting $IFACE at $busdev"
+    if ! usbreset "$busdev"; then
+        if [[ $(uname -r) == *microsoft* ]]; then
+            die "USB reset detached the WSL device; in elevated PowerShell re-run: usbipd attach --wsl --busid <BUSID>"
+        fi
+        die "USB reset failed for $IFACE at $busdev"
+    fi
+    for tries in {1..20}; do
+        IFACE="$(find_card_ifaces | while read -r name; do
+            [[ $(<"/sys/class/net/$name/address") == "$mac" ]] && { printf '%s\n' "$name"; break; }
+        done)"
+        [[ -n $IFACE ]] && return 0
+        sleep 1
+    done
+    if [[ $(uname -r) == *microsoft* ]]; then
+        die "radio detached from WSL USB/IP after reset; in elevated PowerShell re-run: usbipd attach --wsl --busid <BUSID>"
+    fi
+    die "radio did not reappear after USB reset"
+}
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --iface) [[ $# -ge 2 ]] || die "--iface needs a value"; IFACE=$2; shift 2 ;;
+        --health-channels) [[ $# -ge 2 ]] || die "--health-channels needs a value"; HEALTH_CHANNELS=$2; shift 2 ;;
+        --target-channel) [[ $# -ge 2 ]] || die "--target-channel needs a value"; TARGET_CHANNEL=$2; shift 2 ;;
+        --timeout) [[ $# -ge 2 ]] || die "--timeout needs a value"; RX_TIMEOUT=$2; shift 2 ;;
+        --dry-run) DRY_RUN=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        --) shift; break ;;
+        *) die "unknown argument: $1" ;;
+    esac
+done
+
+select_iface
+CARD_ID="$(usb_id_of_iface "$IFACE")"
+msg "[health] interface=$IFACE usb=$CARD_ID health=$HEALTH_CHANNELS target=$TARGET_CHANNEL"
+
+if (( DRY_RUN )); then
+    iw dev "$IFACE" info | awk '$1=="type" || $1=="channel"'
+    exit 0
+fi
+
+(( EUID == 0 )) || die "run as root"
+[[ $TARGET_CHANNEL =~ ^[0-9]+$ ]] || die "invalid target channel: $TARGET_CHANNEL"
+(( TARGET_CHANNEL >= 1 && TARGET_CHANNEL <= 196 )) || die "target channel out of range: $TARGET_CHANNEL"
+[[ $RX_TIMEOUT =~ ^[0-9]+([.][0-9]+)?$ ]] || die "invalid timeout: $RX_TIMEOUT"
+[[ $HEALTH_CHANNELS =~ ^([0-9]+,)*[0-9]+$ ]] || die "invalid --health-channels: $HEALTH_CHANNELS"
+command -v iw >/dev/null 2>&1 || die "iw is required"
+command -v tcpdump >/dev/null 2>&1 || die "tcpdump is required"
+
+reject_stale_capture
+configure_monitor
+if ! has_rx; then
+    reset_card
+    configure_monitor
+    has_rx || die "radio still receives zero frames after USB reset"
+fi
+iw dev "$IFACE" set channel "$TARGET_CHANNEL"
+msg "[health] PASS; $IFACE restored to channel $TARGET_CHANNEL"
+
+export SWITCHTRADE_IFACE="$IFACE"
+(( $# == 0 )) || exec "$@"

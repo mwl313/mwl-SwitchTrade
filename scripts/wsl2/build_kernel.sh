@@ -38,28 +38,39 @@ sudo apt-get install -y build-essential flex bison libssl-dev libelf-dev bc dwar
 
 say "2/6 커널 소스 받기"
 cd "$HOME"
+KERNEL_REF="${KERNEL_REF:-linux-msft-wsl-6.6.123.2}"
 if [[ ! -d WSL2-Linux-Kernel ]]; then
-  git clone --depth 1 https://github.com/microsoft/WSL2-Linux-Kernel.git
+  git clone --depth 1 --branch "$KERNEL_REF" https://github.com/microsoft/WSL2-Linux-Kernel.git
 fi
 cd WSL2-Linux-Kernel
-git pull --ff-only 2>/dev/null || true
+git fetch --depth 1 origin "$KERNEL_REF"
+git checkout --detach FETCH_HEAD
 
 say "3/6 설정 — Wi-Fi 드라이버 + 펌웨어 내장 + usbip 클라이언트"
 cp Microsoft/config-wsl .config
 mkdir -p firmware/rtlwifi
-# RTL8188EU 펌웨어 (커널 이미지에 내장 — 배포 시 펌웨어 파일 불필요)
+FW_BASE="https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain"
+REGDB_BASE="https://git.kernel.org/pub/scm/linux/kernel/git/wens/wireless-regdb.git/plain"
+# RTL8188EU/RTL8192EU 펌웨어 (커널 이미지에 내장 — 배포 시 펌웨어 파일 불필요)
 if [[ ! -s firmware/rtlwifi/rtl8188eufw.bin ]]; then
-  wget -q "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/rtlwifi/rtl8188eufw.bin" \
+  wget -q "$FW_BASE/rtlwifi/rtl8188eufw.bin" \
        -O firmware/rtlwifi/rtl8188eufw.bin
 fi
-# 8192EU도 쓰려면 아래 주석 해제:
-# wget -q "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/rtlwifi/rtl8192eu_nic.bin" \
-#      -O firmware/rtlwifi/rtl8192eu_nic.bin
+if [[ ! -s firmware/rtlwifi/rtl8192eu_nic.bin ]]; then
+  wget -q "$FW_BASE/rtlwifi/rtl8192eu_nic.bin" \
+       -O firmware/rtlwifi/rtl8192eu_nic.bin
+fi
+for REGDB in regulatory.db regulatory.db.p7s; do
+  [[ -s firmware/$REGDB ]] || wget -q "$REGDB_BASE/$REGDB" -O "firmware/$REGDB"
+done
 
 scripts/config \
+  --enable CONFIG_USB_SUPPORT \
+  --enable CONFIG_USB_COMMON \
+  --enable CONFIG_USB \
   --enable CONFIG_EXTRA_FIRMWARE \
   --set-str CONFIG_EXTRA_FIRMWARE_DIR "$(pwd)/firmware" \
-  --set-str CONFIG_EXTRA_FIRMWARE "rtlwifi/rtl8188eufw.bin" \
+  --set-str CONFIG_EXTRA_FIRMWARE "rtlwifi/rtl8188eufw.bin rtlwifi/rtl8192eu_nic.bin regulatory.db regulatory.db.p7s" \
   --module CONFIG_CFG80211 \
   --module CONFIG_MAC80211 \
   --module CONFIG_RTL8XXXU \
@@ -68,13 +79,17 @@ scripts/config \
   --module CONFIG_USBIP_VHCI_HCD
 make olddefconfig
 
+for OPT in CONFIG_USB CONFIG_USB_COMMON CONFIG_CFG80211 CONFIG_MAC80211 CONFIG_RTL8XXXU CONFIG_USBIP_CORE CONFIG_USBIP_VHCI_HCD; do
+  grep -qE "^${OPT}=(y|m)" .config || { echo "[오류] olddefconfig가 ${OPT}를 제거했습니다."; exit 1; }
+done
+
 say "4/6 빌드 시작 ($(nproc)코어 — 여기가 제일 오래 걸려요, 놔두세요)"
 make -j"$(nproc)"
 
 say "5/6 모듈 번들링 (WSL 시스템 오염 없음 — 격리 폴더에)"
 KVER=$(make kernelrelease)
 rm -rf modout
-make modules_install INSTALL_MOD_PATH="$PWD/modout"
+make modules_install INSTALL_MOD_PATH="$PWD/modout" INSTALL_MOD_STRIP=1
 tar -C modout/lib/modules -czf "${WINHOME}/modules-${KVER}.tar.gz" .
 
 say "6/6 Windows로 결과 복사"

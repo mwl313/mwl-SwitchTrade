@@ -98,14 +98,11 @@ scp -i ~/.ssh/aria_bridge "aria@100.109.113.113:~/mons/received_trade_trade*.pk3
 
 ### 4-1. 카드 수신 사망 (스캔 0 + tcpdump 0) — 가장 흔한 케이스
 ```bash
-# ① usbreset으로 즉시 복구 (재부팅 불필요) — ID는 lsusb로 확인 (8179=8188EU / 818b=8192EU)
-ssh ... "lsusb | grep 0bda; sudo usbreset <감지된 ID: 0bda:8179|0bda:818b>; sleep 3"
-#    (래퍼 v6는 이 리셋을 자동 수행 — 수동 절차는 래퍼 밖에서 카드가 죽었을 때용)
-# ② 인터페이스 재설정 후 스캔
-ssh ... "sudo ip link set wlx00ada7117309 down; sudo iw dev wlx00ada7117309 set type monitor; sudo ip link set wlx00ada7117309 up; sudo iw dev wlx00ada7117309 set channel 1"
-# ③ 그래도 0이면: Windows에서 pnputil /restart-device "USB\VID_0BDA&PID_818B" (재부팅 없이, 현재 카드 기준)
-# ④ 최후: Windows 재시작 (100% 복구 — 8/20 실측)
-# ⑤ 예방: Windows powercfg로 USB 선택적 절전 차단 (1회성 설정, 영구)
+# ① 공통 gate가 RX를 확인하고, RX 0일 때만 USB 리셋/재열거/재검증한다.
+sudo /home/aria/scripts/radio-health-gate.sh --target-channel 1
+# ② gate 실패 시 해당 오류를 해결한 뒤에만 스캔/캡처를 재시작한다.
+# ③ WSL에서 reset 뒤 장치가 사라지면 Windows 관리자 PowerShell에서 usbipd attach를 다시 실행한다.
+# ④ 예방: Windows powercfg로 USB 선택적 절전 차단 (1회성 설정, 영구)
 ```
 
 ### 4-2. 스캔 found 0 (카드는 살아있음)
