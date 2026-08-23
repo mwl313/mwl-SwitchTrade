@@ -1,6 +1,6 @@
-# STATUS — 진행 상태 (2026-08-22)
+# STATUS — 진행 상태 (2026-08-24)
 
-> 마지막 갱신: 2026-08-22 저녁 — **framerelay 메인 전환 확정 · STEP 1~5 완료 · V-1 시나리오 A 확정**
+> 마지막 갱신: 2026-08-24 — **WSL 두 카드 G2~G4 통과 · 8192EU 30분 soak 통과**
 
 ## 🏆 핵심 성과
 
@@ -13,6 +13,17 @@
 - MWL-SwitchTrade-v2 껍데기 삭제 (고유 내용 0 확인 후)
 - STEP 1~4 오픈코드 위임 완료: audit 청소(`0185cf8`) / RFU 비콘 인코더(`b4f329e`) / 호스트 모드(`0c8d7c8`) / EchoGuard 설계+rate limiter(`ffa79d9`)
 - **V-1 실측 완료 — 시나리오 A 확정** (`fd99200`): 주입↔재캡처 바이트 완전 일치(8/8회), 드라이버 FCS 덮어쓰기 없음(rtl8xxxu+커널 7.0). → EchoGuard sha1 유지, 재구현 불필요
+**2026-08-24**: **WSL2 무선 기반 카드별 판정**
+- RTL8192EU는 custom WSL 6.18.35.2 + usbipd-win에서 monitor RX, CH1~13, health gate 및
+  외부 RF TX injection(G4) 통과. 30분 연속 RX는 41,394 packets/0 kernel drops로 통과했다.
+- RTL8188EU는 세 WSL kernel의 mainline `rtl8xxxu`에서 firmware MCU start `-11`로 실패하지만,
+  pinned vendor `8188eu`는 monitor RX, CH1~13, 양방향 외부 RF TX와 frame-type G4를 통과했다.
+  새 커널 netdev address patch 산출물의 warning-free 재검증만 남았다.
+- profile-driven selector가 exact USB/driver/module/vermagic/SHA/role/actual-RX를 검사한 뒤 command를
+  실행한다. Windows preflight도 VMware/usbipd 소유권 충돌을 실행 전에 차단한다.
+- framerelay의 double-radiotap injection 결함을 수정했다(`82dd0d3`). MonitorRadio가 bare 802.11
+  frame에 radiotap을 정확히 한 번만 붙이는 계약을 회귀 test로 고정했다.
+- 상세: `docs/24-wsl-radio-validation-20260824.md`.
 
 ## 📈 Phase 진행도 (2026-08-22 기준)
 
@@ -24,7 +35,7 @@
 | **2b** | LAN 2브리지 실기 | 🔄 ~70% — 단독 트레이드·양방향 조인 실증, E2E 양방향 교환만 잔여 |
 | **2b'** | framerelay 코어 | 🔄 코드 완성 — STEP 6~7(레이트리미터 연결·AP+monitor 실측) 잔여 |
 | 3 | 세션 시스템 + GUI (PySide6 확정, `docs/13-userside-app-plan.md`) | 설계 완료 |
-| 4 | 프로덕션 배포 (WSL2 길 A, `docs/12-wsl2-poc-windows.md`) | α트랙 준비 완료 |
+| 4 | 프로덕션 배포 (WSL2 길 A, `docs/12-wsl2-poc-windows.md`) | α G1~G4는 8192EU PASS, G5/G6 잔여 |
 
 ## 🔀 리포 구조 (2026-08-22 확정)
 
@@ -40,8 +51,8 @@
 
 | 카드 | HOST(방 개설) | GUEST | 비고 |
 |---|---|---|---|
-| RTL8192EU (`0bda:818b`) VM1 | ✅ AP 노출 | ✅ | LDN join 실증(T1/T3) |
-| RTL8188EU (`0bda:8179`) VM2 | ❌ AP 없음 | ✅ | join·모니터 실증(T3), 수신 사망 잦음→토글 복구 |
+| RTL8192EU (`0bda:818b`) VM/WSL | ✅ AP 노출 | ✅ | VM LDN join, WSL monitor RX+TX G4 실증 |
+| RTL8188EU (`0bda:8179`) WSL/vendor | ❌ AP 없음 | ✅ | mainline G2 FAIL, vendor monitor RX/TX G4 PASS |
 
 ## 알려진 미해결 이슈
 
@@ -49,7 +60,8 @@
 2. CanTradeSelectedMon 게이트 (EMU 한계) — framerelay와 무관
 3. RX decrypt FAILED 간헐 (VM1+8192EU 초기)
 4. 호스트 모드(--mode host): 코드 완성, **실기 미검증** — STEP 7(AP+monitor 동시 vif)이 선행
-5. 8188EU 수신 사망 → authorized 토글 복구 절차 확립, card-watch 권장
+5. 8188EU mainline firmware start 실패는 vendor-driver로 우회했다. out-of-tree driver 유지보수와
+   실제 Switch G5/G6는 잔여 risk다.
 
 ## 다음 단계 (순서대로)
 
@@ -62,7 +74,7 @@
 1. ~~STEP 6~~ ✅ / ~~STEP 7~~ ✅ / ~~STEP 8~~ ✅ / ~~STEP 9~~ ✅
 2. **STEP 10**: 호스트 모드 + 스위치A 조인 (스위치 필요) — 방 리스트에 EMU 표시 확인
 3. **STEP 11**: 🏆 framerelay E2E (스위치 A·B) — B 화면에 "A의 방" = 목표② 달성
-4. **α트랙**: WSL2 무선 기반 검증 G1~G4 (동글 1개, GitHub Actions 커널 빌드 산출물)
+4. **α트랙 G1~G4**: 두 카드 기준 ✅(8188 patched module 최종 warning gate 진행 중). 다음은 G5 로컬 루프, G6 Switch E2E
 5. **STEP 10~13**: 스위치 실기 (호스트 모드 → framerelay E2E 🏆 → 안정성 5종)
 6. 프로덕션: γ(GUI 셸) / δ(릴레이 운영) / β(installer)
 

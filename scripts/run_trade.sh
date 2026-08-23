@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# run_trade.sh v6 — frlgtrade.py 실행 래퍼 (CRITICAL-2 / WP-G, docs/plan/2026-08-22-audit-fix-plan.md)
+# run_trade.sh v7 — frlgtrade.py 실행 래퍼 (CRITICAL-2 / WP-G, docs/plan/2026-08-22-audit-fix-plan.md)
 #
 # v5(VM 전용 ~/frlg-ldn-trade/run_trade.sh — **폐기**) 대비 변경점:
 #   1. emu 탐색을 SCRIPT_DIR 기준으로 변경: $SCRIPT_DIR/../emu/frlgtrade.py 우선.
@@ -32,7 +32,8 @@
 
 set -euo pipefail
 
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR
 if [[ -z ${EMU_DIR:-} ]]; then
     if [[ -f "$SCRIPT_DIR/../emu/frlgtrade.py" ]]; then
         EMU_DIR="$SCRIPT_DIR/../emu"
@@ -45,6 +46,7 @@ fi
 readonly EMU_DIR
 readonly EMU_PY="$EMU_DIR/frlgtrade.py"
 readonly HEALTH_GATE="$SCRIPT_DIR/radio-health-gate.sh"
+readonly WSL_RADIO_PREP="$SCRIPT_DIR/wsl-radio-prepare.sh"
 readonly WATCHDOG_TIMEOUT=900                  # 15분 — 트레이드 1세션 실측 러닝타임의 충분한 상한
 
 msg() { printf '%s\n' "$*"; }
@@ -52,16 +54,18 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 usage() {
     cat <<EOF
-run_trade.sh v6 — frlgtrade.py 실행 래퍼 (CRITICAL-2)
+run_trade.sh v7 — frlgtrade.py 실행 래퍼 (CRITICAL-2)
 
 사용법:
   sudo bash run_trade.sh [--live ...] [frlgtrade.py 인자...]   # 트레이드 실행 (root 필수)
+  sudo bash run_trade.sh --radio-usb-id 0bda:818b [--live ...] # WSL에서 카드 2개 이상일 때
   run_trade.sh --dry-run                                      # 상태만 출력, 실행 안 함
   run_trade.sh --help
 
 환경변수:
   EMU_DIR     emu 디렉터리 (기본: $SCRIPT_DIR/../emu)
   PYTHON_BIN  실행 파이썬 (기본: \$EMU_DIR/.venv/bin/python, 없으면 python3)
+  RADIO_USB_ID WSL 카드 선택 VID:PID (--radio-usb-id와 동일)
 EOF
 }
 
@@ -69,15 +73,22 @@ EOF
 
 find_card_dev() {
     # sysfs 역탐색: idVendor/idProduct로 USB 장치 디렉터리를 찾아 출력 (lsusb 부재/무검칠 때의 폴백).
-    local f d
+    local f d id
     [[ -d /sys/bus/usb/devices ]] || return 1
     for f in /sys/bus/usb/devices/*/idVendor; do
         [[ -r $f ]] || continue
-        [[ $(<"$f") == 0bda ]] || continue
         d="$(dirname "$f")"
         [[ -r $d/idProduct ]] || continue
-        case "$(<"$d/idProduct")" in
-            8179|818b) printf '%s\n' "$d"; return 0 ;;
+        id="$(<"$f"):$(<"$d/idProduct")"
+        if [[ -n ${RADIO_USB_ID:-} ]]; then
+            [[ $id == "${RADIO_USB_ID,,}" ]] || continue
+            printf '%s\n' "$d"
+            return 0
+        fi
+        case "$id" in
+            0bda:8179|0bda:818b)
+                printf '%s\n' "$d"; return 0
+                ;;
         esac
     done
     return 1
@@ -92,8 +103,15 @@ detect_card_phy() {
         [[ -e $link ]] || continue
         phy="$(basename "$(dirname "$link")")"
         usbid="$(usb_id_of_syspath "$link")" || continue
+        if [[ -n ${RADIO_USB_ID:-} ]]; then
+            [[ $usbid == "${RADIO_USB_ID,,}" ]] || continue
+            printf '%s %s\n' "$phy" "$usbid"
+            return 0
+        fi
         case "$usbid" in
-            0bda:8179|0bda:818b) printf '%s %s\n' "$phy" "$usbid"; return 0 ;;
+            0bda:8179|0bda:818b)
+                printf '%s %s\n' "$phy" "$usbid"; return 0
+                ;;
         esac
     done
     return 1
@@ -162,7 +180,7 @@ resolve_python() {
 
 dry_run_report() {
     local dev phy
-    msg "== run_trade.sh v6 --dry-run (실행하지 않음) =="
+    msg "== run_trade.sh v7 --dry-run (실행하지 않음) =="
     msg "emu 경로   : $EMU_PY"
     if [[ -f $EMU_PY ]]; then
         msg "             존재 ✓"
@@ -191,10 +209,23 @@ dry_run_report() {
 
 main() {
     local dry_run=0
+    local radio_role=guest
     local args=()
     while [[ $# -gt 0 ]]; do
         case $1 in
             --dry-run) dry_run=1 ;;
+            --radio-usb-id)
+                [[ $# -ge 2 ]] || die "--radio-usb-id에 VID:PID가 필요"
+                RADIO_USB_ID="${2,,}"
+                shift
+                ;;
+            --mode)
+                [[ $# -ge 2 ]] || die "--mode에 값이 필요"
+                [[ $2 == host ]] && radio_role=host
+                args+=("$1" "$2")
+                shift
+                ;;
+            --mode=host) radio_role=host; args+=("$1") ;;
             -h|--help) usage; exit 0 ;;
             *) args+=("$1") ;;          # --phy 포함 나머지는 모두 frlgtrade에 그대로 전달
         esac
@@ -214,18 +245,27 @@ main() {
 
     cleanup_stale
 
-    [[ -x $HEALTH_GATE ]] || die "RX health gate 미발견/실행불가: $HEALTH_GATE"
-    "$HEALTH_GATE" --target-channel "${RADIO_TARGET_CHANNEL:-6}"
-
     trap restore_ifaces_up EXIT
 
     # 본체 워치독 — VM hang 최후 방어.
     # 근거: ldn.scan 커널 레벨 hang으로 VM 전체 먹통 4회 실측 (docs/04 #5), 그리고
     # docs/09 D-1 — fail_after는 checkpoint에서만 발동해 커널 blocking hang에는 무력.
     # -k 15: hang한 런이 SIGTERM을 무시할 수 있어 15초 후 SIGKILL로 마무리.
-    msg "[run] timeout ${WATCHDOG_TIMEOUT}s $PYTHON_BIN $EMU_PY ${args[*]+"${args[*]}"}"
+    local gate=()
+    if [[ $(uname -r) == *microsoft* ]]; then
+        [[ -x $WSL_RADIO_PREP ]] || die "WSL radio selector 미발견/실행불가: $WSL_RADIO_PREP"
+        gate=("$WSL_RADIO_PREP")
+        [[ -z ${RADIO_USB_ID:-} ]] || gate+=(--usb-id "$RADIO_USB_ID")
+        gate+=(--role "$radio_role")
+    else
+        [[ -x $HEALTH_GATE ]] || die "RX health gate 미발견/실행불가: $HEALTH_GATE"
+        gate=("$HEALTH_GATE")
+    fi
+    gate+=(--target-channel "${RADIO_TARGET_CHANNEL:-6}" --)
+
+    msg "[run] ${gate[*]} timeout ${WATCHDOG_TIMEOUT}s $PYTHON_BIN $EMU_PY ${args[*]+"${args[*]}"}"
     set +e
-    timeout -k 15 "$WATCHDOG_TIMEOUT" "$PYTHON_BIN" "$EMU_PY" ${args[@]+"${args[@]}"}
+    "${gate[@]}" timeout -k 15 "$WATCHDOG_TIMEOUT" "$PYTHON_BIN" "$EMU_PY" ${args[@]+"${args[@]}"}
     local rc=$?
     set -e
     if (( rc == 124 || rc == 137 )); then

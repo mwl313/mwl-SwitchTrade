@@ -8,6 +8,7 @@ HEALTH_CHANNELS="${RADIO_HEALTH_CHANNELS:-1,6,11}"
 TARGET_CHANNEL="${RADIO_TARGET_CHANNEL:-6}"
 RX_TIMEOUT="${RADIO_HEALTH_TIMEOUT:-2}"
 IFACE=""
+EXPECTED_USB_ID=""
 DRY_RUN=0
 
 msg() { printf '%s\n' "$*"; }
@@ -20,13 +21,15 @@ Usage:
 
 Options:
   --iface IFACE          Realtek radio interface (required when multiple cards exist)
+  --usb-id VID:PID       Exact USB ID expected on IFACE (enables profile-added cards)
   --health-channels CSV  Receive-test channels (default: 1,6,11)
   --target-channel N     Channel left configured for COMMAND (default: 6)
   --timeout SECONDS      Per-channel receive timeout (default: 2)
   --dry-run              Detect and report only; do not change the radio
   -h, --help             Show this help
 
-The selected interface is exported to COMMAND as SWITCHTRADE_IFACE.
+The selected interface and USB ID are exported to COMMAND as
+SWITCHTRADE_IFACE and SWITCHTRADE_USB_ID.
 EOF
 }
 
@@ -48,20 +51,30 @@ find_card_ifaces() {
     for name in /sys/class/net/*; do
         name="$(basename "$name")"
         id="$(usb_id_of_iface "$name")" || continue
-        case $id in
-            0bda:8179|0bda:818b) printf '%s\n' "$name" ;;
-        esac
+        if [[ -n $EXPECTED_USB_ID ]]; then
+            [[ $id == "$EXPECTED_USB_ID" ]] && printf '%s\n' "$name"
+        else
+            case $id in
+                0bda:8179|0bda:818b) printf '%s\n' "$name" ;;
+            esac
+        fi
     done
 }
 
 select_iface() {
-    local cards=()
+    local id cards=()
     if [[ -n $IFACE ]]; then
         [[ -d /sys/class/net/$IFACE ]] || die "interface not found: $IFACE"
-        case "$(usb_id_of_iface "$IFACE" || true)" in
-            0bda:8179|0bda:818b) return 0 ;;
-            *) die "$IFACE is not a supported Realtek radio" ;;
-        esac
+        id="$(usb_id_of_iface "$IFACE" || true)"
+        if [[ -n $EXPECTED_USB_ID ]]; then
+            [[ $id == "$EXPECTED_USB_ID" ]] || die "$IFACE USB ID $id != expected $EXPECTED_USB_ID"
+        else
+            case $id in
+                0bda:8179|0bda:818b) ;;
+                *) die "$IFACE is not a supported Realtek radio" ;;
+            esac
+        fi
+        return 0
     fi
     mapfile -t cards < <(find_card_ifaces)
     (( ${#cards[@]} > 0 )) || die "no Realtek 0bda:8179/818b radio found"
@@ -117,7 +130,7 @@ has_rx() {
 }
 
 reset_card() {
-    local mac busdev tries
+    local mac busdev
     command -v usbreset >/dev/null 2>&1 || die "usbreset is required to recover a dead radio"
     mac="$(<"/sys/class/net/$IFACE/address")"
     busdev="$(card_busdev)" || die "cannot resolve USB bus/device for $IFACE"
@@ -128,7 +141,7 @@ reset_card() {
         fi
         die "USB reset failed for $IFACE at $busdev"
     fi
-    for tries in {1..20}; do
+    for _ in {1..20}; do
         IFACE="$(find_card_ifaces | while read -r name; do
             [[ $(<"/sys/class/net/$name/address") == "$mac" ]] && { printf '%s\n' "$name"; break; }
         done)"
@@ -144,6 +157,7 @@ reset_card() {
 while [[ $# -gt 0 ]]; do
     case $1 in
         --iface) [[ $# -ge 2 ]] || die "--iface needs a value"; IFACE=$2; shift 2 ;;
+        --usb-id) [[ $# -ge 2 ]] || die "--usb-id needs a value"; EXPECTED_USB_ID="${2,,}"; shift 2 ;;
         --health-channels) [[ $# -ge 2 ]] || die "--health-channels needs a value"; HEALTH_CHANNELS=$2; shift 2 ;;
         --target-channel) [[ $# -ge 2 ]] || die "--target-channel needs a value"; TARGET_CHANNEL=$2; shift 2 ;;
         --timeout) [[ $# -ge 2 ]] || die "--timeout needs a value"; RX_TIMEOUT=$2; shift 2 ;;
@@ -182,4 +196,5 @@ iw dev "$IFACE" set channel "$TARGET_CHANNEL"
 msg "[health] PASS; $IFACE restored to channel $TARGET_CHANNEL"
 
 export SWITCHTRADE_IFACE="$IFACE"
+export SWITCHTRADE_USB_ID="$CARD_ID"
 (( $# == 0 )) || exec "$@"

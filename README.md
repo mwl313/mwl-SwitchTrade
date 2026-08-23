@@ -26,9 +26,15 @@
 | [docs/04-trade-workflow.md](docs/04-trade-workflow.md) | 트레이드 워크플로우 v1 (검증된 절차) |
 | [docs/05-phase2-design.md](docs/05-phase2-design.md) | Phase 2 상세 설계 — PC↔PC 인터넷 브리지 |
 | [docs/06-distribution.md](docs/06-distribution.md) | 배포 전략 — 리눅스 레이어 분석, WSL2/ESP32 경로 |
+| [docs/24-wsl-radio-validation-20260824.md](docs/24-wsl-radio-validation-20260824.md) | WSL/VM 카드별 G2~G4 검증과 RTL8188EU 진단 |
+| [handoff/HANDOFF-20260824-wsl-dual-radio.md](handoff/HANDOFF-20260824-wsl-dual-radio.md) | WSL 두 카드 최종 상태, 확장 구조, 다음 G5/G6 절차 |
 | [docs/research/01-frlg-ldn-trade.md](docs/research/01-frlg-ldn-trade.md) | Tornadus 프로젝트 리서치 |
 | [docs/research/02-gb-link-celio.md](docs/research/02-gb-link-celio.md) | GB-Link/Celio 생태계 리서치 |
 | [docs/research/03-kinnay-ldn.md](docs/research/03-kinnay-ldn.md) | LDN 프로토콜 리서치 |
+
+WSL 무선 실행은 Windows에서 `scripts/windows/wsl-radio-preflight.ps1 -Prepare -AutoAttach`를 먼저 실행하고,
+Linux에서는 `scripts/wsl-radio-prepare.sh --usb-id VID:PID --role ROLE -- COMMAND...`를 사용한다.
+지원 카드와 driver/role 정책은 `config/wsl-radio-hardware.tsv`에 있다.
 | [docs/research/04-youtube-videos.md](docs/research/04-youtube-videos.md) | YouTube 영상 2건 정리 |
 
 ## 상태

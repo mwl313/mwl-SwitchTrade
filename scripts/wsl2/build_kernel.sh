@@ -3,6 +3,9 @@
 # WSL2 커스텀 커널 빌드 — MWL-SwitchTrade 배포 트랙 α (A-2)
 # 실행 위치: 주인님 Windows PC의 WSL2(Ubuntu) 안
 # 사용법:   bash build_kernel.sh   (sudo 암호 1회 물어봄)
+# 신규 in-kernel 카드 예:
+#   EXTRA_KERNEL_CONFIG='CONFIG_MT76_USB=m CONFIG_MT76x2U=m' \
+#   EXTRA_FIRMWARE_SPECS='mediatek/file.bin=https://pinned.example/file.bin' bash build_kernel.sh
 # 소요:     20~60분 (PC 사양 따라) · 디스크 12GB+ 필요
 # 검증 문서: docs/12-wsl2-poc-windows.md (G1~G2 게이트)
 # ============================================================
@@ -51,6 +54,8 @@ cp Microsoft/config-wsl .config
 mkdir -p firmware/rtlwifi
 FW_BASE="https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain"
 REGDB_BASE="https://git.kernel.org/pub/scm/linux/kernel/git/wens/wireless-regdb.git/plain"
+EXTRA_KERNEL_CONFIG="${EXTRA_KERNEL_CONFIG:-}"
+EXTRA_FIRMWARE_SPECS="${EXTRA_FIRMWARE_SPECS:-}"
 # RTL8188EU/RTL8192EU 펌웨어 (커널 이미지에 내장 — 배포 시 펌웨어 파일 불필요)
 if [[ ! -s firmware/rtlwifi/rtl8188eufw.bin ]]; then
   wget -q "$FW_BASE/rtlwifi/rtl8188eufw.bin" \
@@ -63,6 +68,21 @@ fi
 for REGDB in regulatory.db regulatory.db.p7s; do
   [[ -s firmware/$REGDB ]] || wget -q "$REGDB_BASE/$REGDB" -O "firmware/$REGDB"
 done
+FW_LIST="rtlwifi/rtl8188eufw.bin rtlwifi/rtl8192eu_nic.bin regulatory.db regulatory.db.p7s"
+for SPEC in $EXTRA_FIRMWARE_SPECS; do
+  PATH_PART="${SPEC%%=*}"
+  URL_PART="${SPEC#*=}"
+  [[ "$SPEC" == *=* && -n "$PATH_PART" && -n "$URL_PART" ]] || {
+    echo "[오류] 잘못된 EXTRA_FIRMWARE_SPECS 항목: $SPEC"; exit 1;
+  }
+  [[ "$PATH_PART" != /* && "$PATH_PART" != *..* ]] || {
+    echo "[오류] 안전하지 않은 firmware 상대경로: $PATH_PART"; exit 1;
+  }
+  mkdir -p "firmware/$(dirname "$PATH_PART")"
+  wget -q "$URL_PART" -O "firmware/$PATH_PART"
+  [[ -s firmware/$PATH_PART ]] || { echo "[오류] firmware 다운로드 실패: $PATH_PART"; exit 1; }
+  FW_LIST="$FW_LIST $PATH_PART"
+done
 
 scripts/config \
   --enable CONFIG_USB_SUPPORT \
@@ -70,14 +90,35 @@ scripts/config \
   --enable CONFIG_USB \
   --enable CONFIG_EXTRA_FIRMWARE \
   --set-str CONFIG_EXTRA_FIRMWARE_DIR "$(pwd)/firmware" \
-  --set-str CONFIG_EXTRA_FIRMWARE "rtlwifi/rtl8188eufw.bin rtlwifi/rtl8192eu_nic.bin regulatory.db regulatory.db.p7s" \
+  --set-str CONFIG_EXTRA_FIRMWARE "$FW_LIST" \
   --module CONFIG_CFG80211 \
   --module CONFIG_MAC80211 \
   --module CONFIG_RTL8XXXU \
   --enable CONFIG_RTL8XXXU_UNTESTED \
   --module CONFIG_USBIP_CORE \
   --module CONFIG_USBIP_VHCI_HCD
+for SPEC in $EXTRA_KERNEL_CONFIG; do
+  KEY="${SPEC%%=*}"
+  VALUE="${SPEC#*=}"
+  [[ "$KEY" =~ ^CONFIG_[A-Z0-9_]+$ ]] || { echo "[오류] 잘못된 config symbol: $KEY"; exit 1; }
+  case "$VALUE" in
+    y) scripts/config --enable "$KEY" ;;
+    m) scripts/config --module "$KEY" ;;
+    n) scripts/config --disable "$KEY" ;;
+    *) echo "[오류] 잘못된 config 값: $SPEC"; exit 1 ;;
+  esac
+done
 make olddefconfig
+
+for SPEC in $EXTRA_KERNEL_CONFIG; do
+  KEY="${SPEC%%=*}"
+  VALUE="${SPEC#*=}"
+  if [[ "$VALUE" == n ]]; then
+    grep -q "^# ${KEY} is not set" .config
+  else
+    grep -q "^${KEY}=${VALUE}" .config
+  fi || { echo "[오류] olddefconfig가 $SPEC 요청을 변경했습니다."; exit 1; }
+done
 
 for OPT in CONFIG_USB CONFIG_USB_COMMON CONFIG_CFG80211 CONFIG_MAC80211 CONFIG_RTL8XXXU CONFIG_USBIP_CORE CONFIG_USBIP_VHCI_HCD; do
   grep -qE "^${OPT}=(y|m)" .config || { echo "[오류] olddefconfig가 ${OPT}를 제거했습니다."; exit 1; }

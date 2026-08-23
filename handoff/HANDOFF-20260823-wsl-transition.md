@@ -2,7 +2,7 @@
 
 > 작성: Codex, 2026-08-23
 > 기준 커밋: `31cbd99` (`gptsolreview` 작업 트리)
-> 목적: 검증된 VMware 환경을 보존하면서 VM2의 RTL8188EU만 WSL2로 옮겨 G2~G4를 조기 검증한다.
+> 목적: 검증된 VMware 환경을 보존하면서 WSL2 카드별 G2~G4를 조기 검증하고 안전한 배포 경로를 확정한다.
 
 ## 1. 비WSL 경로에서 완료한 것
 
@@ -45,7 +45,7 @@
   upload가 USB/IP에서 실패한다. maintainer는 USB/IP 지연 또는 partial firmware upload로 판단했고
   issue는 아직 open이다. 따라서 WSL이 VMware보다 무조건 안정적이라는 가정은 현재 증거와 반대다.
 
-## 3. 지금 실행할 최소 전환 절차
+## 3. 실행한 최소 전환 절차
 
 1. VM2를 정상 종료해 disk 상태를 보존하고 RTL8188EU만 Windows로 반환한다. VM1/RTL8192EU는 건드리지 않는다.
 2. Windows에서 8188EU의 실제 BUSID를 확인하고 `usbipd bind --busid` 후 WSL에 attach한다.
@@ -61,10 +61,10 @@
 |---|---|
 | G2 | 8192EU PASS: `0bda:818b`, `rtl8xxxu`, monitor mode, ch1~13 설정 성공. 8188EU FAIL |
 | G3 | health gate PASS + 각 LDN 후보 채널에서 유효한 802.11 frame pcap 확보 |
-| G4 | WSL TX frame이 VM1 외부 카드에 재캡처되고 송신 payload가 비교 가능 |
+| G4 | **8192EU PASS**: WSL TX frame을 VM2/8188EU가 외부 재캡처, 10 Hz 표본 90~93.3%, 수신 frame byte-exact |
 | Soak | 30분 이상 연속 RX, 무응답이면 gate가 실패를 탐지하고 복구 경로가 결정적 |
 
-8192EU의 G4/soak 전에는 WSL이 VMware보다 안정적이라고 결론 내리지 않는다.
+8192EU의 G4는 통과했다. soak와 실제 Switch G5/G6 전에는 WSL이 VMware보다 안정적이라고 결론 내리지 않는다.
 
 ## 5. 실행 기록 — 2026-08-23 22:45~
 
@@ -112,3 +112,43 @@
   <https://github.com/dorssel/usbipd-win/issues/1022>
 - 현재 설치된 `usbipd-win 5.3.0` 릴리스:
   <https://github.com/dorssel/usbipd-win/releases/tag/v5.3.0>
+
+## 6. 후속 실행 기록 — 2026-08-24
+
+- 사용자가 VM2를 다시 시작했다. VM2 `bridge-b`의 RTL8188EU는 `rtl8xxxu`, monitor CH6로
+  정상 probe됐고 health gate actual RX를 통과했다. NetworkManager에서는 계속 unmanaged이며
+  NetworkManager/systemd-networkd/Tailscale도 모두 active다. 카드가 물리적으로 고장 났거나
+  영구 receive death에 빠졌다는 가설을 기각했다.
+- WSL/RTL8192EU와 VM2/RTL8188EU를 모두 health gate로 CH6에 고정한 뒤 외부 G4를 완료했다.
+  marker 100회 빠른 송신 중 42회가 외부 포착됐고 42/42 frame이 byte-exact였다.
+- rate-relevant 10 Hz 실험은 30회 중 28 unique(93.3%), 100회 중 90 unique(90.0%), duplicate 0,
+  포착 frame 전부 byte-exact였다. 수신 radiotap은 26바이트이며 bare 802.11 frame에는 FCS/padding
+  변형이 없었다. 실험 직후 두 카드 health gate가 다시 통과해 지속 RX death/channel drift는 없었다.
+- pcap: `logs/wsl/g4-wsl8192-to-vm8188.pcap`, `g4-wsl8192-to-vm8188-10hz.pcap`,
+  `g4-wsl8192-to-vm8188-10hz-100.pcap`(git ignore, 로컬 보존).
+- Windows USB selective suspend는 AC뿐 아니라 DC에서도 disabled로 통일했다.
+- 첫 WSL soak는 20분/29,786 packets/0 kernel drops 후 background service만 남은 WSL instance가
+  idle 종료됐다. radio는 재시작 즉시 정상이다. daemon 배포를 위해 `.wslconfig`에
+  `instanceIdleTimeout=-1`과 `vmIdleTimeout=-1`을 추가했고 controlled restart 후 재검증한다.
+- `SimplyCEO/rtl8188eus` commit `b5f02e742fad6ae27d893ffae62d05e27374c0ed`를 정확한
+  6.18.35.2 WSL kernel tree에서 빌드하는 opt-in workflow를 kernel-build repo `f6f6739`에 추가했다.
+  심화 감사 결과 mainline도 내부적으로 196-byte control transfer로 분할하므로 block 크기는 차이가
+  아니다. vendor의 별도 MCU I/O wrapper reset, polling, firmware/init 흐름이 probe 결과를 바꾸는지
+  실기로 확인한다.
+- framerelay/beacon/radio safety 핵심 offline test 102개는 Windows audit venv에서 전부 통과했다.
+- VM2 RTL8188EU soak는 00:24:48~00:49:08 KST 동안 24분 20초 실행돼 22,140 packets,
+  filter 22,142 packets, kernel drop 0을 기록했다. 사용자가 VMware USB 메뉴 알림을 선택하면서
+  `USB disconnect`로 중단됐으므로 30분 PASS로 과장하지 않는다. 카드는 현재 VM2 밖의 VMware
+  stub에 대기 중이며, WSL vendor-driver probe 뒤 VM2로 복구한다.
+- 전체 분석은 `docs/24-wsl-radio-validation-20260824.md`에 정리했다.
+
+## 7. 최종 전환 결과
+
+- idle 설정 적용 뒤 WSL/RTL8192EU 30분 soak가 41,394 packets/0 kernel drops로 통과했다.
+- RTL8188EU는 mainline 실패와 달리 pinned vendor `8188eu`로 WSL monitor RX, CH1~13,
+  외부 양방향 TX 및 probe/action/beacon/data injection을 통과했다.
+- 두 카드는 WSL에 attach했고 VMware USB Arbitrator는 현재 session에서 정지했다. VM2는 무선 카드
+  없이 Ethernet/Tailscale rollback 환경으로 정상 동작한다.
+- profile-driven selector, Windows ownership preflight, role enforcement와 exact loaded-module 검증을
+  구현했다. 상세 후속 인계는 `handoff/HANDOFF-20260824-wsl-dual-radio.md`를 기준으로 한다.
+- framerelay double-radiotap 결함도 emulator commit `82dd0d3`에서 수정·push했다.

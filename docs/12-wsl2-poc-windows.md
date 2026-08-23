@@ -1,6 +1,6 @@
 # 12 — Windows 배포 PoC 절차서 (WSL2 × framerelay)
 
-> 작성: 2026-08-22 | 개정: 2026-08-24 — **실기 G1~G3 + 카드별 WSL 호환성 반영**
+> 작성: 2026-08-22 | 개정: 2026-08-24 — **실기 G1~G4 + 카드별 WSL 호환성 반영**
 > 상위 문서: `docs/06-distribution.md` (전략), `docs/12-framerelay-구조와-로드맵.md` (framerelay 로드맵 — 이 문서는 그 STEP 16의 실행 절차서)
 
 ### 2026-08-24 현재 실측 상태
@@ -10,14 +10,15 @@
 - **RTL8188EU(0bda:8179)는 WSL G2 실패**: 6.6.87.2, 6.6.123.2, 6.18.35.2에서 USB 열거와
   firmware 파일 로드는 성공하지만 약 3.6초 후 MCU ready handshake가 `-11`로 끝난다. `iw`
   interface가 생기기 전 실패하므로 NetworkManager, monitor mode, RX death 문제가 아니다.
-- **RTL8192EU(0bda:818b)는 같은 WSL/USB-IP에서 G2와 ambient G3 통과**: monitor mode,
+- **RTL8192EU(0bda:818b)는 같은 WSL/USB-IP에서 G2, ambient G3, 외부 RF G4 통과**: monitor mode,
   1~13 전체 채널 설정, health gate 통과. CH1/6/11 5초 pcap에서 각각 109/53/3 frames,
   kernel drop 0을 확인했다(`logs/wsl/g3-8192eu-ch*.pcap`).
-- G4 단일 카드 송신은 AF_PACKET이 radiotap frame 20개를 오류 없이 받았으나 자기 캡처에는
-  echo되지 않았다. 이는 RF 송신 증명이 아니므로 VM2/8188EU 외부 재캡처가 남아 있다.
-- 결론: WSL 경로 자체는 동작하지만 **현재 mainline `rtl8xxxu` + USB/IP 조합에서 8188EU만
-  비호환**이다. WSL 배포는 우선 8192EU로 진행하고, 8188EU는 vendor driver 별도 실험 또는
-  VMware 폴백으로 분리한다.
+- G4는 VM2/RTL8188EU 외부 수신기로 WSL/RTL8192EU 주입을 재캡처했다. CH6 10 Hz 표본에서
+  30개 중 28개(93.3%), 100개 중 90개(90.0%)를 unique frame으로 수신했고, 재캡처된 802.11
+  payload는 전부 byte-exact였다. 단일 카드 self-capture가 아니라 실제 RF 송신을 증명했다.
+- 결론: WSL 경로 자체는 동작한다. **mainline `rtl8xxxu` + USB/IP에서 8188EU만 비호환**이지만
+  pinned vendor `8188eu`는 monitor RX와 양방향 외부 TX G4를 통과했다. 8192EU는 전 역할,
+  8188EU는 guest/relay profile로 사용한다. 실제 Switch G5/G6 전에는 production 완료로 부르지 않는다.
 
 ## 0. [확정] 결정 사항
 
@@ -95,6 +96,18 @@ usbipd list                      # 동글 BUSID 확인 (예: 2-3)
 usbipd bind --busid <BUSID>
 usbipd attach --wsl --busid <BUSID>
 ```
+
+이 저장소에서는 elevated PowerShell에서 다음 preflight를 표준 진입점으로 쓴다. VMware USB
+Arbitrator 충돌을 막고 profile에 있는 두 카드를 attach한 뒤 WSL `lsusb`까지 확인한다.
+
+```powershell
+.\scripts\windows\wsl-radio-preflight.ps1 -Prepare -AutoAttach
+```
+
+`-AutoAttach`는 USB reset/재연결 뒤 같은 BUSID를 WSL에 다시 붙이는 hidden watcher를 카드별로
+유지한다. Linux command는 `scripts/wsl-radio-prepare.sh --usb-id VID:PID --role host|guest|relay -- COMMAND...`
+형태로 시작한다. driver/module/vermagic/SHA/role와 actual RX 중 하나라도 실패하면 COMMAND는 실행되지
+않는다. `run_trade.sh v7`은 WSL에서 이 selector를 자동 적용한다.
 ```bash
 # WSL2 안
 lsusb                            # 0bda:8179 / 0bda:818b 확인
@@ -169,7 +182,11 @@ done
 - radiotap 8B 헤더(`00 00 08 00 00 00 00 00`) 부착 필수 — VM 실측에서 헤더 없으면 드라이버가 조용히 폐기
 - 2026-08-24 WSL/8192EU 단일 카드에서는 `send()` 성공 frame이 같은 카드 pcap에 echo되지 않았다.
   그러므로 자기 재캡처를 성공 기준으로 쓰지 않고 별도 monitor 카드/VM에서 RF 재캡처한다.
-- 성공 기준: 외부 카드의 주입 프레임 재캡처율 + FCS/padding 차이 기록 (V-1의 WSL2 버전 실측 데이터)
+- **실측 PASS**: VM2/8188EU 외부 카드가 CH6에서 10 Hz 주입 30개 중 28개, 100개 중 90개를
+  unique로 재캡처했다. 수신 radiotap 26바이트를 제외한 frame은 모두 송신본과 byte-exact였고
+  FCS/padding 차이가 없었다(`logs/wsl/g4-wsl8192-to-vm8188*.pcap`).
+- 이 90~93.3%는 ACK 없는 broadcast Probe Request 표본이다. 반복 beacon 또는 ACK/retry가 있는
+  실제 LDN unicast의 신뢰도나 SIFS 인터넷 중계 가능성으로 그대로 환산하지 않는다.
 
 ### Step 8 — framerelay 루프 (G5) — 동글 2개 구성
 - PowerShell에서 동글 2개 각각 bind/attach (같은 WSL2 인스턴스)
@@ -185,6 +202,18 @@ done
 - 릴레이를 같은 PC에서 돌리면 "usbipd 지연만" 분리 측정 가능 → Mac mini 릴레이로 바꾸면 "인터넷 왕복 가산" 분리 측정 (2단계 측정 권장)
 
 ### Step 10 — 세션 유지성 (배포 전제)
+background systemd service만으로는 WSL instance/VM idle 종료를 막지 못할 수 있다. relay daemon
+배포에서는 다음 설정을 kernel 항목과 함께 사용하고 `wsl --shutdown` 후 재시작한다.
+
+```ini
+[general]
+instanceIdleTimeout=-1
+
+[wsl2]
+kernel=C:\\wsl-kernel\\bzImage-wsl-st-6.18.35.2
+vmIdleTimeout=-1
+```
+
 ```powershell
 usbipd bind --busid <BUSID>                               # 관리자, 최초 1회
 usbipd attach --wsl --busid <BUSID> --auto-attach         # 이 프로세스가 실행 중일 때 재연결 감시
