@@ -253,6 +253,12 @@ main() {
     # -k 15: hang한 런이 SIGTERM을 무시할 수 있어 15초 후 SIGKILL로 마무리.
     local gate=()
     if [[ $(uname -r) == *microsoft* ]]; then
+        # WSL does not reliably autoload these modular dependencies from the nl80211/TAP
+        # call sites. Without them LDN fails late with NEW_KEY ENOENT or missing /dev/net/tun.
+        modprobe ccm || die "WSL CCMP module(ccm) load failed"
+        modprobe cmac || die "WSL CMAC module load failed"
+        modprobe tun || die "WSL TUN/TAP module load failed"
+        [[ -c /dev/net/tun ]] || die "WSL TUN/TAP device missing after modprobe tun"
         [[ -x $WSL_RADIO_PREP ]] || die "WSL radio selector 미발견/실행불가: $WSL_RADIO_PREP"
         gate=("$WSL_RADIO_PREP")
         [[ -z ${RADIO_USB_ID:-} ]] || gate+=(--usb-id "$RADIO_USB_ID")

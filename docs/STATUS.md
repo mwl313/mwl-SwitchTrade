@@ -18,11 +18,17 @@
   외부 RF TX injection(G4) 통과. 30분 연속 RX는 41,394 packets/0 kernel drops로 통과했다.
 - RTL8188EU는 세 WSL kernel의 mainline `rtl8xxxu`에서 firmware MCU start `-11`로 실패하지만,
   pinned vendor `8188eu`는 monitor RX, CH1~13, 양방향 외부 RF TX와 frame-type G4를 통과했다.
-  새 커널 netdev address patch 산출물의 warning-free 재검증만 남았다.
+  patched artifact는 warning-free load/RX를 통과했다. standalone AP beacon 108개도 외부 수신됐지만
+  AP+monitor add/delete가 vendor cfg80211에서 deadlock되므로 project host role은 안전하게 차단한다.
+  patched 5분 soak는 8,474 packets/0 kernel drops와 post-soak RX로 통과했다.
 - profile-driven selector가 exact USB/driver/module/vermagic/SHA/role/actual-RX를 검사한 뒤 command를
   실행한다. Windows preflight도 VMware/usbipd 소유권 충돌을 실행 전에 차단한다.
 - framerelay의 double-radiotap injection 결함을 수정했다(`82dd0d3`). MonitorRadio가 bare 802.11
   frame에 radiotap을 정확히 한 번만 붙이는 계약을 회귀 test로 고정했다.
+- WSL runtime/keys를 설치하고 modular `ccm`/`cmac`/`tun` preflight를 추가했다. RTL8192EU에서 실제
+  `HostTransport`가 AP+monitor/TAP/FRLG room-ready까지 통과하고 iface 0개로 clean stop했다.
+- selector는 host teardown 후 netdev 0개 상태를 자동 복구하고, multi-vif monitor 우선 선택 및 stale
+  vif 제거를 수행한다. HostTransport도 udev-renamed AP를 phy-scope로 정리한다.
 - 상세: `docs/24-wsl-radio-validation-20260824.md`.
 
 ## 📈 Phase 진행도 (2026-08-22 기준)
@@ -33,7 +39,7 @@
 | 1 | PoC 재현 | ✅ 100% |
 | **2a** | 릴레이 인프라 (RemoteTransport+relay 서버+FSM 훅) | ✅ 100% |
 | **2b** | LAN 2브리지 실기 | 🔄 ~70% — 단독 트레이드·양방향 조인 실증, E2E 양방향 교환만 잔여 |
-| **2b'** | framerelay 코어 | 🔄 코드 완성 — STEP 6~7(레이트리미터 연결·AP+monitor 실측) 잔여 |
+| **2b'** | framerelay 코어 | ✅ STEP 6~9 완료 — 다음은 WSL G5와 실제 Switch STEP 10~11/G6 |
 | 3 | 세션 시스템 + GUI (PySide6 확정, `docs/13-userside-app-plan.md`) | 설계 완료 |
 | 4 | 프로덕션 배포 (WSL2 길 A, `docs/12-wsl2-poc-windows.md`) | α G1~G4는 8192EU PASS, G5/G6 잔여 |
 
@@ -44,15 +50,17 @@
 | **mwl313/mwl-SwitchTrade** | 문서·릴레이 서버·WSL2 배포 인프라·스크립트 |
 | **mwl313/frlg-ldn-trade-emu** (emu/) | **동작 코드 본체** — framerelay(메인) + EMU(동결). `emu/HANDOFF.md`가 작업 대장 |
 
-- 브랜치: `framerelay-dev` = 최신 (양쪽 리포 push 완료). 로컬 `main`/`stabilize`는 부분집합
+- 검토 브랜치: 양쪽 first-party 리포의 `gptsolreview`가 최신이며 push 완료. emulator의 최신 수정은
+  host teardown cleanup commit `607fd71`이며 double-radiotap 회귀 방지는 `82dd0d3`이다.
+  `framerelay-dev`는 그 이전 기능 기준선이다.
 - ~~MWL-SwitchTrade-v2~~: 삭제됨 (고유 내용 0)
 
 ## 하드웨어 매트릭스 (`docs/14-hardware-matrix.md`)
 
 | 카드 | HOST(방 개설) | GUEST | 비고 |
 |---|---|---|---|
-| RTL8192EU (`0bda:818b`) VM/WSL | ✅ AP 노출 | ✅ | VM LDN join, WSL monitor RX+TX G4 실증 |
-| RTL8188EU (`0bda:8179`) WSL/vendor | ❌ AP 없음 | ✅ | mainline G2 FAIL, vendor monitor RX/TX G4 PASS |
+| RTL8192EU (`0bda:818b`) VM/WSL | 🟡 WSL LDN room-open PASS | ✅ | VM LDN join, WSL AP+monitor/TAP/FRLG ready; WSL Switch join 잔여 |
+| RTL8188EU (`0bda:8179`) WSL/vendor | ❌ project HOST 차단 | ✅ | standalone AP PASS, AP+monitor deadlock; monitor RX/TX G4 PASS |
 
 ## 알려진 미해결 이슈
 
@@ -74,7 +82,7 @@
 1. ~~STEP 6~~ ✅ / ~~STEP 7~~ ✅ / ~~STEP 8~~ ✅ / ~~STEP 9~~ ✅
 2. **STEP 10**: 호스트 모드 + 스위치A 조인 (스위치 필요) — 방 리스트에 EMU 표시 확인
 3. **STEP 11**: 🏆 framerelay E2E (스위치 A·B) — B 화면에 "A의 방" = 목표② 달성
-4. **α트랙 G1~G4**: 두 카드 기준 ✅(8188 patched module 최종 warning gate 진행 중). 다음은 G5 로컬 루프, G6 Switch E2E
+4. **α트랙 G1~G4**: 두 카드 기준 ✅(8188 patched warning-free guest/relay). 다음은 G5 로컬 루프, G6 Switch E2E
 5. **STEP 10~13**: 스위치 실기 (호스트 모드 → framerelay E2E 🏆 → 안정성 5종)
 6. 프로덕션: γ(GUI 셸) / δ(릴레이 운영) / β(installer)
 

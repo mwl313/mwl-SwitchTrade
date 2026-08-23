@@ -4,7 +4,7 @@
 > 최종 빌드: WSL2 프로그램 (docs/06-distribution.md 길 A, docs/12-wsl2-poc-windows.md)
 > 배경 실측: VMware에서는 8192EU=AP 노출 ✅ / 8188EU=AP 미노출 ❌. WSL USB/IP 호환성은
 > 별도 축이며 2026-08-24 현재 8192EU G2~G4+30분 soak ✅ / 8188EU mainline G2 ❌,
-> pinned vendor driver G2~G4 ✅이다.
+> patched pinned vendor driver guest/relay G2~G4 + 5분 soak ✅이다.
 
 ---
 
@@ -21,10 +21,10 @@
 | USB ID | 칩셋 | 백엔드/드라이버 | HOST | GUEST | 근거 |
 |---|---|---|---|---|---|
 | `0bda:818b` | RTL8192EU | VMware/rtl8xxxu | ✅ | ✅ | AP 노출, LDN join 실증(T1/T3) |
-| `0bda:818b` | RTL8192EU | WSL USB-IP/rtl8xxxu | ✅ 기능 노출 | ✅ | monitor RX + 외부 TX G4 실증. 실제 WSL AP/LDN은 G5/G6 잔여 |
+| `0bda:818b` | RTL8192EU | WSL USB-IP/rtl8xxxu | ✅ room-open | ✅ | monitor RX/TX G4 + AP/monitor/TAP/FRLG room-ready. 실제 Switch join은 G6 잔여 |
 | `0bda:8179` | RTL8188EU | VMware/rtl8xxxu | ❌ | ✅ | AP 미노출, LDN join·monitor RX 실증(T3) |
 | `0bda:8179` | RTL8188EU | WSL USB-IP/rtl8xxxu | ❌ | ❌ | firmware MCU start `-11`, interface 생성 전 G2 FAIL |
-| `0bda:8179` | RTL8188EU | WSL USB-IP/vendor 8188eu | ❌ | ✅ | monitor RX, 양방향 외부 RF TX, probe/action/beacon/data G4 통과. AP 역할은 허용하지 않음 |
+| `0bda:8179` | RTL8188EU | WSL USB-IP/patched vendor 8188eu | ❌ | ✅ | warning-free RX/TX+5분 soak. 단일 AP beacon 108개 외부 수신, AP+monitor는 cfg80211 deadlock |
 | `0e8d:7612` 등 | MT7612U | mt76 (인커널) | 🔍 예상 ✅ | 🔍 예상 ✅ | 미실측 — 입수 시 backend별 검증 후 갱신 |
 | `0bda:c811` 등 | RTL8821CU | rtw88_8821cu | ❓ 미확인 | ❓ 미확인 | USB 변형 및 USB-IP 별도 검증 필요 |
 | Intel AX 계열 | — | iwlwifi | ❌ | ❌ | 원작자 README: 동작 안 함 (공식 기록) |
@@ -73,7 +73,8 @@ fail-closed로 수행한다.
 [카드 감지됨] Realtek RTL8188EU (0bda:8179) / WSL USB-IP / vendor 8188eu
   ├─ 방 개설(HOST): ❌ 불가
   └─ 참가/중계(GUEST/RELAY): ✅ 가능
-  ℹ mainline rtl8xxxu는 firmware start 실패; pinned vendor module만 허용합니다.
+  ℹ mainline rtl8xxxu는 firmware start 실패; patched pinned module만 허용합니다.
+  ℹ 단독 AP 기능은 있지만 LDN HOST 필수 조건인 AP+monitor 동시 vif는 안전하지 않습니다.
 
 [알 수 없는 카드] (0bda:xxxx)
   ⚠ 이 카드는 아직 검증 목록에 없습니다 — 호스트/참가 모두 불가로 표시됩니다.
@@ -88,8 +89,9 @@ fail-closed로 수행한다.
 
 | 날짜 | 결정 |
 |---|---|
+| 2026-08-24 | patched 8188EU warning-free guest/relay 검증. 단독 AP는 PASS지만 AP+monitor cfg80211 deadlock 실측으로 host 차단 근거 갱신 |
 | 2026-08-24 | 실제 TSV profile+selector 구현. driver/vermagic/SHA/RX/role 검사를 command 앞에 강제 |
-| 2026-08-24 | 8188EU vendor driver를 WSL guest/relay로 승격. host는 과거 AP 미노출 근거로 계속 차단 |
+| 2026-08-24 | 8188EU vendor driver를 WSL guest/relay로 승격 |
 | 2026-08-24 | 호환성 key를 USB ID만이 아니라 backend+driver까지 확장. 8188EU는 VM guest ✅지만 WSL mainline ❌ |
 | 2026-08-22 | 🅑안(rtl8188eus out-of-tree AP 실험) **폐기** — 과거 hang 4회 이력 + 🅐 역할 재배치로 충분 + 최종 빌드는 WSL2라 드라이버 실험의 이득이 제한적 |
 | 2026-08-22 | 대신 **하드웨어 체크 UI + 확장 레지스트리** 채택 (본 문서) |

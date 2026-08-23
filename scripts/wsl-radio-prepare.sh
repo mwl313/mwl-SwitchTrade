@@ -85,6 +85,61 @@ ifaces_for_device() {
     done
 }
 
+preferred_iface_for_device() {
+    local device=$1 iface first="" type
+    while read -r iface; do
+        [[ -n $first ]] || first=$iface
+        type="$(iw dev "$iface" info 2>/dev/null | awk '$1 == "type" { print $2; exit }')"
+        if [[ $type == monitor ]]; then
+            printf '%s\n' "$iface"
+            return 0
+        fi
+    done < <(ifaces_for_device "$device")
+    [[ -n $first ]] || return 1
+    printf '%s\n' "$first"
+}
+
+phy_for_device() {
+    local dev_real link path
+    dev_real="$(readlink -f "$1")"
+    for link in /sys/class/ieee80211/*/device; do
+        [[ -e $link ]] || continue
+        path="$(readlink -f "$link")"
+        case $path in
+            "$dev_real"/*|"$dev_real":*) basename "$(dirname "$link")"; return 0 ;;
+        esac
+    done
+    return 1
+}
+
+recreate_monitor_iface() {
+    local device=$1 phy candidate iface
+    phy="$(phy_for_device "$device")" || return 1
+    candidate="stmon${phy#phy}"
+    if ip link show "$candidate" >/dev/null 2>&1; then
+        candidate="st${phy#phy}mon"
+    fi
+    printf '%s\n' "[driver] $phy has no netdev; recreating monitor interface $candidate" >&2
+    iw phy "$phy" interface add "$candidate" type monitor || return 1
+    for _ in {1..20}; do
+        iface="$(preferred_iface_for_device "$device" 2>/dev/null || true)"
+        [[ -n $iface ]] && { printf '%s\n' "$iface"; return 0; }
+        sleep 0.1
+    done
+    return 1
+}
+
+remove_extra_ifaces() {
+    local device=$1 keep=$2 iface
+    while read -r iface; do
+        [[ $iface == "$keep" ]] && continue
+        msg "[driver] removing stale extra interface $iface"
+        ip link set "$iface" down 2>/dev/null || true
+        iw dev "$iface" del || die "could not remove stale interface $iface"
+        [[ ! -e /sys/class/net/$iface ]] || die "stale interface still exists after delete: $iface"
+    done < <(ifaces_for_device "$device")
+}
+
 driver_for_device() {
     local dev_real intf link
     dev_real="$(readlink -f "$1")"
@@ -216,8 +271,13 @@ if [[ -n $REQUIRED_ROLE ]]; then
     case $REQUIRED_ROLE in host|guest|relay) ;; *) die "invalid role: $REQUIRED_ROLE" ;; esac
     role_allowed "$REQUIRED_ROLE" "$roles" || die "$USB_ID does not support role $REQUIRED_ROLE (roles=$roles)"
 fi
-iface="$(ifaces_for_device "$DEVICE" | head -1)"
+iface="$(preferred_iface_for_device "$DEVICE" 2>/dev/null || true)"
 driver="$(driver_for_device "$DEVICE" 2>/dev/null || true)"
+
+if [[ -z $iface && -n $driver ]]; then
+    iface="$(recreate_monitor_iface "$DEVICE")" || \
+        die "$USB_ID is bound to $driver but its missing monitor interface could not be recreated"
+fi
 
 if [[ -z $iface ]]; then
     [[ $strategy == vanilla-then-module ]] || die "$USB_ID vanilla driver produced no interface"
@@ -230,7 +290,7 @@ if [[ -z $iface ]]; then
         insmod "$module"
     fi
     for _ in {1..30}; do
-        iface="$(ifaces_for_device "$DEVICE" | head -1)"
+        iface="$(preferred_iface_for_device "$DEVICE" 2>/dev/null || true)"
         [[ -n $iface ]] && break
         sleep 0.5
     done
@@ -250,6 +310,8 @@ if [[ -z $iface ]]; then
     fi
     driver="$(driver_for_device "$DEVICE" 2>/dev/null || true)"
 fi
+
+remove_extra_ifaces "$DEVICE" "$iface"
 
 [[ -n $driver ]] || die "$USB_ID has interface $iface but no bound driver"
 driver_allowed "$driver" "$allowed_drivers" || die "$USB_ID bound unexpected driver: $driver"

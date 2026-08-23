@@ -111,7 +111,16 @@ Arbitrator 충돌을 막고 profile에 있는 두 카드를 attach한 뒤 WSL `l
 ```bash
 # WSL2 안
 lsusb                            # 0bda:8179 / 0bda:818b 확인
-sudo apt install linux-tools-generic hwdata usbutils iw tcpdump wireless-regdb
+sudo apt install linux-tools-generic hwdata usbutils iw tcpdump wireless-regdb hostapd
+
+# 프로젝트 runtime은 system Python과 분리한다.
+cd /mnt/c/Users/<계정>/Desktop/switchtrade/emu
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+
+# VM에서 실기 검증한 동일 prod.keys를 사용한다. 내용을 생성하거나 추측하지 않는다.
+sudo install -D -m 600 /path/to/verified/prod.keys /root/.switch/prod.keys
+.venv/bin/python -c 'import ldn; ldn.load_keys("/root/.switch/prod.keys"); print("runtime PASS")'
 ```
 > 기본 WSL2 커널엔 Wi-Fi 드라이버가 없어 wlan 인터페이스는 안 생김 — 정상. G2는 Step 5에서.
 

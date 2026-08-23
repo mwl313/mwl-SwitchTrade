@@ -87,7 +87,24 @@ SIFS ACK를 인터넷 왕복으로 대체할 수 있다는 증거도 아니다. 
 Sequence Control overwrite와 beacon timestamp 갱신은 장치가 over-air management frame에서 소유하는
 필드다. application payload/주소 손상 증거는 없다. 첫 module은 Linux 6.18에서 금지된 direct
 `dev_addr` write 때문에 interface open 시 warning을 냈다. kernel-build commit `1650687`은 여섯
-write를 `eth_hw_addr_set()`으로 바꾸며 warning-free rebuild를 최종 재검증한다.
+write를 `eth_hw_addr_set()`으로 바꿨다. GitHub Actions run `32654325060`의 patched artifact는
+SHA-256 `032002aaf8ce5c25cdf1482eee085c2bfa002d0f780b05cd8e14b7905c9b7d21`,
+`srcversion=0E89F9AAD0AC20A979DE5B4`이며 exact kernel vermagic을 가진다. clean WSL boot에서 두 번
+load/actual-RX를 통과했고 address warning은 0개였다.
+
+RTL8188EU는 단일 interface를 AP로 바꾸는 것은 가능했다. 실제 `hostapd`가 `AP-ENABLED`에
+도달했고 별도 RTL8192EU가 `ST8188CERT` beacon 108개를 수신했으며 kernel drop은 0이었다.
+그러나 project HOST에 필요한 AP+monitor 동시 vif는 지원하지 않는다. primary monitor가 있는 상태에서
+AP를 추가하면 `ENODEV`, primary AP 뒤 monitor를 추가하거나 primary를 삭제하면 vendor driver가
+`cfg80211_netdev_notifier`에서 D-state deadlock에 들어가 WSL restart가 필요했다. 따라서 하드웨어 AP
+기능이 없는 것이 아니라 **현 vendor driver/Linux 6.18 동시-vif 구현이 안전하지 않은 것**이며,
+profile은 guest/relay만 유지한다.
+
+Patched driver 5분 soak는 8,474 packets captured, 8,476 received by filter, kernel drop 0으로
+통과했고 종료 직후 actual-RX도 재통과했다. capture SHA-256은
+`2a321fed8d5eb3a629d08c067680cac1633723cfae609cc25227fb3a18c6d318`이다. 장기 30분
+soak 근거는 RTL8192EU에만 있으므로 8188EU의 profile 상태는 역할을 명시한
+`verified-guest-relay`로 제한한다.
 
 `usb 1-2: seqnum max` 한 줄은 driver error가 아니다. Linux `vhci_hcd`가 USB/IP URB sequence가
 `0xffff`일 때 출력하는 informational message이며, 그 뒤 실제 RX/TX가 계속 통과했다.
@@ -101,8 +118,9 @@ write를 `eth_hw_addr_set()`으로 바꾸며 warning-free rebuild를 최종 재�
    mainline `rtl8xxxu`와 다른 firmware upload/start 경로를 쓰는 `8188eu` 모듈이 USB/IP 타이밍
    문제를 우회할 가능성이 있다. `SimplyCEO/rtl8188eus`의
    `b5f02e742fad6ae27d893ffae62d05e27374c0ed`를 정확한 WSL 6.18.35.2 kernel tree에서 빌드하는
-   reproducible workflow를 추가했다. probe/monitor/RX/injection은 통과했으며 patched module
-   warning gate 뒤 guest/relay profile로만 배포한다. 심화 코드 감사에서 두 드라이버 모두
+   reproducible workflow를 추가했다. patched artifact는 warning-free probe/monitor/RX와 기존
+   양방향 injection 근거를 통과했으며 guest/relay profile로만 배포한다. standalone AP beacon도
+   외부 수신됐지만 AP+monitor deadlock 때문에 project host role은 차단한다. 심화 코드 감사에서 두 드라이버 모두
    4096바이트 firmware page를 실제로는 196바이트
    이하 USB control transfer로 분할함을 확인했다. 따라서 transfer block 크기는 우회 근거가 아니다.
    실험 근거는 vendor가 MCU I/O wrapper까지 reset하는 별도 8051 sequence, wall-clock/yield 기반
@@ -124,7 +142,8 @@ write를 `eth_hw_addr_set()`으로 바꾸며 warning-free rebuild를 최종 재�
   NetworkManager에서 unmanaged다.
 - VMware USB Arbitrator는 WSL dual-radio 운영 중 정지 상태다. start type은 Automatic이므로 reboot
   후 `scripts/windows/wsl-radio-preflight.ps1 -Prepare -AutoAttach`를 elevated PowerShell에서
-  실행한다. 현재 두 BUSID에는 hidden usbipd auto-attach watcher가 하나씩 동작 중이다.
+  실행한다. `wsl --shutdown`도 watcher process를 종료하고 장치를 Shared 상태로 돌리므로 같은
+  preflight를 다시 실행해야 한다. 현재 두 BUSID에는 hidden usbipd auto-attach watcher가 하나씩 동작 중이다.
 - Windows USB selective suspend는 AC/DC 모두 disabled로 통일했다.
 - WSL `.wslconfig`는 `C:\wsl-kernel\bzImage-wsl-st-6.18.35.2`를 사용한다. 기존 kernel/modules와
   `.wslconfig.pre-6.6.123.2` rollback을 보존했다.
@@ -144,10 +163,30 @@ write를 `eth_hw_addr_set()`으로 바꾸며 warning-free rebuild를 최종 재�
   검증한다. 여러 지원 카드가 있으면 ID를 지정하지 않은 실행을 거부하며 실제 RX 뒤 command를 exec한다.
 - framerelay double-radiotap 결함을 수정했다. bridge는 bare 802.11 frame을 전달하고
   `MonitorRadio.send()`가 radiotap을 정확히 한 번만 붙인다(emulator commit `82dd0d3`).
+- RTL8192EU에서는 기존 monitor interface를 유지한 채 임시 `__ap` interface를 생성하고 up한
+  AP+monitor 저수준 공존 검사가 통과했다. 이는 WSL cfg80211/vif 조합이 가능하다는 증거지만,
+  아직 `hostapd` beacon 또는 실제 Switch join 성공을 뜻하지는 않는다.
+- WSL repo-local `.venv`에 `requirements.txt`의 pinned runtime을 설치했고 `ldn.load_keys()`까지
+  통과했다. VM2에서 실기 사용 중인 `prod.keys`를 SHA-256으로 대조해 `/root/.switch/prod.keys`에
+  mode 0600으로 설치했다. `backup-vm-20260821/prod.keys`는 VM2 파일과 hash가 달라 사용하지 않았다.
+- `run_trade.sh --dry-run --radio-usb-id 0bda:818b`는 WSL에서 emu 경로, 기본 `.venv` Python,
+  exact USB sysfs와 `phy0`를 모두 자동 발견했다.
+- 첫 실제 WSL `HostTransport` 실행은 `NL80211_CMD_NEW_KEY`에서 `ENOENT`가 났다. kernel config의
+  `CONFIG_CRYPTO_CCM/CMAC=m`은 정상이었지만 모듈이 자동 load되지 않은 것이 원인이었다. `ccm`과
+  `cmac`을 load하자 key 단계가 통과했고, 다음 실패가 `/dev/net/tun` 부재로 이동했다.
+- `CONFIG_TUN/TAP=m`과 정확한 module artifact가 이미 있었고 `modprobe tun` 뒤 `/dev/net/tun`이
+  생성됐다. `run_trade.sh`는 WSL 실행마다 `ccm`, `cmac`, `tun`을 load하고 character device를 검증한
+  뒤 radio selector를 실행한다. kernel workflow도 네 config를 명시적으로 강제/검증한다.
+- 위 수정 뒤 RTL8192EU WSL `HostTransport`가 CCMP key, AP+monitor, TAP, 122-byte FRLG application
+  data와 `comm_id=0x01006fa0233f8000`을 포함한 room-ready 상태까지 통과했고 정상 종료했다.
+- 실패/종료가 마지막 netdev를 지운 경우 selector가 wiphy에서 monitor netdev를 재생성한다. 여러
+  interface가 있으면 monitor를 우선 선택하고 stale extra vif를 제거한다. 이전 `head -1` 구현은
+  `pipefail` 아래 여러 vif에서 SIGPIPE로 조용히 종료하는 결함이 있어 제거했다.
+- `HostTransport.stop()`은 radio thread에 기존 15초 grace를 적용하고 thread 종료 뒤 이름이 아니라
+  대상 phy 전체를 sweep한다. udev가 AP를 `ldn`에서 `wlx<MAC>`으로 바꿔도 종료 후 iface 0개를 실측했다.
 
 ## 7. 남은 게이트
 
-- patched vendor `8188eu` artifact의 warning-free load + 짧은 actual RX/TX 재검증.
 - 인터넷 설정을 제거한 Switch 두 대로 1~13 discovery capture. 단, 한 카드 호핑은 각 채널 체류
   시간 밖의 frame을 놓치므로 가능하면 여러 카드 고정 캡처 또는 반복 실험을 함께 사용한다.
 - framerelay G5 로컬 루프와 G6 실제 Switch E2E. 특히 ACK/retry와 SIFS 경계를 측정한다.
