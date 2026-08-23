@@ -1,5 +1,10 @@
 # 20 — STEP 10 Codex audit: LDN discovery correction and fixes (2026-08-23)
 
+> **2026-08-24 실기 교정:** 이 문서의 당시 VM1/VM2 PASS는 EMU 송신값과 verifier가 서로
+> 일치한다는 것만 증명했다. 두 Switch 실기 gold에서 FRLG는 LDN **protocol 3 / app version
+> 88**로 확정되었고, 당시 구현은 protocol 1 / app version 1이었다. 아래 기대값은 교정했으며
+> 전체 근거는 `docs/25-goldencapture-2차-WSL-결과.md`를 따른다.
+
 ## Outcome
 
 The project was debugging the wrong discovery signal. A Nintendo Switch does not build its
@@ -37,10 +42,12 @@ change was to make the SSID visible, which contradicts LDN.
 encrypted Vendor Action advertisement, decrypts it through Kinnay's decoder, and asserts:
 
 ```text
-OUI/protocol/type = 7f 00 22 aa 04 00 01 01
+OUI/action/type   = 7f 00 22 aa 04 00 01 01
+LDN protocol      = 3 (AES-GCM)
 comm_id           = 0x01006fa0233f8000
 scene_id          = 22287
 LDN/security      = version 4 / security level 1
+application ver.  = 88
 accept policy     = 0
 participants      = 1/6
 application_data  = 122 bytes, Pia prefix 00 5c 16 00 58
@@ -66,8 +73,8 @@ Do not run this on VM1/the hosting radio; the result must come from a physically
 Expected output:
 
 ```text
-bssid=... ch=6 comm=0x01006fa0233f8000 scene=22287 ldn=v4/security1 \
-appver=1 participants=1/6 appdata=122B OK
+bssid=... ch=6 comm=0x01006fa0233f8000 scene=22287 protocol=3 ldn=v4/security1 \
+appver=88 participants=1/6 appdata=122B OK
 PASS: external radio decoded the exact FRLG Vendor Action advertisement
 ```
 
@@ -126,7 +133,7 @@ every run decoded the exact FRLG Vendor Action advertisement:
 
 ```text
 bssid=A0:47:D7:B0:2B:39 ch=6 comm=0x01006fa0233f8000 scene=22287 \
-ldn=v4/security1 appver=1 participants=1/6 appdata=122B OK
+ldn=v4/security1 appver=1 participants=1/6 appdata=122B OK  # 당시 잘못된 값
 PASS: external radio decoded the exact FRLG Vendor Action advertisement
 ```
 
@@ -134,7 +141,6 @@ One early free-scan run reported `ch=1`: the receiver card caught the
 advertisement while still hopping; with channel 6 pinned every run reports
 `ch=6`. This is a receiver-state artifact, not host behavior.
 
-G0/G1 gates from this audit are therefore PASSED on real hardware:
-periodic beacons (earlier measurement, 102/12s) AND external decoding of the
-encrypted LDN Vendor Action advertisement. The next step per §7 is putting a
-real Switch on the FRLG search screen while the room is up.
+이 실험으로 periodic RF 송신과 별도 카드 수신은 증명됐지만, verifier도 같은 잘못된
+protocol/app 값을 기대했으므로 **FRLG 호환성 G1 PASS로는 취소**한다. 2026-08-24 교정 코드로
+protocol 3/app 88 외부 decode와 실제 Switch room 표시를 다시 통과해야 한다.
