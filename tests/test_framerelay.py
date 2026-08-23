@@ -103,6 +103,20 @@ class RadiotapTest(unittest.TestCase):
         self.assertEqual(radiomod.wrap_radiotap(b"\xab"),
                          b"\x00\x00\x08\x00\x00\x00\x00\x00\xab")
 
+    def test_monitor_radio_send_adds_exactly_one_radiotap_header(self):
+        class SendSocket:
+            def __init__(self):
+                self.sent = []
+
+            def sendto(self, data, address):
+                self.sent.append((bytes(data), address))
+
+        sock = SendSocket()
+        radio = radiomod.MonitorRadio("mon-test").open(sock=sock)
+        radio.send(b"\xab\xcd")
+        self.assertEqual(sock.sent, [(radiomod.RADIOTAP_TX_HEADER + b"\xab\xcd",
+                                      ("mon-test", 0))])
+
     def test_strip_roundtrip(self):
         raw = beacon_frame()
         stripped = radiomod.strip_radiotap(
@@ -294,7 +308,7 @@ class BridgePipeTest(unittest.TestCase):
         app = self._bridge()
         self.assertTrue(app.on_ws_message(mwlb.build_frame(mwlb.MSG_FRAME_RELAY,
                                                            beacon_frame())))
-        self.assertEqual(app.radio.sent, [radiomod.wrap_radiotap(beacon_frame())])
+        self.assertEqual(app.radio.sent, [beacon_frame()])
         self.assertEqual(len(app.beacon_cache), 1)         # remote beacon kept alive
         self.assertEqual(app.stats["injected"], 1)
 
@@ -341,15 +355,14 @@ class BridgePipeTest(unittest.TestCase):
         self.assertTrue(host_bridge.on_radio_capture(beacon_frame()))
         for frame in host_bridge.drain_outbox():            # ...rides the relay untouched...
             wire.deliver("host", frame)
-        # ...and lands on switch B's air exactly as it left A (plus radiotap).
-        self.assertEqual(guest_bridge.radio.sent,
-                         [radiomod.wrap_radiotap(beacon_frame())])
+        # ...and MonitorRadio receives one bare frame; its send() adds radiotap once.
+        self.assertEqual(guest_bridge.radio.sent, [beacon_frame()])
         # The reverse direction carries the guest's join request back to A.
         join_req = data_to_ap_frame()
         self.assertTrue(guest_bridge.on_radio_capture(join_req))
         for frame in guest_bridge.drain_outbox():
             wire.deliver("guest", frame)
-        self.assertEqual(host_bridge.radio.sent, [radiomod.wrap_radiotap(join_req)])
+        self.assertEqual(host_bridge.radio.sent, [join_req])
         # Neither half relayed anything twice (echo suppression held).
         self.assertEqual(host_bridge.drain_outbox() + guest_bridge.drain_outbox(), [])
 

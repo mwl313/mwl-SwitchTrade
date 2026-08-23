@@ -30,7 +30,7 @@ import threading
 import time
 
 from common import mwlb
-from framerelay.radio import is_beacon, mac_str, parse_80211, wrap_radiotap
+from framerelay.radio import is_beacon, mac_str, parse_80211
 from framerelay.rate_limit import TokenBucket
 
 HEARTBEAT_INTERVAL = 10.0     # relay/server.py HEARTBEAT_TIMEOUT is 30.0s - sending at
@@ -271,7 +271,7 @@ class RelayBridge:
         if is_beacon(parse_80211(payload)):
             self.beacon_cache.add(payload)  # keep the remote room alive between relays
         try:
-            self.radio.send(wrap_radiotap(payload))
+            self.radio.send(payload)
         except OSError as e:
             self.log(f"[bridge] inject failed: {e}")
             return False
@@ -392,4 +392,4 @@ class RelayBridge:
     def _inject_guarded(self, frame):
         """Inject + echo-guard bookkeeping in one step (used by the beacon replayer)."""
         self.echo_guard.record(frame)
-        self.radio.send(wrap_radiotap(frame))
+        self.radio.send(frame)
