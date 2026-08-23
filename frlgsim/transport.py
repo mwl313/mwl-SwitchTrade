@@ -1514,7 +1514,7 @@ class HostTransport:
 
     def __init__(self, password=None, nickname="EMU", keys_path="~/.switch/prod.keys",
                  phyname="phy0", ifname="ldn", ifname_monitor="ldn-mon", channel=6,
-                 trainer_id=None, use_ap_engine=True, ap_passphrase=None, log=print):
+                 trainer_id=None, use_ap_engine=False, ap_passphrase=None, log=print):
         self.info = getattr(log, "info", log)   # clean milestone sink (default-mode narration)
         self.password = password if password else GBA_APP_PASSPHRASE
         self.nickname = nickname
