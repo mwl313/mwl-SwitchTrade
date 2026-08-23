@@ -33,20 +33,22 @@ class HostAdvertisementTest(unittest.TestCase):
             0x9CA7, "DESTROY", 0x1EFD,
             header=build_pia_header(player_name="Min"))
         param.app_version = HostTransport.APPLICATION_VERSION
+        param.protocol = HostTransport.LDN_PROTOCOL
         param.name = b"Min"
         param.channel = 6
         param.ssid = bytes(range(16))
         param.server_random = b"R" * 16
 
         key = b"K" * 16
-        keys = ldn.KeyDerivation({}, 1, override_advertise_key=key)
+        keys = ldn.KeyDerivation({}, HostTransport.LDN_PROTOCOL,
+                                 override_advertise_key=key)
         network = ldn.APNetwork(FakeAccessPoint(), object(), object(), param, keys, key)
         encoded = network.info().build_advertisement(keys).encode()
 
         self.assertTrue(encoded.startswith(bytes.fromhex("7f0022aa04000101")))
-        decoded_frame = ldn.AdvertisementFrame(keys, 1)
+        decoded_frame = ldn.AdvertisementFrame(keys, HostTransport.LDN_PROTOCOL)
         decoded_frame.decode(encoded)
-        decoded = ldn.NetworkInfo(1)
+        decoded = ldn.NetworkInfo(HostTransport.LDN_PROTOCOL)
         decoded.address = FakeAccessPoint().address()
         decoded.parse_advertisement(decoded_frame)
 
@@ -54,6 +56,8 @@ class HostAdvertisementTest(unittest.TestCase):
         self.assertEqual(decoded.scene_id, 22287)
         self.assertEqual(decoded.max_participants, 6)
         self.assertEqual(decoded.num_participants, 1)
+        self.assertEqual(decoded.protocol, 3)
+        self.assertEqual(decoded.app_version, 88)
         self.assertEqual(decoded.security_mode, ldn.SECURITY_MODE_PROD)
         self.assertEqual(decoded.application_data, param.application_data)
         self.assertEqual(issues(decoded), [])

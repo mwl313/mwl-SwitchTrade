@@ -119,6 +119,16 @@ class PiaHeaderTest(unittest.TestCase):
         self.assertEqual(int.from_bytes(hdr[3:5], "big"), 0x58)
         self.assertEqual(hdr[0x15:0x17], b"\x01\x01")
 
+    def test_20260824_golden_room_is_byte_exact(self):
+        """Initial one-player CH11 advertisement captured from the real host."""
+        captured = bytes.fromhex(
+            "005c16005800000000000000000000000000000000010100000003014d696e000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003b373858615628756c644d40503449232323232368642323232323232323")
+        built = build_application_data(
+            0x9CA7, "DESTROY", 0x76DF,
+            partner_data=bytes.fromhex("0000000084150000"),
+            header=build_pia_header(player_name="Min"))
+        self.assertEqual(built, captured)
+
     def test_player_name_uses_documented_fixed_fields(self):
         hdr = build_pia_header(player_name="EMU")
         self.assertEqual(int.from_bytes(hdr[0x17:0x1B], "big"), 3)

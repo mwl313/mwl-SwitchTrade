@@ -9,6 +9,8 @@ import argparse
 
 COMM_ID = 0x01006FA0233F8000
 SCENE_ID = 22287
+LDN_PROTOCOL = 3
+APP_VERSION = 88
 
 
 def issues(network):
@@ -17,9 +19,10 @@ def issues(network):
     checks = (
         (getattr(network, "local_communication_id", None) == COMM_ID, "comm_id"),
         (getattr(network, "scene_id", None) == SCENE_ID, "scene_id"),
+        (getattr(network, "protocol", None) == LDN_PROTOCOL, "ldn_protocol"),
         (getattr(network, "version", None) == 4, "ldn_version"),
         (getattr(network, "security_mode", None) == 1, "security_mode"),
-        (getattr(network, "app_version", None) == 1, "app_version"),
+        (getattr(network, "app_version", None) == APP_VERSION, "app_version"),
         (getattr(network, "accept_policy", None) == 0, "accept_policy"),
         (getattr(network, "max_participants", None) == 6, "max_participants"),
         (len(app) == 122, "application_data_length"),
@@ -33,6 +36,7 @@ def describe(network):
     return (f"bssid={address} ch={getattr(network, 'channel', '?')} "
             f"comm=0x{getattr(network, 'local_communication_id', 0):016x} "
             f"scene={getattr(network, 'scene_id', '?')} "
+            f"protocol={getattr(network, 'protocol', '?')} "
             f"ldn=v{getattr(network, 'version', '?')}/security"
             f"{getattr(network, 'security_mode', '?')} "
             f"appver={getattr(network, 'app_version', '?')} "
