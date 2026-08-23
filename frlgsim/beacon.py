@@ -80,27 +80,35 @@ def encode_frlg_name(name, width=NAME_WIDTH):
 
 
 # --- Pia 6.16-6.41 LDN system header --------------------------------------------------------
-# Observed prefix of a real Switch advertisement's application_data (FRLG emulator host beacon).
-# [2:4] as u16 LE = 22 matches transport.py's "sysCommVer 21/22"; the other offsets are kept raw.
-# Everything beyond these fields was not in the captured dump - zero for now, refreshed whenever a
-# full hexdump lands. Pass `overrides={offset: bytes}` to patch any region of the header.
+# https://github.com/kinnay/NintendoClients/wiki/LDN-Application-Data-(Pia)
+# Pia 6.x fields are big-endian. This is a fixed 0x5C-byte structure, not a TLV:
+#   0x00 u16 property size, 0x02 u8 system communication version,
+#   0x03 u16 application communication version, 0x15/0x16 player-limit fields,
+#   0x17 u32 player-name byte length, 0x1B encoding, 0x1C..0x5B name bytes.
 _OBSERVED_HEADER_FIELDS = {
-    0: b"\x00",
-    1: b"\x5c",
-    2: b"\x16\x00",
-    4: b"\x58",
-    # STEP 10 fix (docs/17): byte-level diff vs a real Switch advertisement showed the
-    # console always sets these; our all-zero room was invisible to the Switch's scan.
-    21: b"\x01\x01",               # D1: unknown flag pair - Switch always sets 0x0101
+    0x00: struct.pack(">H", _PIA_HDR),
+    0x02: b"\x16",                  # system communication version 22 (Pia 6.39-6.41)
+    0x03: struct.pack(">H", 0x58),  # application communication version (captured FRLG value)
+    0x15: b"\x01",                  # player limit enabled
+    0x16: b"\x01",                  # current/advertised player count in captured FRLG room
 }
 
 
-def build_pia_header(overrides=None, size=_PIA_HDR):
-    """Build the Pia system header that precedes the base85 game payload. Starts from the observed
-    fields (see _OBSERVED_HEADER_FIELDS), applies `overrides` ({offset: bytes}) on top, zero-fills
-    the rest."""
+def build_pia_header(overrides=None, size=_PIA_HDR, *, player_name=None):
+    """Build the documented Pia 6.16-6.41 system-property header.
+
+    ``player_name`` is UTF-8, with its byte length at 0x17 and encoding marker 1 at 0x1B.
+    ``overrides`` remains available for captured game-specific variants and is applied last.
+    """
     out = bytearray(size)
-    for off, val in {**_OBSERVED_HEADER_FIELDS, **(overrides or {})}.items():
+    fields = dict(_OBSERVED_HEADER_FIELDS)
+    if player_name is not None:
+        name = str(player_name).encode("utf-8")[:64]
+        fields[0x17] = struct.pack(">I", len(name))
+        fields[0x1B] = b"\x01"       # UTF-8
+        fields[0x1C] = name
+    fields.update(overrides or {})
+    for off, val in fields.items():
         val = bytes(val)
         if not 0 <= off <= size - len(val):
             raise ValueError(f"header override at offset {off} (len {len(val)}) out of range "

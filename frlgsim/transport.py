@@ -64,12 +64,10 @@ PIA_PORT = 12345
 # ---------------------------------------------------------------------------
 
 _BEACON_INTERVAL_TU = 100          # same value ldn/hostapd use
-# Capability: ESS(0x0001) + short preamble(0x0020) + PRIVACY(0x0010).
-# The Switch's FRLG room list only surfaces WPA2 (CCMP) rooms: ldn's stock head used
-# 0x0511 (ESS+IBSS?|privacy) and its probe response adds 0x10 whenever wlan_key exists.
-# Our earlier open-room capability 0x0401 made the room invisible to the console scan
-# even with beacons on air - STEP 10 finding, docs/19.
-_BEACON_CAPABILITY = 0x0431        # ESS + short preamble + short slot + PRIVACY
+# Match ldn 0.0.17's encrypted probe response exactly. Ordinary beacons do not populate
+# Nintendo's room list (vendor action advertisements do), but they must still describe the
+# same protected BSS that the Switch will associate with after selecting the advertisement.
+_BEACON_CAPABILITY = 0x0511        # ESS + PRIVACY + stock ldn capability flags
 _SUPPORTED_RATES_IE = bytes([0x01, 0x08, 0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24])
 # RSN IE (WPA2-PSK/CCMP pair+group, same values as ldn's own RSNElement in probe resp):
 #   version=1, group=CCMP(00-0f-ac:4), 1 pairwise=CCMP, 1 akm=PSK(00-0f-ac:2), cap=0x000c
@@ -97,8 +95,8 @@ def _build_host_beacon_head(ssid: bytes, channel: int, bssid: bytes) -> bytes:
       [00 00]        seq_ctrl
       [00*8]         timestamp (kernel overwrites)
       [64 00]        beacon interval, 100 TU LE u16
-      [01 04]        capability LE u16 (ESS)
-      [00 len ssid]  SSID IE
+      [11 05]        capability LE u16 (stock encrypted LDN BSS)
+      [00 len 00..]  hidden SSID IE (zero contents, original length retained)
       [01 08 ...]    Supported Rates IE
       [03 01 ch]     DS Parameter Set IE
     """
@@ -126,10 +124,11 @@ def _build_host_beacon_head(ssid: bytes, channel: int, bssid: bytes) -> bytes:
         + struct.pack("<H", _BEACON_INTERVAL_TU)             # interval LE
         + struct.pack("<H", _BEACON_CAPABILITY)              # capability LE
     )
-    ssid_ie = bytes([0x00, len(ssid)]) + ssid                # WLAN_EID_SSID
+    # LDN rooms are hidden. The real SSID (32 ASCII hex characters) stays in
+    # NL80211_ATTR_SSID and probe responses; beacon contents are zeroed.
+    ssid_ie = bytes([0x00, len(ssid)]) + bytes(len(ssid))     # WLAN_EID_SSID
     ds_ie = bytes([0x03, 0x01, int(channel)])                # WLAN_EID_DS_PARAMS
-    # RSN IE goes into BEACON_HEAD (kernel appends tail after it): the Switch filters
-    # its room list on WPA2 rooms, so the beacon must advertise RSN + PRIVACY bit.
+    # RSN must agree with ldn's probe response and static CCMP association setup.
     return mac_header + fixed_fields + ssid_ie + _SUPPORTED_RATES_IE + ds_ie + _RSN_IE
 
 
@@ -179,10 +178,11 @@ def install_beacon_head_override(log=print) -> bool:
                 ssid = getattr(self, "_ssid", None)
                 channel = getattr(self, "_channel", None)
                 addr = self.address()
-                # ldn passes param.ssid.hex() (a STR of hex digits) into create_ap ->
-                # Station stores it as-is; accept both hex strings and raw bytes.
+                # ldn passes param.ssid.hex() into create_ap. That 32-character ASCII
+                # string IS the Wi-Fi SSID; decoding it with bytes.fromhex() produced a
+                # different 16-byte BSS that did not match the Action advertisement.
                 if isinstance(ssid, str):
-                    ssid = bytes.fromhex(ssid)
+                    ssid = ssid.encode("ascii")
                 if isinstance(ssid, (bytes, bytearray)) and isinstance(channel, int) \
                         and addr is not None:
                     head = _build_host_beacon_head(bytes(ssid), int(channel), bytes(addr))
@@ -198,127 +198,6 @@ def install_beacon_head_override(log=print) -> bool:
         return True
     except Exception as e:                           # noqa: BLE001
         log(f"[beacon-head] install failed: {e} - stock beacon head kept")
-        return False
-
-
-# ---------------------------------------------------------------------------
-# STEP B4 (docs/plan/18-b2-gap분석.md): the 4 remaining hostapd-vs-ldn START_AP
-# attr gaps on the HOST path. hostapd on the SAME rtl8xxxu card beacons fine;
-# ldn 0.0.17's AccessPoint._start_ap (wlan.py:1572) differs in exactly 4 attrs:
-#   GAP-1  NL80211_ATTR_BEACON_IES    missing (hostapd: Extended Capabilities IE)
-#   GAP-2  NL80211_ATTR_PROBERESP_IES missing (same IE)
-#   GAP-3  NL80211_ATTR_ASSOCRESP_IES missing (same IE)
-#   GAP-4  NL80211_ATTR_HIDDEN_SSID   = ZERO_CONTENTS(2) vs hostapd NOT_IN_USE(0)
-#          (hidden mode suppresses the SSID in beacons - passive scans can't match)
-# ---------------------------------------------------------------------------
-
-# hostapd-measured Extended Capabilities IE (docs/plan/18-b2-gap분석.md GAP-1..3):
-# [7f][08] 04 00 00 02 00 00 00 40 - 10 bytes, exactly what hostapd sends as
-# beacon_ies/proberesp_ies/assocresp_ies on this card.
-_EXT_CAPABILITIES_IE = bytes.fromhex("7f080400000200000040")
-
-_START_AP_ATTRS_INSTALLED = False
-
-
-class _StartApAttrsProxy:
-    """Transparent forwarding proxy around an AccessPoint's real `_wlan` handle (STEP B4,
-    same mechanism as C-4's _WlanProxy): every attribute - receive() included - resolves
-    through the original object; ONLY request() is intercepted, and only for
-    NL80211_CMD_START_AP, whose attrs get the hostapd-parity overrides written IN PLACE
-    so the original call carries them."""
-
-    def __init__(self, wlan, cmd_start_ap, overrides):
-        self._mwl_wlan = wlan
-        self._mwl_cmd_start_ap = cmd_start_ap
-        self._mwl_overrides = dict(overrides)
-
-    def __getattr__(self, name):
-        # Only reached for attributes the proxy itself does not define -> pure passthrough
-        # (the stock CM waits for the START_AP event on receive()).
-        return getattr(self._mwl_wlan, name)
-
-    async def request(self, cmd, *args, **kwargs):
-        if cmd == self._mwl_cmd_start_ap:
-            attrs = kwargs.get("attrs", args[0] if args else None)
-            if isinstance(attrs, Mapping):
-                attrs.update(self._mwl_overrides)       # in place: same dict object
-        return await self._mwl_wlan.request(cmd, *args, **kwargs)
-
-
-def install_start_ap_attrs_override(log=print) -> bool:
-    """Monkey-patch ldn.wlan.AccessPoint._start_ap so the HOST path's START_AP request
-    carries the 4 hostapd-parity attrs ldn omits (GAP-1..4 above).
-
-    Mechanism: _start_ap builds its attrs dict LOCALLY (wlan.py:1580) and hands it
-    straight to self._wlan.request(NL80211_CMD_START_AP, attrs) (wlan.py:1598), so an
-    args/kwargs wrapper can never see it. Instead - the C-4 _WlanProxy pattern - the
-    wrapper swaps the AccessPoint's _wlan handle for a transparent forwarding proxy for
-    the lifetime of the original CM; the proxy rewrites ONLY NL80211_CMD_START_AP
-    requests (attrs updated IN PLACE, by reference) and forwards everything else -
-    receive() included - untouched. The real handle is restored afterwards, also on
-    failure.
-
-    Idempotent (a second call is a no-op), guarded (missing ldn/constants -> stock
-    fallback with ONE warning), reports the outcome via `log`. Returns True when this
-    call has the override in effect."""
-    global _START_AP_ATTRS_INSTALLED
-    if _START_AP_ATTRS_INSTALLED:
-        return False
-    try:
-        from ldn import wlan as _wlan
-
-        # Resolve the SAME nl80211 object the Station's request() call sees (ldn.wlan's
-        # module global) so constants always match - real netlink on Linux, the test
-        # stubs' fake nl80211 offline (same resolution as install_target_bssid_patch).
-        nl80211 = getattr(_wlan, "nl80211", None)
-        if nl80211 is None:
-            raise ImportError("ldn.wlan has no nl80211 reference (library version drift?)")
-        ap_cls = getattr(_wlan, "AccessPoint", None)
-        if ap_cls is None or not hasattr(ap_cls, "_start_ap"):
-            log("[start-ap-attrs] ldn.wlan.AccessPoint._start_ap missing - "
-                "stock START_AP attrs kept")
-            return False
-        stock_start_ap = ap_cls._start_ap
-        if getattr(stock_start_ap, "_mwl_start_ap_attrs_patch", False):
-            _START_AP_ATTRS_INSTALLED = True         # already ours (re-import guard)
-            return True
-
-        # GAP-1..3: BEACON_IES/PROBERESP_IES/ASSOCRESP_IES are NOT in ldn 0.0.17's
-        # netlink binding (verified live: no NL80211_ATTR_BEACON_IES constant exists).
-        # Standard kernel values would collide with different attrs in this binding
-        # (22=WIPHY_BANDS, 23=MNTR_FLAGS, 24=MESH_ID), so we CANNOT inject them via
-        # the generic request path. Instead: embed the Extended Capabilities IE into
-        # BEACON_HEAD (as a trailing IE) — the kernel appends it to every beacon and
-        # probe response, which is functionally equivalent to hostapd's *_IES attrs.
-        #
-        # GAP-4: HIDDEN_SSID ZERO_CONTENTS(2) -> NOT_IN_USE(0) so the Switch's passive
-        # scan can match the SSID. This attr IS defined in the binding.
-        cmd_start_ap = nl80211.NL80211_CMD_START_AP
-        overrides = {
-            nl80211.NL80211_ATTR_HIDDEN_SSID: nl80211.NL80211_HIDDEN_SSID_NOT_IN_USE,
-        }
-
-        @functools.wraps(stock_start_ap)
-        @contextlib.asynccontextmanager
-        async def _start_ap_with_attrs(ap):
-            saved_wlan = ap._wlan
-            ap._wlan = _StartApAttrsProxy(saved_wlan, cmd_start_ap, overrides)
-            try:
-                async with stock_start_ap(ap):
-                    yield
-            finally:
-                ap._wlan = saved_wlan               # restore even on failure/exception
-
-        _start_ap_with_attrs._mwl_start_ap_attrs_patch = True
-        ap_cls._start_ap = _start_ap_with_attrs
-        _START_AP_ATTRS_INSTALLED = True
-        log("[start-ap-attrs] AccessPoint._start_ap patched "
-            "(BEACON_IES/PROBERESP_IES/ASSOCRESP_IES + HIDDEN_SSID=NOT_IN_USE, "
-            "docs/plan/18-b2 GAP-1..4)")
-        return True
-    except Exception as e:                           # noqa: BLE001
-        log(f"[start-ap-attrs] install failed ({type(e).__name__}: {e}) - "
-            f"stock START_AP attrs kept")
         return False
 
 
@@ -1482,7 +1361,7 @@ class HostTransport:
 
     Identity we advertise (docs/12 §3, all measured off a real Switch advertisement):
       * local_communication_id = 0x01006fa0233f8000 (FRLG emulator title, 실측값),
-      * scene_id = 22287, max_participants = 8, channel = 6,
+      * scene_id = 22287, max_participants = 6, channel = 6,
       * application_data = frlgsim.beacon.build_application_data(...): the RFU search beacon -
         [0x5C Pia system header][base85-encoded 24 B record] with a random-or-given trainer id
         and a random nonzero RFU session id (STEP 2 encoder),
@@ -1515,7 +1394,9 @@ class HostTransport:
     # class constant, which is the id the JOIN path matches scans against).
     LOCAL_COMMUNICATION_ID = 0x01006FA0233F8000
     SCENE_ID = 22287
-    MAX_PARTICIPANTS = 8
+    # Every captured FRLG room is 1/6. The old value 8 was the ldn library default,
+    # not a measurement, and made our vendor advertisement differ from the game host.
+    MAX_PARTICIPANTS = 6
     APPLICATION_VERSION = 1
 
     IFNAME_TAP = "ldn-tap"           # CreateNetworkParam.ifname_tap default (our data plane)
@@ -1671,17 +1552,10 @@ class HostTransport:
             # invisible to the Switch's scan; a dummy profile-derived value satisfies
             # whatever non-zero check the client does without pretending to be a console.
             partner_stub = b"\x00\x00\x00\x00" + struct.pack("<H", 0x1584) + b"\x00\x00"
-            # STEP 10 fix D2 (docs/17): the Switch embeds its owner nickname as a TLV at
-            # header offset 26: [0x03][0x01][nickname bytes...] - measured "Min" (3 chars).
-            # Without it the room is invisible to the console's scan filter.
-            nick = self.nickname.encode("ascii", errors="replace")[:16]
-            header_overrides = {
-                26: b"\x03\x01" + nick,     # field ID + flag + nickname
-            }
             self.app_data = beacon.build_application_data(
                 self.trainer_id, self.nickname, self.rfu_session_id,
                 partner_data=partner_stub,
-                header=beacon.build_pia_header(overrides=header_overrides))
+                header=beacon.build_pia_header(player_name=self.nickname))
             _dump_beacon(self.app_data, self.log)    # diagnostics parity: decode OUR ad
             param = ldn.CreateNetworkParam()
             param.keys = keys
@@ -1752,11 +1626,6 @@ class HostTransport:
             # ldn AP was invisible). Rebuild the head hostapd-style and hand it to the kernel.
             if install_beacon_head_override(self.log):
                 self.info("beacon head override installed (hostapd-style IEs)")
-            # STEP B4 (docs/plan/18-b2-gap분석.md): the 4 remaining hostapd-vs-ldn
-            # START_AP attr gaps (beacon/proberesp/assocresp IEs + hidden SSID mode).
-            if install_start_ap_attrs_override(self.log):
-                self.info("START_AP attrs override installed (beacon_ies/proberesp_ies/assocresp_ies + hidden_ssid)")
-
             self.info("Opening the FRLG room (create_network/AP)...")
             try:
                 async with ldn.create_network(param) as network:
@@ -1776,11 +1645,13 @@ class HostTransport:
                     self.host_mac = self.our_mac
                     self.broadcast = self.our_ip.rsplit(".", 1)[0] + ".255"
                     self.iface = self._require_tap()
-                    self.log(f"[live] hosting ssid={self.ssid.hex()} "
+                    self.log(f"[live] hosting hidden_ssid={self.ssid.hex()} "
                              f"us={self.our_ip}/{self.our_mac.hex()} "
                              f"broadcast={self.broadcast} comm_id="
                              f"0x{self.LOCAL_COMMUNICATION_ID:016x} scene={self.SCENE_ID} "
-                             f"ch={self.channel}")
+                             f"ch={self.channel} ldn=v{info.version}/security{info.security_mode} "
+                             f"participants={info.num_participants}/{info.max_participants} "
+                             "discovery=vendor-action/100ms")
                     self.info("Room is open - waiting for the Switch to scan and join...")
                     self._ready.set()
                     while not self._stop.is_set():
