@@ -1786,7 +1786,7 @@ class HostTransport:
     def stop(self):
         """Tear down: signal the trio loop (the create_network context exit sends
         DISCONNECT_NETWORK_DESTROYED to peers [APNetwork._destroy_network]), close the
-        sockets, then sweep any leftover vifs off the radio."""
+        sockets, then sweep any leftover vifs off the exclusively-owned radio."""
         self._stop.set()
         for s in (self._tx, self._rx):
             try:
@@ -1795,8 +1795,16 @@ class HostTransport:
             except OSError:
                 pass
         if self._thread is not None:
-            self._thread.join(timeout=5)     # give the library's AP/tap teardown a moment
-        light_cleanup(self.log)
+            self._thread.join(timeout=self.THREAD_JOIN_GRACE)
+            if self._thread.is_alive():
+                raise RuntimeError(
+                    "host radio thread still alive - refusing concurrent vif cleanup "
+                    f"after {self.THREAD_JOIN_GRACE}s")
+            self._thread = None
+        # udev may rename the AP from `ldn` to wlx<MAC>; a name-only cleanup leaks it.
+        # HostTransport took exclusive ownership of this phy in start(), so a phy sweep is safe
+        # once its radio thread has fully exited.
+        free_radio({self.phyname}, self.log)
 
 
 class HostRemoteTransport(RelayChannel, HostTransport):
