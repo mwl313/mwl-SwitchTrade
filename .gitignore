@@ -1,5 +1,6 @@
 
 # emu는 별도 git 리포 (tornadus 포크) — 여기서 제외
 /emu/
+/_related/
 __pycache__/
 /logs/
