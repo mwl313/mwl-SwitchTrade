@@ -64,9 +64,25 @@ PIA_PORT = 12345
 # ---------------------------------------------------------------------------
 
 _BEACON_INTERVAL_TU = 100          # same value ldn/hostapd use
-_BEACON_CAPABILITY = 0x0401        # ESS + short preamble (hostapd measured 0x0411 w/ privacy;
-                                   # we advertise an open room like ldn intends)
+# Capability: ESS(0x0001) + short preamble(0x0020) + PRIVACY(0x0010).
+# The Switch's FRLG room list only surfaces WPA2 (CCMP) rooms: ldn's stock head used
+# 0x0511 (ESS+IBSS?|privacy) and its probe response adds 0x10 whenever wlan_key exists.
+# Our earlier open-room capability 0x0401 made the room invisible to the console scan
+# even with beacons on air - STEP 10 finding, docs/19.
+_BEACON_CAPABILITY = 0x0431        # ESS + short preamble + short slot + PRIVACY
 _SUPPORTED_RATES_IE = bytes([0x01, 0x08, 0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24])
+# RSN IE (WPA2-PSK/CCMP pair+group, same values as ldn's own RSNElement in probe resp):
+#   version=1, group=CCMP(00-0f-ac:4), 1 pairwise=CCMP, 1 akm=PSK(00-0f-ac:2), cap=0x000c
+_RSN_IE_BODY = (
+    struct.pack("<H", 1)                          # version
+    + bytes([0x00, 0x0f, 0xac, 0x04])             # group cipher CCMP-128
+    + struct.pack("<H", 1)                        # pairwise count
+    + bytes([0x00, 0x0f, 0xac, 0x04])             # pairwise CCMP-128
+    + struct.pack("<H", 1)                        # akm count
+    + bytes([0x00, 0x0f, 0xac, 0x02])             # AKM PSK
+    + struct.pack("<H", 0x000c)                   # RSN capabilities (12, matches ldn)
+)
+_RSN_IE = bytes([48, len(_RSN_IE_BODY)]) + _RSN_IE_BODY   # element id 48 = WLAN_EID_RSN
 
 
 def _build_host_beacon_head(ssid: bytes, channel: int, bssid: bytes) -> bytes:
@@ -112,7 +128,9 @@ def _build_host_beacon_head(ssid: bytes, channel: int, bssid: bytes) -> bytes:
     )
     ssid_ie = bytes([0x00, len(ssid)]) + ssid                # WLAN_EID_SSID
     ds_ie = bytes([0x03, 0x01, int(channel)])                # WLAN_EID_DS_PARAMS
-    return mac_header + fixed_fields + ssid_ie + _SUPPORTED_RATES_IE + ds_ie
+    # RSN IE goes into BEACON_HEAD (kernel appends tail after it): the Switch filters
+    # its room list on WPA2 rooms, so the beacon must advertise RSN + PRIVACY bit.
+    return mac_header + fixed_fields + ssid_ie + _SUPPORTED_RATES_IE + ds_ie + _RSN_IE
 
 
 _BEACON_HEAD_INSTALLED = False
