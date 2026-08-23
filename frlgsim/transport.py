@@ -682,9 +682,12 @@ class LiveTransport:
     (scan/connect + UDP TX socket + AF_PACKET RX). Untested offline."""
 
     # FRLG LDN identity (the same the bridge/console use).
-    LOCAL_COMMUNICATION_ID = 0x0100610011000000     # FireRed/LeafGreen emulator title id
-    SCENE_ID = 0
-    APPLICATION_VERSION = 1
+    # Measured from the 2026-08-24 two-Switch golden capture.  The previous
+    # values belonged to an unverified placeholder and made our authentication
+    # identity differ from the real FRLG client.
+    LOCAL_COMMUNICATION_ID = 0x01006FA0233F8000
+    SCENE_ID = 22287
+    APPLICATION_VERSION = 88
 
     # WP-D (H-1): 다음 attempt 시작 전 이전 ldn 스레드를 회수하기 위한 유예 시간(초). grace
     # 내에도 is_alive()면 라디오 상태를 알 수 없으므로 남은 재시도를 포기한다 (아래 start()).
@@ -1397,7 +1400,8 @@ class HostTransport:
     # Every captured FRLG room is 1/6. The old value 8 was the ldn library default,
     # not a measurement, and made our vendor advertisement differ from the game host.
     MAX_PARTICIPANTS = 6
-    APPLICATION_VERSION = 1
+    APPLICATION_VERSION = 88
+    LDN_PROTOCOL = 3
 
     IFNAME_TAP = "ldn-tap"           # CreateNetworkParam.ifname_tap default (our data plane)
     PEER_POLL_INTERVAL = 0.5         # seconds between participant-list polls (trio task)
@@ -1568,6 +1572,10 @@ class HostTransport:
             param.channel = self.channel             # ch6 (is_valid_channel-checked upstream)
             param.name = self.nickname.encode()
             param.app_version = self.APPLICATION_VERSION
+            # ldn 0.0.17 defaults to protocol 1/AES-CTR.  FRLG uses protocol
+            # 3/AES-GCM; leaving the default in place produces an advertisement
+            # and authentication exchange that the real client cannot accept.
+            param.protocol = self.LDN_PROTOCOL
             param.phyname = self.phyname             # both vifs live on the SAME radio
             param.phyname_monitor = self.phyname
             param.ifname = self.ifname               # AP vif (like the bridge: ldn)
