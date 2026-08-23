@@ -87,7 +87,7 @@ class HostapdApEngine:
         self.hostapd_bin = hostapd_bin
         self._log = log
 
-        self._proc: asyncio.subprocess.Process | None = None
+        self._proc: subprocess.Popen | None = None
         self._conf_path: str | None = None
         self._ctrl_sock_path = os.path.join(ctrl_dir, iface)
         self._attached_sock: socket.socket | None = None
@@ -122,24 +122,58 @@ class HostapdApEngine:
         self._log(f"[ap-engine] starting {self.hostapd_bin} "
                   f"(iface={self.iface} ch={self.channel} "
                   f"wpa={'on' if self.wpa_passphrase else 'off'})")
-        self._proc = await asyncio.create_subprocess_exec(
-            self.hostapd_bin, "-dd", self._conf_path,
-            stdout=asyncio.subprocess.PIPE, stderr=subprocess.STDOUT)
+        # SYNC subprocess (not asyncio.create_subprocess_exec): this engine runs inside
+        # trio.run() (HostTransport._run_ldn) where there is NO running asyncio loop -
+        # the async variant raised "no running event loop" live on VM1. A blocking Popen +
+        # blocking readline are fine here: the caller is a dedicated worker thread.
+        self._proc = subprocess.Popen(
+            [self.hostapd_bin, "-dd", self._conf_path],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
         await self._wait_enabled(timeout_s)
         self._attach_ctrl_socket()
         self._log("[ap-engine] hostapd AP-ENABLED - waiting for a station")
 
     async def wait_station(self, timeout_s: float = 120.0) -> str:
+        """Wait for AP-STA-CONNECTED via a plain OS thread pumping the ctrl socket.
+        The pump thread bridges the blocking socket into an asyncio-free queue; we then
+        poll it with trio-friendly sleeps (no asyncio loop needed inside trio.run())."""
         if not self.is_running:
             raise RuntimeError("engine not running")
-        loop = asyncio.get_running_loop()
-        reader_task = loop.create_task(self._pump_events())
-        try:
-            return await asyncio.wait_for(self._sta_connected.get(),
-                                          timeout=timeout_s)
-        finally:
-            reader_task.cancel()
+        assert self._attached_sock is not None
+
+        import threading
+        import queue as _queue
+        q: "_queue.Queue[str]" = _queue.Queue()
+        deadline = time.monotonic() + timeout_s
+
+        def _pump():
+            sock = self._attached_sock
+            while sock is not None:
+                try:
+                    data = sock.recv(4096)             # non-blocking socket
+                except (BlockingIOError, InterruptedError):
+                    time.sleep(0.1)
+                    continue
+                except OSError:
+                    break
+                for line in data.decode(errors="replace").splitlines():
+                    if line.startswith("<1>AP-STA-CONNECTED ") or \
+                            line.startswith("AP-STA-CONNECTED "):
+                        mac = line.split()[-1]
+                        q.put(mac)
+                        return
+
+        t = threading.Thread(target=_pump, daemon=True)
+        t.start()
+        while True:
+            try:
+                return q.get_nowait()
+            except _queue.Empty:
+                pass
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"no station joined within {timeout_s}s")
+            await __import__("trio").sleep(0.2)        # trio checkpoint, keeps C-c alive
 
     async def stop(self) -> None:
         if self._attached_sock is not None:
@@ -148,13 +182,16 @@ class HostapdApEngine:
             except OSError:
                 pass
             self._attached_sock = None
-        if self._proc is not None and self._proc.returncode is None:
+        if self._proc is not None and self._proc.poll() is None:
             self._proc.send_signal(signal.SIGTERM)
             try:
-                await asyncio.wait_for(self._proc.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
+                # Popen.wait() is blocking; the 5s cap bounds the worst case. Called from
+                # the trio worker thread, so a short block is acceptable (same rationale
+                # as start()'s synchronous Popen).
+                self._proc.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
                 self._proc.kill()
-                await self._proc.wait()
+                self._proc.wait()
         self._proc = None
         if self._conf_path and os.path.exists(self._conf_path):
             try:
@@ -173,11 +210,15 @@ class HostapdApEngine:
 
     # -- internals ------------------------------------------------------------
     async def _wait_enabled(self, timeout_s: float) -> None:
-        """Read hostapd stdout until 'AP-ENABLED' or fail on error markers."""
+        """Read hostapd stdout until 'AP-ENABLED' or fail on error markers.
+
+        Blocking readline with a manual deadline (not asyncio.wait_for): we run inside
+        trio.run() where no asyncio loop exists. hostapd prints continuously at -dd, so
+        readline() returns promptly; the deadline guards a wedged pipe."""
         assert self._proc is not None and self._proc.stdout is not None
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
-            line = await asyncio.wait_for(self._proc.stdout.readline(), timeout=5.0)
+            line = self._proc.stdout.readline()
             if not line:                                   # EOF = process died
                 raise RuntimeError("hostapd exited before AP-ENABLED")
             text = line.decode(errors="replace")
@@ -186,6 +227,9 @@ class HostapdApEngine:
             if any(m in text for m in ("Could not configure", "driver initialization failed",
                                        "Failed to setup interface")):
                 raise RuntimeError(f"hostapd failed: {text.strip()}")
+            # drain fast so the pipe never fills while we wait for the marker
+            if "Try to enable AP" in text or "flus" in text.lower():
+                continue
         raise TimeoutError(f"no AP-ENABLED within {timeout_s}s")
 
     def _attach_ctrl_socket(self) -> None:
