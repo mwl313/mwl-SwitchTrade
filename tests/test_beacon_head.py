@@ -7,6 +7,7 @@ Run:  .venv/bin/python tests/test_beacon_head.py
 """
 
 import os
+import struct
 import sys
 import types
 import unittest
@@ -84,12 +85,23 @@ class BeaconHeadBuilderTest(unittest.TestCase):
         self.assertEqual(self.head[16:22], self.BSSID)         # BSSID
 
     def test_fixed_fields_interval_capability(self):
-        # offset 24: timestamp(8) then interval LE=100 (0x0064), capability=0x0401
+        # offset 24: timestamp(8) then interval LE=100 (0x0064), capability=0x0431
+        # STEP 10: PRIVACY bit must be set - the Switch's room list filters on WPA2 rooms.
         self.assertEqual(self.head[24:32], b"\x00" * 8)
         interval = int.from_bytes(self.head[32:34], "little")
         cap = int.from_bytes(self.head[34:36], "little")
         self.assertEqual(interval, 100)
-        self.assertEqual(cap, 0x0401)
+        self.assertEqual(cap, 0x0431)
+        self.assertTrue(cap & 0x0010)
+
+    def test_rsn_ie_present(self):
+        # STEP 10: RSN IE (id 48, WPA2-PSK/CCMP) appended after the DS params IE.
+        rsn_pos = self.head.find(bytes([48, 20]))
+        self.assertGreater(rsn_pos, 0)
+        body = self.head[rsn_pos + 2:rsn_pos + 22]
+        self.assertEqual(body[:2], struct.pack("<H", 1))          # version
+        self.assertEqual(body[2:6], bytes([0x00, 0x0f, 0xac, 0x04]))   # group CCMP
+        self.assertEqual(body[-2:], struct.pack("<H", 0x000c))    # capabilities
 
     def test_ssid_ie_present_with_mwltest_bytes(self):
         ie = bytes([0x00, len(self.SSID)]) + self.SSID
