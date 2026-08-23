@@ -24,7 +24,8 @@ sys.path.insert(0, EMU_ROOT)
 from frlgsim import beacon as bmod                                    # noqa: E402
 from frlgsim.beacon import (build_application_data, build_pia_header,  # noqa: E402
                             build_rfu_record, encode_frlg_name)
-from frlgsim.transport import _PIA_HDR, _b85_decode, _dump_beacon, _frlg_name  # noqa: E402
+from frlgsim.transport import (HostTransport, _PIA_HDR, _b85_decode,  # noqa: E402
+                               _dump_beacon, _frlg_name)
 
 
 class BeaconRoundtripTest(unittest.TestCase):
@@ -112,7 +113,18 @@ class PiaHeaderTest(unittest.TestCase):
 
     def test_observed_default_prefix(self):
         self.assertTrue(build_pia_header().startswith(bytes.fromhex("005c160058")))
-        self.assertEqual(int.from_bytes(build_pia_header()[2:4], "little"), 22)  # sysCommVer
+        hdr = build_pia_header()
+        self.assertEqual(int.from_bytes(hdr[0:2], "big"), 0x5C)
+        self.assertEqual(hdr[2], 22)                       # system communication version
+        self.assertEqual(int.from_bytes(hdr[3:5], "big"), 0x58)
+        self.assertEqual(hdr[0x15:0x17], b"\x01\x01")
+
+    def test_player_name_uses_documented_fixed_fields(self):
+        hdr = build_pia_header(player_name="EMU")
+        self.assertEqual(int.from_bytes(hdr[0x17:0x1B], "big"), 3)
+        self.assertEqual(hdr[0x1B], 1)                    # UTF-8
+        self.assertEqual(hdr[0x1C:0x1F], b"EMU")
+        self.assertEqual(hdr[0x1F:], b"\x00" * (0x5C - 0x1F))
 
     def test_overrides(self):
         hdr = build_pia_header({0x50: b"\xab\xcd"})
@@ -142,6 +154,11 @@ class RecordFieldsTest(unittest.TestCase):
             build_rfu_record(1, "X", 0x10000)
         with self.assertRaises(ValueError):
             build_rfu_record(1, "X", 1, trade_species=0x10000)
+
+
+class HostIdentityTest(unittest.TestCase):
+    def test_advertised_capacity_matches_captured_frlg_rooms(self):
+        self.assertEqual(HostTransport.MAX_PARTICIPANTS, 6)
 
 
 if __name__ == "__main__":

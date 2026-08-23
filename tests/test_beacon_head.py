@@ -85,13 +85,12 @@ class BeaconHeadBuilderTest(unittest.TestCase):
         self.assertEqual(self.head[16:22], self.BSSID)         # BSSID
 
     def test_fixed_fields_interval_capability(self):
-        # offset 24: timestamp(8) then interval LE=100 (0x0064), capability=0x0431
-        # STEP 10: PRIVACY bit must be set - the Switch's room list filters on WPA2 rooms.
+        # offset 24: timestamp(8), interval LE=100, then stock encrypted LDN capability.
         self.assertEqual(self.head[24:32], b"\x00" * 8)
         interval = int.from_bytes(self.head[32:34], "little")
         cap = int.from_bytes(self.head[34:36], "little")
         self.assertEqual(interval, 100)
-        self.assertEqual(cap, 0x0431)
+        self.assertEqual(cap, 0x0511)
         self.assertTrue(cap & 0x0010)
 
     def test_rsn_ie_present(self):
@@ -103,11 +102,10 @@ class BeaconHeadBuilderTest(unittest.TestCase):
         self.assertEqual(body[2:6], bytes([0x00, 0x0f, 0xac, 0x04]))   # group CCMP
         self.assertEqual(body[-2:], struct.pack("<H", 0x000c))    # capabilities
 
-    def test_ssid_ie_present_with_mwltest_bytes(self):
-        ie = bytes([0x00, len(self.SSID)]) + self.SSID
+    def test_hidden_ssid_ie_preserves_length_and_zeros_contents(self):
+        ie = bytes([0x00, len(self.SSID)]) + bytes(len(self.SSID))
         self.assertIn(ie, self.head)
-        # the known MWLTEST hex must appear byte-for-byte
-        self.assertIn(bytes.fromhex("4d574c54455354"), self.head)
+        self.assertNotIn(self.SSID, self.head)
 
     def test_supported_rates_ie_present(self):
         rates_ie = bytes([0x01, 0x08, 0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24])
@@ -160,9 +158,23 @@ class InstallOverrideTest(unittest.TestCase):
         st._addr = W._FakeAddr(bytes.fromhex("a047d7b02b39"))
         st.address = lambda: st._addr
         head = st._create_beacon_head()                        # patched path
-        self.assertIn(bytes([0x00, 7]) + b"MWLTEST", head)     # our SSID IE
+        self.assertIn(bytes([0x00, 7]) + b"\x00" * 7, head)    # hidden SSID IE
         self.assertIn(bytes([0x03, 0x01, 6]), head)            # DS params from self._channel
         self.assertTrue(any("overridden" in m for m in logs))
+
+    def test_ldn_hex_string_stays_32_ascii_bytes_before_hiding(self):
+        _make_ldn_stub()
+        install_beacon_head_override()
+        import ldn.wlan as W
+        from ldn.wlan import AccessPoint
+        st = AccessPoint.__new__(AccessPoint)
+        st._ssid = "00112233445566778899aabbccddeeff"
+        st._channel = 6
+        st._addr = W._FakeAddr(bytes.fromhex("a047d7b02b39"))
+        st.address = lambda: st._addr
+        head = st._create_beacon_head()
+        self.assertIn(b"\x00\x20" + b"\x00" * 32, head)
+        self.assertNotIn(bytes.fromhex(st._ssid), head)
 
     def test_second_call_is_noop(self):
         _make_ldn_stub()
