@@ -112,3 +112,29 @@ beacons on the current rtl8xxxu setup.
 - `test_detect_phy.py` was not run on Windows because it intentionally constructs Linux sysfs
   symlinks containing `:`; it is unrelated to the host advertisement changes and must be run on
   Linux/VM before deployment.
+
+## Live verification on VM1/VM2 (2026-08-23, Aria)
+
+Deployed the `gptsolreview` branch to both VMs and ran the decisive test:
+
+- VM1: `HostTransport` room open with the corrected code
+  (SSID fix + MAX_PARTICIPANTS=6), channel 6, beacon-head override active.
+- VM2: physically separate 8188EU receiver, `advert_check` against phy15.
+
+Result: **PASS ×6 consecutive runs** (3 free-scan + 3 fixed-channel),
+every run decoded the exact FRLG Vendor Action advertisement:
+
+```text
+bssid=A0:47:D7:B0:2B:39 ch=6 comm=0x01006fa0233f8000 scene=22287 \
+ldn=v4/security1 appver=1 participants=1/6 appdata=122B OK
+PASS: external radio decoded the exact FRLG Vendor Action advertisement
+```
+
+One early free-scan run reported `ch=1`: the receiver card caught the
+advertisement while still hopping; with channel 6 pinned every run reports
+`ch=6`. This is a receiver-state artifact, not host behavior.
+
+G0/G1 gates from this audit are therefore PASSED on real hardware:
+periodic beacons (earlier measurement, 102/12s) AND external decoding of the
+encrypted LDN Vendor Action advertisement. The next step per §7 is putting a
+real Switch on the FRLG search screen while the room is up.
