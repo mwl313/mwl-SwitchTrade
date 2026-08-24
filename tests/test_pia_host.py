@@ -22,7 +22,7 @@ from frlgsim.pia_connect import (
     parse_session_join,
 )
 from frlgsim import gbaframe, linkplayer, mon, ni, reliable, rfu, trade
-from frlgsim.sim import Sim, TS_SEED
+from frlgsim.sim import PARENT_SEAT_IDLE_FRAMES, Sim, TS_SEED
 
 
 HOST_MAC = bytes.fromhex("a047d7b02b39")
@@ -148,14 +148,27 @@ class PiaHostTest(unittest.TestCase):
 
         engine.sender = None
         engine.established = True
+        engine.tick = lambda: rfu.exit_standby_words(0)
+        self.assertEqual(drive_row_zero(), rfu.idle_slot())
         standby0 = rfu.serialize(rfu.exit_standby_words(0))
         sim._on_gba_in(gbaframe.wrap_t(rfu.uni_slot(standby0), 0x31353))
+        self.assertEqual(drive_row_zero(), standby0)
+        self.assertEqual(drive_row_zero(), standby0)
+        self.assertEqual(drive_row_zero(), rfu.idle_slot())
+        self.assertEqual(drive_row_zero(), rfu.idle_slot())
         self.assertEqual(drive_row_zero(), rfu.serialize([rfu.SEND_BLOCK_REQ, 2]))
         self.assertEqual(engine.requests, [0, 2])
         self.assertEqual((engine.sender.owner, engine.sender.trust_pia), (0, True))
 
+        engine.sender = None
         standby1 = rfu.serialize(rfu.exit_standby_words(1))
         sim._on_gba_in(gbaframe.wrap_t(rfu.uni_slot(standby1), 0x31354))
+        self.assertEqual(drive_row_zero(), standby1)
+        self.assertEqual(drive_row_zero(), standby1)
+        for _ in range(PARENT_SEAT_IDLE_FRAMES):
+            self.assertEqual(drive_row_zero(), rfu.idle_slot())
+        self.assertFalse(sim._parent_seat_ready)
+        drive_row_zero()
         self.assertTrue(sim._parent_seat_ready)
 
     def test_parent_uni_drives_real_trade_engine_to_card_gate(self):
@@ -193,7 +206,8 @@ class PiaHostTest(unittest.TestCase):
             drive()
         sim._on_gba_in(gbaframe.wrap_t(
             rfu.uni_slot(slots.build(rfu.exit_standby_words(0))), 0x4001))
-        drive()
+        for _ in range(5):
+            drive()
         self.assertTrue(sim._parent_card_request_sent)
         self.assertEqual((engine.sender.owner, engine.sender.trust_pia), (0, True))
 
