@@ -93,6 +93,12 @@ DUP_NACK_THRESHOLD = 3
 RTO_CEIL_MS = 670
 RTO_BACKOFF = 1.0
 RTO_BOOTSTRAP_MS = 200    # RTO while sampleless so the connect J/C retransmit until the host engages (NOT a floor)
+# PC-parent traffic rides raw monitor injection instead of a console's hardware-retried Wi-Fi TX.  The
+# live Switch closes room entry about 3.56s after WG=1; a 670ms guest-path recovery tail serialized four
+# consecutive parent holes and consumed 3.17s on LinkPlayer alone.  Keep the proven guest knobs unchanged,
+# but recover a parent hole within four VBlanks and resend its whole bounded six-frame window.
+PARENT_RTO_CEIL_MS = 67
+PARENT_RTX_LIMIT = MAX_INFLIGHT
 # K-ack pacing: the K-ack is the emulator's ack of a received host poll. _drive_reliable emits up to
 # K_PER_VBLANK new K-acks per VBlank (the free-run cadence), leaving window room for the 'T'. K_BACKLOG_MAX
 # bounds the pending-K list as a memory safety net (K is a monotonic ts ack; the host re-sends un-acked T,
@@ -243,9 +249,12 @@ class Sim:
         # RTT-driven RTO and selective-repeat recovery. GAP-TARGETED retransmit (RTX_GAP_LIMIT, in
         # _drive_reliable) re-sends only the gap - the peer buffers out-of-order, so the gap alone drains
         # its run. Live only (conn!=None); offline replay/tests keep the bare path.
+        parent_link = parent_session_id is not None
         self.rel = reliable.ReliableLink(start=RELIABLE_SEQ_START, max_inflight=MAX_INFLIGHT,
-                                         rtt_jitter_k=RTT_JITTER_K, dup_nack_threshold=DUP_NACK_THRESHOLD,
-                                         rto_ceil_ms=RTO_CEIL_MS, rto_backoff=RTO_BACKOFF,
+                                         rtt_jitter_k=0.0 if parent_link else RTT_JITTER_K,
+                                         dup_nack_threshold=1 if parent_link else DUP_NACK_THRESHOLD,
+                                         rto_ceil_ms=PARENT_RTO_CEIL_MS if parent_link else RTO_CEIL_MS,
+                                         rto_backoff=RTO_BACKOFF,
                                          rto_bootstrap_ms=RTO_BOOTSTRAP_MS)
         self._rel_opened = False
         self._ack_owed = False           # received host reliable DATA we haven't bulk-acked yet
@@ -466,6 +475,9 @@ class Sim:
                 elif connect_id != self._parent_connect_id:
                     self.log(f"[sim] ignoring changed guest connect id {connect_id.hex()} "
                              f"(session is pinned to {self._parent_connect_id.hex()})")
+            elif typ == gbaframe.TYPE_D and not self.host_disconnected:
+                self.host_disconnected = True
+                self.log("[sim] guest emulator DISCONNECT ('D' 0x44) - RFU link closing")
             elif typ == "T":
                 child_llsf = rec.get("llsf")
                 if child_llsf is None:
@@ -793,7 +805,7 @@ class Sim:
     def _drive_parent_reliable(self):
         """Drive the capture-locked parent WA, NI exchange, and room-entry UNI bootstrap."""
         now_ms = self._now_ms
-        batch = list(self.rel.due_retransmits(now_ms, limit=RTX_GAP_LIMIT_NI))
+        batch = list(self.rel.due_retransmits(now_ms, limit=PARENT_RTX_LIMIT))
 
         def queue(inner, flags=reliable.FLAGSA_GBA):
             if self.rel.inflight() >= self.rel.max_inflight:
