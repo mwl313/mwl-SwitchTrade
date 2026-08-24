@@ -21,7 +21,7 @@ from frlgsim.pia_connect import (
     parse_net,
     parse_session_join,
 )
-from frlgsim import gbaframe, ni, reliable, rfu
+from frlgsim import gbaframe, linkplayer, mon, ni, reliable, rfu, trade
 from frlgsim.sim import Sim, TS_SEED
 
 
@@ -83,6 +83,119 @@ class PiaHostTest(unittest.TestCase):
         self.assertEqual(
             tuple(gbaframe.wrap_parent_t(slot, ts).hex()
                   for slot, ts in zip(slots, timestamps)), expected)
+
+        uni = rfu.parent_uni_slot((rfu.idle_slot(), rfu.idle_slot()))
+        self.assertEqual((len(uni), uni[:3].hex()), (73, "460005"))
+        parsed = gbaframe.parse_in(gbaframe.wrap_parent_t(uni, 0x4B7B))
+        self.assertEqual(parsed["llsf_state"], rfu.LCOM_UNI)
+        self.assertEqual(parsed["slots"], [(i, rfu.idle_slot()) for i in range(5)])
+
+    def test_parent_uni_opens_with_native_player_and_link_bootstrap(self):
+        class Engine:
+            def __init__(self):
+                self.sender = None
+                self.requests = []
+                self.frames = []
+                self.established = False
+                self.in_seat_phase = True
+
+            def _on_req(self, reqtype):
+                self.requests.append(reqtype)
+                self.sender = SimpleNamespace(owner=1, trust_pia=False)
+
+            def feed_in_frame(self, frame):
+                self.frames.append(frame)
+
+            def tick(self):
+                return [0] * 7
+
+        engine = Engine()
+        sim = Sim(SimpleNamespace(), PiaCrypto(bytes(range(16))), engine,
+                  "169.254.25.1", "169.254.25.2",
+                  parent_session_id=bytes.fromhex("fcc3"))
+        sim._parent_accept_acked = True
+        sim._parent_poll_sent = True
+        sim._parent_child_ni_complete = True
+        sim._parent_group_zero_sent = True
+        sim._parent_status_index = len(sim._parent_status_slots)
+        sim._parent_group_one_sent = True
+        sim._parent_ni_complete = True
+        batches = []
+        sim._tx_reliable_batch = lambda batch: batches.append(list(batch))
+
+        def drive_row_zero():
+            batches.clear()
+            sim._drive_parent_reliable()
+            frames = [entry[2] for entry in batches[-1]
+                      if entry[1] != reliable.FLAGSA_CTRL]
+            sim.rel.on_ack(sim.rel.out_seq)
+            return gbaframe.parse_in(frames[-1])["slots"][0][1]
+
+        self.assertEqual(drive_row_zero(), rfu.idle_slot())
+        self.assertEqual(drive_row_zero(), rfu.idle_slot())
+        self.assertEqual(drive_row_zero(), rfu.serialize([rfu.SEND_PLAYER_IDS, 2, 1]))
+        self.assertEqual(drive_row_zero(), rfu.idle_slot())
+        self.assertEqual(drive_row_zero(), rfu.idle_slot())
+        self.assertEqual(drive_row_zero(), rfu.serialize([rfu.SEND_BLOCK_REQ, 0]))
+        self.assertEqual(engine.requests, [0])
+        self.assertEqual((engine.sender.owner, engine.sender.trust_pia), (0, True))
+
+        tagged = bytearray(rfu.serialize(rfu.send_block_words(0, b"GameFreak in")))
+        tagged[0] |= 0xA0
+        sim._on_gba_in(gbaframe.wrap_t(rfu.uni_slot(tagged), 0x31352))
+        self.assertEqual(engine.frames[-1]["positional"][0],
+                         (0, rfu.serialize(rfu.send_block_words(0, b"GameFreak in"))))
+
+        engine.sender = None
+        engine.established = True
+        standby0 = rfu.serialize(rfu.exit_standby_words(0))
+        sim._on_gba_in(gbaframe.wrap_t(rfu.uni_slot(standby0), 0x31353))
+        self.assertEqual(drive_row_zero(), rfu.serialize([rfu.SEND_BLOCK_REQ, 2]))
+        self.assertEqual(engine.requests, [0, 2])
+        self.assertEqual((engine.sender.owner, engine.sender.trust_pia), (0, True))
+
+        standby1 = rfu.serialize(rfu.exit_standby_words(1))
+        sim._on_gba_in(gbaframe.wrap_t(rfu.uni_slot(standby1), 0x31354))
+        self.assertTrue(sim._parent_seat_ready)
+
+    def test_parent_uni_drives_real_trade_engine_to_card_gate(self):
+        engine = trade.TradeEngine(
+            [mon.Mon.empty(), mon.Mon.empty()], trade_slot=1,
+            link_player=linkplayer.LinkPlayer(name="CODEX"), log=lambda *args: None)
+        sim = Sim(SimpleNamespace(), PiaCrypto(bytes(range(16))), engine,
+                  "169.254.25.1", "169.254.25.2",
+                  parent_session_id=bytes.fromhex("fcc3"))
+        sim._parent_accept_acked = sim._parent_poll_sent = True
+        sim._parent_child_ni_complete = sim._parent_group_zero_sent = True
+        sim._parent_status_index = len(sim._parent_status_slots)
+        sim._parent_group_one_sent = sim._parent_ni_complete = True
+        sim._tx_reliable_batch = lambda batch: None
+
+        def drive():
+            sim._drive_parent_reliable()
+            sim.rel.on_ack(sim.rel.out_seq)
+
+        for _ in range(6):
+            drive()
+        self.assertEqual((engine.sender.owner, engine.sender.trust_pia), (0, True))
+
+        child = linkplayer.build_block(linkplayer.LinkPlayer(name="MWL")).ljust(200, b"\0")
+        slots = rfu.SlotBuilder()
+        commands = [rfu.init_words(17, owner=1)] + [
+            rfu.send_block_words(i, child[i * 12:(i + 1) * 12]) for i in range(17)]
+        for words in commands:
+            sim._on_gba_in(gbaframe.wrap_t(rfu.uni_slot(slots.build(words)), 0x4000))
+            drive()
+        self.assertEqual(engine.host_link_player.name, "MWL")
+        self.assertTrue(engine.established)
+
+        while engine.sender is not None:
+            drive()
+        sim._on_gba_in(gbaframe.wrap_t(
+            rfu.uni_slot(slots.build(rfu.exit_standby_words(0))), 0x4001))
+        drive()
+        self.assertTrue(sim._parent_card_request_sent)
+        self.assertEqual((engine.sender.owner, engine.sender.trust_pia), (0, True))
 
     def test_parent_join_status_advances_only_on_matching_child_acks(self):
         sim = Sim(SimpleNamespace(), PiaCrypto(bytes(range(16))), SimpleNamespace(),
