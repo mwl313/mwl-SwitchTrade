@@ -147,6 +147,9 @@ PARENT_PARTY_REQUEST_IDLE_FRAMES = 11
 # Live NSO FRLG: post-confirm save/menu callbacks occupy counts 5..10.  Once the Switch stops
 # count 10, player zero is in CB2_CreateTradeMenu and must run BufferTradeParties again.
 PARENT_POST_SAVE_MENU_COUNT = 10
+# After the final ribbon block, CB2_CreateTradeMenu still runs states 7..22 (sprites/backgrounds/
+# palette fade) before installing CB1_UpdateLink.  A leader command sent earlier is discarded.
+PARENT_MENU_READY_FRAMES = 120
 
 
 class Sim:
@@ -330,6 +333,7 @@ class Sim:
         self._parent_confirm_finish_sent = False
         self._parent_post_save_party_armed = False
         self._parent_final_cancel_sent = False
+        self._parent_final_cancel_wait = None
         self._parent_child_cmd = rfu.idle_slot()
         self._parent_child_queue = deque()
         # Emission is FREE-RUN: _drive_reliable emits one child slot ('T') per local VBlank, on our own
@@ -992,6 +996,10 @@ class Sim:
                         self._parent_party_request_index = None
                         self.log("[sim] parent BufferTradeParties complete")
                         self.info("Synchronized both Pokémon parties.")
+                        if self._parent_post_save_party_armed:
+                            self._parent_final_cancel_wait = PARENT_MENU_READY_FRAMES
+                            self.log(f"[sim] parent menu build delay armed: "
+                                     f"{PARENT_MENU_READY_FRAMES}f before final cancel")
                     else:
                         self._parent_party_request_idle = PARENT_PARTY_REQUEST_IDLE_FRAMES
                 if (self._parent_party_request_index is not None
@@ -1028,14 +1036,18 @@ class Sim:
                     and self._parent_party_request_index is None
                     and getattr(self.engine, "leader_local_cancel_ready", False)
                     and not self._parent_final_cancel_sent
-                    and getattr(self.engine, "sender", None) is None):
-                start_parent_command(trademod.BOTH_CANCEL_TRADE)
-                self._parent_final_cancel_sent = True
-                self.engine.requested_cancel = True
-                self.engine._on_linkcmd(trademod.BOTH_CANCEL_TRADE, 0)
-                self.log("[sim] parent BOTH_CANCEL_TRADE; configured trade session complete")
-                self.info("Trade complete; leaving the room.")
-                return rfu.serialize(self.engine.tick())
+                    and getattr(self.engine, "sender", None) is None
+                    and self._parent_final_cancel_wait is not None):
+                if self._parent_final_cancel_wait:
+                    self._parent_final_cancel_wait -= 1
+                else:
+                    start_parent_command(trademod.BOTH_CANCEL_TRADE)
+                    self._parent_final_cancel_sent = True
+                    self.engine.requested_cancel = True
+                    self.engine._on_linkcmd(trademod.BOTH_CANCEL_TRADE, 0)
+                    self.log("[sim] parent BOTH_CANCEL_TRADE; configured trade session complete")
+                    self.info("Trade complete; leaving the room.")
+                    return rfu.serialize(self.engine.tick())
 
             if (self._parent_set_mons_sent
                     and not self._parent_start_trade_sent
