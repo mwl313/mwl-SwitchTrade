@@ -1,6 +1,6 @@
 # STATUS — 진행 상태 (2026-08-24)
 
-> 마지막 갱신: 2026-08-24 — **full trade animation 실기 PASS · finish commit 구현 완료/실기 대기**
+> 마지막 갱신: 2026-08-24 — **finish commit 실기 PASS · reactive save/menu return 구현 완료/실기 대기**
 
 ## 🏆 핵심 성과
 
@@ -121,6 +121,13 @@
   `CONFIRM_FINISH_TRADE`와 local commit을 수행하도록 구현했다(`emu` `812fb90`, 140 functional PASS).
   다음 실기는 save/return 진행과 neutral 상태에서도 trade 유지가 기준이다. 상세:
   `docs/43-full-animation-pass-confirm-finish-ready-20260824.md`.
+- `pc_host_confirm_finish_live_20260824_194059`에서 `812fb90`이 실기 PASS했다. Local/child
+  `READY_FINISH_TRADE` 뒤 owner-zero `CONFIRM_FINISH_TRADE`를 전송했고 Rattata 100B를
+  `received.pk3`로 저장했다. Switch는 post-save count 5~10을 모두 완료했으나 CODEX가 존재하지 않는
+  count 11을 선제 시작해 `Communication standby...`에서 정지했다. Save callback의 count/timing을
+  예측하지 않고 Switch-originated barrier만 reactive mirror하도록 수정했다(`emu` `cea2d75`,
+  140 functional PASS). 다음 실기는 party re-exchange, Cancel, neutral persistence다. 상세:
+  `docs/44-confirm-finish-live-pass-save-count-fix-20260824.md`.
 - ldn 0.0.17 local-self DESTROY 수정은 no-peer stop(1.191초)만 해결했다. joined WA 실기 종료에서는
   radio thread가 15초 뒤에도 살아 있었다. process exit 후 selector stale-AP 청소와 양 카드 post-RX는
   PASS했지만 joined-session teardown root cause는 thread stack 확보 전까지 미해결이다.
@@ -133,7 +140,7 @@
 | 1 | PoC 재현 | ✅ 100% |
 | **2a** | 릴레이 인프라 (RemoteTransport+relay 서버+FSM 훅) | ✅ 100% |
 | **2b** | LAN 2브리지 실기 | 🔄 ~70% — 단독 트레이드·양방향 조인 실증, E2E 양방향 교환만 잔여 |
-| **2b'** | framerelay 코어 | ✅ full animation 실기 완료; finish commit 구현·실기 대기 — save/return 잔여 |
+| **2b'** | framerelay 코어 | ✅ finish commit 실기 완료; reactive save/menu return 실기 대기 |
 | 3 | 세션 시스템 + GUI (PySide6 확정, `docs/13-userside-app-plan.md`) | 설계 완료 |
 | 4 | 프로덕션 배포 (WSL2 길 A, `docs/12-wsl2-poc-windows.md`) | α G1~G4는 8192EU PASS, G5/G6 잔여 |
 
@@ -145,7 +152,7 @@
 | **mwl313/frlg-ldn-trade-emu** (emu/) | **동작 코드 본체** — framerelay(메인) + EMU(동결). `emu/HANDOFF.md`가 작업 대장 |
 
 - 검토 브랜치: main은 `golden-capture-re`, emulator는 `gptsolreview`가 최신이며 push 완료. emulator의
-  최신 parent finish-commit 구현은 `812fb90`, party-pull 구현은 `0b8a2ab`, post-seat standby 수정은 `ff81318`, batched-child reflection 수정은 `0a8d9a0`, parent Reliable deadline 수정은 `31b29bf`,
+  최신 reactive save-return 구현은 `cea2d75`, parent finish-commit 구현은 `812fb90`, party-pull 구현은 `0b8a2ab`, post-seat standby 수정은 `ff81318`, batched-child reflection 수정은 `0a8d9a0`, parent Reliable deadline 수정은 `31b29bf`,
   double-radiotap 회귀 방지는 `82dd0d3`이다.
   `framerelay-dev`는 그 이전 기능 기준선이다.
 - ~~MWL-SwitchTrade-v2~~: 삭제됨 (고유 내용 0)
@@ -154,7 +161,7 @@
 
 | 카드 | HOST(방 개설) | GUEST | 비고 |
 |---|---|---|---|
-| RTL8192EU (`0bda:818b`) VM/WSL | 🟡 PC-host full animation live PASS | ✅ | finish/save와 repeated clean teardown 잔여 |
+| RTL8192EU (`0bda:818b`) VM/WSL | 🟡 PC-host finish commit live PASS | ✅ | save/menu return과 repeated clean teardown 잔여 |
 | RTL8188EU (`0bda:8179`) WSL/vendor | ❌ project HOST 차단 | ✅ | standalone AP PASS, AP+monitor deadlock; monitor RX/TX G4 PASS |
 
 ## 알려진 미해결 이슈
