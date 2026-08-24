@@ -535,7 +535,7 @@ sudo .venv/bin/python frlgtrade.py --mode host ...
 
 ### 리포 관리 잔무 (틈날 때)
 - [ ] 로컬 `stabilize` 브랜치 처리 (내용 포함됨 — 삭제 또는 태그)
-- [ ] `tests/` 전체를 CI로 (GitHub Actions — mwl-SwitchTrade scripts/wsl2/github-build/ 패턴 참고)
+- [ ] `tests/` 전체를 CI로 (GitHub Actions — 별도 `mwl313/wsl2-kernel-build` 패턴 참고)
 - [ ] README.md 갱신 (방향 전환 반영: framerelay 메인, EMU 동결 표기)
 - [ ] THIRD-PARTY-LICENSES.md (AGPL 출처) — 통합 작업 시 mwl-SwitchTrade 쪽과 정합 유지
 

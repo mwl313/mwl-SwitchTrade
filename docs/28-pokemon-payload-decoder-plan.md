@@ -115,7 +115,7 @@ Use the existing simulator structures as initial fixtures, not as proof that eve
 - Treat the Reliable initialization/configuration payload separately; a leading `0x4A` is not automatically a `0x57` game frame.
 - Record carrier timestamps, direction, Reliable sequence, and retransmission identity.
 
-Relevant reference implementation: `_related/frlg-ldn-trade-emu/frlgsim/gbaframe.py`.
+Relevant reference implementation: `bridge/frlgsim/gbaframe.py`.
 
 **Deliverable:** carrier-level JSON and byte-exact fixtures.
 
@@ -136,7 +136,7 @@ For each `T` carrier:
 - Preserve incomplete blocks and missing indices instead of padding them silently.
 - Record block requests and retransmissions so a repeated fragment is not mistaken for new data.
 
-Relevant reference implementation: `_related/frlg-ldn-trade-emu/frlgsim/rfu.py` and `gbaframe.py`.
+Relevant reference implementation: `bridge/frlgsim/rfu.py` and `gbaframe.py`.
 
 **Deliverable:** RFU command stream, block objects, and explicit completeness status.
 

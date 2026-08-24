@@ -132,7 +132,8 @@ sudo install -D -m 600 /path/to/verified/prod.keys /root/.switch/prod.keys
 - 실행: `gh workflow run build-kernel.yml` (아리아) → 소요 ~20분 → Artifacts에서 다운로드
   - 산출물: `bzImage-wsl-st` + `modules-<KVER>.tar.gz` + `README-install.txt`
 - 주인님 PC 필요 용량: **결과 파일 ~300MB만**
-- 워크플로우 소스: `scripts/wsl2/github-build/.github/workflows/build-kernel.yml` (MWL-SwitchTrade 리포 내 관리)
+- 워크플로우 소스: 별도 [`mwl313/wsl2-kernel-build`](https://github.com/mwl313/wsl2-kernel-build)
+  리포의 `.github/workflows/build-kernel.yml`
 - (참고) 로컬 빌드 대안 스크립트도 유지: `scripts/wsl2/build_kernel.sh` — 용량 여유 생기면 사용 가능
 - ⚠️ 알려진 리스크: usbipd-win #1022 — usbip 경유 펌웨어 다운로드 타이밍 실패 사례. Step 5 dmesg로 확인.
 
