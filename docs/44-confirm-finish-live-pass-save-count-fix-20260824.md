@@ -12,6 +12,10 @@ additional count 11, which the Switch never answered; the screen remained at
 `Communication standby... Please wait.`. This is a new post-commit save/menu-return boundary, not a
 regression in discovery, joining, trade data, animation, or finish confirmation.
 
+After the host was stopped and the game returned to a controllable state, the user confirmed
+Salamence remained in the Switch party. Combined with CODEX's saved Rattata, this proves both sides
+of the trade and the Switch's cartridge save persisted. Only graceful post-save return remains.
+
 Commit `cea2d75` fixes the boundary by following the Switch's source-timed save barriers reactively.
 It is offline-test-proven and awaits hardware verification.
 
@@ -77,5 +81,6 @@ four relay tests pass in Windows.
 ## Next live gate
 
 With `cea2d75`, repeat one full trade. PASS requires the Switch to drive post-save barriers, return
-to the trade menu, re-exchange parties, accept CODEX's Cancel, and reach neutral state without
-rolling the trade back. Do not alter any lower protocol layer unless this exact flow disproves it.
+to the trade menu, re-exchange parties, accept CODEX's Cancel, and reach neutral state cleanly.
+Persistence is already live-proven. Do not alter any lower protocol layer unless this exact flow
+disproves it.

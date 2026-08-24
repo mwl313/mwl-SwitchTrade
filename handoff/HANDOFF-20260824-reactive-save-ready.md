@@ -5,7 +5,8 @@ Read `docs/44-confirm-finish-live-pass-save-count-fix-20260824.md` first.
 ## Current truth
 
 - `812fb90` is live-proven through owner-zero `CONFIRM_FINISH_TRADE` and disk commit of the received
-  Rattata.
+  Rattata. After the forced return-path disconnect, the user confirmed Salamence remained on the
+  Switch, so its cartridge-side save is also live-proven.
 - The Switch completed save/return standby counts 5–10. The old engine then invented count 11 and
   deadlocked at `Communication standby... Please wait.`.
 - Capture evidence is local/ignored at
@@ -16,6 +17,6 @@ Read `docs/44-confirm-finish-live-pass-save-count-fix-20260824.md` first.
 
 ## Resume gate
 
-Repeat one health-gated full trade. PASS is party re-exchange after save, CODEX Cancel, graceful room
-exit, and no rollback at neutral state. If it stops, inspect only the first post-save leader/menu
+Repeat one health-gated full trade. PASS is party re-exchange after save, CODEX Cancel, and graceful
+room exit. Persistence is already proven. If it stops, inspect only the first post-save leader/menu
 transition; discovery through finish confirmation is already live-proven.

@@ -126,7 +126,8 @@
   `received.pk3`로 저장했다. Switch는 post-save count 5~10을 모두 완료했으나 CODEX가 존재하지 않는
   count 11을 선제 시작해 `Communication standby...`에서 정지했다. Save callback의 count/timing을
   예측하지 않고 Switch-originated barrier만 reactive mirror하도록 수정했다(`emu` `cea2d75`,
-  140 functional PASS). 다음 실기는 party re-exchange, Cancel, neutral persistence다. 상세:
+  140 functional PASS). 강제 종료 후에도 Switch에 Salamence가 남아 cartridge save persistence도
+  실기 PASS했다. 다음 실기는 party re-exchange, Cancel, graceful room exit다. 상세:
   `docs/44-confirm-finish-live-pass-save-count-fix-20260824.md`.
 - ldn 0.0.17 local-self DESTROY 수정은 no-peer stop(1.191초)만 해결했다. joined WA 실기 종료에서는
   radio thread가 15초 뒤에도 살아 있었다. process exit 후 selector stale-AP 청소와 양 카드 post-RX는
