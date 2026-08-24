@@ -1,6 +1,6 @@
 # STATUS — 진행 상태 (2026-08-24)
 
-> 마지막 갱신: 2026-08-24 — **전체 trade/save/menu re-entry 실기 PASS · graceful close delay 실기 대기**
+> 마지막 갱신: 2026-08-24 — **PC-host 전체 trade/save/atomic room exit 실기 PASS**
 
 ## 🏆 핵심 성과
 
@@ -137,6 +137,15 @@
   WSL ordinary 136 PASS + Windows relay 4/4 PASS). 다음 실기는 Bulbasaur fixture로 cancel/count 11~12와
   native error 없는 clean exit를 검증한다. 상세:
   `docs/45-parent-menu-reentry-live-pass-final-close-delay-20260824.md`.
+- `pc_host_atomic_exit_switcha_retry_live_20260824_212450`에서 Switch A가 PC-host 전체 golden path를
+  실기 PASS했다. Rattata를 보내고 Magikarp 100B를 저장했으며 trade animation, finish commit, save,
+  party/menu rebuild, final cancel, count 11/12, 같은 parent tick의 양쪽 `EXIT_ROOM`,
+  `READY_CLOSE_LINK`, RFU `D`까지 완료했다. Pia decrypt failure와 pcap kernel drop은 모두 0이고 양
+  radio post-RX도 PASS다. 종료 animation 뒤 native `2318-0006` popup만 남았으며 이는 game trade가
+  아니라 RFU `D` 직후 PC가 LDN AP를 너무 일찍 내린 outer-tail 문제다. `57a25c9`은 parent-mode `D`
+  뒤 game output을 멈추고 peer leave 또는 5초까지 AP를 유지한다(15/15 focused, 138/138 ordinary
+  WSL PASS; 사용자 선택에 따라 추가 hardware trade는 생략). 상세:
+  `docs/47-full-trade-atomic-exit-pass-20260824.md`.
 - ldn 0.0.17 local-self DESTROY 수정은 no-peer stop(1.191초)만 해결했다. joined WA 실기 종료에서는
   radio thread가 15초 뒤에도 살아 있었다. process exit 후 selector stale-AP 청소와 양 카드 post-RX는
   PASS했지만 joined-session teardown root cause는 thread stack 확보 전까지 미해결이다.
@@ -149,7 +158,7 @@
 | 1 | PoC 재현 | ✅ 100% |
 | **2a** | 릴레이 인프라 (RemoteTransport+relay 서버+FSM 훅) | ✅ 100% |
 | **2b** | LAN 2브리지 실기 | 🔄 ~70% — 단독 트레이드·양방향 조인 실증, E2E 양방향 교환만 잔여 |
-| **2b'** | framerelay 코어 | ✅ trade/save/menu re-entry 실기 완료; final graceful close 실기 대기 |
+| **2b'** | framerelay 코어 | ✅ PC-host full trade/save/atomic room exit 실기 완료 |
 | 3 | 세션 시스템 + GUI (PySide6 확정, `docs/13-userside-app-plan.md`) | 설계 완료 |
 | 4 | 프로덕션 배포 (WSL2 길 A, `docs/12-wsl2-poc-windows.md`) | α G1~G4는 8192EU PASS, G5/G6 잔여 |
 
@@ -161,7 +170,7 @@
 | **mwl313/frlg-ldn-trade-emu** (emu/) | **동작 코드 본체** — framerelay(메인) + EMU(동결). `emu/HANDOFF.md`가 작업 대장 |
 
 - 검토 브랜치: main은 `golden-capture-re`, emulator는 `gptsolreview`가 최신이며 push 완료. emulator의
-  최신 menu-ready final-close 구현은 `823288b`, parent post-save re-entry는 `5cb19af`, reactive save-return은 `cea2d75`, parent finish-commit 구현은 `812fb90`, party-pull 구현은 `0b8a2ab`, post-seat standby 수정은 `ff81318`, batched-child reflection 수정은 `0a8d9a0`, parent Reliable deadline 수정은 `31b29bf`,
+  최신 post-RFU-D LDN tail 구현은 `57a25c9`, atomic room-exit 실기 기준은 `946bc63`, menu-ready final-close 구현은 `823288b`, parent post-save re-entry는 `5cb19af`, reactive save-return은 `cea2d75`, parent finish-commit 구현은 `812fb90`, party-pull 구현은 `0b8a2ab`, post-seat standby 수정은 `ff81318`, batched-child reflection 수정은 `0a8d9a0`, parent Reliable deadline 수정은 `31b29bf`,
   double-radiotap 회귀 방지는 `82dd0d3`이다.
   `framerelay-dev`는 그 이전 기능 기준선이다.
 - ~~MWL-SwitchTrade-v2~~: 삭제됨 (고유 내용 0)
@@ -170,7 +179,7 @@
 
 | 카드 | HOST(방 개설) | GUEST | 비고 |
 |---|---|---|---|
-| RTL8192EU (`0bda:818b`) VM/WSL | 🟡 PC-host finish commit live PASS | ✅ | save/menu return과 repeated clean teardown 잔여 |
+| RTL8192EU (`0bda:818b`) VM/WSL | ✅ full PC-host trade/room exit live PASS | ✅ | joined-session process teardown thread 잔여 |
 | RTL8188EU (`0bda:8179`) WSL/vendor | ❌ project HOST 차단 | ✅ | standalone AP PASS, AP+monitor deadlock; monitor RX/TX G4 PASS |
 
 ## 알려진 미해결 이슈
@@ -178,12 +187,9 @@
 1. **EMU E2E 미완주** (T4): 릴레이 WS 미기동 버그 수정(ad591b5) 후 재실행 필요 — 단, EMU는 동결이라 회귀 도구 용도
 2. CanTradeSelectedMon 게이트 (EMU 한계) — framerelay와 무관
 3. RX decrypt FAILED 간헐 (VM1+8192EU 초기)
-4. 호스트 모드(--mode host): discovery/LDN/ARP/Pia Session/parent `WA`/NI/UNI/LinkPlayer/trainer-card/
-   trading-room/이동/post-seat counts 0..3/party exchange/selection/START/full animation까지 실기 PASS.
-   deadline-safe Reliable, batched row-one FIFO, reactive standby와 player-zero party pulls도 실기 완료.
-   다음은 `CONFIRM_FINISH_TRADE` 및 save/return 실기 검증이다.
-   `timeout --foreground`로 Ctrl-C 전달을 수정했지만 joined-session adapter
-   teardown은 다음 graceful stop에서 별도 재검증한다.
+4. 호스트 모드(--mode host): discovery부터 full trade, commit/save/menu return, final cancel,
+   count 11/12, atomic room exit와 RFU close까지 실기 PASS. Post-RFU-D LDN tail은 offline fix됐고
+   joined-session process teardown thread timeout은 별도 미해결이다.
 5. 8188EU mainline firmware start 실패는 vendor-driver로 우회했다. out-of-tree driver 유지보수와
    실제 Switch G5/G6는 잔여 risk다.
 
@@ -207,9 +213,8 @@
 
 1. ~~STEP 6~~ ✅ / ~~STEP 7~~ ✅ / ~~STEP 8~~ ✅ / ~~STEP 9~~ ✅
 2. **STEP 10 discovery/join/room entry**: ✅ `ARP -> Net -> Session -> Reliable -> WA/NI/UNI ->
-   LinkPlayer -> trainer card -> trading room/이동 -> post-seat count 2/3 -> party exchange -> visible
-   trade menu -> player-zero selection/confirm/START -> full animation` 실기 PASS. 다음 gate는
-   player-zero `CONFIRM_FINISH_TRADE`와 save/return.
+   LinkPlayer -> room/seat -> party -> selection/START -> animation -> commit/save -> menu rebuild ->
+   cancel -> return field -> atomic room exit -> RFU close` 전체 실기 PASS.
 3. **STEP 11**: 🏆 framerelay E2E (스위치 A·B) — B 화면에 "A의 방" = 목표② 달성
 4. **α트랙 G1~G4**: 두 카드 기준 ✅(8188 patched warning-free guest/relay). 다음은 G5 로컬 루프, G6 Switch E2E
 5. **STEP 10~13**: 스위치 실기 (호스트 모드 → framerelay E2E 🏆 → 안정성 5종)
