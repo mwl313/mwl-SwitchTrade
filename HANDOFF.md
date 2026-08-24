@@ -7,6 +7,35 @@
 
 ---
 
+## 2026-08-24 override — CONFIRM_FINISH live PASS; reactive save return ready
+
+Commit `812fb90` passed its exact real-Switch gate. Local and child `READY_FINISH_TRADE` completed,
+parent sent owner-zero `CONFIRM_FINISH_TRADE`, and the received Rattata was committed to a valid
+100-byte `received.pk3`.
+
+The Switch then completed standby counts 5 through 10. The old save-chain driver immediately
+invented count 11, which the Switch never answered; the screen remained at
+`Communication standby... Please wait.`. This isolates the remaining failure after the commit.
+
+Evidence: `logs/golden/pc_host_confirm_finish_live_20260824_194059/` (local/ignored; integrity-locked
+by `MANIFEST.md`). Pia captured 20,421 datagrams with no decrypt failure logged, all three pcaps had
+zero kernel drops, and both post-test actual-RX gates passed.
+
+Commit `cea2d75` applies the minimal source-defined fix: while the ROM performs its real save, CODEX
+does not predict a barrier count or delay. It waits for each Switch-originated
+`READY_EXIT_STANDBY` and uses the existing reactive responder. Party re-exchange remains the normal
+chain terminator; the dead-host watchdog remains only a safety net. The regression test proves an
+idle post-confirm tick cannot invent or advance a count.
+
+WSL ordinary is 136 PASS and Windows relay is 4/4 PASS (140 functional). This commit is not yet
+hardware-proven. Resume with one full trade; PASS is post-save party re-exchange, CODEX Cancel,
+graceful room exit, and no rollback at neutral state.
+
+Authoritative report:
+`mwl-SwitchTrade/docs/44-confirm-finish-live-pass-save-count-fix-20260824.md`.
+
+---
+
 ## 2026-08-24 override — full animation live PASS; finish commit implemented
 
 Commit `2d66c08` passed its complete real-Switch gate. Both confirmation blocks completed, parent
