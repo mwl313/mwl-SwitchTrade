@@ -28,7 +28,7 @@ installed there:
 
 ```text
 wsl -d Ubuntu -- bash -lc \
-  "cd /mnt/c/Users/임민우/Desktop/switchtrade/_related/frlg-ldn-trade-emu && \
+  "cd /mnt/c/Users/임민우/Desktop/switchtrade/bridge && \
    .venv/bin/python /mnt/c/Users/임민우/Desktop/switchtrade/tools/extract_pokemon_payload.py \
    /mnt/c/Users/임민우/Desktop/switchtrade/logs/golden/pc_host_parent_party_pulls_live_20260824_183308/pc_host_pia.jsonl \
    -o /mnt/c/Users/임민우/Desktop/switchtrade/logs/golden/pc_host_parent_party_pulls_live_20260824_183308/pokemon_payload_report.json"

@@ -82,7 +82,5 @@ controlled selection and confirmation with a known Pokémon on each Switch.
 
 ## Branch status
 
-This report belongs to the independent `pokemon-payload-re` branch. The
-emulator protocol work remains in the separate `_related/frlg-ldn-trade-emu`
-repository on `gptsolreview`; its future commits should be cherry-picked or
-handed off explicitly rather than assumed to be part of this branch.
+This report originally belonged to the independent `pokemon-payload-re` branch. Both histories are
+now merged on `production-beta`, with protocol runtime code tracked under `bridge/`.

@@ -12,6 +12,14 @@ ROOT = Path(__file__).resolve().parents[1]
 SALAMENCE = ROOT / "mons" / "0373_SALAMENCE.pk3"
 
 
+class RepositoryLayoutTests(unittest.TestCase):
+    def test_extractor_uses_tracked_bridge_by_default(self):
+        from tools import extract_pokemon_payload
+
+        self.assertEqual(extract_pokemon_payload.EMU_ROOT, ROOT / "bridge")
+        self.assertTrue((extract_pokemon_payload.EMU_ROOT / "frlgsim" / "crypto.py").is_file())
+
+
 def _gba(frame_type, body):
     return b"\x57" + bytes([frame_type]) + len(body).to_bytes(2, "little") + body
 

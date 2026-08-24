@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Extract Pokémon candidates from the emulator's encrypted Pia JSONL capture.
 
-The protocol repository already owns Pia crypto and Reliable/GBA framing. This
+The tracked bridge runtime already owns Pia crypto and Reliable/GBA framing. This
 small adapter reuses those implementations, then hands RFU commands to the
 payload-side block assembler and Gen-III scanner. It emits decoded metadata,
 never raw pcap bytes or keys.
@@ -19,7 +19,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EMU_ROOT = ROOT / "_related" / "frlg-ldn-trade-emu"
+EMU_ROOT = ROOT / "bridge"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 if str(EMU_ROOT) not in sys.path:

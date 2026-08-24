@@ -163,7 +163,7 @@ For each room instance:
 - recover Ethernet/SNAP and 169.254.x.x IP traffic;
 - reassemble UDP datagrams by direction and timestamp;
 - identify Pia packet IDs, session IDs, retransmissions, and reliable-channel boundaries;
-- compare recovered messages with `_related/frlg-ldn-trade-emu/frlgsim/pia_connect.py`, `rfu.py`, `reliable.py`, and `trade.py` as hypotheses only.
+- compare recovered messages with `bridge/frlgsim/pia_connect.py`, `rfu.py`, `reliable.py`, and `trade.py` as hypotheses only.
 
 The all-channel capture should be used to locate messages and state transitions, not to prove byte-complete payloads. Any message whose sequence is interrupted by hopping must be marked incomplete.
 

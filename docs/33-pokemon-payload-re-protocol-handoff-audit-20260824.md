@@ -8,9 +8,8 @@ findings and the payload decoder foundation are available as a reproducible
 baseline. Future commits on `golden-capture-re` do not automatically enter this
 branch.
 
-The emulator is a separate Git repository under `_related/frlg-ldn-trade-emu`.
-Its protocol branch is `gptsolreview` at `4478ec9`. That repository and branch
-remain independent of this payload branch.
+At the time of this audit the emulator was a separate repository. Its history is now imported under
+`bridge/` on `production-beta`; the old checkout is no longer a runtime dependency.
 
 The payload decoder owns the downstream boundary:
 
