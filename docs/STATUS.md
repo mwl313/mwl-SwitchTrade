@@ -1,6 +1,6 @@
 # STATUS — 진행 상태 (2026-08-24)
 
-> 마지막 갱신: 2026-08-24 — **PC-host ARP + Pia Session 실기 PASS · host Reliable/RFU가 다음 경계**
+> 마지막 갱신: 2026-08-24 — **PC-host parent Reliable ACK/WC/WA 구현 · 실기 WA gate 대기**
 
 ## 🏆 핵심 성과
 
@@ -37,11 +37,17 @@
 - Corrected PC-host smoke에서 Switch association과 강한 RF 수신은 통과했지만 ARP가 TAP에 도달하지
   않았다. RTL8192EU `rtl8xxxu`가 Protected/CCMP header+MIC를 남기고 payload만 hardware-decrypt한
   형태를 Kinnay가 재복호화해 silent drop한 것이 확정됐다. runtime compatibility adapter와 실측 pcap
-  replay는 8/8 data, 7/7 ARP deliverable PASS. patched live join 재검증만 잔여다. 상세:
+  replay는 8/8 data, 7/7 ARP deliverable PASS했고 patched live join도 다음 항목처럼 통과했다. 상세:
   `docs/31-pc-host-monitor-ccmp-20260824.md`.
 - Patched live 재검증에서 ARP request/reply, Net `0x12`, Session `0 -> 2/5 -> 6`, FireRed Reliable
   INIT까지 실기 PASS했다. Pia 119 datagram 모두 decrypt 성공, 실패 0. 화면의 동일한 unavailable은
   이제 PC가 guest `fff0`/`WC`를 ACK/`WA`하지 않는 host/parent Reliable gate 때문임이 확정됐다.
+- Native CH1 gold의 `INIT fff0 -> ACK fff1 -> WC -> WA+ACK fff2 -> guest ACK fff1`를 exact decode했고,
+  beacon RFU session id가 `WA` host id임을 확정했다. 별도 parent bootstrap으로 구현하고 native-byte
+  test에 고정했다(`emu` `4478ec9`). child/right-seat RFU는 계속 차단되어 있으며 다음 실기 gate는
+  Switch의 `WA` ACK이다. 상세: `docs/32-parent-reliable-bootstrap-20260824.md`.
+- ldn 0.0.17이 종료 때 local AP 자신에게 DESTROY control frame을 보내 rtl8xxxu netlink가 대기하던
+  HostTransport hang도 수정했다. RTL8192EU 실제 room stop 1.191초, vif 0개, post-stop RX PASS.
 
 ## 📈 Phase 진행도 (2026-08-22 기준)
 
@@ -51,7 +57,7 @@
 | 1 | PoC 재현 | ✅ 100% |
 | **2a** | 릴레이 인프라 (RemoteTransport+relay 서버+FSM 훅) | ✅ 100% |
 | **2b** | LAN 2브리지 실기 | 🔄 ~70% — 단독 트레이드·양방향 조인 실증, E2E 양방향 교환만 잔여 |
-| **2b'** | framerelay 코어 | ✅ STEP 6~10 discovery/join 완료 — 다음은 corrected Pia smoke와 STEP 11/G6 |
+| **2b'** | framerelay 코어 | ✅ STEP 6~10 discovery/join 완료 — 다음은 live WA gate와 parent T/NI, STEP 11/G6 |
 | 3 | 세션 시스템 + GUI (PySide6 확정, `docs/13-userside-app-plan.md`) | 설계 완료 |
 | 4 | 프로덕션 배포 (WSL2 길 A, `docs/12-wsl2-poc-windows.md`) | α G1~G4는 8192EU PASS, G5/G6 잔여 |
 
@@ -62,8 +68,8 @@
 | **mwl313/mwl-SwitchTrade** | 문서·릴레이 서버·WSL2 배포 인프라·스크립트 |
 | **mwl313/frlg-ldn-trade-emu** (emu/) | **동작 코드 본체** — framerelay(메인) + EMU(동결). `emu/HANDOFF.md`가 작업 대장 |
 
-- 검토 브랜치: 양쪽 first-party 리포의 `gptsolreview`가 최신이며 push 완료. emulator의 최신 수정은
-  host teardown cleanup commit `607fd71`이며 double-radiotap 회귀 방지는 `82dd0d3`이다.
+- 검토 브랜치: main은 `golden-capture-re`, emulator는 `gptsolreview`가 최신이며 push 완료. emulator의
+  최신 parent Reliable/teardown 수정은 `4478ec9`이며 double-radiotap 회귀 방지는 `82dd0d3`이다.
   `framerelay-dev`는 그 이전 기능 기준선이다.
 - ~~MWL-SwitchTrade-v2~~: 삭제됨 (고유 내용 0)
 
@@ -71,7 +77,7 @@
 
 | 카드 | HOST(방 개설) | GUEST | 비고 |
 |---|---|---|---|
-| RTL8192EU (`0bda:818b`) VM/WSL | 🟡 WSL ARP/Pia live PASS | ✅ | host Reliable/RFU + graceful teardown 잔여 |
+| RTL8192EU (`0bda:818b`) VM/WSL | 🟡 ARP/Pia live PASS, ACK/WC/WA 구현 | ✅ | graceful teardown PASS; parent T/NI 잔여 |
 | RTL8188EU (`0bda:8179`) WSL/vendor | ❌ project HOST 차단 | ✅ | standalone AP PASS, AP+monitor deadlock; monitor RX/TX G4 PASS |
 
 ## 알려진 미해결 이슈
@@ -79,8 +85,9 @@
 1. **EMU E2E 미완주** (T4): 릴레이 WS 미기동 버그 수정(ad591b5) 후 재실행 필요 — 단, EMU는 동결이라 회귀 도구 용도
 2. CanTradeSelectedMon 게이트 (EMU 한계) — framerelay와 무관
 3. RX decrypt FAILED 간헐 (VM1+8192EU 초기)
-4. 호스트 모드(--mode host): discovery/LDN/ARP/Pia Session/guest Reliable INIT까지 실증. 다음은
-   host/parent Reliable ACK+`WA`, RFU/NI 방향 구현과 HostTransport graceful teardown 수리다.
+4. 호스트 모드(--mode host): discovery/LDN/ARP/Pia Session/guest Reliable INIT까지 실증,
+   host/parent ACK+`WA`와 graceful teardown 구현/오프라인+radio 검증 완료. 다음은 `WA` 실기 ACK 후
+   parent `T`/NI 방향 구현이다.
 5. 8188EU mainline firmware start 실패는 vendor-driver로 우회했다. out-of-tree driver 유지보수와
    실제 Switch G5/G6는 잔여 risk다.
 
@@ -94,7 +101,7 @@
 
 1. ~~STEP 6~~ ✅ / ~~STEP 7~~ ✅ / ~~STEP 8~~ ✅ / ~~STEP 9~~ ✅
 2. **STEP 10 discovery/join**: ✅ `ARP -> Net 0x11/0x12 -> Session 0/2/5/6 -> Reliable INIT` 실기 PASS.
-   다음 gate는 host bulk ACK + `WA` accept로 child seat 성립.
+   host bulk ACK + `WA`는 구현/회귀 PASS. 다음 gate는 Switch의 `WA` ACK 실기 확인 후 parent `T`/NI.
 3. **STEP 11**: 🏆 framerelay E2E (스위치 A·B) — B 화면에 "A의 방" = 목표② 달성
 4. **α트랙 G1~G4**: 두 카드 기준 ✅(8188 patched warning-free guest/relay). 다음은 G5 로컬 루프, G6 Switch E2E
 5. **STEP 10~13**: 스위치 실기 (호스트 모드 → framerelay E2E 🏆 → 안정성 5종)
