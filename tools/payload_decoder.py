@@ -395,6 +395,7 @@ class RfuBlock:
     ordinal: int
     expected_fragments: int
     owner: int | None
+    multiplayer_id: int | None = None
     fragments: dict[int, bytes] = field(default_factory=dict)
     source_offsets: list[int] = field(default_factory=list)
     request_type: int | None = None
@@ -428,8 +429,8 @@ class RfuBlockAssembler:
     """Reassemble RFU SEND_BLOCK_INIT/SEND_BLOCK pairs per direction."""
 
     def __init__(self) -> None:
-        self._active: dict[str, RfuBlock] = {}
-        self._ordinals: dict[str, int] = {}
+        self._active: dict[tuple[str, int | None], RfuBlock] = {}
+        self._ordinals: dict[tuple[str, int | None], int] = {}
         self.completed: list[RfuBlock] = []
         self.issues: list[ParseIssue] = []
 
@@ -440,10 +441,25 @@ class RfuBlockAssembler:
         direction: str,
         source_offset: int | None = None,
     ) -> RfuBlock | None:
+        stream = (direction, command.multiplayer_id)
         if command.opcode == 0x8800:
-            ordinal = self._ordinals.get(direction, 0)
-            self._ordinals[direction] = ordinal + 1
-            previous = self._active.get(direction)
+            active = self._active.get(stream)
+            # RFU retransmits INIT until the peer arms its receive block.  A
+            # same-size/same-owner INIT during an incomplete epoch is a
+            # retransmission, not a new block; resetting here would discard
+            # already received fragments and manufacture false gaps.
+            if (
+                active is not None
+                and not active.complete
+                and active.expected_fragments == (command.block_count or 0)
+                and active.owner == command.block_owner
+            ):
+                if source_offset is not None:
+                    active.source_offsets.append(source_offset)
+                return active
+            ordinal = self._ordinals.get(stream, 0)
+            self._ordinals[stream] = ordinal + 1
+            previous = active
             if previous is not None and not previous.complete:
                 self.issues.append(ParseIssue(
                     source_offset or 0, "block_replaced_incomplete",
@@ -454,24 +470,32 @@ class RfuBlockAssembler:
                 ordinal=ordinal,
                 expected_fragments=command.block_count or 0,
                 owner=command.block_owner,
+                multiplayer_id=command.multiplayer_id,
             )
             if source_offset is not None:
                 block.source_offsets.append(source_offset)
-            self._active[direction] = block
+            self._active[stream] = block
             return block
         if command.opcode == 0x8900:
-            block = self._active.get(direction)
+            block = self._active.get(stream)
             if block is None:
                 self.issues.append(ParseIssue(
                     source_offset or 0, "fragment_without_init", direction,
                 ))
                 return None
+            index = command.block_index
+            if index is None or not 0 <= index < block.expected_fragments:
+                self.issues.append(ParseIssue(
+                    source_offset or 0, "invalid_fragment_index",
+                    f"{direction}:{index} not in 0..{block.expected_fragments - 1}",
+                ))
+                return block
             block.add_fragment(command.block_index or 0, command.fragment or b"", source_offset)
             if block.complete and block not in self.completed:
                 self.completed.append(block)
             return block
         if command.opcode == 0xA100:
-            block = self._active.get(direction)
+            block = self._active.get(stream)
             if block is not None:
                 block.request_type = command.request_type
             return block
@@ -482,7 +506,9 @@ class RfuBlockAssembler:
             if block.complete or block in self.completed:
                 continue
             self.issues.append(ParseIssue(
-                0, "incomplete_block", f"{block.direction}:{block.ordinal} missing {block.missing_indices}",
+                block.source_offsets[-1] if block.source_offsets else 0,
+                "incomplete_block",
+                f"{block.direction}:{block.ordinal} missing {block.missing_indices}",
             ))
 
 
