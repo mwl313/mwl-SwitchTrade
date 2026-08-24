@@ -1,6 +1,6 @@
 # STATUS — 진행 상태 (2026-08-24)
 
-> 마지막 갱신: 2026-08-24 — **finish commit 실기 PASS · reactive save/menu return 구현 완료/실기 대기**
+> 마지막 갱신: 2026-08-24 — **전체 trade/save/menu re-entry 실기 PASS · graceful close delay 실기 대기**
 
 ## 🏆 핵심 성과
 
@@ -129,6 +129,14 @@
   140 functional PASS). 강제 종료 후에도 Switch에 Salamence가 남아 cartridge save persistence도
   실기 PASS했다. 다음 실기는 party re-exchange, Cancel, graceful room exit다. 상세:
   `docs/44-confirm-finish-live-pass-save-count-fix-20260824.md`.
+- `pc_host_parent_reentry_live_20260824_200611`에서 `5cb19af`이 post-save return을 실기 PASS했다.
+  Switch가 count 5~10을 주도한 뒤 parent가 party/mail/ribbon 5개 block을 다시 pull했고, 사용자가 정상
+  trade 화면 복귀를 직접 확인했다. 받은 Pidgey 100B도 저장됐다. 단 final ribbon frame과 같은 frame에
+  `BOTH_CANCEL_TRADE`를 보내 `CB2_CreateTradeMenu` state 7~22 동안 command가 소비되지 않았다.
+  state 22의 `CB1_UpdateLink` 설치를 기다리는 120-frame bounded delay를 구현했다(`emu` `823288b`,
+  WSL ordinary 136 PASS + Windows relay 4/4 PASS). 다음 실기는 Bulbasaur fixture로 cancel/count 11~12와
+  native error 없는 clean exit를 검증한다. 상세:
+  `docs/45-parent-menu-reentry-live-pass-final-close-delay-20260824.md`.
 - ldn 0.0.17 local-self DESTROY 수정은 no-peer stop(1.191초)만 해결했다. joined WA 실기 종료에서는
   radio thread가 15초 뒤에도 살아 있었다. process exit 후 selector stale-AP 청소와 양 카드 post-RX는
   PASS했지만 joined-session teardown root cause는 thread stack 확보 전까지 미해결이다.
@@ -141,7 +149,7 @@
 | 1 | PoC 재현 | ✅ 100% |
 | **2a** | 릴레이 인프라 (RemoteTransport+relay 서버+FSM 훅) | ✅ 100% |
 | **2b** | LAN 2브리지 실기 | 🔄 ~70% — 단독 트레이드·양방향 조인 실증, E2E 양방향 교환만 잔여 |
-| **2b'** | framerelay 코어 | ✅ finish commit 실기 완료; reactive save/menu return 실기 대기 |
+| **2b'** | framerelay 코어 | ✅ trade/save/menu re-entry 실기 완료; final graceful close 실기 대기 |
 | 3 | 세션 시스템 + GUI (PySide6 확정, `docs/13-userside-app-plan.md`) | 설계 완료 |
 | 4 | 프로덕션 배포 (WSL2 길 A, `docs/12-wsl2-poc-windows.md`) | α G1~G4는 8192EU PASS, G5/G6 잔여 |
 
@@ -153,7 +161,7 @@
 | **mwl313/frlg-ldn-trade-emu** (emu/) | **동작 코드 본체** — framerelay(메인) + EMU(동결). `emu/HANDOFF.md`가 작업 대장 |
 
 - 검토 브랜치: main은 `golden-capture-re`, emulator는 `gptsolreview`가 최신이며 push 완료. emulator의
-  최신 reactive save-return 구현은 `cea2d75`, parent finish-commit 구현은 `812fb90`, party-pull 구현은 `0b8a2ab`, post-seat standby 수정은 `ff81318`, batched-child reflection 수정은 `0a8d9a0`, parent Reliable deadline 수정은 `31b29bf`,
+  최신 menu-ready final-close 구현은 `823288b`, parent post-save re-entry는 `5cb19af`, reactive save-return은 `cea2d75`, parent finish-commit 구현은 `812fb90`, party-pull 구현은 `0b8a2ab`, post-seat standby 수정은 `ff81318`, batched-child reflection 수정은 `0a8d9a0`, parent Reliable deadline 수정은 `31b29bf`,
   double-radiotap 회귀 방지는 `82dd0d3`이다.
   `framerelay-dev`는 그 이전 기능 기준선이다.
 - ~~MWL-SwitchTrade-v2~~: 삭제됨 (고유 내용 0)
