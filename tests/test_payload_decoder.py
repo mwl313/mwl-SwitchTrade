@@ -132,6 +132,54 @@ class BlockTests(unittest.TestCase):
         self.assertEqual(block.missing_indices, [1])
         self.assertTrue(any(issue.code == "incomplete_block" for issue in assembler.issues))
 
+    def test_duplicate_init_preserves_partial_block(self):
+        assembler = decoder.RfuBlockAssembler()
+        block = assembler.feed(
+            decoder._parse_command(_init_command(2)), direction="peer_to_host"
+        )
+        assembler.feed(
+            decoder._parse_command(_fragment_command(0, b"first")), direction="peer_to_host"
+        )
+        same = assembler.feed(
+            decoder._parse_command(_init_command(2)), direction="peer_to_host"
+        )
+        self.assertIs(same, block)
+        self.assertEqual(block.fragments[0][:5], b"first")
+        assembler.feed(
+            decoder._parse_command(_fragment_command(1, b"second")), direction="peer_to_host"
+        )
+        self.assertTrue(block.complete)
+        self.assertEqual(len(assembler.completed), 1)
+
+    def test_parent_rows_keep_independent_block_state(self):
+        assembler = decoder.RfuBlockAssembler()
+        blocks = []
+        for mpid, value in ((0, b"zero"), (1, b"one")):
+            blocks.append(assembler.feed(
+                decoder._parse_command(_init_command(1), multiplayer_id=mpid),
+                direction="host_to_peer",
+            ))
+            assembler.feed(
+                decoder._parse_command(_fragment_command(0, value), multiplayer_id=mpid),
+                direction="host_to_peer",
+            )
+        self.assertTrue(all(block.complete for block in blocks))
+        self.assertEqual([block.multiplayer_id for block in blocks], [0, 1])
+        self.assertEqual(len(assembler.completed), 2)
+
+    def test_invalid_fragment_index_is_reported(self):
+        assembler = decoder.RfuBlockAssembler()
+        block = assembler.feed(
+            decoder._parse_command(_init_command(1)), direction="peer_to_host", source_offset=7
+        )
+        assembler.feed(
+            decoder._parse_command(_fragment_command(1, b"bad")),
+            direction="peer_to_host",
+            source_offset=8,
+        )
+        self.assertFalse(block.complete)
+        self.assertEqual(assembler.issues[-1].code, "invalid_fragment_index")
+
 
 class PokemonCandidateTests(unittest.TestCase):
     def test_scans_canonical_party_record(self):
