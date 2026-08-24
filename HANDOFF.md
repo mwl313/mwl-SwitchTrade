@@ -25,11 +25,13 @@ the PC-host interoperability path:
   monitor vif retained Protected/CCMP header/MIC around hardware-decrypted SNAP. Kinnay
   double-decrypted and silently dropped every Switch ARP before `ldn-tap`.
 - `install_monitor_ccmp_compat()` normalizes that retained-wrapper form at runtime. Tests and
-  replay of the exact failing pcap deliver 8/8 Switch data frames and 7/7 ARPs. A patched live
-  join is still required; the first patched room received no manual join attempt.
-- `connected` intentionally remains false after `pia_connected`: the existing
-  Reliable/RFU engine is the guest/child role. The next live gate must prove the
-  Switch accepts this Pia exchange before a separate host/parent engine is added.
+  replay of the exact failing pcap deliver 8/8 Switch data frames and 7/7 ARPs.
+- Patched live validation passed ARP, Net `0x12`, Session `0 -> 2/5 -> 6`, and FireRed Reliable
+  INIT with 119/119 Pia decrypts. The Switch then sent 77 sequential `WC` connect requests
+  because the PC did not ACK `fff0` or send the native host `WA` accept.
+- `connected` intentionally remains false after `pia_connected`: the existing Reliable/RFU
+  engine is the guest/child role. The next implementation is now authorized by live evidence:
+  host bulk ACK of `fff0`, native `WA` accept, then parent RFU/NI direction.
 
 Focused gates: `python -m unittest -v tests.test_pia_host` (5 tests) and
 `python -m unittest -v tests.test_monitor_ccmp_compat` (2 tests).
