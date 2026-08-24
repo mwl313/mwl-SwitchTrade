@@ -7,7 +7,7 @@
 
 ---
 
-## 2026-08-24 override — PC-host Pia track is active again
+## 2026-08-24 override — native PC-host Session bytes acquired
 
 The old “EMU frozen” decision below predates the WSL dual-radio gold and the
 real Switch PC-host test.  The current `gptsolreview` branch has reopened only
@@ -17,15 +17,23 @@ the PC-host interoperability path:
 - A real Switch displays and joins the PC-created room.
 - The 2026-08-24 observer capture proved LDN authentication succeeds but the
   old joiner-only Pia manager emits zero host outreach.
-- `HostConnectionManager` now broadcasts/retransmits Net `0x11`, validates the
-  Switch's `0x12`, and parses its Session join into a captureable identity.
-- `connected` intentionally remains false: Session type-5 accept/type-2 follow-up
-  and the LEFT/Leader game engine must be implemented from the next native
-  response capture, not guessed.
+- A fixed-channel native two-Switch capture supplied the complete missing gate:
+  six NetStation records, Session `0 -> 2/5 -> 6`, and the first Reliable exchange.
+- `HostConnectionManager` now emits the byte-verified Net `0x11`, Session type `2`,
+  and Session type `5`, then recognizes the Switch's type `6` finalize.
+- `connected` intentionally remains false after `pia_connected`: the existing
+  Reliable/RFU engine is the guest/child role. The next live gate must prove the
+  Switch accepts this Pia exchange before a separate host/parent engine is added.
 
-Focused gate: `python -m unittest -v tests.test_pia_host` (4 tests).
+Focused gate: `python -m unittest -v tests.test_pia_host` (5 tests).
 The legacy join path is unchanged apart from fixing `parse_net()` so the fixed
-fields following an inner `size=0` header are no longer discarded.
+fields following an inner `size=0` header are no longer discarded and applying
+the documented LDN constant-ID permutation.
+
+Main analysis/handoff:
+
+- `mwl-SwitchTrade/docs/30-native-fixed-handshake-20260824.md`
+- `mwl-SwitchTrade/handoff/HANDOFF-20260824-native-host-session.md`
 
 ---
 
