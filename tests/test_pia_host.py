@@ -21,7 +21,7 @@ from frlgsim.pia_connect import (
     parse_net,
     parse_session_join,
 )
-from frlgsim.reliable import parse_app
+from frlgsim import reliable
 from frlgsim.sim import Sim
 
 
@@ -33,6 +33,30 @@ NATIVE_JOIN = bytes.fromhex(
     "0000000000000000000000000000000000000000000000000000000000000000"
     "e8732566c1a40000cdb0010100a9fe190230391000000000449c5d2f18fd9c5a"
     "032d8200000003016d776c")
+NATIVE_GUEST_METADATA = bytes.fromhex(
+    "4a002a00580100466972655265645f6500000000000000000000000000000000"
+    "0000000000000000000000000000")
+
+
+def pia_reliable_datagram(crypto, src_ip, dst_var, src_var, pktid,
+                          seq, window, flags_a, inner):
+    """Build one uncompressed, established Pia Reliable test datagram."""
+    frame = reliable.build_reliable(seq, window, inner, flagsA=flags_a)
+    body = reliable.build_message(reliable.PROTO_RELIABLE, frame)
+    body += dst_var.to_bytes(2, "big")
+    pad = (-len(body)) % 16
+    body += b"\xff" * pad
+    header = PiaHeader(dst=dst_var, src=src_var, pktid=pktid,
+                       nonce8=bytes([pktid]) * 8, flags=pad << 4, footer=2)
+    return crypto.encrypt(body, src_ip, header)
+
+
+def decode_reliable_messages(crypto, datagram, src_ip):
+    plaintext = crypto.decrypt(datagram, src_ip)
+    app, compressed = decompress(plaintext)
+    messages, _, _ = reliable.parse_app(app)
+    return compressed, [(message, reliable.parse_reliable(message.payload))
+                        for message in messages]
 
 
 class PiaHostTest(unittest.TestCase):
@@ -154,7 +178,7 @@ class PiaHostTest(unittest.TestCase):
         self.assertEqual(header.flags & 0x0F, 3)       # zstd + skip-dst check
         plaintext = crypto.decrypt(datagram, "169.254.21.1")
         app, compressed = decompress(plaintext)
-        messages, _, _ = parse_app(app)
+        messages, _, _ = reliable.parse_app(app)
         self.assertTrue(compressed)
         self.assertEqual(len(messages), 1)
         self.assertEqual(messages[0].proto, PROTO_NET)
@@ -195,17 +219,98 @@ class PiaHostTest(unittest.TestCase):
 
         plain2 = crypto.decrypt(first, "169.254.25.1")
         app2, compressed2 = decompress(plain2)
-        messages2, footer2, _ = parse_app(app2)
+        messages2, footer2, _ = reliable.parse_app(app2)
         self.assertFalse(compressed2)
         self.assertEqual(footer2, 0xF469)
         self.assertEqual(messages2[0].payload[0], 2)
 
         plain5 = crypto.decrypt(second, "169.254.25.1")
         app5, compressed5 = decompress(plain5)
-        messages5, _, _ = parse_app(app5)
+        messages5, _, _ = reliable.parse_app(app5)
         self.assertTrue(compressed5)
         self.assertEqual(plain5[-3:-1], bytes.fromhex("f469"))
         self.assertEqual(messages5[0].payload[0], 5)
+
+    def test_parent_reliable_bootstrap_matches_native_gold(self):
+        class Transport:
+            def __init__(self):
+                self.sent = []
+
+            def recv(self):
+                return []
+
+            def send(self, datagram, destination):
+                self.sent.append((datagram, destination))
+
+        transport = Transport()
+        crypto = PiaCrypto(bytes(range(16)))
+        manager = HostConnectionManager(
+            NATIVE_HOST_MAC, "169.254.25.1", crypto.net_id, our_var=0xCDB0,
+            peer_provider=lambda: (PEER_MAC, "169.254.25.2"))
+        manager.state = ST_FINALIZED
+        manager.host_var = 0xF469
+        sim = Sim(transport, crypto, SimpleNamespace(),
+                  "169.254.25.1", "169.254.25.2", conn=manager,
+                  our_var=manager.our_var,
+                  parent_session_id=bytes.fromhex("fcc3"))
+
+        # Native frame 1264: guest INIT fff0 (FireRed metadata).  The host's
+        # only response is the native cumulative ACK fff1.
+        init = pia_reliable_datagram(
+            crypto, "169.254.25.2", 0xCDB0, 0xF469, 2,
+            0xFFF0, 0xFFF0, reliable.FLAGSA_INIT, NATIVE_GUEST_METADATA)
+        self.assertTrue(sim.process_datagram(init, "169.254.25.2"))
+        sim.tick()
+        self.assertEqual(len(transport.sent), 1)
+        first, destination = transport.sent.pop(0)
+        self.assertEqual(destination, "169.254.25.2")
+        compressed, decoded = decode_reliable_messages(
+            crypto, first, "169.254.25.1")
+        self.assertFalse(compressed)
+        self.assertEqual(len(decoded), 1)
+        message, ack = decoded[0]
+        self.assertEqual(message.msgflags, 0x40)
+        self.assertEqual((ack.flagsA, ack.seq, ack.ack, ack.payload.hex()),
+                         (reliable.FLAGSA_CTRL, 0xFFF0, 0xFFF0,
+                          "0001fff100000000000000000000000000000000"))
+
+        # Native frame 1266: guest WC fff1 with connect id 1a51.  Native
+        # frame 1269 answers with host INIT/WA fff0 followed by ACK fff2 in
+        # the same Pia datagram.
+        wc = pia_reliable_datagram(
+            crypto, "169.254.25.2", 0xCDB0, 0xF469, 3,
+            0xFFF1, 0xFFF0, reliable.FLAGSA_GBA,
+            bytes.fromhex("574302001a51"))
+        self.assertTrue(sim.process_datagram(wc, "169.254.25.2"))
+        sim.tick()
+        self.assertEqual(len(transport.sent), 1)
+        second, destination = transport.sent.pop(0)
+        self.assertEqual(destination, "169.254.25.2")
+        compressed, decoded = decode_reliable_messages(
+            crypto, second, "169.254.25.1")
+        self.assertFalse(compressed)
+        self.assertEqual(len(decoded), 2)
+        wa_message, wa = decoded[0]
+        ack_message, ack = decoded[1]
+        self.assertEqual(wa_message.msgflags, 0)
+        self.assertEqual((wa.flagsA, wa.seq, wa.ack, wa.payload.hex()),
+                         (reliable.FLAGSA_INIT, 0xFFF0, 0xFFF0,
+                          "57410600fcc31a510000"))
+        self.assertEqual(ack_message.msgflags, 0x40)
+        self.assertEqual((ack.flagsA, ack.seq, ack.ack, ack.payload.hex()),
+                         (reliable.FLAGSA_CTRL, 0xFFF0, 0xFFF0,
+                          "0001fff200000000000000000000000000000000"))
+
+        # Native frame 1271: the guest ACKs host WA with next-expected fff1.
+        guest_ack = pia_reliable_datagram(
+            crypto, "169.254.25.2", 0xCDB0, 0xF469, 4,
+            0xFFF0, 0xFFF2, reliable.FLAGSA_CTRL,
+            reliable.build_bulk_ack(0xFFF1))
+        self.assertTrue(sim.process_datagram(guest_ack, "169.254.25.2"))
+        sim.tick()
+        self.assertTrue(sim.parent_link_accepted)
+        self.assertFalse(sim.connected)  # parent slot/NI engine is still deliberately gated
+        self.assertEqual(transport.sent, [])
 
 
 if __name__ == "__main__":

@@ -20,9 +20,14 @@ import subprocess
 import sys
 import time
 import unittest
+from pathlib import Path
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))  # MWL-SwitchTrade/ (shared relay)
-EMU_ROOT = os.path.join(PROJECT_ROOT, "emu")                                          # emu/ (frlgsim)
+EMU_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+PROJECT_ROOT = next(
+    (str(parent) for parent in Path(__file__).resolve().parents
+     if (parent / "relay" / "server.py").is_file()),
+    os.path.abspath(os.path.join(EMU_ROOT, "..")),
+)  # MWL-SwitchTrade/ (works for both main/emu and a junction into _related/)
 sys.path.insert(0, PROJECT_ROOT)
 sys.path.insert(0, EMU_ROOT)
 

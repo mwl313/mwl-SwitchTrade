@@ -506,7 +506,7 @@ class HostConnectionManager:
 
     @property
     def connected(self):
-        return False                                 # host RFU path is not implemented yet
+        return False                                 # parent slot/NI path is not implemented yet
 
     @property
     def pia_connected(self):

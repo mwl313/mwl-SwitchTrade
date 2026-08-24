@@ -41,6 +41,21 @@ def build_connect(connect_id):
     return build_gba_frame(TYPE_C, connect_id)
 
 
+def build_accept(host_session_id, connect_id):
+    """The parent/host's emulator RFU accept (``WA``).
+
+    The two u16 values are already in their on-wire little-endian byte order:
+    ``host_session_id`` is the RFU session id advertised in the host beacon and
+    ``connect_id`` is echoed from the child's preceding ``WC`` request.  The
+    final two zero bytes are present in every native accept observed.
+    """
+    host_session_id = bytes(host_session_id)
+    connect_id = bytes(connect_id)
+    if len(host_session_id) != 2 or len(connect_id) != 2:
+        raise ValueError("host session id and connect id must both be 2 bytes")
+    return build_gba_frame(TYPE_A, host_session_id + connect_id + b"\x00\x00")
+
+
 def _roundup4(n):
     return (n + 3) & ~3
 
@@ -118,6 +133,8 @@ def parse_in(payload):
         return rec
     if typ == TYPE_A:
         return {"type": "A", "host_session_id": body[0:2], "connect_id": body[2:4]}
+    if typ == TYPE_C:
+        return {"type": "C", "connect_id": body[0:2]}
     if typ == TYPE_K:
         return {"type": "K", "k_seq": int.from_bytes(body[0:4], "little"),
                 "acked_ts": int.from_bytes(body[8:12], "little") if len(body) >= 12 else None}
