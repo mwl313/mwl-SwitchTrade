@@ -309,12 +309,14 @@ def run_live(args, lg):
     if args.mode == "host":
         # The LDN host must initiate Pia.  Use a fresh session variable id (Pia requires >=2),
         # broadcast Net 0x11, and capture the Switch's Net/Session replies.  The manager keeps
-        # connected=False until a byte-exact native Session accept is implemented, so the legacy
-        # follower trade engine cannot leak child traffic into this host acquisition stage.
+        # The byte-exact native Session accept is implemented. connected=False still gates the
+        # legacy follower Reliable/RFU engine because host/parent game traffic is a distinct role.
         host_var = max(2, int.from_bytes(os.urandom(2), "big"))
         conn = pia_connect.HostConnectionManager(
             our_mac=t.our_mac or b"\x00" * 6, our_ip=t.our_ip,
-            network_id=pc.net_id, our_var=host_var, log=lg)
+            network_id=pc.net_id, our_var=host_var,
+            peer_provider=lambda: (t.host_mac, t.host_ip),
+            player_name=args.ot, log=lg)
     else:
         conn = pia_connect.ConnectionManager(
             our_mac=t.our_mac or b"\x00" * 6, host_mac=t.host_mac or b"\x00" * 6,
@@ -343,7 +345,8 @@ def run_live(args, lg):
               f"(decrypt/analyse offline afterward)")
     if args.mode == "host":
         lg(f"[live] LDN host active; broadcasting Pia Net 0x11 every 500ms. "
-           f"The Switch's 0x12 + Session join will be captured; game traffic remains gated.")
+           f"The native Pia Session accept will run after the Switch joins; "
+           f"host Reliable/RFU game traffic remains gated.")
     else:
         lg(f"[live] joined LDN; awaiting the host's Pia connection handshake "
            f"(Net 0x11 -> Session join -> confirm). NOT trading until the host confirms us.")
