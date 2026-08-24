@@ -1,6 +1,6 @@
 # STATUS — 진행 상태 (2026-08-24)
 
-> 마지막 갱신: 2026-08-24 — **PC-host 전체 trade/save/atomic room exit 실기 PASS**
+> 마지막 갱신: 2026-08-24 — **PC-host 전체 trade/exit 실기 PASS · absolute-VBlank cadence fix 완료**
 
 ## 🏆 핵심 성과
 
@@ -146,6 +146,11 @@
   뒤 game output을 멈추고 peer leave 또는 5초까지 AP를 유지한다(15/15 focused, 138/138 ordinary
   WSL PASS; 사용자 선택에 따라 추가 hardware trade는 생략). 상세:
   `docs/47-full-trade-atomic-exit-pass-20260824.md`.
+- room movement jitter의 root cause는 live loop가 매 tick의 처리시간 뒤에 다시 full VBlank
+  (`16.74 ms`)를 sleep한 work-plus-sleep scheduler였다. `53d8878`은 shared 59.727 Hz constant와
+  monotonic absolute deadline을 사용해 work time을 period에서 빼고, overrun 뒤 burst 없이
+  resync한다. focused 16/16, ordinary WSL 139/139 PASS; 사용자 요청에 따라 visual hardware test는
+  복귀 뒤로 연기했다. 상세: `docs/48-absolute-vblank-movement-cadence-fix-20260824.md`.
 - ldn 0.0.17 local-self DESTROY 수정은 no-peer stop(1.191초)만 해결했다. joined WA 실기 종료에서는
   radio thread가 15초 뒤에도 살아 있었다. process exit 후 selector stale-AP 청소와 양 카드 post-RX는
   PASS했지만 joined-session teardown root cause는 thread stack 확보 전까지 미해결이다.
@@ -170,7 +175,7 @@
 | **mwl313/frlg-ldn-trade-emu** (emu/) | **동작 코드 본체** — framerelay(메인) + EMU(동결). `emu/HANDOFF.md`가 작업 대장 |
 
 - 검토 브랜치: main은 `golden-capture-re`, emulator는 `gptsolreview`가 최신이며 push 완료. emulator의
-  최신 post-RFU-D LDN tail 구현은 `57a25c9`, atomic room-exit 실기 기준은 `946bc63`, menu-ready final-close 구현은 `823288b`, parent post-save re-entry는 `5cb19af`, reactive save-return은 `cea2d75`, parent finish-commit 구현은 `812fb90`, party-pull 구현은 `0b8a2ab`, post-seat standby 수정은 `ff81318`, batched-child reflection 수정은 `0a8d9a0`, parent Reliable deadline 수정은 `31b29bf`,
+  최신 absolute-VBlank cadence 구현은 `53d8878`, post-RFU-D LDN tail 구현은 `57a25c9`, atomic room-exit 실기 기준은 `946bc63`, menu-ready final-close 구현은 `823288b`, parent post-save re-entry는 `5cb19af`, reactive save-return은 `cea2d75`, parent finish-commit 구현은 `812fb90`, party-pull 구현은 `0b8a2ab`, post-seat standby 수정은 `ff81318`, batched-child reflection 수정은 `0a8d9a0`, parent Reliable deadline 수정은 `31b29bf`,
   double-radiotap 회귀 방지는 `82dd0d3`이다.
   `framerelay-dev`는 그 이전 기능 기준선이다.
 - ~~MWL-SwitchTrade-v2~~: 삭제됨 (고유 내용 0)

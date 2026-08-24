@@ -24,7 +24,9 @@ session-local player/owner fields required by the two local Pia sessions.
 ## Future TODO, in order
 
 1. Finish and freeze the PC-host trade/close golden baseline.
-2. Fix local held-key cadence and match native Switch-to-Switch movement smoothness.
+2. Fix local held-key cadence and match native Switch-to-Switch movement smoothness. Implemented as
+   the absolute-VBlank scheduler in emulator `53d8878` (139/139 ordinary WSL PASS); visual hardware
+   comparison is deferred until the user returns.
 3. Specify a feature-neutral RFU tunnel envelope: session, direction, RFU frame/slot, sequence,
    timestamp, player mapping, and reconnect epoch.
 4. Terminate LDN/Pia/Reliable locally on both ends; never send WAN latency into the local 802.11 ACK
@@ -50,4 +52,3 @@ session-local player/owner fields required by the two local Pia sessions.
 - No per-feature cloud game server.
 - No claim that raw 802.11 frame relay is production-safe until its ACK/SIFS behavior passes real WAN
   testing. The locally terminated Pia/RFU tunnel is the default expansion path.
-

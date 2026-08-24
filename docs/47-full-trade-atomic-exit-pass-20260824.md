@@ -90,7 +90,7 @@ regression appears. Remaining work is now:
 
 1. joined-session `HostTransport.stop()` can still exceed its 15-second thread guard after a peer;
    cleanup is safe and both cards recover, but production shutdown should capture/fix the thread wait;
-2. replace the work-plus-sleep parent cadence with an absolute VBlank deadline to reduce avatar jitter;
+2. hardware-verify the absolute-VBlank cadence fix in `53d8878`; the work-plus-sleep defect is fixed
+   offline and 139/139 ordinary WSL tests pass;
 3. use this proven local endpoint as the baseline for the Switch-to-Switch tunnel; battles, Union Room,
    and later features remain Switch-to-Switch only per `docs/46-future-switch-to-switch-features-todo-20260824.md`.
-
