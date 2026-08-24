@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, dataclass
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -168,6 +169,8 @@ def extract(path: str | Path, *, emu_root: str | Path = EMU_ROOT) -> dict[str, A
                                 "size": candidate.size,
                                 "form": candidate.form,
                                 "valid": candidate.valid,
+                                "raw_sha256": hashlib.sha256(candidate.raw).hexdigest(),
+                                "canonical_sha256": hashlib.sha256(candidate.canonical).hexdigest(),
                                 "decoded": candidate.decoded,
                                 "validation": candidate.validation,
                             }
