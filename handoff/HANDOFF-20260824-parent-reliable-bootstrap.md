@@ -1,5 +1,9 @@
 # Handoff — parent Reliable ACK/WC/WA gate (2026-08-24)
 
+> Superseded for current work by
+> `handoff/HANDOFF-20260824-parent-ni-gate.md`.  The WA gate passed live; joined
+> teardown remains unresolved despite the no-peer fix recorded below.
+
 ## Current branches
 
 - Main repository: `golden-capture-re`.

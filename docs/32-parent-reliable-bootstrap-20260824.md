@@ -1,4 +1,8 @@
-# 32 — PC-host parent Reliable bootstrap and clean teardown (2026-08-24)
+# 32 — PC-host parent Reliable bootstrap and no-peer teardown (2026-08-24)
+
+> Follow-up correction: the live WA gate passed, but joined-session teardown
+> still hangs after the 15-second grace.  The parent NI implementation and the
+> corrected teardown scope are in `docs/33-parent-ni-gate-20260824.md`.
 
 ## Outcome
 
@@ -13,8 +17,8 @@ commit `4478ec9`:
 - retransmit `WA` until the Switch acknowledges it;
 - keep the child/right-seat trade engine gated until parent RFU/NI exists.
 
-The separate HostTransport shutdown hang is also repaired and validated on the
-real RTL8192EU. The next one-Switch run is a `WA` wire gate, not yet a full trade.
+The separate HostTransport no-peer shutdown hang is repaired and validated on
+the real RTL8192EU.  This did not fix the later joined-session shutdown path.
 
 ## Native evidence
 
@@ -67,7 +71,7 @@ Consequently, the next live UI may still end with “trainer unavailable” afte
 a later delay. Success for this gate is the Switch's bulk ACK of PC `WA`, not
 trading-room entry.
 
-## Teardown root cause and repair
+## No-peer teardown root cause and partial repair
 
 Kinnay ldn 0.0.17 `APNetwork._destroy_network()` walks every connected
 participant and sends a network-destroy control-port frame. That includes
@@ -79,7 +83,7 @@ The guarded runtime adapter now skips only the local AP MAC. A still-connected
 remote Switch continues to receive the destroy notification. Site-packages is
 not modified.
 
-Real health-gated validation on the RTL8192EU:
+Real health-gated no-peer validation on the RTL8192EU:
 
 ```text
 room ready             1.403 s
@@ -89,6 +93,10 @@ owned vifs after stop  0
 post-stop monitor      recreated by selector
 post-stop actual RX    PASS (channel 1), restored to channel 6
 ```
+
+The later joined WA test still left the radio thread alive after 15 seconds.
+Do not generalize this no-peer result to an associated Switch session; see
+document 33.
 
 ## Verification
 
