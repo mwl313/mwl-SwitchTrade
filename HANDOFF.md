@@ -11,7 +11,8 @@
 
 Commit `812fb90` passed its exact real-Switch gate. Local and child `READY_FINISH_TRADE` completed,
 parent sent owner-zero `CONFIRM_FINISH_TRADE`, and the received Rattata was committed to a valid
-100-byte `received.pk3`.
+100-byte `received.pk3`. After the forced return-path disconnect, the user confirmed Salamence
+remained on the Switch, proving its cartridge-side save also persisted.
 
 The Switch then completed standby counts 5 through 10. The old save-chain driver immediately
 invented count 11, which the Switch never answered; the screen remained at
@@ -28,8 +29,8 @@ chain terminator; the dead-host watchdog remains only a safety net. The regressi
 idle post-confirm tick cannot invent or advance a count.
 
 WSL ordinary is 136 PASS and Windows relay is 4/4 PASS (140 functional). This commit is not yet
-hardware-proven. Resume with one full trade; PASS is post-save party re-exchange, CODEX Cancel,
-graceful room exit, and no rollback at neutral state.
+hardware-proven. Resume with one full trade; PASS is post-save party re-exchange, CODEX Cancel, and
+graceful room exit. Persistence is already proven.
 
 Authoritative report:
 `mwl-SwitchTrade/docs/44-confirm-finish-live-pass-save-count-fix-20260824.md`.
