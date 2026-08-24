@@ -1,6 +1,7 @@
 
-# emu는 별도 git 리포 (tornadus 포크) — 여기서 제외
+# Legacy safety checkout only. Production source is tracked under bridge/.
 /emu/
 /_related/
+/related/
 __pycache__/
 /logs/

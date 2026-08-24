@@ -1,6 +1,9 @@
-# STATUS — 진행 상태 (2026-08-24)
+# STATUS — 진행 상태 (2026-08-25)
 
-> 마지막 갱신: 2026-08-24 — **PC-host 전체 trade/exit 실기 PASS · absolute-VBlank cadence fix 완료**
+> 마지막 갱신: 2026-08-25 — **production-beta 통합 · RTL8192EU-only beta 계획 확정**
+>
+> 현재 실행 순서와 future backlog의 authoritative 문서:
+> `docs/49-production-beta-priorities-20260825.md`.
 
 ## 🏆 핵심 성과
 
@@ -9,7 +12,7 @@
 - C-4 BSSID 고정 **실증** (dmesg assoc MAC 일치), kill 후 vif 청소, phy 자동감지, 래퍼 v6.1
 - nl80211 임포트 버그 2연쇄 수정 (f249d8f → 5514b66), T4 다중 방 선택 픽스(63e5572), start_remote 미기동 픽스(ad591b5)
 **2026-08-22 저녁**: **프로젝트 방향 전환 확정 + STEP 1~5 완료**
-- **framerelay(트랙 B) = 프로덕션 메인**, EMU(트랙 A) = 동결·폴백 보존 (`emu/README_MWL.md`, `emu/HANDOFF.md`)
+- **framerelay(트랙 B) = 프로덕션 메인**, EMU(트랙 A) = 동결·폴백 보존 (`bridge/README_MWL.md`, `bridge/HANDOFF.md`)
 - MWL-SwitchTrade-v2 껍데기 삭제 (고유 내용 0 확인 후)
 - STEP 1~4 오픈코드 위임 완료: audit 청소(`0185cf8`) / RFU 비콘 인코더(`b4f329e`) / 호스트 모드(`0c8d7c8`) / EchoGuard 설계+rate limiter(`ffa79d9`)
 - **V-1 실측 완료 — 시나리오 A 확정** (`fd99200`): 주입↔재캡처 바이트 완전 일치(8/8회), 드라이버 FCS 덮어쓰기 없음(rtl8xxxu+커널 7.0). → EchoGuard sha1 유지, 재구현 불필요
@@ -164,17 +167,18 @@
 | **2a** | 릴레이 인프라 (RemoteTransport+relay 서버+FSM 훅) | ✅ 100% |
 | **2b** | LAN 2브리지 실기 | 🔄 ~70% — 단독 트레이드·양방향 조인 실증, E2E 양방향 교환만 잔여 |
 | **2b'** | framerelay 코어 | ✅ PC-host full trade/save/atomic room exit 실기 완료 |
-| 3 | 세션 시스템 + GUI (PySide6 확정, `docs/13-userside-app-plan.md`) | 설계 완료 |
+| 3 | 세션 시스템 + HTML/CSS GUI (`docs/49-production-beta-priorities-20260825.md`) | 계획 정리 |
 | 4 | 프로덕션 배포 (WSL2 길 A, `docs/12-wsl2-poc-windows.md`) | α G1~G4는 8192EU PASS, G5/G6 잔여 |
 
-## 🔀 리포 구조 (2026-08-22 확정)
+## 🔀 리포 구조 (2026-08-25 통합)
 
 | 리포 | 역할 |
 |---|---|
-| **mwl313/mwl-SwitchTrade** | 문서·릴레이 서버·WSL2 배포 인프라·스크립트 |
-| **mwl313/frlg-ldn-trade-emu** (emu/) | **동작 코드 본체** — framerelay(메인) + EMU(동결). `emu/HANDOFF.md`가 작업 대장 |
+| **mwl313/mwl-SwitchTrade** | 단일 앱 리포: `bridge/` runtime + relay + scripts + docs + payload decoder |
+| **mwl313/wsl2-kernel-build** | 별도 WSL kernel/driver 빌드 리포 |
 
-- 검토 브랜치: main은 `golden-capture-re`, emulator는 `gptsolreview`가 최신이며 push 완료. emulator의
+- 통합 브랜치: `production-beta`. 이전 golden/payload/gptsolreview 브랜치와 standalone emulator
+  리포는 증거 보존용이다. 통합된 `bridge/` runtime의
   최신 absolute-VBlank cadence 구현은 `53d8878`, post-RFU-D LDN tail 구현은 `57a25c9`, atomic room-exit 실기 기준은 `946bc63`, menu-ready final-close 구현은 `823288b`, parent post-save re-entry는 `5cb19af`, reactive save-return은 `cea2d75`, parent finish-commit 구현은 `812fb90`, party-pull 구현은 `0b8a2ab`, post-seat standby 수정은 `ff81318`, batched-child reflection 수정은 `0a8d9a0`, parent Reliable deadline 수정은 `31b29bf`,
   double-radiotap 회귀 방지는 `82dd0d3`이다.
   `framerelay-dev`는 그 이전 기능 기준선이다.
@@ -185,7 +189,7 @@
 | 카드 | HOST(방 개설) | GUEST | 비고 |
 |---|---|---|---|
 | RTL8192EU (`0bda:818b`) VM/WSL | ✅ full PC-host trade/room exit live PASS | ✅ | joined-session process teardown thread 잔여 |
-| RTL8188EU (`0bda:8179`) WSL/vendor | ❌ project HOST 차단 | ✅ | standalone AP PASS, AP+monitor deadlock; monitor RX/TX G4 PASS |
+| RTL8188EU (`0bda:8179`) WSL/vendor | ❌ beta quarantine | ❌ beta quarantine | RX/decode PASS지만 custom control-port connect EINVAL; AP+monitor deadlock |
 
 ## 알려진 미해결 이슈
 
@@ -225,7 +229,7 @@
 5. **STEP 10~13**: 스위치 실기 (호스트 모드 → framerelay E2E 🏆 → 안정성 5종)
 6. 프로덕션: γ(GUI 셸) / δ(릴레이 운영) / β(installer)
 
-상세 실행 절차: `emu/HANDOFF.md` STEP 5~13 | 마스터 로드맵: `docs/12-framerelay-구조와-로드맵.md`
+상세 역사/실행 증거: `bridge/HANDOFF.md` | 현재 beta 로드맵: `docs/49-production-beta-priorities-20260825.md`
 
 ## 파일/백업
 

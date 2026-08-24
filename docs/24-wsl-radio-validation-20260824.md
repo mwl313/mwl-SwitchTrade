@@ -1,5 +1,10 @@
 # 24 — WSL/VM 무선 카드 검증 종합 보고서 (2026-08-24)
 
+> **2026-08-25 후속 실기 정정:** 아래 시험은 8188EU RF 송수신과 beacon decode를 증명하지만
+> production guest 호환성을 증명하지 않는다. 실제 `ldn.connect()`는 Nintendo custom nl80211
+> control-port protocol에서 `EINVAL`로 실패했고 AP+monitor도 deadlock한다. RTL8188EU는 beta에서
+> quarantine한다. 현재 기준은 `docs/49-production-beta-priorities-20260825.md`다.
+
 ## 1. 결론
 
 RTL8188EU 자체는 고장 나지 않았다. VM2를 재시작한 뒤 같은 카드(`0bda:8179`,
@@ -18,7 +23,8 @@ start, monitor RX, 채널 변경 및 외부 검증 TX injection을 통과했다.
 검증 후 운영 구성은 다음과 같다.
 
 - WSL RTL8192EU: in-kernel `rtl8xxxu`, host/guest/relay. G2~G4와 30분 soak 통과.
-- WSL RTL8188EU: pinned vendor `8188eu`, guest/relay. G2~G4 통과; host는 과거 AP 미노출 실측으로 차단.
+- WSL RTL8188EU: pinned vendor `8188eu`의 G2~G4 RF 시험은 통과했지만 후속 real guest control-port
+  connect가 실패했다. 현재 beta 역할은 모두 차단한다.
 - VMware VM2는 Ethernet/Tailscale rollback 환경으로 보존하되 두 USB Wi-Fi 카드는 WSL이 소유한다.
 
 ## 2. RTL8188EU 실패 위치

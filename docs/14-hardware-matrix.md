@@ -6,6 +6,11 @@
 > 별도 축이며 2026-08-24 현재 8192EU G2~G4+30분 soak ✅ / 8188EU mainline G2 ❌,
 > patched pinned vendor driver guest/relay G2~G4 + 5분 soak ✅이다.
 
+> **2026-08-25 production correction:** later real guest tests showed that the patched 8188EU can
+> receive/decode the room but cannot complete Nintendo's custom nl80211 control-port association
+> (`EINVAL`), and AP+monitor can deadlock. It is quarantined from every beta role. RTL8192EU is the
+> sole beta candidate; a second matching card will be used for symmetric testing on 2026-08-26.
+
 ---
 
 ## 1. 역할 정의
@@ -24,8 +29,10 @@
 | `0bda:818b` | RTL8192EU | WSL USB-IP/rtl8xxxu | ✅ room-open | ✅ | monitor RX/TX G4 + AP/monitor/TAP/FRLG room-ready. 실제 Switch join은 G6 잔여 |
 | `0bda:8179` | RTL8188EU | VMware/rtl8xxxu | ❌ | ✅ | AP 미노출, LDN join·monitor RX 실증(T3) |
 | `0bda:8179` | RTL8188EU | WSL USB-IP/rtl8xxxu | ❌ | ❌ | firmware MCU start `-11`, interface 생성 전 G2 FAIL |
-| `0bda:8179` | RTL8188EU | WSL USB-IP/patched vendor 8188eu | ❌ | ✅ | warning-free RX/TX+5분 soak. 단일 AP beacon 108개 외부 수신, AP+monitor는 cfg80211 deadlock |
-| `0e8d:7612` 등 | MT7612U | mt76 (인커널) | 🔍 예상 ✅ | 🔍 예상 ✅ | 미실측 — 입수 시 backend별 검증 후 갱신 |
+| `0bda:8179` | RTL8188EU | WSL USB-IP/patched vendor 8188eu | ❌ | ❌ beta quarantine | room RX/decode PASS; custom control-port connect `EINVAL`; AP+monitor deadlock |
+| `0e8d:7610` 등 | MT7610U | mt76x0u (인커널) | 🔍 후보 | 🔍 후보 | upstream ALFA AWUS036ACHM reliability high; WSL/role 미실측 |
+| PCIe ID varies | RTL8821CE | rtw88_8821ce | 🔍 후보 | 🔍 후보 | upstream reliability high; PCIe evidence는 WSL USB-IP 증거가 아님 |
+| PCIe ID varies | AMD RZ616 | mt7921e | ❓ | ❓ | upstream reliability low; 진단 후보 only |
 | `0bda:c811` 등 | RTL8821CU | rtw88_8821cu | ❓ 미확인 | ❓ 미확인 | USB 변형 및 USB-IP 별도 검증 필요 |
 | Intel AX 계열 | — | iwlwifi | ❌ | ❌ | 원작자 README: 동작 안 함 (공식 기록) |
 | Atheros AR9271 | — | ath9k_htc | ❓ | ❌ 대체로 불가 | 원작자 README |

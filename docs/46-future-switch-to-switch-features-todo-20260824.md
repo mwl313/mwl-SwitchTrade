@@ -1,5 +1,8 @@
 # 46 — Future feature scope: Switch-to-Switch only (2026-08-24)
 
+> 2026-08-25: this feature list is retained, but the authoritative ordered beta and future backlog is
+> `docs/49-production-beta-priorities-20260825.md`.
+
 ## Permanent product decision
 
 Future FRLG online features are **real Switch-to-real Switch only**. The production bridge must not

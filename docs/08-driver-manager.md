@@ -1,5 +1,10 @@
 # 08 — 드라이버 매니저 설계 (칩셋 자동 감지 → 적절한 드라이버 로드)
 
+> **2026-08-25 정정:** 이 문서의 8188EU WSL guest 지원 주장은 후속 실기에서 기각됐다.
+> patched vendor driver는 광고 수신/해석은 가능하지만 Nintendo custom control-port association이
+> `EINVAL`로 실패하고 AP+monitor도 deadlock한다. 프로덕션 베타는 RTL8192EU만 후보이며 현재 계획은
+> `docs/49-production-beta-priorities-20260825.md`가 우선한다.
+
 > 작성: 2026-08-21 | 목표: **어떤 Wi-Fi 카드를 꽂든 자동으로 작동**하게 하는 배포용 호환 레이어
 > 원칙: 원래 드라이버의 프로토콜을 덮어쓰지 않는다. 칩셋별 **올바른 드라이버**를 골라 로드한다.
 
@@ -15,7 +20,9 @@
 |---|---|---|---|---|
 | `0bda:8179` | RTL8188EU | `rtl8xxxu` | 인커널 | ✅ LDN join 검증 완료 |
 | `0bda:818b` | RTL8192EU | `rtl8xxxu` | 인커널 | ✅ LDN join 검증 완료 (2026-08-21 재검증 — out-of-tree 불필요) |
-| `0e8d:7610` 등 | MT7612U | `mt76` | 인커널 | ✅ 원작자 검증 (ALFA AWUS036ACHM) |
+| `0e8d:7610` 등 | MT7610U | `mt76x0u` | 인커널 | ✅ 원작자 검증 (ALFA AWUS036ACHM, high) |
+| PCIe ID varies | RTL8821CE | `rtw88_8821ce` | 인커널 | ✅ 원작자 검증 (high; WSL USB-IP와 별개) |
+| PCIe ID varies | AMD RZ616 | `mt7921e` | 인커널 | 🟡 원작자 low reliability |
 | `0bda:c811` 등 | RTL8821CU | `rtw88` (usb) | 인커널 | ❓ 후보 |
 | 그 외 | — | 인커널 드라이버 우선 → 실패 시 out-of-tree | — | — |
 
@@ -50,5 +57,5 @@
 ## 배포 관점
 
 - 사용자 설치는 `install-driver.sh` 한 번 실행 → 카드 꽂으면 자동 인식
-- 지원 칩셋 매트릭스를 README에 명시 (8188EU/8192EU/MT7612U 우선)
+- 지원 칩셋 매트릭스를 README에 명시 (beta는 8192EU; 향후 MT7610U/RTL8821CE/RZ616 검증)
 - 드라이버는 DKMS로 커널 업데이트에도 유지
