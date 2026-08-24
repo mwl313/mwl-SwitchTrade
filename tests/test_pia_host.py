@@ -25,6 +25,7 @@ from frlgsim import gbaframe, linkplayer, mon, ni, reliable, rfu, trade
 from frlgsim.sim import (
     PARENT_RTO_CEIL_MS,
     PARENT_RTX_LIMIT,
+    PARENT_PARTY_REQUEST_IDLE_FRAMES,
     PARENT_SEAT_IDLE_FRAMES,
     Sim,
     TS_SEED,
@@ -152,6 +153,11 @@ class PiaHostTest(unittest.TestCase):
                 self.frames = []
                 self.established = False
                 self.in_seat_phase = True
+                self.entry = SimpleNamespace(on_trade_menu_open=self._open_menu)
+                self.rx = SimpleNamespace(peers=[SimpleNamespace(epochs=2, done=True)])
+
+            def _open_menu(self):
+                self.in_seat_phase = False
 
             def _on_req(self, reqtype):
                 self.requests.append(reqtype)
@@ -239,7 +245,24 @@ class PiaHostTest(unittest.TestCase):
         sim._on_gba_in(gbaframe.wrap_t(rfu.uni_slot(standby3), 0x31356))
         self.assertEqual(drive_row_zero(), standby3)
         self.assertEqual(drive_row_zero(), standby3)
+        for _ in range(PARENT_PARTY_REQUEST_IDLE_FRAMES):
+            self.assertEqual(drive_row_zero(), rfu.idle_slot())
+        self.assertFalse(engine.in_seat_phase)
+        self.assertEqual(drive_row_zero(), rfu.serialize([rfu.SEND_BLOCK_REQ, 1]))
+
+        for expected_index, reqtype in enumerate((1, 1, 3, 4), start=1):
+            engine.sender = None
+            engine.rx.peers[0].epochs += 1
+            for _ in range(PARENT_PARTY_REQUEST_IDLE_FRAMES):
+                self.assertEqual(drive_row_zero(), rfu.idle_slot())
+            self.assertEqual(drive_row_zero(), rfu.serialize([rfu.SEND_BLOCK_REQ, reqtype]))
+            self.assertEqual(len(engine.requests), expected_index + 3)
+
+        engine.sender = None
+        engine.rx.peers[0].epochs += 1
         self.assertEqual(drive_row_zero(), rfu.idle_slot())
+        self.assertIsNone(sim._parent_party_request_index)
+        self.assertEqual(engine.requests, [0, 2, 1, 1, 1, 3, 4])
 
     def test_parent_uni_drives_real_trade_engine_to_card_gate(self):
         engine = trade.TradeEngine(
