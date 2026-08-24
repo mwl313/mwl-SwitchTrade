@@ -389,6 +389,15 @@ class PiaHostTest(unittest.TestCase):
         self.assertEqual((committed["op"], committed["count"], committed["peer"]),
                          (rfu.SEND_BLOCK_INIT, 2, 0))
 
+        # Player zero does not have a local save clock.  After CONFIRM_FINISH it must wait for the
+        # Switch's source-timed save barriers, not invent the next count (live regression: extra 11).
+        engine.sender = None
+        engine.barrier.reset_to_idle()
+        local_count = engine.barrier.local_count
+        self.assertEqual(engine.tick(), [0] * 7)
+        self.assertFalse(engine.barrier.active)
+        self.assertEqual(engine.barrier.local_count, local_count)
+
     def test_parent_uni_drives_real_trade_engine_to_card_gate(self):
         engine = trade.TradeEngine(
             [mon.Mon.empty(), mon.Mon.empty()], trade_slot=1,

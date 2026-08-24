@@ -128,14 +128,8 @@ POST_SEAT_STANDBY_DELAY = 20
 # reaches count=2 first - the reactive gate, not the watchdog, drives the live path).
 WARP4_WATCHDOG = 180
 
-# Inter-round pace for the post-trade SAVE barrier chain [trade_scene.c:2566-2725, CB2_SaveAndEndTrade].
-# The host paces each save SetLinkStandbyCallback by its REAL save (LinkFullSave_WriteSector + the case-40
-# random delay): on the native-Pia reference capture the post-CONFIRM standby counts land ~0.3-1.8s apart (avg ~70 frames). We have no
-# real save, so completing one round (host echoed our count) and IMMEDIATELY bursting the next races the
-# standby count ahead of the host's save FSM -> desync -> host stuck saving -> in-game comms error (observed in a live run).
-# We instead wait SAVE_BARRIER_GAP frames between rounds (the FIRST round stays prompt - its host-side wait
-# [case 100] has a 180f timeout; the later rounds [cases 42/44/6] have NO timeout, so being slower is safe).
-SAVE_BARRIER_GAP = 60
+# Quiet gap before re-arming the bounded post-seat count-2/3 response bursts.
+STANDBY_REARM_GAP = 60
 
 # Dead-host safety net for the post-trade save chain. The host pauses up to ~1.8s between save barriers
 # (its real LinkFullSave writes), so the chain must NOT end on a short quiet window - it ends when the host
@@ -496,8 +490,6 @@ class TradeEngine:
         self._post_seat_wait = 0         # held-keys keepalive ticks left before the post-seat standbys
         self._save_barriers = False     # (c) post-trade save barrier chain is running [trade_scene 2566+]
         self._save_settle = 0           # consecutive host-idle frames since the last save barrier
-        self._save_started = False      # the FIRST save-chain round has been initiated (gate the inter-round pace)
-        self._save_round_wait = 0       # frames waited since the last save round completed (inter-round pace)
         self._cancel_barrier_active = False  # (d) cancel-exit standby running, finish when it passes
         self._return_field_barrier_active = False  # (e) return-to-field sync standby (count+1 after (d))
         # POST-CANCEL OVERWORLD: after the cancel-exit standby passes, the real game
@@ -1102,8 +1094,6 @@ class TradeEngine:
         # clears _save_barriers in feed_in_frame when its REQ/block arrives).
         self._save_barriers = True
         self._save_settle = 0
-        self._save_started = False       # first save round prompt; subsequent rounds paced (SAVE_BARRIER_GAP)
-        self._save_round_wait = 0
 
         if self.round < self.trades:
             self._arm_next_round()
@@ -1175,7 +1165,7 @@ class TradeEngine:
 
     # ---- CHILD-INITIATED standby barriers [link_rfu_2.c:1566-1573] -----------
     def _sustain_standby(self, count, emits_attr, regap_attr):
-        """Emit READY_EXIT_STANDBY `count` as a bounded burst, RE-ARMED across a SAVE_BARRIER_GAP idle gap,
+        """Emit READY_EXIT_STANDBY `count` as a bounded burst, re-armed across a quiet gap,
         so a FRESH count keeps reaching the host (the leader waits silently for it) until it completes the
         round - without flooding. The caller stops calling this once the host completes (barrier.host_count
         advances past `count`). Mirrors the save chain's sustain; fixes the live seat-phase comms error
@@ -1187,16 +1177,16 @@ class TradeEngine:
             return rfu.exit_standby_words(count)
         regap = getattr(self, regap_attr) + 1     # burst delivered (+ retransmitting); idle, then re-arm
         setattr(self, regap_attr, regap)
-        if regap >= SAVE_BARRIER_GAP:
+        if regap >= STANDBY_REARM_GAP:
             setattr(self, emits_attr, 0)
             setattr(self, regap_attr, 0)
         return [0] * 7
 
     def _run_save_chain(self):
         """The post-trade SAVE barrier chain [trade_scene.c:2566-2725, REVISION>=0xA, CB2_SaveAndEndTrade]:
-        after CONFIRM_FINISH the host runs ~5-6 SetLinkStandbyCallback barriers (cases 1/41/43/5/8 + the
-        evolution-check) INTERLEAVED WITH ITS REAL SAVE (LinkFullSave_WriteSector). The child CHILD-INITIATES
-        each standby round (reference captures: counts 5..10) and completes it on the host's mp0 echo (_on_host_standby).
+        after CONFIRM_FINISH the Switch runs its source-defined SetLinkStandbyCallback barriers
+        interleaved with the real save. We have no local save clock, so wait for and react to those
+        rounds instead of predicting their count or timing.
 
         The host's save WRITES pace the barriers 0.3-1.8s apart (reference captures), so the host goes QUIET for >1.5s
         between rounds. The chain must therefore END only when the host RE-EXCHANGES (returns to the trade
@@ -1205,22 +1195,10 @@ class TradeEngine:
         save pause - we did ONE save round then bailed -> the host stuck on "Saving..." (waiting for our next
         count) -> rolled the trade back.) SAVE_CHAIN_TIMEOUT is only the dead-host
         safety net (well above any real inter-barrier pause). Returns True while the chain runs (quiescent)."""
-        if not self.barrier.active:
-            # between rounds: start the next standby round, OR end the chain only if the host has truly
-            # vanished (the dead-host safety net; the NORMAL end is host_reexchange in feed_in_frame).
-            if self._save_settle > SAVE_CHAIN_TIMEOUT:
-                self._save_barriers = False
-                self.log(f"save-chain: host vanished for >{SAVE_CHAIN_TIMEOUT}f -> chain done (safety net)")
-                return False
-            # Initiate the next round IMMEDIATELY once the host completed the current one (barrier IDLE).
-            # No artificial pacing: the host (leader) is ALREADY paced by its real save writes, and we
-            # complete each round only on its mp0 echo - so we follow the host's cadence exactly. [The old
-            # SAVE_BARRIER_GAP inter-round wait added ~1s/round (~6s) that made the host wait on us ("host
-            # expected us sooner"); it was a band-aid for the race that the barrier re-broadcast guard
-            # (_on_host_standby: ignore count < local_count) now fixes properly. With the adaptive-RTO
-            # bootstrap clearing the bufferbloat, the save now runs at the native-Pia reference capture's ~1s/round.]
-            self._save_started = True
-            self.barrier.initiate(barriermod.STANDBY)
+        if not self.barrier.active and self._save_settle > SAVE_CHAIN_TIMEOUT:
+            self._save_barriers = False
+            self.log(f"save-chain: host vanished for >{SAVE_CHAIN_TIMEOUT}f -> chain done (safety net)")
+            return False
         return True
 
     def _advance_timers(self):
