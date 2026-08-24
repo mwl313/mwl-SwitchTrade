@@ -17,7 +17,7 @@ import os
 import time
 from collections import deque
 
-from . import crypto as cryptomod, reliable, gbaframe, rfu, pia_connect, ni, linkplayer
+from . import crypto as cryptomod, reliable, gbaframe, rfu, pia_connect, ni, linkplayer, trade as trademod
 
 RELIABLE_SEQ_START = 0xFFF0
 
@@ -142,6 +142,7 @@ PARENT_SEAT_IDLE_FRAMES = 24
 # three party pairs, mail, then gift ribbons [trade.c:1444-1582].  Each request state is preceded by
 # the ROM's `timer > 10` delay, so leave eleven idle command frames between completed blocks.
 PARENT_PARTY_REQUESTS = (1, 1, 1, 3, 4)
+PARENT_PARTY_RESPONSE_COUNTS = (17, 17, 17, 19, 4)
 PARENT_PARTY_REQUEST_IDLE_FRAMES = 11
 
 
@@ -161,6 +162,8 @@ class Sim:
                                     and hasattr(transport, "remote_poll")) else None
         self.crypto = pia_crypto
         self.engine = engine
+        if parent_session_id is not None and hasattr(engine, "leader_mode"):
+            engine.leader_mode = True
         # Held-keys overworld link-state engine [frlgsim/linkstate.py]. When present, the sim emits a
         # 0xBE00 SEND_HELD_KEYS keepalive on an idle VBlank ONLY while engine.in_seat_phase (the
         # overworld/cable-seat phase, entry P0..P3) - mirroring SendKeysToRfu, which the real child
@@ -311,6 +314,9 @@ class Sim:
         self._parent_party_request_active = False
         self._parent_party_request_idle = 0
         self._parent_party_child_epoch = 0
+        self._parent_child_linkcmd_epoch = 0
+        self._parent_child_ready_cursor = None
+        self._parent_set_mons_sent = False
         self._parent_child_cmd = rfu.idle_slot()
         self._parent_child_queue = deque()
         # Emission is FREE-RUN: _drive_reliable emits one child slot ('T') per local VBlank, on our own
@@ -525,6 +531,17 @@ class Sim:
                     child_frame = {"positional": [(0, reflected)]}
                     if hasattr(self.engine, "feed_in_frame"):
                         self.engine.feed_in_frame(child_frame)
+                    peer = getattr(getattr(self.engine, "rx", None), "peers", [None])[0]
+                    if (peer is not None and peer.done and peer.count == trademod.COUNT_LINKCMD
+                            and peer.epochs > self._parent_child_linkcmd_epoch):
+                        self._parent_child_linkcmd_epoch = peer.epochs
+                        data = peer.data()
+                        cmd = int.from_bytes(data[0:2], "little")
+                        cursor = int.from_bytes(data[2:4], "little")
+                        if cmd == trademod.READY_TO_TRADE and self._parent_child_ready_cursor is None:
+                            self._parent_child_ready_cursor = cursor
+                            self.log(f"[sim] child READY_TO_TRADE cursor={cursor}; "
+                                     f"parent SET_MONS gate armed")
                     parsed = rfu.parse_slot(reflected)
                     if parsed and parsed["op"] == rfu.READY_EXIT_STANDBY:
                         count = parsed["count"]
@@ -847,6 +864,11 @@ class Sim:
                 sender.owner = 0
                 sender.trust_pia = True
 
+        def start_parent_command(cmd, cursor=0):
+            sender = self.engine._begin_send(trademod.linkcmd_block(cmd, cursor))
+            sender.owner = 0
+            sender.trust_pia = True
+
         def parent_uni_command():
             if self._parent_uni_frames < 2:
                 return rfu.idle_slot()
@@ -899,7 +921,9 @@ class Sim:
                 peer = self.engine.rx.peers[0]
                 if (self._parent_party_request_active
                         and getattr(self.engine, "sender", None) is None
-                        and peer.epochs > self._parent_party_child_epoch and peer.done):
+                        and peer.epochs > self._parent_party_child_epoch and peer.done
+                        and peer.count == PARENT_PARTY_RESPONSE_COUNTS[
+                            self._parent_party_request_index]):
                     self._parent_party_request_active = False
                     self._parent_party_request_index += 1
                     if self._parent_party_request_index == len(PARENT_PARTY_REQUESTS):
@@ -921,6 +945,21 @@ class Sim:
                         self.log(f"[sim] parent BufferTradeParties request "
                                  f"{self._parent_party_request_index + 1}/5 type={reqtype}")
                         return rfu.serialize([rfu.SEND_BLOCK_REQ, reqtype])
+
+            if (not self._parent_set_mons_sent
+                    and self._parent_party_request_index is None
+                    and self._parent_child_ready_cursor is not None
+                    and getattr(self.engine, "leader_local_ready", False)
+                    and getattr(self.engine, "sender", None) is None):
+                child_cursor = self._parent_child_ready_cursor
+                start_parent_command(trademod.SET_MONS_TO_TRADE, self.engine.trade_slot)
+                self.engine.host_cursor = child_cursor
+                self.engine.state = trademod.S6_CONFIRM
+                self._parent_set_mons_sent = True
+                self.log(f"[sim] parent SET_MONS_TO_TRADE local_cursor={self.engine.trade_slot} "
+                         f"child_cursor={child_cursor}")
+                self.info("Both Pokémon selected; opening the confirmation screen.")
+                return rfu.serialize(self.engine.tick())
 
             parsed_own = rfu.parse_slot(rfu.serialize(words))
             if (parsed_own and parsed_own["op"] == rfu.READY_EXIT_STANDBY

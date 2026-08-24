@@ -153,8 +153,10 @@ class PiaHostTest(unittest.TestCase):
                 self.frames = []
                 self.established = False
                 self.in_seat_phase = True
+                self.leader_mode = False
+                self.leader_local_ready = False
                 self.entry = SimpleNamespace(on_trade_menu_open=self._open_menu)
-                self.rx = SimpleNamespace(peers=[SimpleNamespace(epochs=2, done=True)])
+                self.rx = SimpleNamespace(peers=[SimpleNamespace(epochs=2, done=True, count=17)])
 
             def _open_menu(self):
                 self.in_seat_phase = False
@@ -253,6 +255,7 @@ class PiaHostTest(unittest.TestCase):
         for expected_index, reqtype in enumerate((1, 1, 3, 4), start=1):
             engine.sender = None
             engine.rx.peers[0].epochs += 1
+            engine.rx.peers[0].count = (17, 17, 17, 19)[expected_index - 1]
             for _ in range(PARENT_PARTY_REQUEST_IDLE_FRAMES):
                 self.assertEqual(drive_row_zero(), rfu.idle_slot())
             self.assertEqual(drive_row_zero(), rfu.serialize([rfu.SEND_BLOCK_REQ, reqtype]))
@@ -260,9 +263,62 @@ class PiaHostTest(unittest.TestCase):
 
         engine.sender = None
         engine.rx.peers[0].epochs += 1
+        engine.rx.peers[0].count = 4
         self.assertEqual(drive_row_zero(), rfu.idle_slot())
         self.assertIsNone(sim._parent_party_request_index)
         self.assertEqual(engine.requests, [0, 2, 1, 1, 1, 3, 4])
+
+    def test_parent_combines_local_and_child_selection_as_owner_zero(self):
+        party = [mon.Mon(bytes([pid]) + b"\x00" * 99) for pid in (1, 2)]
+        engine = trade.TradeEngine(
+            party, trade_slot=1,
+            link_player=linkplayer.LinkPlayer(name="CODEX"), log=lambda *args: None)
+        sim = Sim(SimpleNamespace(), PiaCrypto(bytes(range(16))), engine,
+                  "169.254.25.1", "169.254.25.2",
+                  parent_session_id=bytes.fromhex("fcc3"))
+        sim._parent_accept_acked = sim._parent_poll_sent = True
+        sim._parent_child_ni_complete = sim._parent_group_zero_sent = True
+        sim._parent_status_index = len(sim._parent_status_slots)
+        sim._parent_group_one_sent = sim._parent_ni_complete = True
+        sim._parent_uni_frames = 6
+        sim._parent_player_ids_sent = sim._parent_link_request_sent = True
+        sim._parent_player_ids_gap = 0
+        sim._parent_card_request_sent = sim._parent_seat_ready = True
+        sim._tx_reliable_batch = lambda batch: batches.append(list(batch))
+        sim._parent_party_request_index = None
+        engine.entry.on_trade_menu_open()
+        engine.state = trade.S4_PARTY
+        engine._host_party_blocks = 3
+        engine._lp_sent = True
+        engine._party_sent = len(engine._party_blocks)
+        engine._got_ribbons = engine._live = True
+        batches = []
+
+        self.assertEqual(engine.tick(), [0] * 7)
+        self.assertTrue(engine.leader_local_ready)
+        self.assertIsNone(engine.sender)
+
+        slots = rfu.SlotBuilder()
+        ready = trade.linkcmd_block(trade.READY_TO_TRADE, 2)
+        child_commands = [rfu.init_words(2, owner=1)] + [
+            rfu.send_block_words(i, ready[i * 12:(i + 1) * 12]) for i in range(2)]
+        for i, words in enumerate(child_commands):
+            sim._on_gba_in(gbaframe.wrap_t(rfu.uni_slot(slots.build(words)), 0x5000 + i))
+
+        sim._drive_parent_reliable()
+        frames = [entry[2] for entry in batches[-1]
+                  if entry[1] != reliable.FLAGSA_CTRL]
+        row_zero = gbaframe.parse_in(frames[-1])["slots"][0][1]
+        parsed = rfu.parse_slot(row_zero)
+
+        self.assertTrue(engine.leader_mode)
+        self.assertEqual(sim._parent_child_ready_cursor, 2)
+        self.assertTrue(sim._parent_set_mons_sent)
+        self.assertEqual(engine.sender.data, trade.linkcmd_block(trade.SET_MONS_TO_TRADE, 1))
+        self.assertEqual(engine.host_cursor, 2)
+        self.assertEqual(engine.state, trade.S6_CONFIRM)
+        self.assertEqual((parsed["op"], parsed["count"], parsed["peer"]),
+                         (rfu.SEND_BLOCK_INIT, 2, 0))
 
     def test_parent_uni_drives_real_trade_engine_to_card_gate(self):
         engine = trade.TradeEngine(
