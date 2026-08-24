@@ -21,7 +21,7 @@ from frlgsim.pia_connect import (
     parse_net,
     parse_session_join,
 )
-from frlgsim import gbaframe, linkplayer, mon, ni, reliable, rfu, trade
+from frlgsim import gbaframe, linkplayer, linkstate, mon, ni, reliable, rfu, trade
 from frlgsim.sim import (
     PARENT_RTO_CEIL_MS,
     PARENT_RTX_LIMIT,
@@ -67,6 +67,37 @@ def decode_reliable_messages(crypto, datagram, src_ip):
 
 
 class PiaHostTest(unittest.TestCase):
+    def test_parent_pairs_both_exit_room_keys_in_one_uni_frame(self):
+        engine = trade.TradeEngine(
+            [mon.Mon.empty(), mon.Mon.empty()], trade_slot=1,
+            link_player=linkplayer.LinkPlayer(name="CODEX"), log=lambda *args: None)
+        engine._lp_sent = True
+        engine.host_link_player = linkplayer.LinkPlayer(name="MWL")
+        engine._post_cancel_overworld = True
+        lstate = linkstate.LinkState(log=lambda *args: None)
+        sim = Sim(SimpleNamespace(), PiaCrypto(bytes(range(16))), engine,
+                  "169.254.25.1", "169.254.25.2", linkstate=lstate,
+                  parent_session_id=bytes.fromhex("fcc3"))
+        sim._parent_accept_acked = sim._parent_poll_sent = True
+        sim._parent_child_ni_complete = sim._parent_group_zero_sent = True
+        sim._parent_status_index = len(sim._parent_status_slots)
+        sim._parent_group_one_sent = sim._parent_ni_complete = True
+        sim._parent_uni_frames = 6
+        sim._parent_player_ids_sent = sim._parent_link_request_sent = True
+        sim._parent_player_ids_gap = 0
+        sim._parent_seat_ready = True
+        batches = []
+        sim._tx_reliable_batch = lambda batch: batches.append(list(batch))
+
+        child = rfu.SlotBuilder().build(rfu.held_keys_words(0x17))
+        sim._on_gba_in(gbaframe.wrap_t(rfu.uni_slot(child), 0x4000))
+        sim._drive_parent_reliable()
+        frame = [entry[2] for entry in batches[-1]
+                 if entry[1] != reliable.FLAGSA_CTRL][-1]
+        rows = gbaframe.parse_in(frame)["slots"][:2]
+        self.assertEqual([rfu.parse_slot(slot)["keycode"] & 0xFF
+                          for _mpid, slot in rows], [0x17, 0x17])
+
     def test_parent_reflects_every_batched_child_uni_change_in_order(self):
         engine = SimpleNamespace(
             established=False, in_seat_phase=True,

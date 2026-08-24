@@ -548,6 +548,12 @@ class Sim:
                     child_frame = {"positional": [(0, reflected)]}
                     if hasattr(self.engine, "feed_in_frame"):
                         self.engine.feed_in_frame(child_frame)
+                    # Pair both players' one-shot EXIT_ROOM keys in the same parent UNI frame.  If
+                    # the outer live loop arms ours one tick later, a batched RFU receive can replace
+                    # each one-shot with EMPTY before the game observes both EXITING_ROOM states.
+                    if (self.linkstate is not None
+                            and getattr(self.engine, "host_exiting", False)):
+                        self.linkstate.exit()
                     peer = getattr(getattr(self.engine, "rx", None), "peers", [None])[0]
                     if (peer is not None and peer.done and peer.count == trademod.COUNT_LINKCMD
                             and peer.epochs > self._parent_child_linkcmd_epoch):
