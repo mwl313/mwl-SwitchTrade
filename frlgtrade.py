@@ -237,6 +237,17 @@ def _parent_ldn_tail_complete(transport, deadline, now):
     return getattr(transport, "_peer", None) is None or now >= deadline
 
 
+def _pace_vblank(deadline, period, now=time.monotonic, sleep=time.sleep):
+    """Sleep to an absolute VBlank deadline; resync after an overrun without catch-up bursts."""
+    target = deadline + period
+    current = now()
+    delay = target - current
+    if delay > 0:
+        sleep(delay)
+        return target
+    return current
+
+
 def run_live(args, lg):
     phy = resolve_phy(args.phy, lg)   # explicit --phy, else USB-ID auto-detect (I-5)
     comm_id = int(args.comm_id, 16) if args.comm_id else None
@@ -372,7 +383,8 @@ def run_live(args, lg):
         lg(f"[live] joined LDN; awaiting the host's Pia connection handshake "
            f"(Net 0x11 -> Session join -> confirm). NOT trading until the host confirms us.")
     lg(f"[live] configured trades={args.trades} (cancel-to-leave after the final trade)")
-    period = 1.0 / 59.727
+    period = simmod.MS_PER_VBLANK / 1000.0
+    vblank_deadline = time.monotonic()
     # Sit at the RIGHT seat once the link is ESTABLISHED so our slot reaches PLAYER_LINK_STATE_READY
     # and the host's seat barrier (GetCableClubPartnersReady) can clear [overworld.c:2989-3000].
     #
@@ -436,7 +448,7 @@ def run_live(args, lg):
                     lg("[live] Switch RFU link is closed and its LDN leave tail completed - "
                        "destroying the room.")
                     break
-                time.sleep(period)
+                vblank_deadline = _pace_vblank(vblank_deadline, period)
                 continue
             # --- S0 GATE: do NOTHING (no sit, no trade) until the host CONFIRMS the connection.
             # sim.tick() only emits trade Reliable once s.connected; here we likewise hold off the
@@ -451,7 +463,7 @@ def run_live(args, lg):
                           f"host_var={'learned' if s._learned else 'unseen'}, "
                           f"rx_ok={s.rx_count} rx_decryptfail={s.rx_fail} "
                           f"protos_seen={dict(sorted(s.rx_protos.items()))} tx={s.tx_count}")
-                time.sleep(period)
+                vblank_deadline = _pace_vblank(vblank_deadline, period)
                 continue
             if not connect_announced:
                 if args.mode == "host":
@@ -540,7 +552,7 @@ def run_live(args, lg):
             if leave_until is not None and time.monotonic() >= leave_until:
                 lg("[live] overworld leave tail elapsed without a host CLOSE - disconnecting.")
                 break
-            time.sleep(period)
+            vblank_deadline = _pace_vblank(vblank_deadline, period)
     finally:
         s.close()          # flush the --capture .jsonl
         t.stop()

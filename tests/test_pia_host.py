@@ -3,7 +3,7 @@
 import unittest
 from types import SimpleNamespace
 
-from frlgtrade import PARENT_LDN_CLOSE_GRACE_S, _parent_ldn_tail_complete
+from frlgtrade import PARENT_LDN_CLOSE_GRACE_S, _pace_vblank, _parent_ldn_tail_complete
 from frlgsim.crypto import PiaCrypto, PiaHeader, decompress
 from frlgsim.pia_connect import (
     HOST_NET_PERIOD,
@@ -68,6 +68,25 @@ def decode_reliable_messages(crypto, datagram, src_ip):
 
 
 class PiaHostTest(unittest.TestCase):
+    def test_vblank_pacer_subtracts_work_and_resyncs_after_overrun(self):
+        sleeps = []
+
+        deadline = _pace_vblank(0.0, 0.020, now=lambda: 0.005, sleep=sleeps.append)
+        self.assertAlmostEqual(deadline, 0.020)
+        self.assertAlmostEqual(sleeps.pop(), 0.015)
+
+        deadline = _pace_vblank(deadline, 0.020, now=lambda: 0.025, sleep=sleeps.append)
+        self.assertAlmostEqual(deadline, 0.040)
+        self.assertAlmostEqual(sleeps.pop(), 0.015)
+
+        deadline = _pace_vblank(deadline, 0.020, now=lambda: 0.090, sleep=sleeps.append)
+        self.assertAlmostEqual(deadline, 0.090)
+        self.assertEqual(sleeps, [])
+
+        deadline = _pace_vblank(deadline, 0.020, now=lambda: 0.095, sleep=sleeps.append)
+        self.assertAlmostEqual(deadline, 0.110)
+        self.assertAlmostEqual(sleeps.pop(), 0.015)
+
     def test_parent_ldn_tail_waits_for_peer_leave_or_deadline(self):
         transport = SimpleNamespace(_peer=(b"\x01\x02\x03\x04\x05\x06", "169.254.1.2"))
         deadline = 10.0 + PARENT_LDN_CLOSE_GRACE_S
