@@ -770,7 +770,9 @@ class Sim:
         # S0 handshake + RTT replies; each outbox entry is a dict carrying its own stage var-ids and
         # Pia framing (compress/footer/establishing) [pia_connect].
         if self.conn:
-            if hasattr(self.conn, "maybe_originate_rtt"):
+            if hasattr(self.conn, "poll"):
+                self.conn.poll(self._tick)                    # host Net 0x11 acquisition gate
+            elif hasattr(self.conn, "maybe_originate_rtt"):
                 self.conn.maybe_originate_rtt(self._tick)   # liveness RTT probe (dst=0x0001)
             for e in self.conn.drain():
                 self._send(e["proto"], e["payload"], dst_var=e["dst"], src_var=e["src"],

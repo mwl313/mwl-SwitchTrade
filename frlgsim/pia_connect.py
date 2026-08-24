@@ -51,10 +51,37 @@ def _ip4(ip):
 
 # --- Net protocol (proto 1) -----------------------------------------------------------------
 def parse_net(payload):
-    """-> (version, type, body) for a Net message (header = [ver][type][size:u16 BE])."""
+    """-> (version, type, body) for a Net message.
+
+    The inner size is the trailing variable-payload size, not the size of the
+    fixed fields that follow the four-byte header.  In particular, both the
+    0x12 acknowledgement and a station-less 0x11 carry ``size == 0`` while
+    still carrying their fixed sequence/identity fields.
+    """
     if len(payload) < 4:
         return None
-    return payload[0], payload[1], payload[4:4 + int.from_bytes(payload[2:4], "big")]
+    return payload[0], payload[1], payload[4:]
+
+
+def build_net_request(seqid, host_var, host_mac, network_id):
+    """Build Pia 6.x Net 0x11 with no trailing ``NetStation`` records.
+
+    This is the host's 500 ms connection-status broadcast.  ``size`` and the
+    station count are zero because the joining station is not part of the Pia
+    session yet; the fixed host/network fields are still present.
+    """
+    mac = bytes(host_mac)
+    if len(mac) != 6:
+        raise ValueError("host_mac must be 6 bytes")
+    body = bytearray()
+    body += (seqid & 0xFFFFFFFF).to_bytes(4, "big")
+    body += (_vid(host_var) & 0xFFFF).to_bytes(2, "big")
+    body += mac + b"\x00\x00"                    # host constant id (u64)
+    body += (network_id & 0xFFFFFFFFFFFFFFFF).to_bytes(8, "big")
+    body += b"\x01"                              # network is open
+    body += b"\x00\x00"                         # zero trailing NetStation records
+    body += b"\x00"                              # not migrating host
+    return bytes([0x01, NET_CONN_REQUEST, 0x00, 0x00]) + bytes(body)
 
 
 def build_net_response(seqid=2):
@@ -158,6 +185,53 @@ def parse_session(payload):
     if t in (SESSION_JOIN_REQUEST, SESSION_UPDATE) and len(payload) > 2:
         rec["count"] = payload[1]
     return rec
+
+
+def parse_session_join(payload):
+    """Parse the identity/address fields needed by a Pia 6.x session host."""
+    if len(payload) < 2 or payload[0] != SESSION_JOIN_REQUEST:
+        return None
+    nproto = payload[1]
+    pos = 2
+    if len(payload) < pos + 2 * nproto + 2 + 4 + 8 + 2 + 2 + 32 + 8 + 2 + 2 + 1:
+        return None
+    protocols = [(payload[pos + i], payload[pos + i + 1])
+                 for i in range(0, 2 * nproto, 2)]
+    pos += 2 * nproto
+    app_ver = int.from_bytes(payload[pos:pos + 2], "big"); pos += 2
+    random4 = payload[pos:pos + 4]; pos += 4
+    src_constant = payload[pos:pos + 8]; pos += 8
+    src_var = int.from_bytes(payload[pos:pos + 2], "big"); pos += 2
+    nat_mapping, private_ipv6 = payload[pos:pos + 2]; pos += 2
+    token = payload[pos:pos + 32]; pos += 32
+    dst_constant = payload[pos:pos + 8]; pos += 8
+    dst_var = int.from_bytes(payload[pos:pos + 2], "big"); pos += 2
+    players, participants = payload[pos:pos + 2]; pos += 2
+    family = payload[pos]; pos += 1
+    address_size = 4 if family == 0 else 16 if family == 1 else 0
+    if not address_size or len(payload) < pos + address_size + 2:
+        return None
+    address = payload[pos:pos + address_size]; pos += address_size
+    port = int.from_bytes(payload[pos:pos + 2], "big"); pos += 2
+    names = []
+    for _ in range(players):
+        if len(payload) < pos + 21:
+            return None
+        pos += 16                                  # player id
+        name_size = int.from_bytes(payload[pos:pos + 4], "big"); pos += 4
+        encoding = payload[pos]; pos += 1
+        if len(payload) < pos + name_size:
+            return None
+        raw_name = payload[pos:pos + name_size]; pos += name_size
+        codec = "utf-16-be" if encoding == 2 else "utf-8"
+        names.append(raw_name.decode(codec, errors="replace"))
+    return {"protocols": protocols, "app_ver": app_ver, "random4": random4,
+            "src_constant": src_constant, "src_var": src_var,
+            "nat_mapping": nat_mapping, "private_ipv6": private_ipv6,
+            "token": token, "dst_constant": dst_constant, "dst_var": dst_var,
+            "players": players, "participants": participants,
+            "address": ".".join(str(x) for x in address) if family == 0 else address.hex(),
+            "port": port, "names": names}
 
 
 # --- connection state machine (HOST-ACK-GATED; loss-tolerant) -------------------------------
@@ -325,6 +399,82 @@ class ConnectionManager:
                     sent = self._rtt_pending.pop(systime, None)
                     if sent is not None and tick >= sent:
                         self.rtt_samples.append(tick - sent)
+
+    def drain(self):
+        out, self._outbox = self._outbox, []
+        return out
+
+
+ST_ANNOUNCE, ST_JOIN_RECEIVED = "announce", "join_received"
+HOST_NET_PERIOD = 30             # ~502 ms at the title's 59.727 Hz VBlank
+
+
+class HostConnectionManager:
+    """PC-host Pia acquisition gate.
+
+    It implements the host-owned part that can be constructed from the public
+    Pia 6.x wire format without guessing: retransmit Net 0x11, validate 0x12,
+    and parse the joiner's Session request.  Session accept/update remains
+    deliberately gated until its native bytes are captured from the Switch.
+    """
+
+    def __init__(self, our_mac, our_ip, network_id, our_var=0x7620, seqid=2,
+                 log=lambda *a: None):
+        self.our_mac = bytes(our_mac)
+        self.our_ip = our_ip
+        self.network_id = network_id
+        self.our_var = _vid(our_var)
+        self.host_var = None                         # peer var; Sim-compatible name
+        self.seqid = seqid & 0xFFFFFFFF
+        self.log = log
+        self.info = getattr(log, "info", log)
+        self.state = ST_ANNOUNCE
+        self.peer = None
+        self._last_net_tick = -HOST_NET_PERIOD
+        self._outbox = []
+        self.rtt_samples = []
+
+    @property
+    def connected(self):
+        return False                                 # do not release game traffic yet
+
+    def learn_ids(self, our_var, peer_var):
+        if our_var is not None:
+            self.our_var = _vid(our_var)
+        if peer_var is not None:
+            self.host_var = _vid(peer_var)
+
+    def poll(self, tick):
+        if self.state != ST_ANNOUNCE or tick - self._last_net_tick < HOST_NET_PERIOD:
+            return
+        self._last_net_tick = tick
+        self._outbox.append({
+            "proto": PROTO_NET,
+            "payload": build_net_request(
+                self.seqid, self.our_var, self.our_mac, self.network_id),
+            "dst": 0, "src": 0, "compress": False, "footer": False,
+            "establishing": True, "unicast": False, "pktid": 0,
+            "footer_var": None,
+        })
+
+    def on_message(self, proto, payload, tick=None):
+        if proto == PROTO_NET:
+            net = parse_net(payload)
+            if (net and net[1] == NET_CONN_RESPONSE and len(net[2]) >= 4
+                    and int.from_bytes(net[2][:4], "big") == self.seqid):
+                self.log("Switch acked host Net 0x11; awaiting Session join")
+                self.info("Switch acknowledged the PC host.")
+        elif proto == PROTO_SESSION:
+            join = parse_session_join(payload)
+            if join is None:
+                return
+            self.peer = join
+            self.host_var = join["src_var"]
+            self.state = ST_JOIN_RECEIVED
+            self.log(f"Switch Session join captured: var=0x{self.host_var:04x} "
+                     f"constant={join['src_constant'].hex()} ip={join['address']}:"
+                     f"{join['port']} name={join['names'][:1]}")
+            self.info("Switch Session join captured; host accept remains gated.")
 
     def drain(self):
         out, self._outbox = self._outbox, []

@@ -108,8 +108,12 @@ def make_engine(args, lg):
                             trades=args.trades, offered_slots=offered_slots,
                             refuse_partner_deoxys_mew=args.refuse_illegit,
                             trust_pia=args.trust_pia, log=elog)
-    lg(f"  seat=RIGHT (Follower / mpId={eng.mpid}); trades={eng.trades}, "
-       f"offered_slots={eng.offered_slots}")
+    if args.mode == "host":
+        lg(f"  game engine=RIGHT/Follower remains gated while PC-host Pia acquisition runs; "
+           f"trades={eng.trades}, offered_slots={eng.offered_slots}")
+    else:
+        lg(f"  seat=RIGHT (Follower / mpId={eng.mpid}); trades={eng.trades}, "
+           f"offered_slots={eng.offered_slots}")
     return eng
 
 
@@ -302,10 +306,20 @@ def run_live(args, lg):
         lg(f"[live] WARNING: MAC(s) not resolved from the participant list "
               f"(us={t.our_mac and t.our_mac.hex()} host={t.host_mac and t.host_mac.hex()}); "
               f"the Session join may be rejected.")
-    conn = pia_connect.ConnectionManager(
-        our_mac=t.our_mac or b"\x00" * 6, host_mac=t.host_mac or b"\x00" * 6,
-        our_ip=t.our_ip, host_ip=t.host_ip, player_name=args.ot,
-        random4=os.urandom(4), log=lg)
+    if args.mode == "host":
+        # The LDN host must initiate Pia.  Use a fresh session variable id (Pia requires >=2),
+        # broadcast Net 0x11, and capture the Switch's Net/Session replies.  The manager keeps
+        # connected=False until a byte-exact native Session accept is implemented, so the legacy
+        # follower trade engine cannot leak child traffic into this host acquisition stage.
+        host_var = max(2, int.from_bytes(os.urandom(2), "big"))
+        conn = pia_connect.HostConnectionManager(
+            our_mac=t.our_mac or b"\x00" * 6, our_ip=t.our_ip,
+            network_id=pc.net_id, our_var=host_var, log=lg)
+    else:
+        conn = pia_connect.ConnectionManager(
+            our_mac=t.our_mac or b"\x00" * 6, host_mac=t.host_mac or b"\x00" * 6,
+            our_ip=t.our_ip, host_ip=t.host_ip, player_name=args.ot,
+            random4=os.urandom(4), log=lg)
     # Held-keys overworld link-state engine: keepalive (0xBE00 EMPTY) every idle VBlank, sit at
     # the RIGHT seat (mpId 1), then cancel-to-leave after the configured trade(s). self_id is
     # asserted == 1 (the joiner / RIGHT seat) [frlgsim/linkstate.py; trade.c:1816].
@@ -321,13 +335,18 @@ def run_live(args, lg):
     lg(f"[live] emulator connect: will send 'C' with connect id {connect_id.hex()} "
           f"({'override' if args.connect_id else 'random nonzero'}); the host's 'A' (0x41) accept "
           f"seats our slot - the value need not match anything on the host.")
-    s = simmod.Sim(t, pc, engine, t.our_ip, t.host_ip, conn=conn, compress=args.compress,
+    s = simmod.Sim(t, pc, engine, t.our_ip, t.host_ip, conn=conn, our_var=conn.our_var,
+                   compress=args.compress,
                    linkstate=lstate, connect_id=connect_id, capture_path=args.capture, log=lg)
     if args.capture:
         lg(f"[live] capturing every Pia datagram (both dirs) -> {args.capture} "
               f"(decrypt/analyse offline afterward)")
-    lg(f"[live] joined LDN; awaiting the host's Pia connection handshake "
-          f"(Net 0x11 -> Session join -> confirm). NOT trading until the host confirms us.")
+    if args.mode == "host":
+        lg(f"[live] LDN host active; broadcasting Pia Net 0x11 every 500ms. "
+           f"The Switch's 0x12 + Session join will be captured; game traffic remains gated.")
+    else:
+        lg(f"[live] joined LDN; awaiting the host's Pia connection handshake "
+           f"(Net 0x11 -> Session join -> confirm). NOT trading until the host confirms us.")
     lg(f"[live] configured trades={args.trades} (cancel-to-leave after the final trade)")
     period = 1.0 / 59.727
     # Sit at the RIGHT seat once the link is ESTABLISHED so our slot reaches PLAYER_LINK_STATE_READY
