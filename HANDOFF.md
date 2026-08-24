@@ -7,6 +7,28 @@
 
 ---
 
+## 2026-08-24 override — PC-host Pia track is active again
+
+The old “EMU frozen” decision below predates the WSL dual-radio gold and the
+real Switch PC-host test.  The current `gptsolreview` branch has reopened only
+the PC-host interoperability path:
+
+- LDN protocol 3 / application version 88 is now wire-correct.
+- A real Switch displays and joins the PC-created room.
+- The 2026-08-24 observer capture proved LDN authentication succeeds but the
+  old joiner-only Pia manager emits zero host outreach.
+- `HostConnectionManager` now broadcasts/retransmits Net `0x11`, validates the
+  Switch's `0x12`, and parses its Session join into a captureable identity.
+- `connected` intentionally remains false: Session type-5 accept/type-2 follow-up
+  and the LEFT/Leader game engine must be implemented from the next native
+  response capture, not guessed.
+
+Focused gate: `python -m unittest -v tests.test_pia_host` (4 tests).
+The legacy join path is unchanged apart from fixing `parse_net()` so the fixed
+fields following an inner `size=0` header are no longer discarded.
+
+---
+
 ## 0. 리포 정체성 선언 (2026-08-22 방향 전환 반영)
 
 | 항목 | 결정 |
