@@ -3,6 +3,7 @@
 import unittest
 from types import SimpleNamespace
 
+from frlgtrade import PARENT_LDN_CLOSE_GRACE_S, _parent_ldn_tail_complete
 from frlgsim.crypto import PiaCrypto, PiaHeader, decompress
 from frlgsim.pia_connect import (
     HOST_NET_PERIOD,
@@ -67,6 +68,15 @@ def decode_reliable_messages(crypto, datagram, src_ip):
 
 
 class PiaHostTest(unittest.TestCase):
+    def test_parent_ldn_tail_waits_for_peer_leave_or_deadline(self):
+        transport = SimpleNamespace(_peer=(b"\x01\x02\x03\x04\x05\x06", "169.254.1.2"))
+        deadline = 10.0 + PARENT_LDN_CLOSE_GRACE_S
+
+        self.assertFalse(_parent_ldn_tail_complete(transport, deadline, 10.0))
+        self.assertTrue(_parent_ldn_tail_complete(transport, deadline, deadline))
+        transport._peer = None
+        self.assertTrue(_parent_ldn_tail_complete(transport, deadline, 10.0))
+
     def test_parent_pairs_both_exit_room_keys_in_one_uni_frame(self):
         engine = trade.TradeEngine(
             [mon.Mon.empty(), mon.Mon.empty()], trade_slot=1,
