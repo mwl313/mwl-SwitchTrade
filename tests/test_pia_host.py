@@ -22,7 +22,13 @@ from frlgsim.pia_connect import (
     parse_session_join,
 )
 from frlgsim import gbaframe, linkplayer, mon, ni, reliable, rfu, trade
-from frlgsim.sim import PARENT_SEAT_IDLE_FRAMES, Sim, TS_SEED
+from frlgsim.sim import (
+    PARENT_RTO_CEIL_MS,
+    PARENT_RTX_LIMIT,
+    PARENT_SEAT_IDLE_FRAMES,
+    Sim,
+    TS_SEED,
+)
 
 
 HOST_MAC = bytes.fromhex("a047d7b02b39")
@@ -60,6 +66,19 @@ def decode_reliable_messages(crypto, datagram, src_ip):
 
 
 class PiaHostTest(unittest.TestCase):
+    def test_parent_link_uses_fast_bounded_recovery_and_honors_disconnect(self):
+        sim = Sim(SimpleNamespace(), PiaCrypto(bytes(range(16))), SimpleNamespace(),
+                  "169.254.25.1", "169.254.25.2",
+                  parent_session_id=bytes.fromhex("fcc3"))
+
+        self.assertEqual(sim.rel.max_inflight, PARENT_RTX_LIMIT)
+        self.assertEqual(sim.rel._dup_nack_threshold, 1)
+        self.assertEqual(sim.rel._rtt_jitter_k, 0.0)
+        self.assertEqual(sim.rel._rto_ceil_ms, PARENT_RTO_CEIL_MS)
+
+        sim._on_gba_in(gbaframe.build_gba_frame(gbaframe.TYPE_D, bytes.fromhex("3651")))
+        self.assertTrue(sim.host_disconnected)
+
     def test_parent_rfu_ni_frames_match_native_gold(self):
         self.assertEqual(
             gbaframe.wrap_parent_t(None, 0x49F7).hex(),
