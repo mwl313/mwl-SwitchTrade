@@ -7,6 +7,42 @@
 
 ---
 
+## 2026-08-24 override — full animation live PASS; finish commit implemented
+
+Commit `2d66c08` passed its complete real-Switch gate. Both confirmation blocks completed, parent
+sent owner-zero `START_TRADE`, the count-4 scene-seam standby completed, the full animation ran, and
+the user saw `Take good care of SALAMENCE`. The child then sent `READY_FINISH_TRADE`.
+
+The host was stopped at that boundary. After returning to neutral, the Switch restored the user's
+original Rattata. This independently proves the visible swap is provisional until the
+player-zero finish-confirm transaction.
+
+Evidence: `logs/golden/pc_host_start_trade_live_20260824_191729/` (local/ignored, integrity-locked by
+`MANIFEST.md`). Pia was 7333/7333 authenticated with zero failures; all three pcaps had zero kernel
+drops; both post-test actual-RX gates passed. Joined-session teardown again exceeded 15 seconds, but
+exact stale-AP cleanup and both radio health checks passed.
+
+Commit `812fb90` implements only the source-defined next gate:
+
+- separately latch local and child `READY_FINISH_TRADE` after START;
+- wait for the local owner-zero READY send and child READY block to complete;
+- send owner-zero `CONFIRM_FINISH_TRADE` only when both are ready and no sender is active;
+- commit locally at that same boundary and enter the existing save/return state.
+
+The focused wire test proves owner zero, the two-sided finish gate, one commit, and entry into the
+leaving sequence. WSL ordinary is 136/136 and Windows relay is 4/4 (140 functional passes). The full
+Windows discovery run's six `test_detect_phy` setup errors are Windows/Linux-symlink fixture
+incompatibility, not failures in this patch.
+
+This commit is not hardware-proven yet. All live processes are stopped while the user is away. On
+resume, PASS requires parent `CONFIRM_FINISH_TRADE`, visible save/return progress, and no rollback
+after neutral state. Do not claim full completion until the next capture proves the leader
+save/return/menu-reentry path.
+
+Authoritative report: `mwl-SwitchTrade/docs/43-full-animation-pass-confirm-finish-ready-20260824.md`.
+
+---
+
 ## 2026-08-24 override — selection live PASS; confirmation/START implemented
 
 The `b26b588` live run passed its exact hardware gate. The Switch sent
