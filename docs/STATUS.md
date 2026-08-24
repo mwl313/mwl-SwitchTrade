@@ -1,6 +1,6 @@
 # STATUS — 진행 상태 (2026-08-24)
 
-> 마지막 갱신: 2026-08-24 — **PC-host ARP drop 원인 확정 · rtl8xxxu CCMP wrapper 호환 픽스 구현**
+> 마지막 갱신: 2026-08-24 — **PC-host ARP + Pia Session 실기 PASS · host Reliable/RFU가 다음 경계**
 
 ## 🏆 핵심 성과
 
@@ -39,6 +39,9 @@
   형태를 Kinnay가 재복호화해 silent drop한 것이 확정됐다. runtime compatibility adapter와 실측 pcap
   replay는 8/8 data, 7/7 ARP deliverable PASS. patched live join 재검증만 잔여다. 상세:
   `docs/31-pc-host-monitor-ccmp-20260824.md`.
+- Patched live 재검증에서 ARP request/reply, Net `0x12`, Session `0 -> 2/5 -> 6`, FireRed Reliable
+  INIT까지 실기 PASS했다. Pia 119 datagram 모두 decrypt 성공, 실패 0. 화면의 동일한 unavailable은
+  이제 PC가 guest `fff0`/`WC`를 ACK/`WA`하지 않는 host/parent Reliable gate 때문임이 확정됐다.
 
 ## 📈 Phase 진행도 (2026-08-22 기준)
 
@@ -68,7 +71,7 @@
 
 | 카드 | HOST(방 개설) | GUEST | 비고 |
 |---|---|---|---|
-| RTL8192EU (`0bda:818b`) VM/WSL | 🟡 WSL Switch discovery/join PASS | ✅ | monitor CCMP fix offline PASS; patched live smoke 잔여 |
+| RTL8192EU (`0bda:818b`) VM/WSL | 🟡 WSL ARP/Pia live PASS | ✅ | host Reliable/RFU + graceful teardown 잔여 |
 | RTL8188EU (`0bda:8179`) WSL/vendor | ❌ project HOST 차단 | ✅ | standalone AP PASS, AP+monitor deadlock; monitor RX/TX G4 PASS |
 
 ## 알려진 미해결 이슈
@@ -76,9 +79,8 @@
 1. **EMU E2E 미완주** (T4): 릴레이 WS 미기동 버그 수정(ad591b5) 후 재실행 필요 — 단, EMU는 동결이라 회귀 도구 용도
 2. CanTradeSelectedMon 게이트 (EMU 한계) — framerelay와 무관
 3. RX decrypt FAILED 간헐 (VM1+8192EU 초기)
-4. 호스트 모드(--mode host): Switch room discovery/LDN join 실증. rtl8xxxu retained CCMP wrapper로
-   ARP가 silent drop된 원인을 수정했고 exact pcap replay는 PASS. patched live ARP/Pia smoke와 이후
-   host/parent Reliable/RFU 실기 검증이 잔여다.
+4. 호스트 모드(--mode host): discovery/LDN/ARP/Pia Session/guest Reliable INIT까지 실증. 다음은
+   host/parent Reliable ACK+`WA`, RFU/NI 방향 구현과 HostTransport graceful teardown 수리다.
 5. 8188EU mainline firmware start 실패는 vendor-driver로 우회했다. out-of-tree driver 유지보수와
    실제 Switch G5/G6는 잔여 risk다.
 
@@ -91,8 +93,8 @@
 > - STEP 9: framerelay 캡처→0x20→WS 파이프라인 첫 무선 실증 (`46b492d`, docs/16)
 
 1. ~~STEP 6~~ ✅ / ~~STEP 7~~ ✅ / ~~STEP 8~~ ✅ / ~~STEP 9~~ ✅
-2. **STEP 10 discovery/join**: ✅ PC room 표시와 Switch LDN join 실증. ARP silent-drop 원인도 수정.
-   다음 gate는 patched `ARP -> Net 0x11/0x12 -> Session 0/2/5/6 -> Reliable INIT` one-Switch smoke.
+2. **STEP 10 discovery/join**: ✅ `ARP -> Net 0x11/0x12 -> Session 0/2/5/6 -> Reliable INIT` 실기 PASS.
+   다음 gate는 host bulk ACK + `WA` accept로 child seat 성립.
 3. **STEP 11**: 🏆 framerelay E2E (스위치 A·B) — B 화면에 "A의 방" = 목표② 달성
 4. **α트랙 G1~G4**: 두 카드 기준 ✅(8188 patched warning-free guest/relay). 다음은 G5 로컬 루프, G6 Switch E2E
 5. **STEP 10~13**: 스위치 실기 (호스트 모드 → framerelay E2E 🏆 → 안정성 5종)

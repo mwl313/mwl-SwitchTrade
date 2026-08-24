@@ -97,23 +97,47 @@ Full discovery has 125 ordinary PASS results. Its sole error is the pre-existing
 relay environment check because this venv does not contain `uvicorn`; it is unchanged and
 independent of the radio fix.
 
-## Live status and next gate
+## Patched live validation — PASS
 
-The unchanged diagnostic room reproduced the expected unavailable message. A later patched
-room advertised for about eight minutes but received no Switch join attempt, so it was closed;
-that run is not evidence of either live success or live failure.
+The next health-gated live attempt crossed the entire gate even though the Switch UI still
+ended with "trainer unavailable." Local evidence is under
+`logs/golden/pc_host_ccmp_fix_live_20260824_144343/`:
 
-The next test needs one manual action: keep one Switch on Join Room, select `CODEX` once after
-capture-ready notification, and report the first UI state after "awaiting CODEX's response."
-Required wire progression:
+| File | Bytes | SHA-256 |
+|---|---:|---|
+| `host_final_ldn_mon.pcap` | 1,595,652 | `52b568a4bf3cf0887ce892798b953140635ad0810f1df43f2177d90be500529d` |
+| `host_ldn_tap.pcap` | 15,119 | `c1b89e84f9e874cdaa65fa5218507ed920a004e3e18ccf68f7886c4339a5156c` |
+| `observer_rtl8188_ch6.pcap` | 1,499,533 | `734ce777fcbef62f458d016269fe5c61dc4a26ac44028e4b6583c3b14b7dc564` |
+| `pc_host_pia.jsonl` | 33,819 | `c417e278c3309acbb3f55fe2725b1265fcadf4797e23d571d62118ba7ff53844` |
+
+The host and observer captured 5,376 and 5,835 packets respectively, both with zero kernel
+drops. TAP proves the previously missing transition:
 
 ```text
-Switch ARP request -> ldn-mon -> ldn-tap
-PC ARP reply       -> ldn-tap -> ldn-mon -> Switch
-PC Net 0x11        -> Switch Net 0x12 + Session 0
-PC Session 2/5     -> Switch Session 6 + Reliable INIT
+Switch ARP request  who-has 169.254.72.1
+PC ARP reply        169.254.72.1 is-at a0:47:d7:b0:2b:39
+Switch Net 0x12
+Switch Session 0
+PC Session 2 + 5
+Switch Session 6
+Switch Reliable INIT metadata (FireRed, seq fff0)
 ```
 
-If ARP passes but Pia does not, continue with the byte-locked Session analysis in
-`docs/30-native-fixed-handshake-20260824.md`. Do not implement host/parent Reliable until
-Session `6` and the first guest Reliable INIT are observed live.
+All 119 captured Pia datagrams decrypted successfully: 116 inbound and 3 outbound. Inbound
+protocol messages were Net 1, Session 6, RTT 31, and Reliable 78. The Reliable stream was one
+FireRed metadata INIT followed by 77 sequential copies of the same `WC` connect request. The
+Switch kept advancing from `fff1` while advertising window base `fff0` because the PC sent no
+Reliable acknowledgement.
+
+The same UI message therefore has a new, later cause. The CCMP/ARP and Pia Session work is
+complete. The next implementation is the host/parent Reliable bootstrap from the native gold:
+
+1. ACK guest INIT `fff0` with next-expected `fff1`;
+2. receive the first `WC` connect request;
+3. send native host `WA` accept with host INIT framing and cumulative ACK;
+4. continue host-side Reliable/RFU/NI processing before releasing the game engine.
+
+A secondary teardown issue remains: interrupting HostTransport after the peer left did not
+unwind the radio thread within its 15-second grace. The selector safely removed the stale AP,
+and both cards passed post-test actual-RX health, but graceful host shutdown still needs repair
+before production.

@@ -22,19 +22,28 @@ AES-CCM decrypt and silently dropped the frames, so no Switch ARP reached `ldn-t
 form at runtime before `ldn.create_network()`. Site-packages is not modified. Two focused
 tests and replay of the real failing pcap pass; all seven captured ARPs become TAP-deliverable.
 
-## Immediate live gate
+## Live gate result — PASS
 
-Run one health-gated RTL8192EU host plus RTL8188EU observer capture. Ask the user to select
-`CODEX` once. Preserve monitor, TAP, Pia JSONL, and observer evidence until these milestones
-are classified:
+`logs/golden/pc_host_ccmp_fix_live_20260824_144343/` crossed every boundary: ARP request and
+PC reply, Net `0x12`, Session `0 -> 2/5 -> 6`, and the first guest Reliable INIT. All 119 Pia
+datagrams decrypted with zero failures. Hashes and counts are in the authoritative doc.
 
-1. Switch ARP reaches TAP and PC ARP reply appears over RF.
-2. Switch sends Net `0x12` and Session `0`.
-3. PC sends Session `2` and `5`.
-4. Switch sends Session `6` and first Reliable INIT.
+The UI still reported unavailable because the host/parent Reliable path is deliberately gated.
+The Switch sent FireRed INIT metadata at `fff0`, then 77 sequential `WC` requests while its
+window base remained `fff0`; the PC sent no bulk ACK or `WA` accept.
 
-The patched room started after diagnosis received no manual join attempt and is inconclusive.
-Do not report live success until a new attempt crosses these milestones.
+## Immediate implementation
+
+Implement the native host/parent Reliable bootstrap using the CH1 two-Switch gold:
+
+1. bulk-ACK guest `fff0` with next-expected `fff1`;
+2. accept the first guest `WC` request;
+3. send host INIT `WA` and cumulative ACK;
+4. continue parent RFU/NI direction, keeping game release gated until the child is seated.
+
+Also repair HostTransport graceful teardown: after the peer left, context exit exceeded the
+15-second radio-thread grace and required the selector to remove the stale AP. Both cards passed
+post-cleanup RX health, so this is a shutdown lifecycle bug rather than receive death.
 
 ## Safety constraints
 
