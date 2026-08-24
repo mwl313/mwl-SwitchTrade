@@ -1,5 +1,11 @@
 # HANDOFF — WSL dual-radio stabilization (2026-08-24)
 
+> **Superseded capability conclusion (2026-08-25):** later real-Switch guest tests proved that
+> RTL8188EU RF RX/TX success did not establish LDN guest support. Its patched driver fails Nintendo's
+> custom nl80211 control-port association with `EINVAL`, and AP+monitor remains unsafe. Treat 8188EU
+> as observer/driver-research only. The current plan is
+> `docs/49-production-beta-priorities-20260825.md`.
+
 > Branch: `gptsolreview` in all first-party repositories.
 > Scope: make RTL8192EU and RTL8188EU usable in WSL2, enforce pre-capture health, and make later
 > chipset/driver additions profile-driven.
@@ -12,7 +18,7 @@ G6 two-Switch E2E remain. The two owned radios now have distinct supported paths
 | USB ID | WSL driver | Allowed roles | Evidence |
 |---|---|---|---|
 | `0bda:818b` RTL8192EU | in-kernel `rtl8xxxu` | host, guest, relay | G2/G3/G4, CH1~13, 30-minute RX soak PASS |
-| `0bda:8179` RTL8188EU | pinned vendor `8188eu` | guest, relay | G2/G3/G4, CH1~13, external RX/TX and frame-type injection PASS |
+| `0bda:8179` RTL8188EU | pinned vendor `8188eu` | observer only (2026-08-25 correction) | RF G2/G3/G4 PASS, real guest control-port connect FAIL |
 
 The 8188EU mainline path remains a deterministic failure: firmware is found, but MCU start returns `-11`
 before a netdev exists. This is specific to WSL USB/IP + mainline `rtl8xxxu`; the card itself works in VMware

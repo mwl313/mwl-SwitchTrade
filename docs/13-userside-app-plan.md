@@ -1,5 +1,9 @@
 # 13 — 유저사이드 앱 플랜 & 프로덕션 병렬 트랙
 
+> **2026-08-25 UI 결정 갱신:** frontend는 HTML/CSS이며 interaction에 필요한 최소 JavaScript만
+> 사용한다. Python은 Windows/WSL 제어 backend 역할로 유지할 수 있고, pywebview/WebView2가 현재
+> 최소 shell 후보다. 아래 PySide6 위젯 결정은 역사 기록이며 더 이상 frontend 기준이 아니다.
+
 > 작성: 2026-08-22 | 상태: [확정] 언어·트랙 구조 결정, [실행] 트랙 α 착수
 > 상위: `docs/06-distribution.md`(전략) · `docs/12-wsl2-poc-windows.md`(PoC 절차) · `docs/12-framerelay-구조와-로드맵.md`
 
@@ -7,7 +11,7 @@
 
 | 항목 | 결정 |
 |---|---|
-| 유저사이드 앱 언어 | **Python + PySide6(Qt)** — GUI 필수 포함 |
+| 유저사이드 앱 | **HTML/CSS frontend + Python control backend** — WebView2 shell 후보 |
 | 배포 형태 | SwitchTrade.exe 1개 (GUI = 첫실행 마법사 + 컨트롤 패널 겸용) |
 | 프로덕션까지 병렬 트랙 | α(WSL2 무선) / β(배포 자동화) / γ(GUI 앱셸) / δ(릴레이 운영) |
 
@@ -30,7 +34,7 @@
 - 제거(원상복구) 스크립트
 
 ### γ. 유저사이드 앱 셸 (GUI) — Mock 브리지로 병렬 개발
-- PySide6 골격 + 화면 흐름 확정 (§4)
+- HTML/CSS 골격 + 화면 흐름 확정 (§4)
 - GUI↔브리지 로컬 제어 프로토콜 명세 (wsl.exe 호출 래퍼)
 - framerelay 완성 시 Mock → 실브리지 교체만 남는 구조
 
@@ -47,7 +51,7 @@
 
 ---
 
-## 2. [확정] 언어: Python + PySide6
+## 2. [역사 기록 — superseded] Python + PySide6 검토
 
 판단 핵심: **브리지 로직은 어차피 WSL2 안의 Python**(radio.py/bridge.py). GUI는 조작 패널일 뿐 — 무선 처리·게임 해석·무거운 연산이 GUI에 없다. 단일 언어 스택의 이득 > 네이티브 미학.
 

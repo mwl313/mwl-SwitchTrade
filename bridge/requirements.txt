@@ -4,3 +4,7 @@ pycryptodome==3.23.0
 trio==0.33.0
 websockets==17.0.1
 zstandard==0.25.0
+
+# Unified-repository relay runtime (relay/server.py and test_relay_offline.py).
+fastapi==0.116.1
+uvicorn==0.35.0

@@ -3,7 +3,7 @@
 # run_trade.sh v7 — frlgtrade.py 실행 래퍼 (CRITICAL-2 / WP-G, docs/plan/2026-08-22-audit-fix-plan.md)
 #
 # v5(VM 전용 ~/frlg-ldn-trade/run_trade.sh — **폐기**) 대비 변경점:
-#   1. emu 탐색을 SCRIPT_DIR 기준으로 변경: $SCRIPT_DIR/../emu/frlgtrade.py 우선.
+#   1. runtime 탐색을 SCRIPT_DIR 기준으로 변경: 통합 리포의 $SCRIPT_DIR/../bridge/frlgtrade.py 우선.
 #      v5는 구 클론 경로 /home/aria/frlg-ldn-trade/frlgtrade.py 하드코딩 → 최신 패치 무시.
 #      EMU_DIR 환경변수 오버라이드 지원 — 클론/배포 위치 무관 동작.
 #   2. radio-health-gate.sh가 실제 RX를 먼저 확인하고, RX 0일 때만 USB 리셋한다.
@@ -27,7 +27,7 @@
 #        -o /home/aria/mons/received_trade.pk3 /home/aria/mons/*.pk3
 #   검증:  sudo bash ~/scripts/run_trade.sh --dry-run
 # 환경변수:
-#   EMU_DIR     emu 디렉터리 (기본: 스크립트 위치 기준 ../emu)
+#   EMU_DIR     runtime 디렉터리 (기본: 스크립트 위치 기준 ../bridge)
 #   PYTHON_BIN  실행 파이썬 (기본: $EMU_DIR/.venv/bin/python, 없으면 python3)
 
 set -euo pipefail
@@ -35,12 +35,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 if [[ -z ${EMU_DIR:-} ]]; then
-    if [[ -f "$SCRIPT_DIR/../emu/frlgtrade.py" ]]; then
+    if [[ -f "$SCRIPT_DIR/../bridge/frlgtrade.py" ]]; then
+        EMU_DIR="$SCRIPT_DIR/../bridge"
+    elif [[ -f "$SCRIPT_DIR/../emu/frlgtrade.py" ]]; then
         EMU_DIR="$SCRIPT_DIR/../emu"
     elif [[ -f "/home/aria/emu/frlgtrade.py" ]]; then
         EMU_DIR="/home/aria/emu"          # VM 표준 배포 위치 (~/에 래퍼를 놓을 때)
     else
-        echo "ERROR: emu/frlgtrade.py not found — set EMU_DIR" >&2; exit 2
+        echo "ERROR: bridge/frlgtrade.py not found — set EMU_DIR" >&2; exit 2
     fi
 fi
 readonly EMU_DIR
@@ -63,7 +65,7 @@ run_trade.sh v7 — frlgtrade.py 실행 래퍼 (CRITICAL-2)
   run_trade.sh --help
 
 환경변수:
-  EMU_DIR     emu 디렉터리 (기본: $SCRIPT_DIR/../emu)
+  EMU_DIR     runtime 디렉터리 (기본: $SCRIPT_DIR/../bridge; legacy emu fallback)
   PYTHON_BIN  실행 파이썬 (기본: \$EMU_DIR/.venv/bin/python, 없으면 python3)
   RADIO_USB_ID WSL 카드 선택 VID:PID (--radio-usb-id와 동일)
 EOF
