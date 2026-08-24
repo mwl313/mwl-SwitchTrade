@@ -7,6 +7,36 @@
 
 ---
 
+## 2026-08-24 override — full save/menu re-entry live PASS; final close delay ready
+
+Build `5cb19af` passed the full real-Switch post-save reconstruction gate. CODEX offered the user's
+captured Rattata, received and saved a valid 100-byte Pidgey, mirrored Switch-originated save counts
+5 through 10, re-armed the five parent party/mail/ribbon pulls, and completed them at 247.3 s. The
+user directly confirmed that the Switch returned successfully to the usable Pokémon trade screen.
+
+Evidence: `logs/golden/pc_host_parent_reentry_live_20260824_200611/` (local/ignored,
+integrity-locked by `MANIFEST.md`). Pia contains 17,708 datagrams with zero decrypt failure logged;
+all three captures had zero kernel drops; both radios passed post-test actual-RX and were restored to
+channel 6.
+
+Only the final graceful close remains. `5cb19af` sent owner-zero `BOTH_CANCEL_TRADE` on the same
+frame as the final ribbon block, while the Switch was entering `CB2_CreateTradeMenu` state 7. The ROM
+does not install `CB1_UpdateLink` until state 22, after rebuilding the sprites/backgrounds/HP bars
+and completing the palette fade, so the early command was not consumed and counts 11/12 were not
+answered.
+
+Commit `823288b` adds a one-time 120-frame menu-build wait after the final post-save block, then
+sends the existing final cancel. It passes the focused wire regression, 136 ordinary WSL tests, and
+4/4 Windows relay tests. This is not hardware-proven yet. The next live run must offer
+`mons/0001_BULBASAUR_user_20260824.pk3` (last run used Rattata) and prove final cancel, counts 11/12,
+room exit, and no native communication error. Do not modify lower layers; join, Reliable, trade,
+finish, save, and party re-entry all passed.
+
+Authoritative report:
+`mwl-SwitchTrade/docs/45-parent-menu-reentry-live-pass-final-close-delay-20260824.md`.
+
+---
+
 ## 2026-08-24 override — CONFIRM_FINISH live PASS; reactive save return ready
 
 Commit `812fb90` passed its exact real-Switch gate. Local and child `READY_FINISH_TRADE` completed,
