@@ -326,27 +326,39 @@ def run_live(args, lg):
     # the RIGHT seat (mpId 1), then cancel-to-leave after the configured trade(s). self_id is
     # asserted == 1 (the joiner / RIGHT seat) [frlgsim/linkstate.py; trade.c:1816].
     lstate = lsmod.LinkState(self_id=args.self_id, log=lg)
-    # emulator RFU connect id: our OWN 2-byte RFU connection id sent in the 'C' frame. Any nonzero
-    # value works (the host does not match it, it just seats our slot), so we pick a random nonzero
-    # one. A FRESH id per run also avoids the host's ~40s lost-id re-join lockout that reusing a value
-    # would hit. --connect-id (alias --parent-pid) overrides for debugging.
-    if args.connect_id:
-        connect_id = bytes.fromhex(args.connect_id)
+    parent_session_id = None
+    connect_id = None
+    if args.mode == "host":
+        # Native WA uses the exact RFU session id already advertised in our
+        # room beacon, then echoes the child's WC id.  It is not a new random
+        # connection id (verified in the CH1 two-Switch gold).
+        parent_session_id = t.rfu_session_id.to_bytes(2, "little")
+        lg(f"[live] parent RFU accept armed with advertised session id "
+           f"{parent_session_id.hex()}; waiting for the Switch's WC connect id.")
     else:
-        connect_id = (int.from_bytes(os.urandom(2), "big") or 1).to_bytes(2, "big")
-    lg(f"[live] emulator connect: will send 'C' with connect id {connect_id.hex()} "
-          f"({'override' if args.connect_id else 'random nonzero'}); the host's 'A' (0x41) accept "
-          f"seats our slot - the value need not match anything on the host.")
+        # emulator RFU connect id: our OWN 2-byte RFU connection id sent in the 'C' frame. Any nonzero
+        # value works (the host does not match it, it just seats our slot), so we pick a random nonzero
+        # one. A FRESH id per run also avoids the host's ~40s lost-id re-join lockout that reusing a value
+        # would hit. --connect-id (alias --parent-pid) overrides for debugging.
+        if args.connect_id:
+            connect_id = bytes.fromhex(args.connect_id)
+        else:
+            connect_id = (int.from_bytes(os.urandom(2), "big") or 1).to_bytes(2, "big")
+        lg(f"[live] emulator connect: will send 'C' with connect id {connect_id.hex()} "
+              f"({'override' if args.connect_id else 'random nonzero'}); the host's 'A' (0x41) accept "
+              f"seats our slot - the value need not match anything on the host.")
     s = simmod.Sim(t, pc, engine, t.our_ip, t.host_ip, conn=conn, our_var=conn.our_var,
                    compress=args.compress,
-                   linkstate=lstate, connect_id=connect_id, capture_path=args.capture, log=lg)
+                   linkstate=lstate, connect_id=connect_id,
+                   parent_session_id=parent_session_id,
+                   capture_path=args.capture, log=lg)
     if args.capture:
         lg(f"[live] capturing every Pia datagram (both dirs) -> {args.capture} "
               f"(decrypt/analyse offline afterward)")
     if args.mode == "host":
         lg(f"[live] LDN host active; broadcasting Pia Net 0x11 every 500ms. "
-           f"The native Pia Session accept will run after the Switch joins; "
-           f"host Reliable/RFU game traffic remains gated.")
+           f"The native Pia Session + Reliable ACK/WC/WA bootstrap will run after the Switch joins; "
+           f"parent slot/NI game traffic remains gated.")
     else:
         lg(f"[live] joined LDN; awaiting the host's Pia connection handshake "
            f"(Net 0x11 -> Session join -> confirm). NOT trading until the host confirms us.")
@@ -408,7 +420,10 @@ def run_live(args, lg):
             if not s.connected:
                 connect_ticks += 1
                 if connect_ticks % 120 == 0:
-                    lg(f"[live] awaiting host connection: {connect_ticks}f, conn={conn.state}, "
+                    phase = ("parent WA acknowledged; awaiting parent slot/NI implementation"
+                             if args.mode == "host" and s.parent_link_accepted
+                             else "awaiting connection bootstrap")
+                    lg(f"[live] {phase}: {connect_ticks}f, conn={conn.state}, "
                           f"host_var={'learned' if s._learned else 'unseen'}, "
                           f"rx_ok={s.rx_count} rx_decryptfail={s.rx_fail} "
                           f"protos_seen={dict(sorted(s.rx_protos.items()))} tx={s.tx_count}")

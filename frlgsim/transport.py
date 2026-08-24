@@ -134,6 +134,7 @@ def _build_host_beacon_head(ssid: bytes, channel: int, bssid: bytes) -> bytes:
 
 _BEACON_HEAD_INSTALLED = False
 _MONITOR_CCMP_COMPAT_INSTALLED = False
+_LDN_DESTROY_COMPAT_INSTALLED = False
 
 
 def install_monitor_ccmp_compat(log=print) -> bool:
@@ -171,6 +172,50 @@ def install_monitor_ccmp_compat(log=print) -> bool:
         return True
     except Exception as e:                           # noqa: BLE001
         log(f"[monitor-ccmp] compatibility patch not installed: {e}")
+        return False
+
+
+def install_ldn_destroy_compat(log=print) -> bool:
+    """Do not send LDN's network-destroy control frame to the AP itself.
+
+    ldn 0.0.17 walks every connected participant during ``APNetwork`` context
+    exit, including participant zero (the local AP), and submits a control-port
+    frame addressed to its own netdev.  rtl8xxxu can leave that nl80211 request
+    waiting forever, which was the observed HostTransport teardown hang after
+    the Switch had already left.  Notify only connected remote participants;
+    the rest of ldn's context teardown remains stock.
+    """
+    global _LDN_DESTROY_COMPAT_INSTALLED
+    if _LDN_DESTROY_COMPAT_INSTALLED:
+        return False
+    try:
+        import ldn as _ldn
+
+        network_cls = _ldn.APNetwork
+        stock_destroy = network_cls._destroy_network
+        if getattr(stock_destroy, "_mwl_skip_local_destroy", False):
+            _LDN_DESTROY_COMPAT_INSTALLED = True
+            return False
+
+        @functools.wraps(stock_destroy)
+        async def _destroy_remote_participants(self):
+            local = bytes(self._interface.address())
+            for participant in self._network.participants:
+                if (not participant.connected
+                        or bytes(participant.mac_address) == local):
+                    continue
+                frame = _ldn.DisconnectFrame()
+                frame.reason = _ldn.DISCONNECT_NETWORK_DESTROYED
+                await self._interface.send_custom_frame(
+                    participant.mac_address, frame.encode())
+
+        _destroy_remote_participants._mwl_skip_local_destroy = True
+        network_cls._destroy_network = _destroy_remote_participants
+        _LDN_DESTROY_COMPAT_INSTALLED = True
+        log("[ldn-stop] skip local AP in network-destroy notification")
+        return True
+    except Exception as e:                           # noqa: BLE001
+        log(f"[ldn-stop] compatibility patch not installed: {e}")
         return False
 
 
@@ -1674,6 +1719,7 @@ class HostTransport:
             if install_beacon_head_override(self.log):
                 self.info("beacon head override installed (hostapd-style IEs)")
             install_monitor_ccmp_compat(self.log)
+            install_ldn_destroy_compat(self.log)
             self.info("Opening the FRLG room (create_network/AP)...")
             try:
                 async with ldn.create_network(param) as network:

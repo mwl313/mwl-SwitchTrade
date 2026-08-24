@@ -7,6 +7,52 @@
 
 ---
 
+## 2026-08-24 override — parent Reliable bootstrap implemented
+
+The corrected one-Switch host capture crossed ARP and Pia, then showed the
+Switch retransmitting `WC` because the PC did not participate in Reliable.  The
+native CH1 two-Switch gold has now been decoded at that exact boundary:
+
+```text
+guest INIT fff0, FireRed metadata
+host  CTRL ACK: next=fff1
+guest WC fff1: connect id 1a51
+host  INIT fff0: WA = 57410600 fcc3 1a51 0000
+host  CTRL ACK: next=fff2 (batched after WA)
+guest CTRL ACK: next=fff1
+```
+
+`fcc3` is the native host's beacon RFU session id, not a new random value.
+Host mode now passes `HostTransport.rfu_session_id` into a separate parent
+Reliable bootstrap, echoes the child's `WC` id, retransmits `WA` until ACKed,
+and continues acknowledging guest Reliable data.  A byte-exact regression test
+locks sequence ids, window ids, message flags, payloads, and WA+ACK batching.
+
+`HostConnectionManager.connected` deliberately remains false.  The parent
+slot/NI direction is not implemented, so the mature child/RIGHT-seat engine
+must not run after WA.  The next live gate is proof that the Switch ACKs WA;
+the UI may still time out afterward because the PC does not yet emit the first
+parent `T`/NI poll.
+
+The HostTransport shutdown hang is also fixed.  ldn 0.0.17 sent its network-
+destroy control frame to participant zero (the AP itself), which can leave an
+rtl8xxxu nl80211 request waiting forever.  The runtime compatibility adapter
+skips only the local AP and still notifies a connected remote Switch.  A real
+health-gated RTL8192EU room opened and stopped in 1.191 seconds, fully released
+its interfaces, and passed post-stop RX.
+
+Verification baseline:
+
+```text
+python -m unittest discover -s tests -p 'test_*.py' -q   # 133/133 PASS
+RTL8192EU host open/stop                                  # PASS, stop 1.191 s
+RTL8192EU post-stop actual RX                             # PASS
+```
+
+The relay integration test now locates `relay/server.py` through parent
+discovery, so both a physical `main/emu` checkout and this workspace's
+`emu -> _related/frlg-ldn-trade-emu` junction pass.
+
 ## 2026-08-24 override — native PC-host Session bytes acquired
 
 The old “EMU frozen” decision below predates the WSL dual-radio gold and the
@@ -33,7 +79,7 @@ the PC-host interoperability path:
   engine is the guest/child role. The next implementation is now authorized by live evidence:
   host bulk ACK of `fff0`, native `WA` accept, then parent RFU/NI direction.
 
-Focused gates: `python -m unittest -v tests.test_pia_host` (5 tests) and
+Focused gates: `python -m unittest -v tests.test_pia_host` (6 tests) and
 `python -m unittest -v tests.test_monitor_ccmp_compat` (2 tests).
 The legacy join path is unchanged apart from fixing `parse_net()` so the fixed
 fields following an inner `size=0` header are no longer discarded and applying

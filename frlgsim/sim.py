@@ -125,7 +125,8 @@ TS_SEED = 0x0000362E
 class Sim:
     def __init__(self, transport, pia_crypto, engine, our_ip, host_ip, *, conn=None,
                  our_var=0xc493, compress=False, header_flags=0x50, capture_path=None,
-                 linkstate=None, connect_id=None, log=lambda *a: None):
+                 linkstate=None, connect_id=None, parent_session_id=None,
+                 log=lambda *a: None):
         self.t = transport
         # Remote channel hook (leader-leader EMU). Enabled only when the transport exposes the
         # remote state channel (RemoteTransport, or a test MockTransport stub) - duck-typed via the
@@ -244,8 +245,20 @@ class Sim:
         # passed in. None (offline replay/tests) => we do NOT send a 'C' (the host stays bulk-ack-only
         # until it sees one).
         self._connect_id = bytes(connect_id) if connect_id else None
+        self._parent_session_id = bytes(parent_session_id) if parent_session_id else None
+        if self._connect_id is not None and self._parent_session_id is not None:
+            raise ValueError("child connect_id and parent_session_id are mutually exclusive")
+        if self._parent_session_id is not None and len(self._parent_session_id) != 2:
+            raise ValueError("parent_session_id must be 2 bytes")
         self._gba_conn_sent = False
         self._gba_accepted = False        # have we seen the host's emulator connect accept ('A')
+        # Parent/host Reliable bootstrap.  This is intentionally separate from
+        # the mature child path: after Pia finalize the Switch opens Reliable,
+        # sends WC, and the PC answers WA using the RFU id advertised in its
+        # beacon.  Parent slot/NI remains a later gate.
+        self._parent_connect_id = None
+        self._parent_accept_seq = None
+        self._parent_accept_acked = False
         # Emission is FREE-RUN: _drive_reliable emits one child slot ('T') per local VBlank, on our own
         # clock, NOT paced to the host's slot arrivals. The flood the host's receive side can't absorb is
         # bounded by the small send window (MAX_INFLIGHT), not by response pacing - so a steady one-per-
@@ -281,6 +294,11 @@ class Sim:
     @property
     def connected(self):
         return self.conn is None or self.conn.connected
+
+    @property
+    def parent_link_accepted(self):
+        """True only after the Switch bulk-ACKs the PC's native WA frame."""
+        return self._parent_accept_acked
 
     @property
     def _now_ms(self):
@@ -368,6 +386,13 @@ class Sim:
                     # frees acked frames (cumulative + selective mask); now_ms lets it sample the
                     # reliable round-trip (un-retransmitted frames) to drive the RTO.
                     self.rel.on_ack(ackid, mask, now_ms=self._now_ms)
+                    if (self._parent_accept_seq is not None
+                            and self._parent_accept_seq not in self.rel.unacked
+                            and not self._parent_accept_acked):
+                        self._parent_accept_acked = True
+                        self.log("[sim] Switch ACKED parent WA; Reliable bootstrap complete "
+                                 "(parent slot/NI remains gated)")
+                        self.info("Switch accepted the PC host link.")
             elif self.conn:
                 self.conn.on_message(m.proto, m.payload, tick=self._tick)
         self.rx_count += 1
@@ -385,6 +410,18 @@ class Sim:
         if rec is None:
             return
         typ = rec.get("type")
+        if self._parent_session_id is not None:
+            if typ == "C":
+                connect_id = rec.get("connect_id")
+                if self._parent_connect_id is None:
+                    self._parent_connect_id = connect_id
+                    self.log(f"[sim] guest emulator connect ('C') received: "
+                             f"connect_id={connect_id.hex()} -> parent WA armed")
+                    self.info("Switch requested the host RFU link.")
+                elif connect_id != self._parent_connect_id:
+                    self.log(f"[sim] ignoring changed guest connect id {connect_id.hex()} "
+                             f"(session is pinned to {self._parent_connect_id.hex()})")
+            return
         if typ == "A" and not self._gba_accepted:
             self._gba_accepted = True              # host's emulator connect ACCEPT (0x41)
             self.log(f"[sim] host ACCEPTED emulator connect ('A' 0x41): {payload[:10].hex()} "
@@ -664,6 +701,38 @@ class Sim:
             self._last_ack_tick = tick
         self._tx_reliable_batch(batch)
 
+    def _drive_parent_reliable(self):
+        """Native parent bootstrap after host Pia finalize.
+
+        The CH1 two-Switch gold fixes this order byte-for-byte: ACK the child's
+        INIT ``fff0`` with next-expected ``fff1``; on the first ``WC``, send a
+        host INIT carrying ``WA`` and the cumulative ``fff2`` ACK in one Pia
+        datagram.  The WA is retransmitted until the Switch acknowledges it.
+        No child/RIGHT-seat RFU code is released here.
+        """
+        now_ms = self._now_ms
+        batch = list(self.rel.due_retransmits(now_ms, limit=RTX_GAP_LIMIT_NI))
+
+        if self._parent_connect_id is not None and self._parent_accept_seq is None:
+            accept = gbaframe.build_accept(
+                self._parent_session_id, self._parent_connect_id)
+            seq = self.rel.queue(accept, reliable.FLAGSA_INIT, now_ms)
+            self._parent_accept_seq = seq
+            batch.append((seq, reliable.FLAGSA_INIT, accept))
+            self.log(f"[sim] parent WA sent: host_session_id="
+                     f"{self._parent_session_id.hex()} connect_id="
+                     f"{self._parent_connect_id.hex()} seq={seq:04x}")
+
+        # Bootstrap acknowledgements are immediate in the native capture (the
+        # first arrives ~10 ms after INIT), rather than using the steady-state
+        # child ACK cadence.
+        if self._ack_owed:
+            batch.append((None, reliable.FLAGSA_CTRL, self.rel.ack_payload()))
+            self._ack_owed = False
+            self._last_ack_tick = self._tick
+
+        self._tx_reliable_batch(batch)
+
     def _ensure_ni(self):
         """Build the NI sender once we have an identity (after the host accepts our 'C'). The 26-byte
         NI src is the child's RfuGameData connection config, CONSTRUCTED from our sim identity (the
@@ -782,7 +851,10 @@ class Sim:
         # Reliable traffic only once the Pia connection is up. Live (conn present): drive the full
         # sliding-window connection (open stream + bulk-acks + gba frame) so the host engages its
         # own Reliable stream. Offline replay/tests (conn=None): emit the bare gba frame as before.
-        if self.connected:
+        if self._parent_session_id is not None:
+            if self.conn is not None and getattr(self.conn, "pia_connected", False):
+                self._drive_parent_reliable()
+        elif self.connected:
             if self.conn is not None:
                 self._drive_reliable()
             else:
