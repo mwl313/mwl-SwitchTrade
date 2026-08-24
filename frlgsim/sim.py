@@ -138,6 +138,11 @@ PARENT_IDLE_PERIOD = 16    # native parent keepalive/poll cadence after each NI 
 PARENT_STANDBY_REPLY_EMITS = 2
 PARENT_CARD_REQUEST_IDLE_FRAMES = 2
 PARENT_SEAT_IDLE_FRAMES = 24
+# Player zero drives BufferTradeParties after the child completes post-seat standby count 3:
+# three party pairs, mail, then gift ribbons [trade.c:1444-1582].  Each request state is preceded by
+# the ROM's `timer > 10` delay, so leave eleven idle command frames between completed blocks.
+PARENT_PARTY_REQUESTS = (1, 1, 1, 3, 4)
+PARENT_PARTY_REQUEST_IDLE_FRAMES = 11
 
 
 class Sim:
@@ -302,6 +307,10 @@ class Sim:
         self._parent_standby_reply_count = None
         self._parent_standby_reply_emits = 0
         self._parent_standby_reply_idle = 0
+        self._parent_party_request_index = None
+        self._parent_party_request_active = False
+        self._parent_party_request_idle = 0
+        self._parent_party_child_epoch = 0
         self._parent_child_cmd = rfu.idle_slot()
         self._parent_child_queue = deque()
         # Emission is FREE-RUN: _drive_reliable emits one child slot ('T') per local VBlank, on our own
@@ -871,6 +880,13 @@ class Sim:
                 if count == 1:
                     self._parent_seat_ready = True
                     self.log("[sim] parent standby count=1 reply/gap complete; seat traffic armed")
+                elif count == 3:
+                    # Task_StartWirelessTrade's count 2 and CB2_CreateTradeMenu's count 3 are now
+                    # complete.  Player zero must stop SendKeysToRfu and drive BufferTradeParties.
+                    self.engine.entry.on_trade_menu_open()
+                    self._parent_party_request_index = 0
+                    self._parent_party_request_idle = PARENT_PARTY_REQUEST_IDLE_FRAMES
+                    self.log("[sim] parent standby count=3 complete; party exchange armed")
 
             if (self._parent_card_request_pending and not self._parent_card_request_sent
                     and getattr(self.engine, "sender", None) is None):
@@ -878,6 +894,33 @@ class Sim:
                 self._parent_card_request_sent = True
                 self.log("[sim] child completed LinkPlayer/standby; parent requested trainer card")
                 return rfu.serialize([rfu.SEND_BLOCK_REQ, 2])
+
+            if self._parent_party_request_index is not None:
+                peer = self.engine.rx.peers[0]
+                if (self._parent_party_request_active
+                        and getattr(self.engine, "sender", None) is None
+                        and peer.epochs > self._parent_party_child_epoch and peer.done):
+                    self._parent_party_request_active = False
+                    self._parent_party_request_index += 1
+                    if self._parent_party_request_index == len(PARENT_PARTY_REQUESTS):
+                        self._parent_party_request_index = None
+                        self.log("[sim] parent BufferTradeParties complete")
+                        self.info("Synchronized both Pokémon parties.")
+                    else:
+                        self._parent_party_request_idle = PARENT_PARTY_REQUEST_IDLE_FRAMES
+                if (self._parent_party_request_index is not None
+                        and not self._parent_party_request_active
+                        and getattr(self.engine, "sender", None) is None):
+                    if self._parent_party_request_idle:
+                        self._parent_party_request_idle -= 1
+                    else:
+                        reqtype = PARENT_PARTY_REQUESTS[self._parent_party_request_index]
+                        self._parent_party_child_epoch = peer.epochs
+                        start_parent_block(reqtype)
+                        self._parent_party_request_active = True
+                        self.log(f"[sim] parent BufferTradeParties request "
+                                 f"{self._parent_party_request_index + 1}/5 type={reqtype}")
+                        return rfu.serialize([rfu.SEND_BLOCK_REQ, reqtype])
 
             parsed_own = rfu.parse_slot(rfu.serialize(words))
             if (parsed_own and parsed_own["op"] == rfu.READY_EXIT_STANDBY
