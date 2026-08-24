@@ -5,6 +5,8 @@
 **Primary evidence:** `logs/golden/discovery_20260824_081253/`
 **Interpretation source:** [docs/25-goldencapture-2차-WSL-결과.md](25-goldencapture-2차-WSL-결과.md)
 
+**Execution-scope note:** the separate protocol-research agent owns LDN/Pia wire-protocol recovery. This branch now owns the downstream Pokémon payload and trade-state decoder described in [docs/28-pokemon-payload-decoder-plan.md](28-pokemon-payload-decoder-plan.md).
+
 ## Correction to the first branch analysis
 
 The first draft of this plan analyzed the wrong artifact: `pc_host_20260824_085514/` is a later PC-host join-gate test. It is retained as a control capture, but it is not the native two-Switch session requested here.
