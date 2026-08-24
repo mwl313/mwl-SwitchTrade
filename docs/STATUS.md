@@ -1,6 +1,6 @@
 # STATUS — 진행 상태 (2026-08-24)
 
-> 마지막 갱신: 2026-08-24 — **PC-host visible trade menu 실기 PASS · player-zero selection gate 구현 완료/실기 대기**
+> 마지막 갱신: 2026-08-24 — **player-zero selection 실기 PASS · confirmation/START 구현 완료/실기 대기**
 
 ## 🏆 핵심 성과
 
@@ -105,6 +105,14 @@
   Windows relay 4/4(총 140 functional) PASS. 다음 실기 PASS 기준은 사용자가 Pokémon을 선택한 뒤
   Switch에 `Is this trade okay?`가 표시되는 것이다. 상세:
   `docs/41-player-zero-selection-implemented-20260824.md`.
+- `pc_host_leader_selection_live_20260824_190447`에서 `b26b588`이 실기 PASS했다. Child
+  `READY_TO_TRADE cursor=1` 뒤 parent가 owner-zero `SET_MONS_TO_TRADE`를 보냈고 사용자가 실제
+  `Is this trade okay?` 화면을 확인했다. 사용자의 실수로 Yes까지 눌러 child `INIT_BLOCK`도 확보했다.
+  이후 native error는 CODEX를 그 경계에서 의도적으로 중단한 결과다. Pia 5,398/5,398 auth, pcap 3개
+  kernel drop 0, post-RX 양쪽 PASS, teardown clean. Local owner-zero `INIT_BLOCK`과 child INIT을 모두
+  gate한 뒤 owner-zero `START_TRADE`를 보내고 `S7_ANIM`으로 진입하도록 구현했다(`emu` `2d66c08`,
+  140 functional PASS). 다음 실기는 trade animation 시작 화면이 PASS 기준이다. 상세:
+  `docs/42-selection-live-pass-start-trade-ready-20260824.md`.
 - ldn 0.0.17 local-self DESTROY 수정은 no-peer stop(1.191초)만 해결했다. joined WA 실기 종료에서는
   radio thread가 15초 뒤에도 살아 있었다. process exit 후 selector stale-AP 청소와 양 카드 post-RX는
   PASS했지만 joined-session teardown root cause는 thread stack 확보 전까지 미해결이다.
@@ -117,7 +125,7 @@
 | 1 | PoC 재현 | ✅ 100% |
 | **2a** | 릴레이 인프라 (RemoteTransport+relay 서버+FSM 훅) | ✅ 100% |
 | **2b** | LAN 2브리지 실기 | 🔄 ~70% — 단독 트레이드·양방향 조인 실증, E2E 양방향 교환만 잔여 |
-| **2b'** | framerelay 코어 | ✅ discovery→visible trade menu live 완료; leader select 구현/실기 대기 — confirm/finish 잔여 |
+| **2b'** | framerelay 코어 | ✅ leader selection 실기 완료; confirmation/START 구현·실기 대기 — finish/commit 잔여 |
 | 3 | 세션 시스템 + GUI (PySide6 확정, `docs/13-userside-app-plan.md`) | 설계 완료 |
 | 4 | 프로덕션 배포 (WSL2 길 A, `docs/12-wsl2-poc-windows.md`) | α G1~G4는 8192EU PASS, G5/G6 잔여 |
 
