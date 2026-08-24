@@ -157,6 +157,11 @@ The `uvicorn` error predates and is independent of the Pia changes.
 
 The next test is a one-Switch PC-host smoke test, not another native two-Switch capture.
 
+2026-08-24 addendum: the first smoke test stopped below Pia because rtl8xxxu returned
+hardware-decrypted data with the CCMP wrapper retained; Kinnay double-decrypted and silently
+dropped the Switch's ARP. The local compatibility fix and exact boundary evidence are in
+`docs/31-pc-host-monitor-ccmp-20260824.md`. Repeat this gate only with that fix active.
+
 Success criteria:
 
 1. Switch sees and joins the PC room.
