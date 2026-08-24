@@ -519,15 +519,17 @@ class Sim:
                     parsed = rfu.parse_slot(reflected)
                     if parsed and parsed["op"] == rfu.READY_EXIT_STANDBY:
                         count = parsed["count"]
-                        if (count in (0, 1) and count not in self._parent_child_standbys
+                        if (count in range(4) and count not in self._parent_child_standbys
                                 and ((count == 0 and getattr(self.engine, "established", False))
-                                     or (count == 1 and self._parent_card_request_sent))):
+                                     or (count == 1 and self._parent_card_request_sent)
+                                     or (count >= 2 and self._parent_seat_ready))):
                             self._parent_child_standbys.add(count)
                             self._parent_standby_reply_count = count
                             self._parent_standby_reply_emits = PARENT_STANDBY_REPLY_EMITS
                             self._parent_standby_reply_idle = (
                                 PARENT_CARD_REQUEST_IDLE_FRAMES if count == 0
-                                else PARENT_SEAT_IDLE_FRAMES)
+                                else PARENT_SEAT_IDLE_FRAMES if count == 1
+                                else 0)
                             if count == 0:
                                 self._parent_card_request_pending = True
                             self.log(f"[sim] child initiated native standby count={count}; "
@@ -853,11 +855,10 @@ class Sim:
                 return rfu.serialize([rfu.SEND_BLOCK_REQ, 0])
             words = self.engine.tick() or [0] * 7
 
-            # Parent and child do NOT initiate the pre-seat warp standbys symmetrically.  The mature
-            # TradeEngine is a child and eagerly emits count 0 as soon as LinkPlayer is established;
-            # exposing that from parent row zero made the real Switch fault immediately after
-            # "CODEX says OK".  In the native room the parent waits for the child's count, answers it
-            # twice, then leaves the measured idle gap before advancing.
+            # Parent and child do NOT initiate the entry standbys symmetrically.  The mature
+            # TradeEngine is a child and eagerly emits counts 0..3; exposing those from parent row
+            # zero makes the leader skip the child-initiated gate.  The parent waits for each child's
+            # count and answers it twice, with measured idle gaps only after counts 0 and 1.
             if self._parent_standby_reply_count is not None:
                 count = self._parent_standby_reply_count
                 if self._parent_standby_reply_emits:
@@ -880,10 +881,9 @@ class Sim:
 
             parsed_own = rfu.parse_slot(rfu.serialize(words))
             if (parsed_own and parsed_own["op"] == rfu.READY_EXIT_STANDBY
-                    and parsed_own["count"] in (0, 1)):
-                # Suppress the child FSM's unsolicited count-0/count-1 bursts.  Explicit parent
-                # replies were handled above; until the Switch initiates, native parent row zero is
-                # idle throughout the room-warp delay.
+                    and parsed_own["count"] in range(4)):
+                # Suppress the child FSM's unsolicited entry bursts.  Explicit parent replies were
+                # handled above; until the Switch initiates each round, native parent row zero idles.
                 words = [0] * 7
             if ((words[0] & 0xFFFF) == 0 and self.linkstate is not None
                     and getattr(self.engine, "established", False)

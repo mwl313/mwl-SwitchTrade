@@ -225,6 +225,22 @@ class PiaHostTest(unittest.TestCase):
         drive_row_zero()
         self.assertTrue(sim._parent_seat_ready)
 
+        # The reused TradeEngine is a follower and advances to count 3 as soon as it sees the
+        # child's count 2 reflected as its "host" row.  Parent row zero must still answer the
+        # child-initiated count 2 first, then wait for the child to initiate count 3.
+        engine.tick = lambda: rfu.exit_standby_words(3)
+        standby2 = rfu.serialize(rfu.exit_standby_words(2))
+        sim._on_gba_in(gbaframe.wrap_t(rfu.uni_slot(standby2), 0x31355))
+        self.assertEqual(drive_row_zero(), standby2)
+        self.assertEqual(drive_row_zero(), standby2)
+        self.assertEqual(drive_row_zero(), rfu.idle_slot())
+
+        standby3 = rfu.serialize(rfu.exit_standby_words(3))
+        sim._on_gba_in(gbaframe.wrap_t(rfu.uni_slot(standby3), 0x31356))
+        self.assertEqual(drive_row_zero(), standby3)
+        self.assertEqual(drive_row_zero(), standby3)
+        self.assertEqual(drive_row_zero(), rfu.idle_slot())
+
     def test_parent_uni_drives_real_trade_engine_to_card_gate(self):
         engine = trade.TradeEngine(
             [mon.Mon.empty(), mon.Mon.empty()], trade_slot=1,
