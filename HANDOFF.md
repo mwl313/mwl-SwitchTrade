@@ -7,6 +7,44 @@
 
 ---
 
+## 2026-08-24 override — post-seat barriers live PASS; player-zero party pulls implemented
+
+The live `ff81318` retest passed the exact required hardware order:
+
+```text
+child READY -> parent READY
+child count 2 -> parent count 2 twice
+child count 3 -> parent count 3 twice
+```
+
+The Switch then remained at `Communication standby... Please wait.`. It sent no later AppData, while
+the PC parent continued `SEND_HELD_KEYS` and issued no `SEND_BLOCK_REQ`. This proves the count-order
+fix and moves the boundary to the previously acknowledged missing player-zero `BufferTradeParties`
+driver. Discovery, CCMP, Pia, Reliable, row-one FIFO, room entry, movement, and counts 0..3 are all
+behind the boundary.
+
+Commit `0b8a2ab` implements only that next source-defined gate. After child count 3 completes it:
+
+- latches the trade-menu/held-key cutoff;
+- issues request types `1,1,1,3,4` (three 200-byte party pairs, 220-byte mail, 40-byte ribbons);
+- preserves the ROM's `timer > 10` delay between requests;
+- advances only after both the PC block sender and a new complete child block epoch finish.
+
+Verification: parent/Pia 12/12, WSL ordinary 135/135, Windows relay 4/4, 139 functional tests total.
+The WSL discovery command still reports the pre-existing relay `setUpClass` error because that venv
+lacks `uvicorn`; the same four relay tests pass in `.audit-venv`.
+
+Next live gate: run one health-gated CODEX-host join on `0b8a2ab`, enter the room, sit, and make no
+extra input until the party menu appears. A pass is five ordered request/dual-block completions and a
+visible trade selection menu. Stop at the first new boundary; the likely subsequent unproved layer is
+player-zero `SET_MONS_TO_TRADE` / `START_TRADE` / confirmation leadership.
+
+Authoritative analysis: `mwl-SwitchTrade/docs/39-post-seat-live-pass-parent-party-pulls-20260824.md`.
+Local immutable evidence:
+`logs/golden/pc_host_post_seat_standby_live_20260824_181522/`.
+
+---
+
 ## 2026-08-24 override — trading-room live PASS; post-seat counts 2/3 fixed
 
 The live `0a8d9a0` retest passed every parent-host gate through interactive room movement. Child
