@@ -103,6 +103,7 @@ reject_stale_capture() {
         cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline")"
         [[ " $cmd " == *" -i $IFACE "* ]] && die "tcpdump already owns $IFACE (pid $pid): $cmd"
     done < <(pgrep -x tcpdump || true)
+    return 0
 }
 
 configure_monitor() {

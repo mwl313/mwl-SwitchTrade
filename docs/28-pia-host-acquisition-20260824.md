@@ -1,5 +1,9 @@
 # 28 — Pia PC-host acquisition gate 구현 (2026-08-24)
 
+> **Resolved by the fixed-channel native gold.** The missing NetStation table and Session
+> type `2`/`5` bytes were captured and implemented. Continue with
+> `docs/30-native-fixed-handshake-20260824.md`.
+
 ## 1. 현재 결론
 
 실기 Switch가 PC의 `CODEX` 방을 보고 LDN participant 1로 join한 뒤 약 8초마다 나간 원인은

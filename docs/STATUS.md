@@ -1,6 +1,6 @@
 # STATUS — 진행 상태 (2026-08-24)
 
-> 마지막 갱신: 2026-08-24 — **WSL 두 카드 G2~G4 통과 · 8192EU 30분 soak 통과**
+> 마지막 갱신: 2026-08-24 — **native CH1 full handshake 확보 · PC-host Pia Session accept 구현**
 
 ## 🏆 핵심 성과
 
@@ -30,6 +30,10 @@
 - selector는 host teardown 후 netdev 0개 상태를 자동 복구하고, multi-vif monitor 우선 선택 및 stale
   vif 제거를 수행한다. HostTransport도 udev-renamed AP를 phy-scope로 정리한다.
 - 상세: `docs/24-wsl-radio-validation-20260824.md`.
+- Native Switch A/B 고정 CH1 capture에서 18,252 Pia datagram을 실패 0으로 복호화했다. Net `0x11`
+  의 six-record station table, Session `0 -> 2/5 -> 6`, 첫 Reliable bootstrap과 graceful teardown까지
+  확보했다. PC-host의 empty station table/accept 누락을 byte-verified 구현으로 교정했다. 상세:
+  `docs/30-native-fixed-handshake-20260824.md`.
 
 ## 📈 Phase 진행도 (2026-08-22 기준)
 
@@ -39,7 +43,7 @@
 | 1 | PoC 재현 | ✅ 100% |
 | **2a** | 릴레이 인프라 (RemoteTransport+relay 서버+FSM 훅) | ✅ 100% |
 | **2b** | LAN 2브리지 실기 | 🔄 ~70% — 단독 트레이드·양방향 조인 실증, E2E 양방향 교환만 잔여 |
-| **2b'** | framerelay 코어 | ✅ STEP 6~9 완료 — 다음은 WSL G5와 실제 Switch STEP 10~11/G6 |
+| **2b'** | framerelay 코어 | ✅ STEP 6~10 discovery/join 완료 — 다음은 corrected Pia smoke와 STEP 11/G6 |
 | 3 | 세션 시스템 + GUI (PySide6 확정, `docs/13-userside-app-plan.md`) | 설계 완료 |
 | 4 | 프로덕션 배포 (WSL2 길 A, `docs/12-wsl2-poc-windows.md`) | α G1~G4는 8192EU PASS, G5/G6 잔여 |
 
@@ -59,7 +63,7 @@
 
 | 카드 | HOST(방 개설) | GUEST | 비고 |
 |---|---|---|---|
-| RTL8192EU (`0bda:818b`) VM/WSL | 🟡 WSL LDN room-open PASS | ✅ | VM LDN join, WSL AP+monitor/TAP/FRLG ready; WSL Switch join 잔여 |
+| RTL8192EU (`0bda:818b`) VM/WSL | 🟡 WSL Switch discovery/join PASS | ✅ | corrected PC-host Pia/Reliable smoke 잔여 |
 | RTL8188EU (`0bda:8179`) WSL/vendor | ❌ project HOST 차단 | ✅ | standalone AP PASS, AP+monitor deadlock; monitor RX/TX G4 PASS |
 
 ## 알려진 미해결 이슈
@@ -67,7 +71,8 @@
 1. **EMU E2E 미완주** (T4): 릴레이 WS 미기동 버그 수정(ad591b5) 후 재실행 필요 — 단, EMU는 동결이라 회귀 도구 용도
 2. CanTradeSelectedMon 게이트 (EMU 한계) — framerelay와 무관
 3. RX decrypt FAILED 간헐 (VM1+8192EU 초기)
-4. 호스트 모드(--mode host): 코드 완성, **실기 미검증** — STEP 7(AP+monitor 동시 vif)이 선행
+4. 호스트 모드(--mode host): Switch room discovery와 LDN participant join은 실증. 수정된 Pia
+   Session accept와 이후 host/parent Reliable/RFU 실기 검증이 잔여다.
 5. 8188EU mainline firmware start 실패는 vendor-driver로 우회했다. out-of-tree driver 유지보수와
    실제 Switch G5/G6는 잔여 risk다.
 
@@ -80,7 +85,8 @@
 > - STEP 9: framerelay 캡처→0x20→WS 파이프라인 첫 무선 실증 (`46b492d`, docs/16)
 
 1. ~~STEP 6~~ ✅ / ~~STEP 7~~ ✅ / ~~STEP 8~~ ✅ / ~~STEP 9~~ ✅
-2. **STEP 10**: 호스트 모드 + 스위치A 조인 (스위치 필요) — 방 리스트에 EMU 표시 확인
+2. **STEP 10 discovery/join**: ✅ PC room 표시와 Switch LDN join 실증. 다음 gate는 수정된 PC-host
+   Pia `0x11 -> 0x12 -> Session 0/2/5/6 -> Reliable INIT` one-Switch smoke test.
 3. **STEP 11**: 🏆 framerelay E2E (스위치 A·B) — B 화면에 "A의 방" = 목표② 달성
 4. **α트랙 G1~G4**: 두 카드 기준 ✅(8188 patched warning-free guest/relay). 다음은 G5 로컬 루프, G6 Switch E2E
 5. **STEP 10~13**: 스위치 실기 (호스트 모드 → framerelay E2E 🏆 → 안정성 5종)
