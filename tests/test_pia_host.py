@@ -354,6 +354,41 @@ class PiaHostTest(unittest.TestCase):
         self.assertEqual((start["op"], start["count"], start["peer"]),
                          (rfu.SEND_BLOCK_INIT, 2, 0))
 
+        engine.sender = None
+        engine._anim_wait = 0
+        sim.rel.on_ack(sim.rel.out_seq)
+        batches.clear()
+        sim._drive_parent_reliable()
+        frames = [entry[2] for entry in batches[-1]
+                  if entry[1] != reliable.FLAGSA_CTRL]
+        local_finish = rfu.parse_slot(gbaframe.parse_in(frames[-1])["slots"][0][1])
+        self.assertTrue(sim._parent_local_finish_started)
+        self.assertEqual(engine.sender.data, trade.linkcmd_block(trade.READY_FINISH_TRADE))
+        self.assertEqual((local_finish["op"], local_finish["count"], local_finish["peer"]),
+                         (rfu.SEND_BLOCK_INIT, 2, 0))
+
+        finished = trade.linkcmd_block(trade.READY_FINISH_TRADE)
+        child_commands = [rfu.init_words(2, owner=1)] + [
+            rfu.send_block_words(i, finished[i * 12:(i + 1) * 12]) for i in range(2)]
+        for i, words in enumerate(child_commands):
+            sim._on_gba_in(gbaframe.wrap_t(rfu.uni_slot(slots.build(words)), 0x5200 + i))
+        self.assertTrue(sim._parent_child_finish_ready)
+
+        engine.sender = None
+        sim.rel.on_ack(sim.rel.out_seq)
+        batches.clear()
+        sim._drive_parent_reliable()
+        frames = [entry[2] for entry in batches[-1]
+                  if entry[1] != reliable.FLAGSA_CTRL]
+        committed = rfu.parse_slot(gbaframe.parse_in(frames[-1])["slots"][0][1])
+        self.assertTrue(sim._parent_local_finish_complete)
+        self.assertTrue(sim._parent_confirm_finish_sent)
+        self.assertEqual(engine.sender.data, trade.linkcmd_block(trade.CONFIRM_FINISH_TRADE))
+        self.assertEqual(engine.commits, 1)
+        self.assertTrue(engine.leaving)
+        self.assertEqual((committed["op"], committed["count"], committed["peer"]),
+                         (rfu.SEND_BLOCK_INIT, 2, 0))
+
     def test_parent_uni_drives_real_trade_engine_to_card_gate(self):
         engine = trade.TradeEngine(
             [mon.Mon.empty(), mon.Mon.empty()], trade_slot=1,

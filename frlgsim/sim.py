@@ -321,6 +321,10 @@ class Sim:
         self._parent_local_confirm_started = False
         self._parent_local_confirm_complete = False
         self._parent_start_trade_sent = False
+        self._parent_child_finish_ready = False
+        self._parent_local_finish_started = False
+        self._parent_local_finish_complete = False
+        self._parent_confirm_finish_sent = False
         self._parent_child_cmd = rfu.idle_slot()
         self._parent_child_queue = deque()
         # Emission is FREE-RUN: _drive_reliable emits one child slot ('T') per local VBlank, on our own
@@ -550,6 +554,12 @@ class Sim:
                               and not self._parent_child_confirm_ready):
                             self._parent_child_confirm_ready = True
                             self.log("[sim] child INIT_BLOCK; parent START_TRADE gate armed")
+                        elif (cmd == trademod.READY_FINISH_TRADE
+                              and self._parent_start_trade_sent
+                              and not self._parent_child_finish_ready):
+                            self._parent_child_finish_ready = True
+                            self.log("[sim] child READY_FINISH_TRADE; "
+                                     "parent CONFIRM_FINISH gate armed")
                     parsed = rfu.parse_slot(reflected)
                     if parsed and parsed["op"] == rfu.READY_EXIT_STANDBY:
                         count = parsed["count"]
@@ -898,12 +908,23 @@ class Sim:
                     and getattr(self.engine, "_pending_push", None) is None):
                 self._parent_local_confirm_complete = True
                 self.log("[sim] parent INIT_BLOCK complete")
+            if (self._parent_local_finish_started
+                    and not self._parent_local_finish_complete
+                    and getattr(self.engine, "sender", None) is None
+                    and getattr(self.engine, "_pending_push", None) is None):
+                self._parent_local_finish_complete = True
+                self.log("[sim] parent READY_FINISH_TRADE complete")
             words = self.engine.tick() or [0] * 7
             sender = getattr(self.engine, "sender", None)
-            if (sender is not None and not self._parent_local_confirm_started
-                    and int.from_bytes(sender.data[0:2], "little") == trademod.INIT_BLOCK):
-                self._parent_local_confirm_started = True
-                self.log("[sim] parent INIT_BLOCK started")
+            if sender is not None:
+                sender_cmd = int.from_bytes(sender.data[0:2], "little")
+                if sender_cmd == trademod.INIT_BLOCK and not self._parent_local_confirm_started:
+                    self._parent_local_confirm_started = True
+                    self.log("[sim] parent INIT_BLOCK started")
+                elif (sender_cmd == trademod.READY_FINISH_TRADE
+                      and not self._parent_local_finish_started):
+                    self._parent_local_finish_started = True
+                    self.log("[sim] parent READY_FINISH_TRADE started")
 
             # Parent and child do NOT initiate the entry standbys symmetrically.  The mature
             # TradeEngine is a child and eagerly emits counts 0..3; exposing those from parent row
@@ -992,6 +1013,18 @@ class Sim:
                 self._parent_start_trade_sent = True
                 self.log("[sim] parent START_TRADE; both confirmations complete")
                 self.info("Both sides confirmed; starting the trade animation.")
+                return rfu.serialize(self.engine.tick())
+
+            if (self._parent_start_trade_sent
+                    and not self._parent_confirm_finish_sent
+                    and self._parent_local_finish_complete
+                    and self._parent_child_finish_ready
+                    and getattr(self.engine, "sender", None) is None):
+                start_parent_command(trademod.CONFIRM_FINISH_TRADE)
+                self._parent_confirm_finish_sent = True
+                self.engine._commit()
+                self.log("[sim] parent CONFIRM_FINISH_TRADE; both animations complete")
+                self.info("Trade committed; entering the save/return sequence.")
                 return rfu.serialize(self.engine.tick())
 
             parsed_own = rfu.parse_slot(rfu.serialize(words))
