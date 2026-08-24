@@ -1,6 +1,6 @@
 # STATUS — 진행 상태 (2026-08-24)
 
-> 마지막 갱신: 2026-08-24 — **PC-host post-seat count 2/3 실기 PASS · player-zero party pulls 재실기 대기**
+> 마지막 갱신: 2026-08-24 — **PC-host visible trade menu 실기 PASS · player-zero selection leadership 구현 대기**
 
 ## 🏆 핵심 성과
 
@@ -92,6 +92,12 @@
   양방향 block-complete gate로 pull하도록 구현했다(`emu` `0b8a2ab`, 139 functional PASS). Capture는 양
   radio kernel drop 0, Pia decrypt fail 0, post-RX 양쪽 PASS다. 상세:
   `docs/39-post-seat-live-pass-parent-party-pulls-20260824.md`.
+- `pc_host_parent_party_pulls_live_20260824_183308`에서 `0b8a2ab`이 실기 PASS했다. Parent가
+  `type 1 x3 -> type 3 -> type 4`를 순서대로 pull했고 Switch의 party 3쌍/mail/ribbons block이 모두
+  완성된 뒤 `P5_IN_TRADE`에 진입했다. 사용자가 실제 Pokémon trade selection 화면 표시를 확인했다.
+  Pia 4,567/4,567 auth PASS, 모든 pcap kernel drop 0, 양 card post-RX PASS다. 다음 정확한 경계는
+  child `READY_TO_TRADE`와 CODEX local selection을 합쳐 player zero가 `SET_MONS_TO_TRADE`를 broadcast하는
+  leader-only FSM이다. 상세: `docs/40-live-party-menu-pass-next-leader-gate-20260824.md`.
 - ldn 0.0.17 local-self DESTROY 수정은 no-peer stop(1.191초)만 해결했다. joined WA 실기 종료에서는
   radio thread가 15초 뒤에도 살아 있었다. process exit 후 selector stale-AP 청소와 양 카드 post-RX는
   PASS했지만 joined-session teardown root cause는 thread stack 확보 전까지 미해결이다.
@@ -104,7 +110,7 @@
 | 1 | PoC 재현 | ✅ 100% |
 | **2a** | 릴레이 인프라 (RemoteTransport+relay 서버+FSM 훅) | ✅ 100% |
 | **2b** | LAN 2브리지 실기 | 🔄 ~70% — 단독 트레이드·양방향 조인 실증, E2E 양방향 교환만 잔여 |
-| **2b'** | framerelay 코어 | ✅ STEP 6~10 discovery→post-seat counts live 완료 — player-zero party pulls 재실기와 leader trade 잔여 |
+| **2b'** | framerelay 코어 | ✅ STEP 6~10 discovery→visible trade menu live 완료 — leader select/confirm/finish 잔여 |
 | 3 | 세션 시스템 + GUI (PySide6 확정, `docs/13-userside-app-plan.md`) | 설계 완료 |
 | 4 | 프로덕션 배포 (WSL2 길 A, `docs/12-wsl2-poc-windows.md`) | α G1~G4는 8192EU PASS, G5/G6 잔여 |
 
@@ -125,7 +131,7 @@
 
 | 카드 | HOST(방 개설) | GUEST | 비고 |
 |---|---|---|---|
-| RTL8192EU (`0bda:818b`) VM/WSL | 🟡 PC-host post-seat count 2/3 live PASS | ✅ | party pulls 재실기, leader trade, clean teardown 잔여 |
+| RTL8192EU (`0bda:818b`) VM/WSL | 🟡 PC-host visible trade menu live PASS | ✅ | leader trade와 repeated clean teardown 잔여 |
 | RTL8188EU (`0bda:8179`) WSL/vendor | ❌ project HOST 차단 | ✅ | standalone AP PASS, AP+monitor deadlock; monitor RX/TX G4 PASS |
 
 ## 알려진 미해결 이슈
@@ -135,8 +141,8 @@
 3. RX decrypt FAILED 간헐 (VM1+8192EU 초기)
 4. 호스트 모드(--mode host): discovery/LDN/ARP/Pia Session/parent `WA`/NI/UNI/LinkPlayer/trainer-card/
    trading-room/이동/post-seat counts 0..3까지 실기 PASS. deadline-safe Reliable, batched row-one FIFO,
-   reactive standby와 player-zero party pulls 구현 완료. 다음은 party exchange 실기와 leader
-   selection/confirm/trade 검증이다.
+   reactive standby와 player-zero party pulls 실기 완료. 다음은 leader selection/confirm/trade
+   구현·검증이다.
    `timeout --foreground`로 Ctrl-C 전달을 수정했지만 joined-session adapter
    teardown은 다음 graceful stop에서 별도 재검증한다.
 5. 8188EU mainline firmware start 실패는 vendor-driver로 우회했다. out-of-tree driver 유지보수와
@@ -152,8 +158,8 @@
 
 1. ~~STEP 6~~ ✅ / ~~STEP 7~~ ✅ / ~~STEP 8~~ ✅ / ~~STEP 9~~ ✅
 2. **STEP 10 discovery/join/room entry**: ✅ `ARP -> Net -> Session -> Reliable -> WA/NI/UNI ->
-   LinkPlayer -> trainer card -> trading room/이동 -> post-seat count 2/3` 실기 PASS. 다음 gate는
-   player-zero party exchange와 trade-menu 표시.
+   LinkPlayer -> trainer card -> trading room/이동 -> post-seat count 2/3 -> party exchange -> visible
+   trade menu` 실기 PASS. 다음 gate는 player-zero `SET_MONS_TO_TRADE` leadership.
 3. **STEP 11**: 🏆 framerelay E2E (스위치 A·B) — B 화면에 "A의 방" = 목표② 달성
 4. **α트랙 G1~G4**: 두 카드 기준 ✅(8188 patched warning-free guest/relay). 다음은 G5 로컬 루프, G6 Switch E2E
 5. **STEP 10~13**: 스위치 실기 (호스트 모드 → framerelay E2E 🏆 → 안정성 5종)
