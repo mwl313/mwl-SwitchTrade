@@ -118,9 +118,14 @@ kinnay/LDN에 호스트 모드가 완전히 구현돼 있음 (소스 확인 완�
 | 15 | Phase 3 UI (세션 ID 공유·클라이언트) |
 | 16 | WSL2 PoC (Windows 배포 경로) |
 | 17 | 원클릭 설치 스크립트 |
+| 18 | **Switch-to-Switch 전용** generic Pia/RFU slot+block tunnel 명세/구현 |
+| 19 | Union Room 이동/입장 native gold + LAN/WAN smoothness gate |
+| 20 | single battle -> double battle 순서의 byte-pass-through E2E; PC battle emulator는 만들지 않음 |
 
 ### 백로그
 - C-6 도중 카드 사망 자동복구 / RX decrypt fail 규명 / ldn 업스트림 PR(diff 초안 있음) / push 상시화
+- 기능 확장은 두 실제 Switch가 game state를 실행하는 구조로만 진행. 상세 scope/non-goals:
+  `docs/46-future-switch-to-switch-features-todo-20260824.md`.
 
 ---
 

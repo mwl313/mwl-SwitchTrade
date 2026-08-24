@@ -189,6 +189,16 @@
 
 ## 다음 단계 (순서대로)
 
+### Future feature scope — locked 2026-08-24
+
+- Union Room, battles, chat, and later FRLG activities are **Switch-to-Switch only**.
+- Do not extend the PC-host `TradeEngine` into PC opponents or per-feature input emulators.
+- After the trade golden baseline and movement-cadence fix, build a generic locally terminated
+  Pia/RFU slot-and-block tunnel so the two Switches execute all gameplay themselves.
+- Controlled native gold is still required once per activity for advertisement/entry/player-count/
+  teardown, but discovery, CCMP, Pia crypto, Reliable, and RFU transport are shared.
+- Authoritative TODO: `docs/46-future-switch-to-switch-features-todo-20260824.md`.
+
 > **2026-08-22 밤 갱신**: STEP 6~9 완료!
 > - STEP 6: rate limiter bridge 연결 (`1fef24c`)
 > - STEP 7: AP+monitor 공존 PASS (`93d2277`, docs/15)
