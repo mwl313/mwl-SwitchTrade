@@ -269,9 +269,12 @@ main() {
     fi
     gate+=(--target-channel "${RADIO_TARGET_CHANNEL:-6}" --)
 
-    msg "[run] ${gate[*]} timeout ${WATCHDOG_TIMEOUT}s $PYTHON_BIN $EMU_PY ${args[*]+"${args[*]}"}"
+    msg "[run] ${gate[*]} timeout --foreground ${WATCHDOG_TIMEOUT}s $PYTHON_BIN $EMU_PY ${args[*]+"${args[*]}"}"
     set +e
-    "${gate[@]}" timeout -k 15 "$WATCHDOG_TIMEOUT" "$PYTHON_BIN" "$EMU_PY" ${args[@]+"${args[@]}"}
+    # Keep the live process in the terminal foreground group so Ctrl-C reaches it.  Plain GNU timeout
+    # creates a separate process group here; bash then consumes the terminal SIGINT while waiting and
+    # the radio process continues until the 900s watchdog (reproduced in the parent-NI live run).
+    "${gate[@]}" timeout --foreground -k 15 "$WATCHDOG_TIMEOUT" "$PYTHON_BIN" "$EMU_PY" ${args[@]+"${args[@]}"}
     local rc=$?
     set -e
     if (( rc == 124 || rc == 137 )); then
