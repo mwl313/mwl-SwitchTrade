@@ -133,6 +133,45 @@ def _build_host_beacon_head(ssid: bytes, channel: int, bssid: bytes) -> bytes:
 
 
 _BEACON_HEAD_INSTALLED = False
+_MONITOR_CCMP_COMPAT_INSTALLED = False
+
+
+def install_monitor_ccmp_compat(log=print) -> bool:
+    """Accept rtl8xxxu frames whose CCMP wrapper survives hardware decryption.
+
+    Some rtl8xxxu monitor vifs return ``CCMP header + plaintext SNAP + MIC`` and
+    leave the Protected bit set.  ldn already handles the variant where the
+    driver strips the whole wrapper; extend that handling to the retained-wrapper
+    form so APNetwork does not try to decrypt plaintext a second time.
+    """
+    global _MONITOR_CCMP_COMPAT_INSTALLED
+    if _MONITOR_CCMP_COMPAT_INSTALLED:
+        return False
+    try:
+        from ldn import wlan as _wlan
+
+        frame_cls = _wlan.DataFrame
+        stock_decode = frame_cls.decode
+        if getattr(stock_decode, "_mwl_monitor_ccmp_compat", False):
+            _MONITOR_CCMP_COMPAT_INSTALLED = True
+            return False
+
+        @functools.wraps(stock_decode)
+        def _decode_with_decrypted_ccmp(self, data):
+            stock_decode(self, data)
+            if self.protected and self.payload.startswith(b"\xaa\xaa\x03") \
+                    and len(self.payload) >= 16:
+                self.payload = self.payload[:-8]  # retained CCMP MIC
+                self.protected = False
+
+        _decode_with_decrypted_ccmp._mwl_monitor_ccmp_compat = True
+        frame_cls.decode = _decode_with_decrypted_ccmp
+        _MONITOR_CCMP_COMPAT_INSTALLED = True
+        log("[monitor-ccmp] enabled rtl8xxxu retained-wrapper compatibility")
+        return True
+    except Exception as e:                           # noqa: BLE001
+        log(f"[monitor-ccmp] compatibility patch not installed: {e}")
+        return False
 
 
 def install_beacon_head_override(log=print) -> bool:
@@ -1634,6 +1673,7 @@ class HostTransport:
             # ldn AP was invisible). Rebuild the head hostapd-style and hand it to the kernel.
             if install_beacon_head_override(self.log):
                 self.info("beacon head override installed (hostapd-style IEs)")
+            install_monitor_ccmp_compat(self.log)
             self.info("Opening the FRLG room (create_network/AP)...")
             try:
                 async with ldn.create_network(param) as network:

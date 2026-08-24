@@ -21,11 +21,18 @@ the PC-host interoperability path:
   six NetStation records, Session `0 -> 2/5 -> 6`, and the first Reliable exchange.
 - `HostConnectionManager` now emits the byte-verified Net `0x11`, Session type `2`,
   and Session type `5`, then recognizes the Switch's type `6` finalize.
+- The first corrected smoke test exposed a lower-layer rtl8xxxu representation bug: the
+  monitor vif retained Protected/CCMP header/MIC around hardware-decrypted SNAP. Kinnay
+  double-decrypted and silently dropped every Switch ARP before `ldn-tap`.
+- `install_monitor_ccmp_compat()` normalizes that retained-wrapper form at runtime. Tests and
+  replay of the exact failing pcap deliver 8/8 Switch data frames and 7/7 ARPs. A patched live
+  join is still required; the first patched room received no manual join attempt.
 - `connected` intentionally remains false after `pia_connected`: the existing
   Reliable/RFU engine is the guest/child role. The next live gate must prove the
   Switch accepts this Pia exchange before a separate host/parent engine is added.
 
-Focused gate: `python -m unittest -v tests.test_pia_host` (5 tests).
+Focused gates: `python -m unittest -v tests.test_pia_host` (5 tests) and
+`python -m unittest -v tests.test_monitor_ccmp_compat` (2 tests).
 The legacy join path is unchanged apart from fixing `parse_net()` so the fixed
 fields following an inner `size=0` header are no longer discarded and applying
 the documented LDN constant-ID permutation.
@@ -33,6 +40,7 @@ the documented LDN constant-ID permutation.
 Main analysis/handoff:
 
 - `mwl-SwitchTrade/docs/30-native-fixed-handshake-20260824.md`
+- `mwl-SwitchTrade/docs/31-pc-host-monitor-ccmp-20260824.md`
 - `mwl-SwitchTrade/handoff/HANDOFF-20260824-native-host-session.md`
 
 ---
