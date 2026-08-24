@@ -44,15 +44,15 @@ normalize_usb_id() {
 profile_for() {
     local wanted=$1
     awk -F '\t' -v wanted="$wanted" '
-        $0 !~ /^#/ && NF >= 7 && tolower($1) == wanted { print; found=1; exit }
+        $0 !~ /^#/ && NF >= 8 && tolower($1) == wanted { print; found=1; exit }
         END { if (!found) exit 1 }
     ' "$PROFILE_FILE"
 }
 
 list_profiles() {
     awk -F '\t' '
-        BEGIN { printf "%-10s %-20s %-20s %-18s %-10s\n", "USB_ID", "STRATEGY", "DRIVERS", "ROLES", "STATUS" }
-        $0 !~ /^#/ && NF >= 7 { printf "%-10s %-20s %-20s %-18s %-10s\n", $1, $2, $4, $5, $6 }
+        BEGIN { printf "%-10s %-20s %-20s %-18s %-16s %-5s\n", "USB_ID", "STRATEGY", "DRIVERS", "ROLES", "STATUS", "AUTO" }
+        $0 !~ /^#/ && NF >= 8 { printf "%-10s %-20s %-20s %-18s %-16s %-5s\n", $1, $2, $4, $5, $6, $7 }
     ' "$PROFILE_FILE"
 }
 
@@ -211,16 +211,20 @@ verify_loaded_module() {
 }
 
 select_device() {
-    local id dev candidates=()
+    local id dev profile auto_select candidates=()
     while IFS=$'\t' read -r id dev; do
-        profile_for "$id" >/dev/null 2>&1 || continue
+        profile="$(profile_for "$id" 2>/dev/null)" || continue
         if [[ -n $USB_ID && $id != "$USB_ID" ]]; then
+            continue
+        fi
+        IFS=$'\t' read -r _ _ _ _ _ _ auto_select _ <<< "$profile"
+        if [[ -z $USB_ID && $auto_select != yes ]]; then
             continue
         fi
         candidates+=("$id"$'\t'"$dev")
     done < <(attached_usb_devices)
-    ((${#candidates[@]} > 0)) || die "no supported attached USB radio${USB_ID:+ matching $USB_ID}"
-    ((${#candidates[@]} == 1)) || die "multiple supported radios attached; pass --usb-id or RADIO_USB_ID"
+    ((${#candidates[@]} > 0)) || die "no auto-selectable attached USB radio${USB_ID:+ matching $USB_ID}"
+    ((${#candidates[@]} == 1)) || die "multiple eligible radios attached; attach one radio per WSL endpoint (VID:PID cannot distinguish identical adapters)"
     printf '%s\n' "${candidates[0]}"
 }
 
@@ -266,7 +270,7 @@ esac
 selection="$(select_device)"
 IFS=$'\t' read -r USB_ID DEVICE <<< "$selection"
 profile="$(profile_for "$USB_ID")"
-IFS=$'\t' read -r _ strategy module_file allowed_drivers roles status _notes <<< "$profile"
+IFS=$'\t' read -r _ strategy module_file allowed_drivers roles status auto_select _notes <<< "$profile"
 if [[ -n $REQUIRED_ROLE ]]; then
     case $REQUIRED_ROLE in host|guest|relay) ;; *) die "invalid role: $REQUIRED_ROLE" ;; esac
     role_allowed "$REQUIRED_ROLE" "$roles" || die "$USB_ID does not support role $REQUIRED_ROLE (roles=$roles)"
@@ -323,7 +327,7 @@ if [[ $module_file != - ]]; then
         die "$USB_ID uses $driver but its profiled artifact $module_file is unavailable"
     fi
 fi
-msg "[driver] PASS usb=$USB_ID strategy=$strategy driver=$driver iface=$iface roles=$roles status=$status${REQUIRED_ROLE:+ required_role=$REQUIRED_ROLE}"
+msg "[driver] PASS usb=$USB_ID strategy=$strategy driver=$driver iface=$iface roles=$roles status=$status auto_select=$auto_select${REQUIRED_ROLE:+ required_role=$REQUIRED_ROLE}"
 
 exec "$HEALTH_GATE" --iface "$iface" --usb-id "$USB_ID" \
     --health-channels "$HEALTH_CHANNELS" --target-channel "$TARGET_CHANNEL" \

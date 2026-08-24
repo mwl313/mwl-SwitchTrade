@@ -27,7 +27,9 @@
 | [docs/05-phase2-design.md](docs/05-phase2-design.md) | Phase 2 상세 설계 — PC↔PC 인터넷 브리지 |
 | [docs/06-distribution.md](docs/06-distribution.md) | 배포 전략 — 리눅스 레이어 분석, WSL2/ESP32 경로 |
 | [docs/24-wsl-radio-validation-20260824.md](docs/24-wsl-radio-validation-20260824.md) | WSL/VM 카드별 G2~G4 검증과 RTL8188EU 진단 |
-| [docs/49-production-beta-priorities-20260825.md](docs/49-production-beta-priorities-20260825.md) | **프로덕션 베타 우선순위·출시 게이트·미래 TODO (현재 기준 문서)** |
+| [docs/50-current-product-demo-todo-20260825.md](docs/50-current-product-demo-todo-20260825.md) | **현재 제품 데모 즉시/백로그 TODO와 화면 흐름 (권위 문서)** |
+| [docs/49-production-beta-priorities-20260825.md](docs/49-production-beta-priorities-20260825.md) | 프로덕션 베타의 기술적 근거와 출시 게이트 |
+| [docs/51-windows-installer-bootstrap-design-20260825.md](docs/51-windows-installer-bootstrap-design-20260825.md) | Windows 설치·WSL 구성·재부팅 재개·롤백 설계 |
 | [docs/30-native-fixed-handshake-20260824.md](docs/30-native-fixed-handshake-20260824.md) | Native two-Switch fixed-channel gold, PC-host root cause, and byte-verified Session fix |
 | [handoff/HANDOFF-20260824-wsl-dual-radio.md](handoff/HANDOFF-20260824-wsl-dual-radio.md) | WSL 두 카드 최종 상태, 확장 구조, 다음 G5/G6 절차 |
 | [handoff/HANDOFF-20260824-native-host-session.md](handoff/HANDOFF-20260824-native-host-session.md) | Next-agent gate for PC-host Pia and host/parent Reliable work |
@@ -60,6 +62,8 @@ Linux에서는 `scripts/wsl-radio-prepare.sh --usb-id VID:PID --role ROLE -- COM
 - `scripts/`, `config/`: Windows/WSL 무선 준비와 하드웨어 정책.
 - `tools/`, `tests/`: 캡처/Pokémon payload 분석과 회귀 테스트.
 - `SwitchTrade-UI-Kit.zip`: 향후 HTML/CSS frontend용 디자인 reference 원본.
+- `ui/`: UI Kit의 240×160 Canvas 프리미티브를 사용한 제품 데모 frontend.
+- `switchtrade/`: 공유 하드웨어 프로필 reader, 진단/지원 bundle, RFU tunnel envelope, 로컬 control API.
 - `docs/`, `handoff/`: 실측 증거, 결정, 다음 작업.
 - WSL kernel build는 별도 `mwl313/wsl2-kernel-build` 리포에 유지한다.
 

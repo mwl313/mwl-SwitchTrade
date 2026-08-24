@@ -12,9 +12,9 @@
 - RTL8188EU (`0bda:8179`) is quarantined from the beta. Its patched vendor driver can receive and
   decode advertisements, but real guest association fails at Nintendo's custom nl80211 control-port
   protocol and AP+monitor can deadlock. It may be used only for observation/driver research.
-- The existing `config/wsl-radio-hardware.tsv` still contains the older 8188 guest/relay claim. Until
-  P1 corrects and tests the selector, operators must explicitly select `0bda:818b`; the current table
-  is not a production allowlist.
+- `config/wsl-radio-hardware.tsv` now marks RTL8192EU as the only auto-selectable beta candidate and
+  quarantines RTL8188EU to observation. The same table remains the single policy source for the CLI,
+  launcher, and future GUI so additional hardware stays profile-driven.
 - A second RTL8192EU is expected on 2026-08-26. The first production test will use one identical
   8192EU at each local endpoint, removing the 8188 driver from the result.
 - Application, protocol, relay, payload-decoder, documentation, and emulator histories are merged on
