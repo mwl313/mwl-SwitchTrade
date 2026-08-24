@@ -7,6 +7,40 @@
 
 ---
 
+## 2026-08-24 override — selection live PASS; confirmation/START implemented
+
+The `b26b588` live run passed its exact hardware gate. The Switch sent
+`READY_TO_TRADE cursor=1`; the parent immediately broadcast
+`SET_MONS_TO_TRADE local_cursor=1 child_cursor=1`; and the user visibly reached
+`Is this trade okay?`. The user accidentally confirmed Yes, yielding the additional child
+`INIT_BLOCK` at 194.2s. CODEX was intentionally stopped there, so the subsequent native error was
+expected and is not a protocol regression.
+
+Evidence: `logs/golden/pc_host_leader_selection_live_20260824_190447/` (local/ignored). Pia was
+5398/5398 authenticated with zero failures, all three pcaps had zero kernel drops, both post-test
+actual-RX gates passed, and teardown was clean.
+
+Commit `2d66c08` implements only the next source-defined leader gate:
+
+- CODEX applies the existing validity/confirm-YES path and sends owner-zero `INIT_BLOCK` after
+  `SET_MONS_TO_TRADE`;
+- the parent separately latches the Switch's completed `INIT_BLOCK`;
+- only after both confirmations complete does player zero broadcast owner-zero `START_TRADE`;
+- the local engine enters `S7_ANIM`, allowing the existing wireless scene-seam standby/animation
+  path to take over.
+
+The test proves both owner-zero INIT blocks, their exact 20-byte payloads, child confirmation
+reassembly, the two-sided gate, and `S7_ANIM`. WSL ordinary is 136/136 and Windows relay is 4/4
+(140 functional passes). WSL discovery still has only the known missing-`uvicorn` relay setup error.
+
+Next live PASS: after the user selects and confirms a Pokémon, observe parent `INIT_BLOCK`, child
+`INIT_BLOCK`, parent `START_TRADE`, and the visible start of the trade animation. Stop there before
+implementing player-zero `CONFIRM_FINISH_TRADE`.
+
+Authoritative report: `mwl-SwitchTrade/docs/42-selection-live-pass-start-trade-ready-20260824.md`.
+
+---
+
 ## 2026-08-24 override — player-zero selection broadcast implemented; live test pending
 
 Commit `b26b588` implements the next source-defined parent transition without extending beyond the
