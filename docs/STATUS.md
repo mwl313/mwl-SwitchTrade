@@ -1,6 +1,6 @@
 # STATUS — 진행 상태 (2026-08-24)
 
-> 마지막 갱신: 2026-08-24 — **player-zero selection 실기 PASS · confirmation/START 구현 완료/실기 대기**
+> 마지막 갱신: 2026-08-24 — **full trade animation 실기 PASS · finish commit 구현 완료/실기 대기**
 
 ## 🏆 핵심 성과
 
@@ -113,6 +113,14 @@
   gate한 뒤 owner-zero `START_TRADE`를 보내고 `S7_ANIM`으로 진입하도록 구현했다(`emu` `2d66c08`,
   140 functional PASS). 다음 실기는 trade animation 시작 화면이 PASS 기준이다. 상세:
   `docs/42-selection-live-pass-start-trade-ready-20260824.md`.
+- `pc_host_start_trade_live_20260824_191729`에서 `2d66c08`이 실기 PASS했다. 양쪽 INIT 뒤 player-zero
+  `START_TRADE`, scene-seam count 4, 전체 trade animation이 완료됐고 사용자는 실제
+  `Take good care of SALAMENCE`를 확인했다. Host를 child `READY_FINISH_TRADE` 경계에서 중지한 뒤
+  neutral로 돌아가자 Rattata가 복원되어 animation/local swap은 leader finish confirm 전까지
+  provisional임을 실증했다. Local/child `READY_FINISH_TRADE`를 합친 뒤 owner-zero
+  `CONFIRM_FINISH_TRADE`와 local commit을 수행하도록 구현했다(`emu` `812fb90`, 140 functional PASS).
+  다음 실기는 save/return 진행과 neutral 상태에서도 trade 유지가 기준이다. 상세:
+  `docs/43-full-animation-pass-confirm-finish-ready-20260824.md`.
 - ldn 0.0.17 local-self DESTROY 수정은 no-peer stop(1.191초)만 해결했다. joined WA 실기 종료에서는
   radio thread가 15초 뒤에도 살아 있었다. process exit 후 selector stale-AP 청소와 양 카드 post-RX는
   PASS했지만 joined-session teardown root cause는 thread stack 확보 전까지 미해결이다.
@@ -125,7 +133,7 @@
 | 1 | PoC 재현 | ✅ 100% |
 | **2a** | 릴레이 인프라 (RemoteTransport+relay 서버+FSM 훅) | ✅ 100% |
 | **2b** | LAN 2브리지 실기 | 🔄 ~70% — 단독 트레이드·양방향 조인 실증, E2E 양방향 교환만 잔여 |
-| **2b'** | framerelay 코어 | ✅ leader selection 실기 완료; confirmation/START 구현·실기 대기 — finish/commit 잔여 |
+| **2b'** | framerelay 코어 | ✅ full animation 실기 완료; finish commit 구현·실기 대기 — save/return 잔여 |
 | 3 | 세션 시스템 + GUI (PySide6 확정, `docs/13-userside-app-plan.md`) | 설계 완료 |
 | 4 | 프로덕션 배포 (WSL2 길 A, `docs/12-wsl2-poc-windows.md`) | α G1~G4는 8192EU PASS, G5/G6 잔여 |
 
@@ -137,7 +145,7 @@
 | **mwl313/frlg-ldn-trade-emu** (emu/) | **동작 코드 본체** — framerelay(메인) + EMU(동결). `emu/HANDOFF.md`가 작업 대장 |
 
 - 검토 브랜치: main은 `golden-capture-re`, emulator는 `gptsolreview`가 최신이며 push 완료. emulator의
-  최신 parent party-pull 구현은 `0b8a2ab`, post-seat standby 수정은 `ff81318`, batched-child reflection 수정은 `0a8d9a0`, parent Reliable deadline 수정은 `31b29bf`,
+  최신 parent finish-commit 구현은 `812fb90`, party-pull 구현은 `0b8a2ab`, post-seat standby 수정은 `ff81318`, batched-child reflection 수정은 `0a8d9a0`, parent Reliable deadline 수정은 `31b29bf`,
   double-radiotap 회귀 방지는 `82dd0d3`이다.
   `framerelay-dev`는 그 이전 기능 기준선이다.
 - ~~MWL-SwitchTrade-v2~~: 삭제됨 (고유 내용 0)
@@ -146,7 +154,7 @@
 
 | 카드 | HOST(방 개설) | GUEST | 비고 |
 |---|---|---|---|
-| RTL8192EU (`0bda:818b`) VM/WSL | 🟡 PC-host visible trade menu live PASS | ✅ | leader trade와 repeated clean teardown 잔여 |
+| RTL8192EU (`0bda:818b`) VM/WSL | 🟡 PC-host full animation live PASS | ✅ | finish/save와 repeated clean teardown 잔여 |
 | RTL8188EU (`0bda:8179`) WSL/vendor | ❌ project HOST 차단 | ✅ | standalone AP PASS, AP+monitor deadlock; monitor RX/TX G4 PASS |
 
 ## 알려진 미해결 이슈
@@ -155,9 +163,9 @@
 2. CanTradeSelectedMon 게이트 (EMU 한계) — framerelay와 무관
 3. RX decrypt FAILED 간헐 (VM1+8192EU 초기)
 4. 호스트 모드(--mode host): discovery/LDN/ARP/Pia Session/parent `WA`/NI/UNI/LinkPlayer/trainer-card/
-   trading-room/이동/post-seat counts 0..3까지 실기 PASS. deadline-safe Reliable, batched row-one FIFO,
-   reactive standby와 player-zero party pulls 실기 완료. 다음은 leader selection/confirm/trade
-   구현·검증이다.
+   trading-room/이동/post-seat counts 0..3/party exchange/selection/START/full animation까지 실기 PASS.
+   deadline-safe Reliable, batched row-one FIFO, reactive standby와 player-zero party pulls도 실기 완료.
+   다음은 `CONFIRM_FINISH_TRADE` 및 save/return 실기 검증이다.
    `timeout --foreground`로 Ctrl-C 전달을 수정했지만 joined-session adapter
    teardown은 다음 graceful stop에서 별도 재검증한다.
 5. 8188EU mainline firmware start 실패는 vendor-driver로 우회했다. out-of-tree driver 유지보수와
@@ -174,7 +182,8 @@
 1. ~~STEP 6~~ ✅ / ~~STEP 7~~ ✅ / ~~STEP 8~~ ✅ / ~~STEP 9~~ ✅
 2. **STEP 10 discovery/join/room entry**: ✅ `ARP -> Net -> Session -> Reliable -> WA/NI/UNI ->
    LinkPlayer -> trainer card -> trading room/이동 -> post-seat count 2/3 -> party exchange -> visible
-   trade menu` 실기 PASS. 다음 gate는 player-zero `SET_MONS_TO_TRADE` leadership.
+   trade menu -> player-zero selection/confirm/START -> full animation` 실기 PASS. 다음 gate는
+   player-zero `CONFIRM_FINISH_TRADE`와 save/return.
 3. **STEP 11**: 🏆 framerelay E2E (스위치 A·B) — B 화면에 "A의 방" = 목표② 달성
 4. **α트랙 G1~G4**: 두 카드 기준 ✅(8188 patched warning-free guest/relay). 다음은 G5 로컬 루프, G6 Switch E2E
 5. **STEP 10~13**: 스위치 실기 (호스트 모드 → framerelay E2E 🏆 → 안정성 5종)
