@@ -7,6 +7,38 @@
 
 ---
 
+## 2026-08-24 override — parent party exchange and visible trade menu live PASS
+
+The real Switch accepted `0b8a2ab` through all five parent pulls:
+
+```text
+type 1 party pair #1 -> child block complete
+type 1 party pair #2 -> child block complete
+type 1 party pair #3 -> child block complete
+type 3 mail          -> child block complete
+type 4 ribbons       -> child block complete
+```
+
+At 502.2s the engine reached `P5_IN_TRADE`, and the user confirmed the Pokémon trade/party-selection
+screen was visibly open. Pia authentication was 4567/4567 with zero failures, every capture had zero
+kernel drops, and both radios passed post-test actual RX. The host vifs disappeared promptly on this
+stop; the 15-second teardown timeout did not reproduce.
+
+The exact next boundary is player-zero leadership after menu selections. The current `TradeEngine`
+is follower-oriented: it emits `READY_TO_TRADE`, `INIT_BLOCK`, and `READY_FINISH_TRADE`, then reacts
+to leader broadcasts. Parent mode must instead aggregate its configured local selection with the
+Switch's `READY_TO_TRADE`, then send owner-zero `SET_MONS_TO_TRADE`. Later owner-zero duties are
+`START_TRADE` after both `INIT_BLOCK` confirmations and `CONFIRM_FINISH_TRADE` after both
+`READY_FINISH_TRADE` blocks.
+
+Implement the selection transition as a contained parent shim and preserve the live-proven follower
+path. The next live PASS is the Switch showing `Is this trade okay?` after the user selects a Pokémon
+and chooses Trade. Authoritative report:
+`mwl-SwitchTrade/docs/40-live-party-menu-pass-next-leader-gate-20260824.md`. Evidence is local/ignored
+at `logs/golden/pc_host_parent_party_pulls_live_20260824_183308/`.
+
+---
+
 ## 2026-08-24 override — post-seat barriers live PASS; player-zero party pulls implemented
 
 The live `ff81318` retest passed the exact required hardware order:
