@@ -101,3 +101,6 @@ c80fe5e06087b0eefcf460e2f9d4cbd10c50d1be770c2ffc62b73f45181cc9c6  observer_start
 ```
 
 경로: `logs/golden/pc_host_20260824_085514/`
+
+> **2026-08-24 implementation update:** Net `0x11` host outreach and Session-join capture are now
+> implemented as a gated acquisition step. See `docs/28-pia-host-acquisition-20260824.md`.
