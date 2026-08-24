@@ -229,6 +229,14 @@ def create_relay_session(relay_url, lg):
     return sid
 
 
+PARENT_LDN_CLOSE_GRACE_S = 5.0
+
+
+def _parent_ldn_tail_complete(transport, deadline, now):
+    """The Switch must leave the LDN room before the PC destroys its AP."""
+    return getattr(transport, "_peer", None) is None or now >= deadline
+
+
 def run_live(args, lg):
     phy = resolve_phy(args.phy, lg)   # explicit --phy, else USB-ID auto-detect (I-5)
     comm_id = int(args.comm_id, 16) if args.comm_id else None
@@ -392,7 +400,12 @@ def run_live(args, lg):
     LEAVE_TAIL_S = 120.0
     try:
         while True:
-            s.tick()
+            # After the child sends RFU 'D', game traffic is finished.  Keep only the lower LDN host
+            # alive while the Switch performs its native leave animation and drops the AP association.
+            # Destroying the AP immediately here produces native error 2318-0006 after an otherwise
+            # successful room exit.
+            if not (args.mode == "host" and getattr(s, "host_disconnected", False)):
+                s.tick()
             # Save each received mon the INSTANT it commits (on CONFIRM_FINISH), not just at graceful
             # run-end: the post-trade tail (save chain / cancel / close) can stall or be Ctrl+C'd, and the
             # mon data is already valid at commit. Writing here means the received mon survives an
@@ -411,10 +424,20 @@ def run_live(args, lg):
                 lg("[live] ABORT: host rejected our join (NI status != JOIN_GROUP_OK) - leaving.")
                 lg.info("Host rejected our join; leaving.")
                 break
-            # host closed the RFU link (emulator 'D'): the link is down, stop cleanly.
+            # Guest mode can stop as soon as its host closes RFU.  In parent/host mode the Switch is
+            # the RFU child: let it leave the surrounding LDN network first, with a bounded fallback.
             if getattr(s, "host_disconnected", False):
-                lg("[live] host closed the RFU link ('D' 0x44) - disconnecting.")
-                break
+                if args.mode != "host":
+                    lg("[live] host closed the RFU link ('D' 0x44) - disconnecting.")
+                    break
+                if close_until is None:
+                    close_until = time.monotonic() + PARENT_LDN_CLOSE_GRACE_S
+                if _parent_ldn_tail_complete(t, close_until, time.monotonic()):
+                    lg("[live] Switch RFU link is closed and its LDN leave tail completed - "
+                       "destroying the room.")
+                    break
+                time.sleep(period)
+                continue
             # --- S0 GATE: do NOTHING (no sit, no trade) until the host CONFIRMS the connection.
             # sim.tick() only emits trade Reliable once s.connected; here we likewise hold off the
             # seat/trade orchestration so we never "blow past" the host's connection confirmation.
@@ -496,16 +519,18 @@ def run_live(args, lg):
                       "responding with OUR EXIT_ROOM so both are EXITING_ROOM -> host closes the link.")
                 lstate.exit()
                 responded_exit = True
-            # When the host issues READY_CLOSE_LINK (0x5F00) the responder mirrors it; answer briefly,
-            # then disconnect (the close handshake is done - no need to wait out the full tail)
+            # When the host issues READY_CLOSE_LINK (0x5F00) the responder mirrors it.  The RFU child
+            # will then send 'D'; keep the AP alive afterward until it leaves LDN (bounded above).
             # [trade_scene.c:2722-2725; trade.c:2117-2132; link_rfu_2.c:1460-1520].
             if engine.barrier.mode == lsmod_barrier.CLOSE:
                 if not announced_close:
                     announced_close = True
-                    close_until = time.monotonic() + 1.5
-                    lg("[live] host issued READY_CLOSE_LINK (0x5F00) - answering, then disconnecting.")
+                    close_until = time.monotonic() + PARENT_LDN_CLOSE_GRACE_S
+                    lg("[live] host issued READY_CLOSE_LINK (0x5F00) - answering, then waiting "
+                       "for the Switch to leave LDN.")
                     lg.info("Closing the link...")
                 if close_until is not None and time.monotonic() >= close_until:
+                    lg("[live] LDN close grace elapsed - destroying the room.")
                     break
             elif (exited and engine.barrier.mode == lsmod_barrier.STANDBY
                   and not announced_cancel):
