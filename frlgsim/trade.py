@@ -733,9 +733,14 @@ class TradeEngine:
         """Start a block send. Reset the peer-1 reflection first: until the host reflects THIS
         block's INIT (one round later), peer-1 still holds the PREVIOUS block's completed state,
         which would falsely satisfy the send gates and complete the new block after one fragment.
-        Clearing it makes the sender wait for the fresh wire ACK (true against the real host too)."""
+        Clearing it makes the sender wait for the fresh wire ACK (true against the real host too).
+        The contained parent shim reuses this engine with leader_mode set; its blocks are player-zero
+        owned and Pia-reliable, so they use the same bounded send-once adaptation as the other parent
+        commands."""
         self.rx.peers[1] = block.RecvBlock()
-        self.sender = block.BlockSender(buf, trust_pia=self.trust_pia)
+        self.sender = block.BlockSender(
+            buf, owner=0 if self.leader_mode else 1,
+            trust_pia=True if self.leader_mode else self.trust_pia)
         return self.sender
 
     def _on_req(self, reqtype):

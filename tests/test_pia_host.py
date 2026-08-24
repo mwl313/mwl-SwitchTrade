@@ -317,7 +317,41 @@ class PiaHostTest(unittest.TestCase):
         self.assertEqual(engine.sender.data, trade.linkcmd_block(trade.SET_MONS_TO_TRADE, 1))
         self.assertEqual(engine.host_cursor, 2)
         self.assertEqual(engine.state, trade.S6_CONFIRM)
+        self.assertEqual(engine._pending_push, trade.linkcmd_block(trade.INIT_BLOCK))
         self.assertEqual((parsed["op"], parsed["count"], parsed["peer"]),
+                         (rfu.SEND_BLOCK_INIT, 2, 0))
+
+        engine.sender = None
+        sim.rel.on_ack(sim.rel.out_seq)
+        batches.clear()
+        sim._drive_parent_reliable()
+        frames = [entry[2] for entry in batches[-1]
+                  if entry[1] != reliable.FLAGSA_CTRL]
+        local_init = rfu.parse_slot(gbaframe.parse_in(frames[-1])["slots"][0][1])
+        self.assertEqual(engine.sender.data, trade.linkcmd_block(trade.INIT_BLOCK))
+        self.assertTrue(sim._parent_local_confirm_started)
+        self.assertEqual((local_init["op"], local_init["count"], local_init["peer"]),
+                         (rfu.SEND_BLOCK_INIT, 2, 0))
+
+        confirmed = trade.linkcmd_block(trade.INIT_BLOCK)
+        child_commands = [rfu.init_words(2, owner=1)] + [
+            rfu.send_block_words(i, confirmed[i * 12:(i + 1) * 12]) for i in range(2)]
+        for i, words in enumerate(child_commands):
+            sim._on_gba_in(gbaframe.wrap_t(rfu.uni_slot(slots.build(words)), 0x5100 + i))
+        self.assertTrue(sim._parent_child_confirm_ready)
+
+        engine.sender = None
+        sim.rel.on_ack(sim.rel.out_seq)
+        batches.clear()
+        sim._drive_parent_reliable()
+        frames = [entry[2] for entry in batches[-1]
+                  if entry[1] != reliable.FLAGSA_CTRL]
+        start = rfu.parse_slot(gbaframe.parse_in(frames[-1])["slots"][0][1])
+        self.assertTrue(sim._parent_local_confirm_complete)
+        self.assertTrue(sim._parent_start_trade_sent)
+        self.assertEqual(engine.sender.data, trade.linkcmd_block(trade.START_TRADE))
+        self.assertEqual(engine.state, trade.S7_ANIM)
+        self.assertEqual((start["op"], start["count"], start["peer"]),
                          (rfu.SEND_BLOCK_INIT, 2, 0))
 
     def test_parent_uni_drives_real_trade_engine_to_card_gate(self):
