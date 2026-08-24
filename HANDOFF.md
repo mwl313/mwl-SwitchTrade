@@ -7,11 +7,11 @@
 
 ---
 
-## 2026-08-24 override — parent Reliable bootstrap implemented
+## 2026-08-24 override — parent Reliable and NI gates live-proven/implemented
 
-The corrected one-Switch host capture crossed ARP and Pia, then showed the
-Switch retransmitting `WC` because the PC did not participate in Reliable.  The
-native CH1 two-Switch gold has now been decoded at that exact boundary:
+The first corrected one-Switch host capture crossed ARP and Pia, then showed
+the Switch retransmitting `WC` because the PC did not participate in Reliable.
+The native CH1 two-Switch gold locked the missing bootstrap:
 
 ```text
 guest INIT fff0, FireRed metadata
@@ -22,36 +22,42 @@ host  CTRL ACK: next=fff2 (batched after WA)
 guest CTRL ACK: next=fff1
 ```
 
-`fcc3` is the native host's beacon RFU session id, not a new random value.
-Host mode now passes `HostTransport.rfu_session_id` into a separate parent
-Reliable bootstrap, echoes the child's `WC` id, retransmits `WA` until ACKed,
-and continues acknowledging guest Reliable data.  A byte-exact regression test
-locks sequence ids, window ids, message flags, payloads, and WA+ACK batching.
+`fcc3` is the native host's beacon RFU session id, not a new random value.  The
+2026-08-24 `pc_host_parent_wa_live_20260824_151803` run proved the implementation
+on hardware: the Switch ACKed PC `WA`, `parent_link_accepted=True`, and all 79
+captured Pia records authenticated.  It then repeated a child NI_START 17 times
+because the PC emitted only Pia Reliable ACKs.
 
-`HostConnectionManager.connected` deliberately remains false.  The parent
-slot/NI direction is not implemented, so the mature child/RIGHT-seat engine
-must not run after WA.  The next live gate is proof that the Switch ACKs WA;
-the UI may still time out afterward because the PC does not yet emit the first
-parent `T`/NI poll.
+The native post-WA exchange was decoded with 18,257/18,257 protected frames and
+18,252/18,252 Pia datagrams authenticating.  Host mode now additionally:
 
-The HostTransport shutdown hang is also fixed.  ldn 0.0.17 sent its network-
-destroy control frame to participant zero (the AP itself), which can leave an
-rtl8xxxu nl80211 request waiting forever.  The runtime compatibility adapter
-skips only the local AP and still notifies a connected remote Switch.  A real
-health-gated RTL8192EU room opened and stopped in 1.191 seconds, fully released
-its interfaces, and passed post-stop RX.
+- emits the parent idle `T` poll;
+- mirrors each child NI subframe with the three-byte parent LLSF ACK;
+- emits `WG=0` after the child's NI NULL;
+- sends the exact five-frame parent NI transfer carrying `JOIN_GROUP_OK=5`;
+- advances that transfer only on a matching child RFU ACK;
+- emits `WG=1` and periodic parent idle polls after bidirectional NI completes.
+
+`HostConnectionManager.connected` deliberately remains false.  Parent UNI is
+still a distinct final room-entry gate; the mature child/RIGHT-seat engine must
+not be released in host mode.
+
+Teardown correction: skipping ldn's local self-DESTROY fixes a no-peer stop
+(1.191 s), but the joined live run still left the host radio thread alive after
+the 15-second grace.  Treat joined-session teardown as unresolved.  The stale
+AP was removed only after the process exited, then both radios passed post-test
+actual RX.
 
 Verification baseline:
 
 ```text
-python -m unittest discover -s tests -p 'test_*.py' -q   # 133/133 PASS
-RTL8192EU host open/stop                                  # PASS, stop 1.191 s
-RTL8192EU post-stop actual RX                             # PASS
+python -m unittest -v tests.test_pia_host                 # 8/8 PASS
+ordinary emulator suite (relay integration excluded)     # 131/131 PASS
+relay integration in current venv                        # setup error: uvicorn absent
+RTL8192EU no-peer host stop                               # PASS, stop 1.191 s
+RTL8192EU joined-session host stop                        # FAIL, thread alive after 15 s
+both radios post-test actual RX                           # PASS
 ```
-
-The relay integration test now locates `relay/server.py` through parent
-discovery, so both a physical `main/emu` checkout and this workspace's
-`emu -> _related/frlg-ldn-trade-emu` junction pass.
 
 ## 2026-08-24 override — native PC-host Session bytes acquired
 

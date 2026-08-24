@@ -21,8 +21,8 @@ from frlgsim.pia_connect import (
     parse_net,
     parse_session_join,
 )
-from frlgsim import reliable
-from frlgsim.sim import Sim
+from frlgsim import gbaframe, ni, reliable, rfu
+from frlgsim.sim import Sim, TS_SEED
 
 
 HOST_MAC = bytes.fromhex("a047d7b02b39")
@@ -60,6 +60,59 @@ def decode_reliable_messages(crypto, datagram, src_ip):
 
 
 class PiaHostTest(unittest.TestCase):
+    def test_parent_rfu_ni_frames_match_native_gold(self):
+        self.assertEqual(
+            gbaframe.wrap_parent_t(None, 0x49F7).hex(),
+            "57540800f749000001000000")
+        self.assertEqual(
+            gbaframe.wrap_parent_t(
+                ni.parent_recv_ack_slot(rfu.LCOM_NI_START, 1, 0), 0x49F9).hex(),
+            "57540c00f94900000300000000680400")
+        self.assertEqual(gbaframe.build_group_state(0).hex(), "5747040000000000")
+        self.assertEqual(gbaframe.build_group_state(1).hex(), "5747040001000000")
+
+        slots = ni.parent_join_status_slots()
+        timestamps = (0x4B2B, 0x4B2D, 0x4B2F, 0x4B32, 0x4B33)
+        expected = (
+            "575410002b4b0000080000000548040005000100",
+            "575410002d4b0000050000000250040000000000",
+            "57540c002f4b00000400000001880405",
+            "57540c00324b00000300000000c00400",
+            "57540c00334b00000300000000080400",
+        )
+        self.assertEqual(
+            tuple(gbaframe.wrap_parent_t(slot, ts).hex()
+                  for slot, ts in zip(slots, timestamps)), expected)
+
+    def test_parent_join_status_advances_only_on_matching_child_acks(self):
+        sim = Sim(SimpleNamespace(), PiaCrypto(bytes(range(16))), SimpleNamespace(),
+                  "169.254.25.1", "169.254.25.2",
+                  parent_session_id=bytes.fromhex("fcc3"))
+        batches = []
+        sim._tx_reliable_batch = lambda batch: batches.append(list(batch))
+        sim._parent_accept_acked = True
+        sim._parent_poll_sent = True
+        sim._parent_child_ni_complete = True
+
+        def drive():
+            batches.clear()
+            sim._drive_parent_reliable()
+            inner = [entry[2] for entry in batches[-1]
+                     if entry[1] != reliable.FLAGSA_CTRL]
+            sim.rel.on_ack(sim.rel.out_seq)
+            return inner
+
+        self.assertEqual(drive(), [gbaframe.build_group_state(0)])
+        for i, slot in enumerate(ni.parent_join_status_slots()):
+            self.assertEqual(drive(), [gbaframe.wrap_parent_t(slot, TS_SEED + i)])
+            fields = rfu.parse_llsf_parent(slot)
+            if fields["state"] != rfu.LCOM_NULL:
+                child_ack = rfu.child_ni_llsf(
+                    fields["state"], fields["n"], fields["phase"], 1, 0)
+                sim._on_gba_in(gbaframe.wrap_t(child_ack, 0x4000 + i))
+        self.assertEqual(drive(), [gbaframe.build_group_state(1)])
+        self.assertTrue(sim.parent_ni_complete)
+
     def test_net_0x11_matches_fixed_channel_native_gold(self):
         packet = build_net_request(
             2, 0xCDB0, NATIVE_HOST_MAC, 0x55C77B2B,
@@ -310,7 +363,40 @@ class PiaHostTest(unittest.TestCase):
         sim.tick()
         self.assertTrue(sim.parent_link_accepted)
         self.assertFalse(sim.connected)  # parent slot/NI engine is still deliberately gated
-        self.assertEqual(transport.sent, [])
+        self.assertEqual(len(transport.sent), 1)
+        poll, destination = transport.sent[0]
+        self.assertEqual(destination, "169.254.25.2")
+        _, decoded = decode_reliable_messages(crypto, poll, "169.254.25.1")
+        self.assertEqual(len(decoded), 1)
+        _, parent_t = decoded[0]
+        self.assertEqual((parent_t.flagsA, parent_t.seq, parent_t.payload),
+                         (reliable.FLAGSA_GBA, 0xFFF1,
+                          gbaframe.wrap_parent_t(None, TS_SEED)))
+
+        # The next native gate: a child NI_START is answered with the matching
+        # three-byte parent LLSF ACK, then child NULL releases WG=0.
+        sim.rel.on_ack(sim.rel.out_seq)
+        transport.sent.clear()
+        child_start = (rfu.child_ni_llsf(rfu.LCOM_NI_START, 1, 0, 0, 7)
+                       + bytes.fromhex("010c001a000000"))
+        sim._on_gba_in(gbaframe.wrap_t(child_start, 0x311CE))
+        sim.tick()
+        _, decoded = decode_reliable_messages(
+            crypto, transport.sent[-1][0], "169.254.25.1")
+        parent_ack = decoded[0][1]
+        self.assertEqual(
+            parent_ack.payload,
+            gbaframe.wrap_parent_t(
+                ni.parent_recv_ack_slot(rfu.LCOM_NI_START, 1, 0), TS_SEED + 1))
+
+        sim.rel.on_ack(sim.rel.out_seq)
+        transport.sent.clear()
+        child_null = rfu.child_ni_llsf(rfu.LCOM_NULL, 1, 0, 0, 0)
+        sim._on_gba_in(gbaframe.wrap_t(child_null, 0x311D6))
+        sim.tick()
+        _, decoded = decode_reliable_messages(
+            crypto, transport.sent[-1][0], "169.254.25.1")
+        self.assertEqual(decoded[0][1].payload, gbaframe.build_group_state(0))
 
 
 if __name__ == "__main__":

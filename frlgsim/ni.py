@@ -181,6 +181,28 @@ def recv_ack_slot(state, n, phase):
     return rfu.child_ni_llsf(state, n, phase, ack=1, size=0)
 
 
+def parent_recv_ack_slot(state, n, phase):
+    """Mirror one child NI subframe with the native three-byte parent ACK."""
+    return rfu.parent_ni_llsf(state, n, phase, ack=1, size=0)
+
+
+def parent_join_status_slots(status=RFU_STATUS_JOIN_GROUP_OK):
+    """Return the native parent NI transfer for the one-byte join result.
+
+    A parent slot has five payload bytes after its LLSF, so the seven-byte NI
+    header spans two NI_START frames.  These bytes are locked to native frames
+    1644, 1650, 1658, 1663 and 1665 of the CH1 gold capture.
+    """
+    header = _ni_header(0, 5, 1)
+    return (
+        rfu.parent_ni_llsf(rfu.LCOM_NI_START, 1, 0, 0, 5) + header[:5],
+        rfu.parent_ni_llsf(rfu.LCOM_NI_START, 2, 0, 0, 2) + header[5:],
+        rfu.parent_ni_llsf(rfu.LCOM_NI, 1, 0, 0, 1) + bytes([status & 0xFF]),
+        rfu.parent_ni_llsf(rfu.LCOM_NI_END, 0, 0, 0, 0),
+        rfu.parent_ni_llsf(rfu.LCOM_NULL, 1, 0, 0, 0),
+    )
+
+
 class NIReceiver:
     """Tracks the HOST's NI transfer so the sim knows when to stop emitting recv-NI acks and proceed
     to UNI. The host NI completes when its NI_END (state=LCOM_NI_END) arrives with ack=0; a host NULL
