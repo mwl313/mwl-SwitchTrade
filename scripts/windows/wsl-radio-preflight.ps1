@@ -2,6 +2,7 @@
 param(
     [string]$Distro = "Ubuntu",
     [string[]]$UsbId = @(),
+    [string]$BusId = "",
     [switch]$Prepare,
     [switch]$AutoAttach,
     [string]$ProfileFile = (Join-Path $PSScriptRoot "..\..\config\wsl-radio-hardware.tsv")
@@ -36,31 +37,41 @@ if (-not (Get-Command usbipd -ErrorAction SilentlyContinue)) {
 if ($AutoAttach -and -not $Prepare) {
     Fail "-AutoAttach requires -Prepare"
 }
+if ($Prepare) {
+    $principal = New-Object Security.Principal.WindowsPrincipal(
+        [Security.Principal.WindowsIdentity]::GetCurrent()
+    )
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        Fail "-Prepare must run in an elevated PowerShell"
+    }
+}
 
-$profileIds = @(
+$profiles = @(
     Get-Content -LiteralPath $ProfileFile | ForEach-Object {
-        if ($_ -and -not $_.StartsWith('#')) { ($_ -split "`t", 2)[0].ToLowerInvariant() }
+        if ($_ -and -not $_.StartsWith('#')) {
+            $columns = @($_ -split "`t", 8)
+            if ($columns.Count -ne 8) { Fail "invalid hardware profile row: $_" }
+            [pscustomobject]@{
+                UsbId = $columns[0].ToLowerInvariant()
+                Status = $columns[5]
+                AutoSelect = $columns[6] -eq 'yes'
+            }
+        }
     }
 )
+$profileIds = @($profiles | ForEach-Object UsbId)
+$wanted = @()
 if ($UsbId.Count -gt 0) {
     $wanted = @($UsbId | ForEach-Object { $_.ToLowerInvariant() })
     foreach ($id in $wanted) {
         if ($profileIds -notcontains $id) { Fail "USB ID $id has no hardware profile" }
     }
-} else {
-    $wanted = $profileIds
 }
 
 $vmware = Get-Service -Name VMUSBArbService -ErrorAction SilentlyContinue
 if ($vmware -and $vmware.Status -eq 'Running') {
     if (-not $Prepare) {
         Fail "VMware USB Arbitrator is running and can reclaim a dongle; rerun elevated with -Prepare"
-    }
-    $principal = New-Object Security.Principal.WindowsPrincipal(
-        [Security.Principal.WindowsIdentity]::GetCurrent()
-    )
-    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        Fail "-Prepare must run in an elevated PowerShell"
     }
     Stop-Service -Name VMUSBArbService -Force
     Write-Host "[windows] stopped VMware USB Arbitrator for this Windows session"
@@ -72,23 +83,41 @@ if ($LASTEXITCODE -ne 0) { Fail "WSL distro '$Distro' did not start" }
 
 $state = usbipd state | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) { Fail "usbipd state failed" }
-$matched = @()
+$profiledDevices = @()
 foreach ($device in $state.Devices) {
     $id = UsbId-OfDevice $device
-    if ($id -and $wanted -contains $id) {
-        $matched += [pscustomobject]@{ UsbId = $id; Device = $device }
+    $profile = @($profiles | Where-Object UsbId -eq $id)
+    if ($id -and $profile.Count -eq 1) {
+        $profiledDevices += [pscustomobject]@{
+            UsbId = $id
+            AutoSelect = $profile[0].AutoSelect
+            Device = $device
+        }
     }
 }
 
-foreach ($id in $wanted) {
-    $entry = @($matched | Where-Object UsbId -eq $id)
-    if ($entry.Count -eq 0) {
-        Fail "$id is profiled but not physically enumerated by Windows"
+if ($BusId) {
+    $matched = @($profiledDevices | Where-Object { $_.Device.BusId -eq $BusId })
+    if ($matched.Count -eq 0) { Fail "BUSID $BusId is not a physically enumerated profiled radio" }
+    if ($wanted.Count -gt 0 -and $wanted -notcontains $matched[0].UsbId) {
+        Fail "BUSID $BusId is $($matched[0].UsbId), not one of the requested USB IDs"
     }
-    if ($entry.Count -gt 1) {
-        Fail "multiple devices use $id; select by BUSID manually before production use"
+} elseif ($wanted.Count -gt 0) {
+    $matched = @($profiledDevices | Where-Object { $wanted -contains $_.UsbId })
+    foreach ($id in $wanted) {
+        $count = @($matched | Where-Object UsbId -eq $id).Count
+        if ($count -eq 0) { Fail "$id is profiled but not physically enumerated by Windows" }
+        if ($count -gt 1) { Fail "multiple devices use $id; rerun with -BusId from 'usbipd list'" }
     }
-    $device = $entry[0].Device
+} else {
+    $matched = @($profiledDevices | Where-Object AutoSelect)
+    if ($matched.Count -eq 0) { Fail "no auto-selectable profiled radio is physically enumerated" }
+    if ($matched.Count -gt 1) { Fail "multiple auto-selectable radios are present; rerun with -BusId" }
+}
+
+foreach ($entry in $matched) {
+    $id = $entry.UsbId
+    $device = $entry.Device
     if (-not $device.BusId) { Fail "$id has no BUSID; unplug/replug it, then rerun" }
     if (-not $device.ClientIPAddress) {
         if (-not $Prepare) {
@@ -122,7 +151,7 @@ if ($LASTEXITCODE -ne 0 -or $kernel -notmatch 'microsoft') {
 }
 Write-Host "[wsl] kernel=$kernel"
 
-foreach ($id in $wanted) {
+foreach ($id in @($matched | ForEach-Object UsbId | Select-Object -Unique)) {
     $seen = & wsl.exe -d $Distro -- sh -c "lsusb -d '$id' 2>/dev/null"
     if ($LASTEXITCODE -ne 0 -or -not $seen) {
         Fail "$id is attached in usbipd but absent from lsusb inside '$Distro'"

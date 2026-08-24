@@ -3,7 +3,8 @@
 > 마지막 갱신: 2026-08-25 — **production-beta 통합 · RTL8192EU-only beta 계획 확정**
 >
 > 현재 실행 순서와 future backlog의 authoritative 문서:
-> `docs/49-production-beta-priorities-20260825.md`.
+> `docs/50-current-product-demo-todo-20260825.md`.
+> 기술적 근거와 상세 beta gate는 `docs/49-production-beta-priorities-20260825.md`에 보존한다.
 
 ## 🏆 핵심 성과
 

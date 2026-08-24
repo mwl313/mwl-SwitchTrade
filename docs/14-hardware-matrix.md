@@ -72,16 +72,11 @@ fail-closed로 수행한다.
   ├─ 방 개설(HOST): ✅ 가능
   └─ 참가(GUEST):   ✅ 가능
 
-[카드 감지됨] Realtek RTL8188EU (0bda:8179) / VMware
-  ├─ 방 개설(HOST): ❌ 불가 (이 카드는 참가 전용입니다)
-  └─ 참가(GUEST):   ✅ 가능
-  ℹ 방 개설이 필요하면 RTL8192EU 카드를 사용하세요.
-
 [카드 감지됨] Realtek RTL8188EU (0bda:8179) / WSL USB-IP / vendor 8188eu
   ├─ 방 개설(HOST): ❌ 불가
-  └─ 참가/중계(GUEST/RELAY): ✅ 가능
-  ℹ mainline rtl8xxxu는 firmware start 실패; patched pinned module만 허용합니다.
-  ℹ 단독 AP 기능은 있지만 LDN HOST 필수 조건인 AP+monitor 동시 vif는 안전하지 않습니다.
+  └─ 참가/중계(GUEST/RELAY): ❌ beta 불가
+  ℹ 관찰용 RX/decode만 허용됩니다.
+  ℹ Nintendo custom control-port association이 실패하고 AP+monitor가 deadlock할 수 있습니다.
 
 [알 수 없는 카드] (0bda:xxxx)
   ⚠ 이 카드는 아직 검증 목록에 없습니다 — 호스트/참가 모두 불가로 표시됩니다.
