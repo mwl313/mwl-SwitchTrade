@@ -80,6 +80,24 @@ def parent_ni_llsf(state, n, phase, ack, size, bm_slot=1):
     return frame.to_bytes(3, "little")
 
 
+def parent_uni_slot(rows):
+    """Build the native parent UNI window: one 14-byte command row per mpId, padded to five."""
+    commands = [bytes(row) for row in rows]
+    if any(len(row) != COMM_SLOT_LENGTH for row in commands) or len(commands) > 5:
+        raise ValueError("parent UNI needs at most five 14-byte command rows")
+    payload = b"".join(commands + [idle_slot()] * (5 - len(commands)))
+    return parent_ni_llsf(LCOM_UNI, 0, 0, 0, len(payload)) + payload
+
+
+def parent_reflect_child(cmd14):
+    """Strip the child's rolling tag before reflecting its command in parent row 1."""
+    cmd = bytearray(bytes(cmd14))
+    if len(cmd) != COMM_SLOT_LENGTH:
+        raise ValueError("child command must be 14 bytes")
+    cmd[0] &= 0x1F
+    return bytes(cmd)
+
+
 def parse_llsf_parent(slot):
     """Decode a three-byte parent LLSF."""
     f = int.from_bytes(slot[0:3], "little")

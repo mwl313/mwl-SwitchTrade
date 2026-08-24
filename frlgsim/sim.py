@@ -271,6 +271,14 @@ class Sim:
         self._parent_status_wait = None
         self._parent_group_one_sent = False
         self._parent_ni_complete = False
+        self._parent_uni_frames = 0
+        self._parent_player_ids_sent = False
+        self._parent_player_ids_gap = 2
+        self._parent_link_request_sent = False
+        self._parent_card_request_pending = False
+        self._parent_card_request_sent = False
+        self._parent_seat_ready = False
+        self._parent_child_cmd = rfu.idle_slot()
         # Emission is FREE-RUN: _drive_reliable emits one child slot ('T') per local VBlank, on our own
         # clock, NOT paced to the host's slot arrivals. The flood the host's receive side can't absorb is
         # bounded by the small send window (MAX_INFLIGHT), not by response pacing - so a steady one-per-
@@ -305,6 +313,8 @@ class Sim:
 
     @property
     def connected(self):
+        if self._parent_session_id is not None:
+            return self._parent_ni_complete
         return self.conn is None or self.conn.connected
 
     @property
@@ -465,7 +475,17 @@ class Sim:
                         self.log("[sim] child NI complete; parent join-status transfer armed")
                         self.info("Switch identity transfer accepted.")
                 elif child_llsf["state"] == rfu.LCOM_UNI:
-                    self.log("[sim] child entered UNI while parent UNI remains gated")
+                    child_cmd = rec.get("cmd") or rfu.idle_slot()
+                    self._parent_child_cmd = rfu.parent_reflect_child(child_cmd)
+                    child_frame = {"positional": [(0, self._parent_child_cmd)]}
+                    if hasattr(self.engine, "feed_in_frame"):
+                        self.engine.feed_in_frame(child_frame)
+                    parsed = rfu.parse_slot(self._parent_child_cmd)
+                    if parsed and parsed["op"] == rfu.READY_EXIT_STANDBY:
+                        if parsed["count"] == 0 and getattr(self.engine, "established", False):
+                            self._parent_card_request_pending = True
+                        elif parsed["count"] >= 1 and self._parent_card_request_sent:
+                            self._parent_seat_ready = True
             return
         if typ == "A" and not self._gba_accepted:
             self._gba_accepted = True              # host's emulator connect ACCEPT (0x41)
@@ -747,7 +767,7 @@ class Sim:
         self._tx_reliable_batch(batch)
 
     def _drive_parent_reliable(self):
-        """Drive the capture-locked parent WA and bidirectional NI exchange."""
+        """Drive the capture-locked parent WA, NI exchange, and room-entry UNI bootstrap."""
         now_ms = self._now_ms
         batch = list(self.rel.due_retransmits(now_ms, limit=RTX_GAP_LIMIT_NI))
 
@@ -762,6 +782,42 @@ class Sim:
             frame = gbaframe.wrap_parent_t(slot, self._parent_ts)
             self._parent_ts = (self._parent_ts + 1) & 0xFFFFFFFF
             return frame
+
+        def start_parent_block(reqtype):
+            self.engine._on_req(reqtype)
+            sender = getattr(self.engine, "sender", None)
+            if sender is not None:
+                sender.owner = 0
+                sender.trust_pia = True
+
+        def parent_uni_command():
+            if self._parent_uni_frames < 2:
+                return rfu.idle_slot()
+            if not self._parent_player_ids_sent:
+                self._parent_player_ids_sent = True
+                return rfu.serialize([rfu.SEND_PLAYER_IDS, 2, 1])
+            if self._parent_player_ids_gap:
+                self._parent_player_ids_gap -= 1
+                return rfu.idle_slot()
+            if not self._parent_link_request_sent:
+                start_parent_block(0)
+                self._parent_link_request_sent = True
+                self.log("[sim] parent UNI started: SEND_PLAYER_IDS + LinkPlayer request")
+                self.info("Switch entered the two-player room bootstrap.")
+                return rfu.serialize([rfu.SEND_BLOCK_REQ, 0])
+            if (self._parent_card_request_pending and not self._parent_card_request_sent
+                    and getattr(self.engine, "sender", None) is None):
+                start_parent_block(2)
+                self._parent_card_request_sent = True
+                self.log("[sim] child completed LinkPlayer/standby; parent requested trainer card")
+                return rfu.serialize([rfu.SEND_BLOCK_REQ, 2])
+            words = self.engine.tick() or [0] * 7
+            if ((words[0] & 0xFFFF) == 0 and self.linkstate is not None
+                    and getattr(self.engine, "established", False)
+                    and self._parent_seat_ready
+                    and getattr(self.engine, "in_seat_phase", True)):
+                words = self.linkstate.tick()
+            return rfu.serialize(words)
 
         if self._parent_connect_id is not None and self._parent_accept_seq is None:
             accept = gbaframe.build_accept(
@@ -808,9 +864,15 @@ class Sim:
                 if emitted:
                     self._parent_group_one_sent = True
                     self._parent_ni_complete = True
-                    self.log("[sim] parent WG=1 sent; bidirectional NI complete "
-                             "(parent UNI remains gated)")
+                    self.log("[sim] parent WG=1 sent; bidirectional NI complete; parent UNI armed")
                     self.info("Switch join-status exchange complete.")
+            elif (self._parent_ni_complete
+                  and self.rel.inflight() < self.rel.max_inflight):
+                own_cmd = parent_uni_command()
+                slot = rfu.parent_uni_slot((own_cmd, self._parent_child_cmd))
+                emitted = queue(parent_t(slot)) is not False
+                if emitted:
+                    self._parent_uni_frames += 1
             if (not emitted and self._parent_poll_sent
                     and self._tick - self._parent_last_idle_tick >= PARENT_IDLE_PERIOD):
                 if queue(parent_t(None)) is not False:

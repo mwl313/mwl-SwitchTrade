@@ -109,8 +109,9 @@ def make_engine(args, lg):
                             refuse_partner_deoxys_mew=args.refuse_illegit,
                             trust_pia=args.trust_pia, log=elog)
     if args.mode == "host":
-        lg(f"  game engine=RIGHT/Follower remains gated while PC-host Pia acquisition runs; "
-           f"trades={eng.trades}, offered_slots={eng.offered_slots}")
+        lg(f"  game engine=existing follower FSM reused for symmetric room-entry blocks; "
+           f"leader-side trading remains a later gate; trades={eng.trades}, "
+           f"offered_slots={eng.offered_slots}")
     else:
         lg(f"  seat=RIGHT (Follower / mpId={eng.mpid}); trades={eng.trades}, "
            f"offered_slots={eng.offered_slots}")
@@ -358,7 +359,7 @@ def run_live(args, lg):
     if args.mode == "host":
         lg(f"[live] LDN host active; broadcasting Pia Net 0x11 every 500ms. "
            f"The native Pia Session + Reliable ACK/WC/WA bootstrap will run after the Switch joins; "
-           f"parent slot/NI game traffic remains gated.")
+           f"parent NI + UNI room-entry bootstrap follows automatically.")
     else:
         lg(f"[live] joined LDN; awaiting the host's Pia connection handshake "
            f"(Net 0x11 -> Session join -> confirm). NOT trading until the host confirms us.")
@@ -420,7 +421,7 @@ def run_live(args, lg):
             if not s.connected:
                 connect_ticks += 1
                 if connect_ticks % 120 == 0:
-                    phase = ("parent WA acknowledged; awaiting parent slot/NI implementation"
+                    phase = ("parent WA acknowledged; running parent NI exchange"
                              if args.mode == "host" and s.parent_link_accepted
                              else "awaiting connection bootstrap")
                     lg(f"[live] {phase}: {connect_ticks}f, conn={conn.state}, "
@@ -430,9 +431,14 @@ def run_live(args, lg):
                 time.sleep(period)
                 continue
             if not connect_announced:
-                lg(f"[live] Pia connection ESTABLISHED - host confirmed us "
-                      f"(conn={conn.state} after {connect_ticks}f). Awaiting the emulator RFU "
-                      f"connect/'A' + NI handshake + LinkPlayer exchange before sitting.")
+                if args.mode == "host":
+                    lg(f"[live] parent NI COMPLETE (conn={conn.state} after {connect_ticks}f). "
+                       f"Parent UNI/player-zero room bootstrap is active; awaiting the "
+                       f"LinkPlayer exchange before seat traffic.")
+                else:
+                    lg(f"[live] Pia connection ESTABLISHED - host confirmed us "
+                       f"(conn={conn.state} after {connect_ticks}f). Awaiting the emulator RFU "
+                       f"connect/'A' + NI handshake + LinkPlayer exchange before sitting.")
                 connect_announced = True
             if not announced_established and engine.established:
                 announced_established = True
