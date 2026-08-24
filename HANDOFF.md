@@ -7,6 +7,34 @@
 
 ---
 
+## 2026-08-24 override — full trade and atomic room exit live PASS
+
+The PC-host one-trade golden path is complete on real hardware. Capture
+`logs/golden/pc_host_atomic_exit_switcha_retry_live_20260824_212450/`, Switch A, and build `946bc63`
+passed Pia/Reliable/RFU bootstrap, room entry, party exchange, trade animation, commit/save, post-save
+menu rebuild, final cancel, return-field standbys 11/12, atomic two-player `EXIT_ROOM`,
+`READY_CLOSE_LINK`, and RFU `D`. CODEX offered the user's captured Rattata and saved a valid Magikarp.
+All pcaps had zero kernel drops, Pia logged zero decrypt failures, and both radios passed post-RX.
+
+The atomic invariant is hardware-proven: child `EXIT_ROOM` must arm `linkstate.exit()` inside
+`Sim._on_gba_in()` before the same tick's parent UNI generation. Do not move this back to the outer
+loop; the old consecutive-frame response hung at the escort dialogue.
+
+The user saw native `2318-0006` only after the termination animation had completed. Build `57a25c9`
+fixes this outer LDN tail: after parent-mode RFU `D`, stop game frames but keep the AP alive until the
+Switch leaves or five seconds elapse. It passes focused parent 15/15 and ordinary WSL 138/138 but is
+hardware-unverified by user choice. The successful trade/room termination itself is not conditional
+on that follow-up.
+
+The two preceding Switch B failures were earlier protocol boundaries (one before held keys, one in
+animation before `READY_FINISH_TRADE`) and did not reach atomic exit. The unchanged-build Switch A
+pass plus zero drops/post-RX PASS rules out a deterministic `946bc63` or adapter receive-death defect.
+
+Authoritative report:
+`mwl-SwitchTrade/docs/47-full-trade-atomic-exit-pass-20260824.md`.
+
+---
+
 ## 2026-08-24 override — full save/menu re-entry live PASS; final close delay ready
 
 Build `5cb19af` passed the full real-Switch post-save reconstruction gate. CODEX offered the user's
