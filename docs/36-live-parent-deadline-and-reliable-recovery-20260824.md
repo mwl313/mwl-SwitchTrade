@@ -1,5 +1,11 @@
 # 36 — Live parent room-entry deadline and Reliable recovery (2026-08-24)
 
+> Correction after the fast-recovery live capture: seeing the final child fragment in parent row one
+> proved only that fragment 16 was reflected. It did not prove that fragments 0–15 were each reflected.
+> The follow-up capture found eleven missing row-one fragment states caused by batched child commands
+> overwriting one another before the next parent VBlank. See
+> `docs/37-live-batched-child-reflection-fix-20260824.md`.
+
 ## Outcome
 
 The `e2979c7` retest proved that suppressing the PC parent's premature standby was correct: row zero
@@ -101,4 +107,3 @@ Repeat one Switch joining the CODEX room using `31b29bf` and record the same thr
 If the Switch still sends `WD` despite completing LinkPlayer with ample margin, stop tuning transport and
 compare the reconstructed player-zero LinkPlayer semantics and final application rows.  If it remains slow,
 measure the new hole/retry cadence before changing the six-frame safety window.
-
