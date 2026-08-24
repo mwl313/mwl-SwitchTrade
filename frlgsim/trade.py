@@ -440,6 +440,7 @@ class TradeEngine:
         self._live = False               # set by the live sim: gate READY_TO_TRADE on full BufferTradeParties
         self.leader_mode = False         # parent shim: player zero records local READY without sending it
         self.leader_local_ready = False
+        self.leader_local_cancel_ready = False
         self._selected = False
         self._pending_push = None       # a LINKCMD block queued to send next
         self._anim_wait = None          # frames remaining before READY_FINISH [S7]
@@ -1136,6 +1137,7 @@ class TradeEngine:
         # partnerSelectStatus -> it waits for our select while we wait for BOTH_CANCEL -> deadlock.
         # (a previously observed bug: cancel-to-leave fired before the host's mail+ribbons.)
         self._got_ribbons = False
+        self.leader_local_cancel_ready = False
         self._bt_settle = 0
         self._anim_wait = None
         self._finish_sent = False
@@ -1388,12 +1390,17 @@ class TradeEngine:
             self.entry.on_trade_menu_live()
             if self.leaving:
                 # All configured trades are done. We are back at the live trade
-                # menu (the host re-ran BufferTradeParties); select CANCEL -> REQUEST_CANCEL 0xEEAA.
-                self.info("Cancelling the trade menu...")
-                self.log("-> REQUEST_CANCEL (leaving: CANCEL selected) [trade.c:2049]")
-                self._pending_push = linkcmd_block(REQUEST_CANCEL)
-                self.requested_cancel = True
-                self.cancelled = True
+                # menu (the host re-ran BufferTradeParties). A follower sends REQUEST_CANCEL; the
+                # parent shim records its local policy decision and broadcasts the leader result.
+                if self.leader_mode:
+                    self.leader_local_cancel_ready = True
+                    self.log("leader: local cancel READY (configured trades complete)")
+                else:
+                    self.info("Cancelling the trade menu...")
+                    self.log("-> REQUEST_CANCEL (leaving: CANCEL selected) [trade.c:2049]")
+                    self._pending_push = linkcmd_block(REQUEST_CANCEL)
+                    self.requested_cancel = True
+                    self.cancelled = True
             elif self._is_valid_slot(self.trade_slot):
                 self.state = S5_SELECT
                 if self.leader_mode:

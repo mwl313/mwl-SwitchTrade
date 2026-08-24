@@ -398,6 +398,32 @@ class PiaHostTest(unittest.TestCase):
         self.assertFalse(engine.barrier.active)
         self.assertEqual(engine.barrier.local_count, local_count)
 
+        engine.barrier.local_count = 11
+        sim.rel.on_ack(sim.rel.out_seq)
+        batches.clear()
+        sim._drive_parent_reliable()
+        self.assertTrue(sim._parent_post_save_party_armed)
+        self.assertEqual(sim._parent_party_request_index, 0)
+        self.assertFalse(engine._save_barriers)
+
+        # The existing five-pull sequencer is covered above.  Once it completes, parent policy ends
+        # a one-trade session with the leader broadcast and enters the proven count-11/12 exit path.
+        sim._parent_party_request_index = None
+        engine.leader_local_cancel_ready = True
+        engine.sender = None
+        sim.rel.on_ack(sim.rel.out_seq)
+        batches.clear()
+        sim._drive_parent_reliable()
+        frames = [entry[2] for entry in batches[-1]
+                  if entry[1] != reliable.FLAGSA_CTRL]
+        cancelled = rfu.parse_slot(gbaframe.parse_in(frames[-1])["slots"][0][1])
+        self.assertTrue(sim._parent_final_cancel_sent)
+        self.assertEqual(engine.sender.data, trade.linkcmd_block(trade.BOTH_CANCEL_TRADE))
+        self.assertTrue(engine.left_gracefully)
+        self.assertTrue(engine.barrier.active)
+        self.assertEqual((cancelled["op"], cancelled["count"], cancelled["peer"]),
+                         (rfu.SEND_BLOCK_INIT, 2, 0))
+
     def test_parent_uni_drives_real_trade_engine_to_card_gate(self):
         engine = trade.TradeEngine(
             [mon.Mon.empty(), mon.Mon.empty()], trade_slot=1,

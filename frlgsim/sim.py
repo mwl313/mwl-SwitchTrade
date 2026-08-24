@@ -144,6 +144,9 @@ PARENT_SEAT_IDLE_FRAMES = 24
 PARENT_PARTY_REQUESTS = (1, 1, 1, 3, 4)
 PARENT_PARTY_RESPONSE_COUNTS = (17, 17, 17, 19, 4)
 PARENT_PARTY_REQUEST_IDLE_FRAMES = 11
+# Live NSO FRLG: post-confirm save/menu callbacks occupy counts 5..10.  Once the Switch stops
+# count 10, player zero is in CB2_CreateTradeMenu and must run BufferTradeParties again.
+PARENT_POST_SAVE_MENU_COUNT = 10
 
 
 class Sim:
@@ -325,6 +328,8 @@ class Sim:
         self._parent_local_finish_started = False
         self._parent_local_finish_complete = False
         self._parent_confirm_finish_sent = False
+        self._parent_post_save_party_armed = False
+        self._parent_final_cancel_sent = False
         self._parent_child_cmd = rfu.idle_slot()
         self._parent_child_queue = deque()
         # Emission is FREE-RUN: _drive_reliable emits one child slot ('T') per local VBlank, on our own
@@ -926,6 +931,23 @@ class Sim:
                     self._parent_local_finish_started = True
                     self.log("[sim] parent READY_FINISH_TRADE started")
 
+            # The Switch's CB2_SaveAndEndTrade / CB2_CreateTradeMenu chain ends after its count-10
+            # broadcast stops.  Player zero must now run BufferTradeParties again; waiting for a
+            # child block is circular because the child is waiting for these parent pulls.
+            barrier = getattr(self.engine, "barrier", None)
+            if (self._parent_confirm_finish_sent
+                    and not self._parent_post_save_party_armed
+                    and getattr(self.engine, "_save_barriers", False)
+                    and barrier is not None and not barrier.active
+                    and barrier.local_count == PARENT_POST_SAVE_MENU_COUNT + 1):
+                self.engine._save_barriers = False
+                self._parent_post_save_party_armed = True
+                self._parent_party_request_index = 0
+                self._parent_party_request_active = False
+                self._parent_party_request_idle = PARENT_PARTY_REQUEST_IDLE_FRAMES
+                self.log("[sim] parent post-save count 10 complete; party re-exchange armed")
+                self.info("Save complete; returning to the trade menu.")
+
             # Parent and child do NOT initiate the entry standbys symmetrically.  The mature
             # TradeEngine is a child and eagerly emits counts 0..3; exposing those from parent row
             # zero makes the leader skip the child-initiated gate.  The parent waits for each child's
@@ -1000,6 +1022,19 @@ class Sim:
                 self.log(f"[sim] parent SET_MONS_TO_TRADE local_cursor={self.engine.trade_slot} "
                          f"child_cursor={child_cursor}")
                 self.info("Both Pokémon selected; opening the confirmation screen.")
+                return rfu.serialize(self.engine.tick())
+
+            if (self._parent_post_save_party_armed
+                    and self._parent_party_request_index is None
+                    and getattr(self.engine, "leader_local_cancel_ready", False)
+                    and not self._parent_final_cancel_sent
+                    and getattr(self.engine, "sender", None) is None):
+                start_parent_command(trademod.BOTH_CANCEL_TRADE)
+                self._parent_final_cancel_sent = True
+                self.engine.requested_cancel = True
+                self.engine._on_linkcmd(trademod.BOTH_CANCEL_TRADE, 0)
+                self.log("[sim] parent BOTH_CANCEL_TRADE; configured trade session complete")
+                self.info("Trade complete; leaving the room.")
                 return rfu.serialize(self.engine.tick())
 
             if (self._parent_set_mons_sent
