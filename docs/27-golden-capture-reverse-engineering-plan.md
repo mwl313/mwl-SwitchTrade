@@ -1,207 +1,235 @@
-# 27 — Golden-capture reverse-engineering plan
+# 27 — Native two-Switch golden-capture reverse-engineering plan
 
-**Branch:** `golden-capture-re`  
-**Date:** 2026-08-24  
-**Scope:** offline analysis of the newest tracked native-radio capture and the follow-up capture required for FRLG trade-payload reverse engineering.
+**Branch:** `golden-capture-re`
+**Date:** 2026-08-24
+**Primary evidence:** `logs/golden/discovery_20260824_081253/`
+**Interpretation source:** [docs/25-goldencapture-2차-WSL-결과.md](25-goldencapture-2차-WSL-결과.md)
 
-## Executive finding
+## Correction to the first branch analysis
 
-The newest tracked artifact is a strong **LDN discovery/join-gate capture**, but it is not yet a completed Switch-to-Switch trade capture.
+The first draft of this plan analyzed the wrong artifact: `pc_host_20260824_085514/` is a later PC-host join-gate test. It is retained as a control capture, but it is not the native two-Switch session requested here.
 
-The repository's capture README and [docs/26](26-pc-host-discovery-join-gate-20260824.md) report five successful room discoveries and joins, followed by the Switch leaving after the Pia timeout. The PC host was still running the joiner/right-seat state machine, so no Pia datagram was emitted. This means the capture is excellent for reverse engineering the wireless/LDN layer, but it cannot yet reveal FRLG trade messages or a Pokémon payload.
+The correct golden set is:
 
-This distinction is a release gate: we must not claim `.pk3`, IV/EV, or full game-state extraction from this capture.
+```text
+logs/golden/discovery_20260824_081253/
+  rtl8192eu_allch.pcap
+  rtl8188eu_allch.pcap
+  README.md
+  SHA256SUMS.txt
+```
 
-## Artifact inventory and integrity
+This capture documents the user flow: two actual Switches entered the room, approached the trade chair, exchanged one Pokémon, ended, and left. It is therefore the correct evidence for native Switch-to-Switch LDN traffic. However, both radios hopped channels every 0.4 seconds, so it is a discovery/coverage gold, not a lossless fixed-channel replay gold. It can support protocol hypotheses and partial decoding; a fixed-channel repeat is still required before claiming complete game-payload recovery.
 
-The capture set is under `logs/golden/pc_host_20260824_085514/`:
+## Integrity and independent inventory
 
-| Artifact | Size | Role | Integrity |
-|---|---:|---|---|
-| `observer_startup.pcap` | 118,759 bytes | pre-session RF baseline | SHA-256 recorded in `SHA256SUMS.txt` |
-| `observer_session.pcap` | 1,359,767 bytes | external RTL8188EU observer | SHA-256 recorded in `SHA256SUMS.txt` |
-| `host_pia.jsonl` | 173 bytes | host-side Pia telemetry | SHA-256 recorded in `SHA256SUMS.txt` |
-| `README.md` | 583 bytes | capture conditions and result | SHA-256 recorded in `SHA256SUMS.txt` |
+The recorded hashes match the files on disk:
 
-The pcap files are classic little-endian pcap with link type `IEEE802_11_RADIO` (radiotap), 262,144-byte snapshot length. The session capture contains 5,325 records over approximately 144.8 seconds, all observed on 2.4 GHz channel 6 / 2437 MHz. The capture was independently checked with the WSL `tcpdump` reader and a standard-library pcap/radiotap inventory; no files were modified.
+```text
+9cc0bcf18a09f0620e63e05849d8b9c7135150b7ac421510ce3e78d48d4eb712  rtl8192eu_allch.pcap
+677f5535680754222393df19a9dd2ccB823C5582BAC0A8D0BB8365290B562EC4  rtl8188eu_allch.pcap
+```
 
-## What is actually in `observer_session.pcap`
+The second hash is shown in the capture document with mixed case; hash comparison is case-insensitive. The local `Get-FileHash` result matches it.
 
-Initial inventory:
+Independent pcap/radiotap inventory and WSL `tcpdump` verification found:
 
-| Observation | Count/evidence | Interpretation |
-|---|---:|---|
-| Nintendo vendor action frames | 1,098 | periodic LDN advertisements from PC host |
-| Vendor-action prefix | `7f0022aa04000101` | consistent Nintendo LDN action format |
-| Open authentication frames | 10 | repeated Switch join attempts |
-| Association requests | 6 | standard 802.11 join path is visible |
-| Association responses | 6 | host accepted the station |
-| Data frames | 123 | LDN and unrelated local RF data are mixed |
-| Protected data frames | 52 | CCMP-protected frames are present |
-| Participant transitions | `1/6 -> 2/6 -> 1/6`, repeated | Switch joined, then timed out and left |
-| Pia packets in `host_pia.jsonl` | 0 | only one session-metadata record; no UDP handshake |
+| Capture | Records | Size | Duration | Kernel drops |
+|---|---:|---:|---:|---:|
+| RTL8192EU | 13,341 | 2,506,764 bytes | ~254.9 s | 0 |
+| RTL8188EU | 7,061 | 1,581,242 bytes | ~254.9 s | 0 |
 
-The documented identities and session fields are:
+The captures contain all 2.4 GHz frequencies used by the 1–13 hopper. The LDN room was observed first on channel 11 and then in a new room instance on channel 1.
 
-- PC LDN host/BSSID: `a0:47:d7:b0:2b:39`
-- Switch station: `98:41:5c:79:41:38`
-- LDN protocol: 3
-- Application version: 88
-- Channel: 6
+## What the capture proves
+
+### It is direct Switch-to-Switch LDN, not router traffic
+
+The LDN identities are:
+
+- Switch A / LDN host BSSID: `a4:c1:e8:66:73:25`
+- Switch B / LDN participant: `98:41:5c:79:41:38`
+- LDN IPs: `169.254.120.1` and `169.254.120.2`
 - Comm ID: `0x01006fa0233f8000`
 - Scene ID: `22287`
-- Security/accept fields: `1 / 0`
-- Application data: 122 bytes
+- Protocol: 3
+- LDN version: 4
+- Application version: 88 (`0x58`)
+- Security mode / accept policy: `1 / 0`
+- Maximum participants: 6
 
-The capture also contains ordinary router traffic and neighboring stations. Analysis must scope by the LDN BSSID and participant MACs before interpreting protected data.
+The TP-Link BSSID `68:ff:7b:ef:67:e8` appears in the capture, but its authentication/EAPOL/protected data are boot/license traffic. It is not the BSSID or transmitter/receiver for the direct LDN exchange.
 
-## What this capture can answer now
+### Direct encrypted traffic is present on both cards
+
+The RTL8192EU capture contains:
+
+- 1,622 protected data frames: Switch B → Switch A
+- 1,539 protected data frames: Switch A → Switch B
+- 183 host-local broadcasts
+- 171 peer broadcasts
+- 280 Nintendo vendor-action advertisements
+- 271 LDN beacons
+
+The RTL8188EU independently contains:
+
+- 316 protected frames: Switch A → Switch B
+- 307 protected frames: Switch B → Switch A
+- 62 Nintendo vendor-action advertisements
+- 69 LDN beacons
+
+This is strong evidence that both cards received real LDN traffic and that the 8188EU was not receive-dead during the experiment. The counts must not be compared as a receive-rate benchmark because both cards were hopping and were not listening to the same channel at the same instants.
+
+### The advertisements are already partly decoded
+
+The capture document reports successful decryption with `ldn 0.0.17` and the verified `prod.keys`. The first CH11 advertisement and the later CH1 advertisement have different SSID, server-random, challenge, and RFU session ID values. The safer interpretation is two consecutive LDN room instances, not one room simply moving channels.
+
+The initial 122-byte `application_data` matches the current RFU beacon encoder byte-for-byte. After the peer joins, the participant count changes from 1 to 2 and the RFU partner word changes from `0x1584` to `0x9584`.
+
+## What can be reverse engineered from this capture
 
 High-confidence targets:
 
-1. Exact LDN advertisement layout and periodicity.
-2. Protocol-3 version, security mode, channel, comm ID, scene ID, and application-data bytes.
-3. Standard authentication/association ordering and retry behavior.
-4. Participant-table transitions and join timeout timing.
-5. LDN CCMP packet-number behavior and the direction of host/station data frames.
-6. Decrypted LDN custom-auth and ARP payloads, subject to the authorized session parameters.
+1. LDN advertisement format, encryption mode, timing, channel selection, and room identity.
+2. Standard 802.11 authentication/association sequence.
+3. Protocol-3 custom authentication and protected data-frame direction.
+4. Participant-count and partner-word state transitions.
+5. CCMP packet-number, sequence-number, retry, and loss behavior.
+6. The existence and rough timing of RFU/game traffic after the direct LDN link forms.
 
-Not answerable from this artifact:
+Conditional targets:
 
-- Pia handshake message semantics.
-- RFU link-state or trade-room messages.
-- A native FRLG `.pk3` payload.
-- Which Pokémon fields are transmitted during a completed trade.
-- Arbitrary in-game memory or state that never crosses the wireless link.
+- Pia/RFU message boundaries.
+- Link-state and trainer-card messages.
+- Trade-state transitions.
+- Pokémon record bytes or a complete `.pk3`.
 
-## Important crypto boundary
+The conditional items cannot be asserted from ciphertext counts alone. They require decryption, reassembly, and validation against known game inputs. Hopping creates gaps, so a missing byte may be a capture gap rather than an absent protocol field.
 
-The existing LDN source already contains the relevant protocol primitives:
+## Key and crypto boundary
 
-- `ldn.wlan.DataFrame.decrypt()` performs the AES-CCM/CCMP data-frame operation.
+The existing LDN implementation already contains the relevant primitives:
+
+- `ldn.wlan.DataFrame.decrypt()` performs AES-CCM/CCMP data-frame decryption.
 - `KeyDerivation.derive_data_key(server_random, password)` derives the LDN data key.
-- `APNetwork._process_data_frame()` decrypts a frame and converts SNAP data to TAP.
+- The advertisement/authentication paths implement protocol-3 AES-GCM handling.
+- The runtime converts decrypted SNAP data to TAP.
 
-Therefore, the missing work is primarily an **offline capture adapter and reassembler**, not a new cryptographic design. `server_random` can be read from the LDN advertisement, but `prod.keys` plus `server_random` are not automatically sufficient if the session password is unknown. The passphrase/session parameters must be recorded from an authorized controlled endpoint; keys must remain outside Git.
+The new work is an offline capture adapter and robust reassembler, not a new crypto scheme. The analyzer must use the authorized verified `prod.keys` and the known GBA application passphrase without committing either to Git. `server_random` is present in the advertisement, but it is not by itself a guarantee that every required session parameter is available to a passive observer.
 
 ## Staged reverse-engineering plan
 
-### Stage 0 — Freeze and verify the evidence (complete)
+### Stage 0 — Preserve evidence (complete)
 
-- Keep the original pcap bytes immutable.
-- Verify every file against `SHA256SUMS.txt`.
-- Record capture role, card chipset, driver, channel, BSSID, Switch MAC, protocol version, and screen timeline.
-- Keep the startup pcap as a negative/control fixture.
+- Treat both pcaps and their hashes as immutable.
+- Keep the README, tcpdump logs, health-gate result, and screen/timeline notes beside the capture.
+- Preserve `pc_host_20260824_085514/` as a separate PC-host control set, not as native-trade evidence.
 
-**Exit criterion:** hashes match and the capture manifest is complete.
+**Exit criterion:** hashes match and the capture manifest is reproducible.
 
 ### Stage 1 — Build a deterministic pcap/radiotap inventory (next)
 
-Implement a read-only analyzer that emits JSON/CSV rather than changing the original capture. It must:
+Create a read-only analyzer that emits JSON/CSV and never rewrites the source pcap. It must:
 
 - parse classic pcap and radiotap headers;
-- preserve timestamp, channel, RSSI, antenna, RX flags, and FCS indicators;
-- decode 802.11 management/data headers, ToDS/FromDS, QoS, retry, and protection bits;
-- identify LDN vendor actions by OUI/type/prefix;
-- extract source, destination, BSSID, sequence number, fragment number, and CCMP PN;
-- separate the LDN BSSID from SK router and neighbor BSS traffic.
+- retain timestamp, actual reported frequency, RSSI, RX flags, and FCS indicators;
+- decode 802.11 management/data headers, ToDS/FromDS, QoS, retry, sequence, and fragment fields;
+- identify Nintendo vendor actions and LDN BSSID/peer MACs;
+- classify router bootstrap traffic separately;
+- emit a channel-hop timeline and a per-direction packet-loss estimate.
 
-**Exit criterion:** the analyzer reproduces the counts above and produces a timestamped five-attempt join timeline.
+**Exit criterion:** the analyzer reproduces the file counts and the direct-frame counts above and generates the two-room timeline.
 
-### Stage 2 — Offline LDN decryption and link-layer validation
+### Stage 2 — Decrypt and validate the LDN layer
 
-Reuse the checked-in LDN parser instead of duplicating its cryptographic formulas:
+Reuse the checked-in LDN implementation rather than duplicating its formulas:
 
-1. Extract `server_random`, security mode, protocol, network identity, and the configured password/session parameters.
-2. Derive the LDN data key without writing key material to the repository.
-3. Reconstruct `DataFrame` objects with the original source MAC, protected bit, CCMP header, and AAD.
-4. Verify the AES-CCM tag for every candidate LDN protected frame.
-5. Reject duplicates/retries correctly and report missing PN ranges.
-6. Emit decrypted SNAP/Ethernet payloads and an analysis pcap/JSON sidecar.
+1. Extract protocol, security mode, SSID, `server_random`, challenge, and application data from each room instance.
+2. Select the correct passphrase/session parameters for the native GBA application.
+3. Reconstruct each captured `DataFrame`, including source MAC, protected bit, CCMP header, packet number, and AAD.
+4. Verify the AES-CCM tag and record failures by packet, direction, channel, and radio.
+5. Dedupe retries using sequence/fragment and CCMP PN without hiding duplicate evidence.
+6. Export decrypted SNAP/Ethernet payloads plus a sidecar describing gaps.
 
-**Exit criterion:** all decryptable LDN frames pass authentication, and at least the documented custom-auth/ARP payloads decode consistently in both directions.
+**Exit criterion:** advertisement/authentication decryption is reproducible and the protected direct frames produce valid plaintext for both directions. A decryption failure must distinguish wrong key/parameters from a missed hopped-channel frame.
 
-### Stage 3 — LDN control/session fixtures
+### Stage 3 — Reassemble network and Pia/RFU streams
 
-Create byte-exact fixtures from this capture for:
+For each room instance:
 
-- vendor action advertisement;
-- probe/auth/association;
-- protocol-3 custom authentication request/response;
-- participant join and leave transitions;
-- timeout and retry sequences.
+- reassemble 802.11 fragments and retries;
+- recover Ethernet/SNAP and 169.254.x.x IP traffic;
+- reassemble UDP datagrams by direction and timestamp;
+- identify Pia packet IDs, session IDs, retransmissions, and reliable-channel boundaries;
+- compare recovered messages with `_related/frlg-ldn-trade-emu/frlgsim/pia_connect.py`, `rfu.py`, `reliable.py`, and `trade.py` as hypotheses only.
 
-Compare each fixture with `_related/LDN/ldn/__init__.py` and the current host implementation. The goal is to make the capture a regression test for the already-passed discovery/join gate.
+The all-channel capture should be used to locate messages and state transitions, not to prove byte-complete payloads. Any message whose sequence is interrupted by hopping must be marked incomplete.
 
-**Exit criterion:** a fresh decoder can classify every LDN event in all five attempts and explain the timeout without relying on log text.
+**Exit criterion:** a timeline shows LDN authentication, Pia/RFU establishment, link-player/trainer-card activity, trade-room entry, and the trade attempt, with an explicit completeness score for each stream.
 
-### Stage 4 — Obtain the missing game-layer capture (blocking)
+### Stage 4 — Extract and validate Pokémon data
 
-This is the current blocker. A completed trade capture must contain:
+Only after Stage 3:
 
-- a native Switch host or a PC host with the host-side Pia state machine fixed;
-- LDN join completion;
-- bidirectional Pia UDP records;
-- RFU handshake, link-player exchange, trainer-card exchange, trade-room entry, offer/accept, and completion;
-- known Pokémon inputs and a synchronized screen recording.
+1. Search decrypted messages for stable record lengths, checksums, and known Gen III markers.
+2. Compare candidate records against known input `.pk3` files.
+3. Validate with `tools/pk3-tool.py` and independent checksum/structure checks.
+4. Record exactly which fields are observed, inferred, or absent.
 
-The next PC-host run should implement the documented host role: participant 0/leader, initiate Net `0x11`, process `0x12`, accept the joiner session, and only then enter the RFU/game flow. Alternatively, capture two actual Switches trading locally. Do not call the current artifact a trade payload capture until Pia packets exist.
+Do not claim IV/EV, trainer identity, or full `.pk3` recovery merely because the trade completed. Those fields are recoverable only if the native wire payload contains them and the capture contains every required fragment.
 
-**Exit criterion:** both directions show nonzero Pia traffic and the capture reaches a verified trade-complete screen.
+**Exit criterion:** at least one known native trade Pokémon is recovered and validates on a second capture.
 
-### Stage 5 — Pia/RFU and trade-payload decoding
+### Stage 5 — Differential mapping
 
-Once Stage 4 exists:
-
-1. Decode UDP framing, session IDs, packet IDs, retransmissions, and direction.
-2. Reuse the simulator structures in `_related/frlg-ldn-trade-emu/frlgsim/` as hypotheses, not as proof of native wire layout.
-3. Align RFU messages with screen timestamps and known state transitions.
-4. Search for recognizable Gen III record boundaries, lengths, checksums, and repeated fields.
-5. Extract candidate `.pk3` records and validate them with `tools/pk3-tool.py` and independent checksums.
-
-**Exit criterion:** a known test Pokémon is recovered from a native capture and validates byte-for-byte or field-for-field against the known input.
-
-### Stage 6 — Differential mapping and generalization
-
-Repeat the completed trade with exactly one controlled change at a time:
+Repeat a fixed-channel trade while changing one input at a time:
 
 - species;
 - level/experience;
 - held item;
-- nickname/trainer name;
+- nickname and trainer name;
 - moves;
 - IV/EV values where controllable;
-- sender/receiver and trade direction.
+- trade direction and sender/receiver.
 
-Use aligned decrypted messages to map fields. Only fields that change in the transmitted payload may be claimed as recoverable. Repeat each case to distinguish data from counters, random values, padding, and checksums.
+Align decrypted messages and separate field bytes from counters, random values, padding, and checksums. Use at least two repeats per condition.
 
-**Exit criterion:** field mappings reproduce new captures that were not used to create the hypothesis.
+**Exit criterion:** a field map predicts bytes in a new capture that was not used to form the hypothesis.
 
-### Stage 7 — Production-grade observer (after validation)
+### Stage 6 — Produce the real replay-grade gold
 
-Separate the passive observer from the relay path. Add:
+Repeat the same two-Switch trade with:
 
-- health-gate and channel verification;
-- loss/duplicate/PN diagnostics;
-- secure key injection from a file descriptor or environment, never Git;
-- pcap preservation plus structured JSON export;
-- redaction options for MACs and Pokémon identity;
-- a clear “wire-observed” versus “inferred” status for every field.
+1. Discovery hopping on Radio A only.
+2. Immediate fixed-channel lock on Radio B after the LDN advertisement identifies the active channel.
+3. Both radios fixed to that channel whenever possible.
+4. Capture beginning before the join and ending after leave.
+5. Screen recording and explicit markers for room creation, join, chair, offer, accept, completion, and exit.
+6. A known Pokémon and a second repeated trade.
 
-## Acceptance criteria for the next true golden trade capture
+This removes the primary ambiguity in the current set: whether a missing message was never sent or was missed during a 0.4-second hop.
 
-The capture is ready for game-layer reverse engineering only when all of these are true:
+### Stage 7 — Production observer
 
-- raw radiotap pcap is preserved and hash recorded;
-- the actual LDN channel is known and fixed for the session;
-- both Switch MACs and the host/BSSID are recorded;
-- LDN advertisement, auth, association, and protected data are present;
-- decryption succeeds for the LDN frames with authorized session parameters;
-- Pia UDP traffic exists in both directions;
-- the screen timeline proves join, trade-room, offer, accept, and completion;
-- the exact Pokémon inputs are known;
-- at least one repeated capture produces the same decoded structure.
+After validation, separate passive analysis from relay/injection and add:
+
+- radio health gate and channel lock verification;
+- PN/sequence/drop diagnostics;
+- secure key/passphrase injection;
+- immutable pcap retention and structured export;
+- “observed” versus “inferred” labels for every game field;
+- redaction controls for MACs and Pokémon identity.
+
+## Acceptance criteria for a complete game-layer golden capture
+
+- Both real Switch MACs and the active LDN BSSID are identified.
+- The capture contains LDN advertisement, authentication, association, and direct protected data.
+- Decryption succeeds in both directions with authorized parameters.
+- Pia/RFU packets exist in both directions and are reassembled without unexplained gaps.
+- The screen timeline proves trade-room entry, offer, accept, completion, and exit.
+- The exact Pokémon inputs are recorded.
+- A second capture reproduces the decoded structure.
 
 ## Current decision
 
-Proceed with Stages 1–3 using `observer_session.pcap`. Treat Stage 4 as the explicit blocker for Pokémon/game-state reverse engineering. The branch deliberately contains a plan and evidence boundary first; decoder implementation should begin only after the plan's fixtures and the missing completed-trade capture are available.
+Use `rtl8192eu_allch.pcap` as the primary reverse-engineering source and `rtl8188eu_allch.pcap` as an independent RX corroboration/control. Proceed immediately with Stages 1–3. Treat Stage 6 as the next required experiment before making claims about complete trade-payload or internal game-state extraction.
