@@ -1,6 +1,6 @@
 # STATUS — 진행 상태 (2026-08-24)
 
-> 마지막 갱신: 2026-08-24 — **parent NI/UNI/LinkPlayer 실기 PASS · parent standby ordering 재실기 대기**
+> 마지막 갱신: 2026-08-24 — **parent NI/UNI/LinkPlayer 실기 PASS · room-entry Reliable deadline 재실기 대기**
 
 ## 🏆 핵심 성과
 
@@ -64,6 +64,12 @@
   byte/timing 비교로 확정됐다. Parent는 child count 0/1을 기다려 각각 2회 응답하고 native idle gap 뒤
   card/seat로 진행하도록 교정했다(`emu` `e2979c7`, 137/137). 상세:
   `docs/35-live-linkplayer-pass-parent-standby-order-20260824.md`.
+- `pc_host_parent_standby_live_20260824_165140`은 조기 parent standby가 사라졌음을 확인했지만, parent
+  Reliable의 연속 seq hole 복구가 직렬화되어 LinkPlayer가 `WG=1` 뒤 약 3.17초를 소비했다. Switch는
+  final fragment가 parent row 1에 반사되고 해당 Reliable 범위를 ACK한 뒤에도 `WG=1 + 3.557초`에 명시적
+  `WD`를 보내 종료했다. Native는 같은 구간을 약 0.55초에 끝낸다. Guest 경로는 유지하고 parent만
+  first-NACK/67ms/full-six-window recovery로 교정했으며 `WD` 종료도 처리한다(`emu` `31b29bf`, 138/138).
+  상세: `docs/36-live-parent-deadline-and-reliable-recovery-20260824.md`.
 - ldn 0.0.17 local-self DESTROY 수정은 no-peer stop(1.191초)만 해결했다. joined WA 실기 종료에서는
   radio thread가 15초 뒤에도 살아 있었다. process exit 후 selector stale-AP 청소와 양 카드 post-RX는
   PASS했지만 joined-session teardown root cause는 thread stack 확보 전까지 미해결이다.
@@ -88,7 +94,7 @@
 | **mwl313/frlg-ldn-trade-emu** (emu/) | **동작 코드 본체** — framerelay(메인) + EMU(동결). `emu/HANDOFF.md`가 작업 대장 |
 
 - 검토 브랜치: main은 `golden-capture-re`, emulator는 `gptsolreview`가 최신이며 push 완료. emulator의
-  최신 parent standby ordering 수정은 `e2979c7`이며 double-radiotap 회귀 방지는 `82dd0d3`이다.
+  최신 parent Reliable deadline 수정은 `31b29bf`이며 double-radiotap 회귀 방지는 `82dd0d3`이다.
   `framerelay-dev`는 그 이전 기능 기준선이다.
 - ~~MWL-SwitchTrade-v2~~: 삭제됨 (고유 내용 0)
 
@@ -105,7 +111,7 @@
 2. CanTradeSelectedMon 게이트 (EMU 한계) — framerelay와 무관
 3. RX decrypt FAILED 간헐 (VM1+8192EU 초기)
 4. 호스트 모드(--mode host): discovery/LDN/ARP/Pia Session/parent `WA`/NI/UNI/LinkPlayer까지 실기 PASS.
-   reactive standby/trainer-card/seat bootstrap 구현 완료. 다음은 room-entry 실기와 player-zero leader
+   reactive standby/trainer-card/seat bootstrap과 deadline-safe parent Reliable 구현 완료. 다음은 room-entry 실기와 player-zero leader
    party/trade 구현이다. `timeout --foreground`로 Ctrl-C 전달을 수정했지만 joined-session adapter
    teardown은 다음 graceful stop에서 별도 재검증한다.
 5. 8188EU mainline firmware start 실패는 vendor-driver로 우회했다. out-of-tree driver 유지보수와
