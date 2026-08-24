@@ -39,6 +39,8 @@ CHILD_LLSF_STATE_SHIFT, CHILD_LLSF_ACK_SHIFT = 10, 9
 CHILD_LLSF_N_SHIFT, CHILD_LLSF_PHASE_SHIFT = 7, 5
 # PARENT LLSF [MODE_PARENT]: frameSize=3 state<<14 bmSlot<<18 ack<<13 n<<11 phase<<9 | size.
 PARENT_LLSF_STATE_SHIFT = 14
+PARENT_LLSF_SLOT_SHIFT, PARENT_LLSF_ACK_SHIFT = 18, 13
+PARENT_LLSF_N_SHIFT, PARENT_LLSF_PHASE_SHIFT = 11, 9
 
 
 def uni_slot(cmd14):
@@ -65,6 +67,28 @@ def parse_llsf_child(slot):
     return {"state": (f >> CHILD_LLSF_STATE_SHIFT) & 0xF, "ack": (f >> CHILD_LLSF_ACK_SHIFT) & 1,
             "n": (f >> CHILD_LLSF_N_SHIFT) & 3, "phase": (f >> CHILD_LLSF_PHASE_SHIFT) & 3,
             "size": f & 0x1F}
+
+
+def parent_ni_llsf(state, n, phase, ack, size, bm_slot=1):
+    """Build the three-byte parent NI LLSF observed in the native room."""
+    frame = ((state & 0xF) << PARENT_LLSF_STATE_SHIFT) \
+        | ((bm_slot & 0xF) << PARENT_LLSF_SLOT_SHIFT) \
+        | ((ack & 1) << PARENT_LLSF_ACK_SHIFT) \
+        | ((n & 3) << PARENT_LLSF_N_SHIFT) \
+        | ((phase & 3) << PARENT_LLSF_PHASE_SHIFT) \
+        | (size & 0x1FF)
+    return frame.to_bytes(3, "little")
+
+
+def parse_llsf_parent(slot):
+    """Decode a three-byte parent LLSF."""
+    f = int.from_bytes(slot[0:3], "little")
+    return {"state": (f >> PARENT_LLSF_STATE_SHIFT) & 0xF,
+            "bm_slot": (f >> PARENT_LLSF_SLOT_SHIFT) & 0xF,
+            "ack": (f >> PARENT_LLSF_ACK_SHIFT) & 1,
+            "n": (f >> PARENT_LLSF_N_SHIFT) & 3,
+            "phase": (f >> PARENT_LLSF_PHASE_SHIFT) & 3,
+            "size": f & 0x1FF}
 
 
 def _words_to_slot(words):

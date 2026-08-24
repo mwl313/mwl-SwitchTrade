@@ -24,6 +24,7 @@ SLOT_LEN = 14
 # 'C'=connect request (rfu_REQ_startConnectParent), 'A'=host accept, 'K'=data ack, 'T'=slot data.
 TYPE_J, TYPE_C, TYPE_A = 0x4A, 0x43, 0x41
 TYPE_D = 0x44           # host emulator DISCONNECT ('D' = 57 44 02 00 <connect_id>)
+TYPE_G = 0x47           # parent group-state notification (u32: 0 after child NI, 1 after host NI)
 
 
 def build_gba_frame(ftype, data):
@@ -56,6 +57,11 @@ def build_accept(host_session_id, connect_id):
     return build_gba_frame(TYPE_A, host_session_id + connect_id + b"\x00\x00")
 
 
+def build_group_state(state):
+    """Build the native parent ``WG`` group-state notification."""
+    return build_gba_frame(TYPE_G, (state & 0xFFFFFFFF).to_bytes(4, "little"))
+
+
 def _roundup4(n):
     return (n + 3) & ~3
 
@@ -68,6 +74,22 @@ def wrap_t(slot, ts):
     slot = bytes(slot)
     padded = slot + b"\x00" * (_roundup4(len(slot)) - len(slot))
     body = (ts & 0xFFFFFFFF).to_bytes(4, "little") + bytes([0, len(slot) & 0xFF, 0, 0]) + padded
+    return bytes([GBA_MARKER, TYPE_T]) + len(body).to_bytes(2, "little") + body
+
+
+def wrap_parent_t(slot, ts):
+    """Build a HOST/parent ``T`` frame.
+
+    Native parent idle polls encode ``slot_len=1`` but carry no slot bytes.
+    Non-idle slots use the three-byte parent LLSF and four-byte padding.
+    """
+    if slot is None:
+        body = (ts & 0xFFFFFFFF).to_bytes(4, "little") + b"\x01\x00\x00\x00"
+    else:
+        slot = bytes(slot)
+        padded = slot + b"\x00" * (_roundup4(len(slot)) - len(slot))
+        body = ((ts & 0xFFFFFFFF).to_bytes(4, "little")
+                + bytes([len(slot) & 0xFF, 0, 0, 0]) + padded)
     return bytes([GBA_MARKER, TYPE_T]) + len(body).to_bytes(2, "little") + body
 
 

@@ -120,6 +120,7 @@ COMPRESS_MIN = 62          # zstd-compress an OUT datagram iff its message body 
 # frame and be REUSED on a Pia retransmit. The reference capture's child seeded it ~0x362e; the host
 # appears to gate on monotonicity + rate, not an absolute base (uncertain on the live link), so we seed nonzero.
 TS_SEED = 0x0000362E
+PARENT_IDLE_PERIOD = 16    # native parent keepalive/poll cadence after each NI boundary (~267 ms)
 
 
 class Sim:
@@ -259,6 +260,17 @@ class Sim:
         self._parent_connect_id = None
         self._parent_accept_seq = None
         self._parent_accept_acked = False
+        self._parent_ts = TS_SEED
+        self._parent_poll_sent = False
+        self._parent_last_idle_tick = -PARENT_IDLE_PERIOD
+        self._parent_pending_ni_ack = None
+        self._parent_child_ni_complete = False
+        self._parent_group_zero_sent = False
+        self._parent_status_slots = ni.parent_join_status_slots()
+        self._parent_status_index = 0
+        self._parent_status_wait = None
+        self._parent_group_one_sent = False
+        self._parent_ni_complete = False
         # Emission is FREE-RUN: _drive_reliable emits one child slot ('T') per local VBlank, on our own
         # clock, NOT paced to the host's slot arrivals. The flood the host's receive side can't absorb is
         # bounded by the small send window (MAX_INFLIGHT), not by response pacing - so a steady one-per-
@@ -299,6 +311,11 @@ class Sim:
     def parent_link_accepted(self):
         """True only after the Switch bulk-ACKs the PC's native WA frame."""
         return self._parent_accept_acked
+
+    @property
+    def parent_ni_complete(self):
+        """True after both child and parent NI transfers and the final WG=1."""
+        return self._parent_ni_complete
 
     @property
     def _now_ms(self):
@@ -406,7 +423,11 @@ class Sim:
               handshake which our recv side must (eventually) ack - it is consumed here (its slots are
               not UNI, so the engine ignores them) and acked via the same per-ts K.
           'K' (0x4b): the host never sends us K, so this is informational only."""
-        rec = gbaframe.parse_in(payload)
+        # The mature path is a child and receives parent-format T frames.  The
+        # PC-host path receives the inverse, child-format T frame.
+        parent_child_t = (self._parent_session_id is not None
+                          and len(payload) > 1 and payload[1] == gbaframe.TYPE_T)
+        rec = gbaframe.parse_out(payload) if parent_child_t else gbaframe.parse_in(payload)
         if rec is None:
             return
         typ = rec.get("type")
@@ -421,6 +442,30 @@ class Sim:
                 elif connect_id != self._parent_connect_id:
                     self.log(f"[sim] ignoring changed guest connect id {connect_id.hex()} "
                              f"(session is pinned to {self._parent_connect_id.hex()})")
+            elif typ == "T":
+                child_llsf = rec.get("llsf")
+                if child_llsf is None:
+                    return
+                key = (child_llsf["state"], child_llsf["n"], child_llsf["phase"])
+                if child_llsf["ack"]:
+                    if key == self._parent_status_wait:
+                        self._parent_status_index += 1
+                        self._parent_status_wait = None
+                        self.log(f"[sim] child ACKED parent NI state={key[0]} "
+                                 f"n={key[1]} phase={key[2]}")
+                    return
+                if child_llsf["state"] in (rfu.LCOM_NI_START, rfu.LCOM_NI,
+                                            rfu.LCOM_NI_END):
+                    self._parent_pending_ni_ack = ni.parent_recv_ack_slot(*key)
+                    self.log(f"[sim] child NI state={key[0]} n={key[1]} phase={key[2]} "
+                             f"-> parent ACK armed")
+                elif child_llsf["state"] == rfu.LCOM_NULL:
+                    if not self._parent_child_ni_complete:
+                        self._parent_child_ni_complete = True
+                        self.log("[sim] child NI complete; parent join-status transfer armed")
+                        self.info("Switch identity transfer accepted.")
+                elif child_llsf["state"] == rfu.LCOM_UNI:
+                    self.log("[sim] child entered UNI while parent UNI remains gated")
             return
         if typ == "A" and not self._gba_accepted:
             self._gba_accepted = True              # host's emulator connect ACCEPT (0x41)
@@ -702,30 +747,77 @@ class Sim:
         self._tx_reliable_batch(batch)
 
     def _drive_parent_reliable(self):
-        """Native parent bootstrap after host Pia finalize.
-
-        The CH1 two-Switch gold fixes this order byte-for-byte: ACK the child's
-        INIT ``fff0`` with next-expected ``fff1``; on the first ``WC``, send a
-        host INIT carrying ``WA`` and the cumulative ``fff2`` ACK in one Pia
-        datagram.  The WA is retransmitted until the Switch acknowledges it.
-        No child/RIGHT-seat RFU code is released here.
-        """
+        """Drive the capture-locked parent WA and bidirectional NI exchange."""
         now_ms = self._now_ms
         batch = list(self.rel.due_retransmits(now_ms, limit=RTX_GAP_LIMIT_NI))
+
+        def queue(inner, flags=reliable.FLAGSA_GBA):
+            if self.rel.inflight() >= self.rel.max_inflight:
+                return False
+            seq = self.rel.queue(inner, flags, now_ms)
+            batch.append((seq, flags, inner))
+            return seq
+
+        def parent_t(slot):
+            frame = gbaframe.wrap_parent_t(slot, self._parent_ts)
+            self._parent_ts = (self._parent_ts + 1) & 0xFFFFFFFF
+            return frame
 
         if self._parent_connect_id is not None and self._parent_accept_seq is None:
             accept = gbaframe.build_accept(
                 self._parent_session_id, self._parent_connect_id)
-            seq = self.rel.queue(accept, reliable.FLAGSA_INIT, now_ms)
-            self._parent_accept_seq = seq
-            batch.append((seq, reliable.FLAGSA_INIT, accept))
-            self.log(f"[sim] parent WA sent: host_session_id="
-                     f"{self._parent_session_id.hex()} connect_id="
-                     f"{self._parent_connect_id.hex()} seq={seq:04x}")
+            seq = queue(accept, reliable.FLAGSA_INIT)
+            if seq is not False:
+                self._parent_accept_seq = seq
+                self.log(f"[sim] parent WA sent: host_session_id="
+                         f"{self._parent_session_id.hex()} connect_id="
+                         f"{self._parent_connect_id.hex()} seq={seq:04x}")
 
-        # Bootstrap acknowledgements are immediate in the native capture (the
-        # first arrives ~10 ms after INIT), rather than using the steady-state
-        # child ACK cadence.
+        if self._parent_accept_acked:
+            emitted = False
+            if self._parent_pending_ni_ack is not None:
+                emitted = queue(parent_t(self._parent_pending_ni_ack)) is not False
+                if emitted:
+                    self._parent_pending_ni_ack = None
+            elif not self._parent_poll_sent:
+                emitted = queue(parent_t(None)) is not False
+                if emitted:
+                    self._parent_poll_sent = True
+                    self._parent_last_idle_tick = self._tick
+                    self.log("[sim] parent RFU poll sent; waiting for child NI")
+            elif self._parent_child_ni_complete and not self._parent_group_zero_sent:
+                emitted = queue(gbaframe.build_group_state(0)) is not False
+                if emitted:
+                    self._parent_group_zero_sent = True
+                    self.log("[sim] parent WG=0 sent after child NI")
+            elif (self._parent_group_zero_sent
+                  and self._parent_status_index < len(self._parent_status_slots)
+                  and self._parent_status_wait is None):
+                slot = self._parent_status_slots[self._parent_status_index]
+                emitted = queue(parent_t(slot)) is not False
+                if emitted:
+                    fields = rfu.parse_llsf_parent(slot)
+                    if fields["state"] == rfu.LCOM_NULL:
+                        self._parent_status_index += 1   # terminal NULL is not child-ACKed
+                    else:
+                        self._parent_status_wait = (
+                            fields["state"], fields["n"], fields["phase"])
+            elif (self._parent_status_index == len(self._parent_status_slots)
+                  and not self._parent_group_one_sent):
+                emitted = queue(gbaframe.build_group_state(1)) is not False
+                if emitted:
+                    self._parent_group_one_sent = True
+                    self._parent_ni_complete = True
+                    self.log("[sim] parent WG=1 sent; bidirectional NI complete "
+                             "(parent UNI remains gated)")
+                    self.info("Switch join-status exchange complete.")
+            if (not emitted and self._parent_poll_sent
+                    and self._tick - self._parent_last_idle_tick >= PARENT_IDLE_PERIOD):
+                if queue(parent_t(None)) is not False:
+                    self._parent_last_idle_tick = self._tick
+
+        # Parent acknowledgements are immediate in the native capture.  Keep
+        # the control ACK last in the datagram, matching the captured ordering.
         if self._ack_owed:
             batch.append((None, reliable.FLAGSA_CTRL, self.rel.ack_payload()))
             self._ack_owed = False
