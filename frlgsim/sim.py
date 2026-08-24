@@ -15,6 +15,7 @@ A capture path mirrors every datagram to a .jsonl so it can be decrypted/analyse
 import json
 import os
 import time
+from collections import deque
 
 from . import crypto as cryptomod, reliable, gbaframe, rfu, pia_connect, ni, linkplayer
 
@@ -302,6 +303,7 @@ class Sim:
         self._parent_standby_reply_emits = 0
         self._parent_standby_reply_idle = 0
         self._parent_child_cmd = rfu.idle_slot()
+        self._parent_child_queue = deque()
         # Emission is FREE-RUN: _drive_reliable emits one child slot ('T') per local VBlank, on our own
         # clock, NOT paced to the host's slot arrivals. The flood the host's receive side can't absorb is
         # bounded by the small send window (MAX_INFLIGHT), not by response pacing - so a steady one-per-
@@ -502,11 +504,19 @@ class Sim:
                         self.info("Switch identity transfer accepted.")
                 elif child_llsf["state"] == rfu.LCOM_UNI:
                     child_cmd = rec.get("cmd") or rfu.idle_slot()
-                    self._parent_child_cmd = rfu.parent_reflect_child(child_cmd)
-                    child_frame = {"positional": [(0, self._parent_child_cmd)]}
+                    reflected = rfu.parent_reflect_child(child_cmd)
+                    # A single Pia datagram can contain several child VBlanks.  Preserve each command
+                    # change until it has occupied parent row 1 once; otherwise only the last block
+                    # fragment in the batch is reflected and the Switch aborts the RFU exchange.
+                    # Exact repeats differ only by the stripped rolling tag and carry no new state.
+                    previous = (self._parent_child_queue[-1]
+                                if self._parent_child_queue else self._parent_child_cmd)
+                    if reflected != previous:
+                        self._parent_child_queue.append(reflected)
+                    child_frame = {"positional": [(0, reflected)]}
                     if hasattr(self.engine, "feed_in_frame"):
                         self.engine.feed_in_frame(child_frame)
-                    parsed = rfu.parse_slot(self._parent_child_cmd)
+                    parsed = rfu.parse_slot(reflected)
                     if parsed and parsed["op"] == rfu.READY_EXIT_STANDBY:
                         count = parsed["count"]
                         if (count in (0, 1) and count not in self._parent_child_standbys
@@ -932,9 +942,13 @@ class Sim:
             elif (self._parent_ni_complete
                   and self.rel.inflight() < self.rel.max_inflight):
                 own_cmd = parent_uni_command()
-                slot = rfu.parent_uni_slot((own_cmd, self._parent_child_cmd))
+                child_cmd = (self._parent_child_queue[0]
+                             if self._parent_child_queue else self._parent_child_cmd)
+                slot = rfu.parent_uni_slot((own_cmd, child_cmd))
                 emitted = queue(parent_t(slot)) is not False
                 if emitted:
+                    if self._parent_child_queue:
+                        self._parent_child_cmd = self._parent_child_queue.popleft()
                     self._parent_uni_frames += 1
             if (not emitted and self._parent_poll_sent
                     and self._tick - self._parent_last_idle_tick >= PARENT_IDLE_PERIOD):
