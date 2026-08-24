@@ -109,8 +109,8 @@ def make_engine(args, lg):
                             refuse_partner_deoxys_mew=args.refuse_illegit,
                             trust_pia=args.trust_pia, log=elog)
     if args.mode == "host":
-        lg(f"  game engine=parent shim through selection/confirmation/finish commit; "
-           f"save/return leadership remains a later gate; trades={eng.trades}, "
+        lg(f"  game engine=parent shim through finish, save/menu re-entry, and final cancel; "
+           f"return-field teardown remains hardware-gated; trades={eng.trades}, "
            f"offered_slots={eng.offered_slots}")
     else:
         lg(f"  seat=RIGHT (Follower / mpId={eng.mpid}); trades={eng.trades}, "
