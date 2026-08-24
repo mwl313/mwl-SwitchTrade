@@ -7,6 +7,40 @@
 
 ---
 
+## 2026-08-24 override — player-zero selection broadcast implemented; live test pending
+
+Commit `b26b588` implements the next source-defined parent transition without extending beyond the
+next observable gate. Parent mode now:
+
+- records CODEX's configured Pokémon selection locally instead of emitting the follower-only
+  `READY_TO_TRADE`;
+- reassembles the Switch's 20-byte `READY_TO_TRADE` block and retains its cursor;
+- after the already-live-proven five party pulls complete, sends an owner-zero
+  `SET_MONS_TO_TRADE` containing CODEX's cursor;
+- stores the Switch cursor for later validity/received-Pokémon handling;
+- requires the exact response counts `(17,17,17,19,4)` for the party/mail/ribbon pulls, preventing
+  a later two-fragment LINKCMD from falsely satisfying the ribbon gate.
+
+This matches `pret/pokefirered` `SetReadyToTrade`, `Leader_ReadLinkBuffer`, and
+`Leader_HandleCommunication`: player one transmits READY, player zero records its own READY locally,
+and only player zero broadcasts SET_MONS after both are ready.
+
+Verification: the focused wire test checks the real leader selection branch, child block
+reassembly, owner-zero INIT framing, the exact `SET_MONS_TO_TRADE` payload, both cursors, and the
+`S6_CONFIRM` transition. WSL ordinary tests are 136/136 and Windows relay integration is 4/4, for
+140 functional passes. WSL discovery still reports only the known relay `setUpClass` environment
+error because that venv lacks `uvicorn`.
+
+This implementation is not hardware-proven yet. The next live test must stop when the user selects
+a Pokémon and the Switch displays `Is this trade okay?`. Confirmation is deliberately not driven in
+this commit. The following source-defined layer is both players' `INIT_BLOCK`, followed by the
+player-zero `START_TRADE` broadcast.
+
+Authoritative report:
+`mwl-SwitchTrade/docs/41-player-zero-selection-implemented-20260824.md`.
+
+---
+
 ## 2026-08-24 override — parent party exchange and visible trade menu live PASS
 
 The real Switch accepted `0b8a2ab` through all five parent pulls:
