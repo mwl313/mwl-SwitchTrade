@@ -444,6 +444,8 @@ class TradeEngine:
         self._got_ribbons = False        # host streamed its giftRibbons = BufferTradeParties complete
         self._bt_settle = 0              # IN frames since the last host block/REQ (offline ribbons fallback)
         self._live = False               # set by the live sim: gate READY_TO_TRADE on full BufferTradeParties
+        self.leader_mode = False         # parent shim: player zero records local READY without sending it
+        self.leader_local_ready = False
         self._selected = False
         self._pending_push = None       # a LINKCMD block queued to send next
         self._anim_wait = None          # frames remaining before READY_FINISH [S7]
@@ -1411,10 +1413,19 @@ class TradeEngine:
                 self.cancelled = True
             elif self._is_valid_slot(self.trade_slot):
                 self.state = S5_SELECT
-                self._pending_push = linkcmd_block(READY_TO_TRADE, self.trade_slot)
-                self.info("Offered our Pokémon; waiting on the host.")
-                self.log(f"-> READY_TO_TRADE cursor={self.trade_slot} "
-                         f"(trade {self.round + 1}/{self.trades})")
+                if self.leader_mode:
+                    # SetReadyToTrade: player zero records STATUS_READY locally; only player one
+                    # sends LINKCMD_READY_TO_TRADE [trade.c:1813-1827]. The parent Sim combines this
+                    # latch with the child's READY block and broadcasts SET_MONS_TO_TRADE.
+                    self.leader_local_ready = True
+                    self.info("Selected CODEX's Pokémon; waiting on the Switch.")
+                    self.log(f"leader: local selection READY cursor={self.trade_slot} "
+                             f"(trade {self.round + 1}/{self.trades})")
+                else:
+                    self._pending_push = linkcmd_block(READY_TO_TRADE, self.trade_slot)
+                    self.info("Offered our Pokémon; waiting on the host.")
+                    self.log(f"-> READY_TO_TRADE cursor={self.trade_slot} "
+                             f"(trade {self.round + 1}/{self.trades})")
             else:
                 self.log(f"slot {self.trade_slot} fails CanTradeSelectedMon -> REQUEST_CANCEL")
                 self.info(f"Cannot trade slot {self.trade_slot}; cancelling to leave.")
