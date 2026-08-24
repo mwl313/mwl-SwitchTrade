@@ -7,6 +7,23 @@
 
 ---
 
+## 2026-08-24 override — absolute-VBlank movement cadence fixed
+
+Commit `53d8878` replaces `work + sleep(full VBlank)` in `run_live()` with a monotonic absolute
+59.727 Hz deadline. Busy Pia/Reliable/RFU work is now subtracted from the 16.74 ms period instead of
+being added to it, which is the root cause of the user's ~half-rate jittery remote-avatar movement.
+Late ticks resynchronize to the current clock without producing catch-up bursts. Connection setup,
+active gameplay, and the post-disconnect tail all use the same pacer.
+
+Focused parent/Pia is 16/16 PASS and the ordinary WSL suite is 139/139 PASS. The user explicitly
+deferred the visual hardware comparison until returning, so do not claim live smoothness yet and do
+not request a full trade merely to test cadence; room entry plus walking is sufficient.
+
+Authoritative report:
+`mwl-SwitchTrade/docs/48-absolute-vblank-movement-cadence-fix-20260824.md`.
+
+---
+
 ## 2026-08-24 override — full trade and atomic room exit live PASS
 
 The PC-host one-trade golden path is complete on real hardware. Capture
