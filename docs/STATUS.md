@@ -1,6 +1,6 @@
 # STATUS — 진행 상태 (2026-08-24)
 
-> 마지막 갱신: 2026-08-24 — **PC-host visible trade menu 실기 PASS · player-zero selection leadership 구현 대기**
+> 마지막 갱신: 2026-08-24 — **PC-host visible trade menu 실기 PASS · player-zero selection gate 구현 완료/실기 대기**
 
 ## 🏆 핵심 성과
 
@@ -98,6 +98,13 @@
   Pia 4,567/4,567 auth PASS, 모든 pcap kernel drop 0, 양 card post-RX PASS다. 다음 정확한 경계는
   child `READY_TO_TRADE`와 CODEX local selection을 합쳐 player zero가 `SET_MONS_TO_TRADE`를 broadcast하는
   leader-only FSM이다. 상세: `docs/40-live-party-menu-pass-next-leader-gate-20260824.md`.
+- player-zero selection gate를 `emu` `b26b588`에 구현했다. Parent mode는 CODEX 선택을 로컬 READY로
+  기록해 follower-only `READY_TO_TRADE` 전송을 막고, child READY block/cursor를 완성한 뒤 owner-zero
+  `SET_MONS_TO_TRADE`를 CODEX cursor로 broadcast한다. Party pull response count도
+  `(17,17,17,19,4)`로 exact-gate해 후속 LINKCMD 오인 가능성을 제거했다. WSL ordinary 136/136,
+  Windows relay 4/4(총 140 functional) PASS. 다음 실기 PASS 기준은 사용자가 Pokémon을 선택한 뒤
+  Switch에 `Is this trade okay?`가 표시되는 것이다. 상세:
+  `docs/41-player-zero-selection-implemented-20260824.md`.
 - ldn 0.0.17 local-self DESTROY 수정은 no-peer stop(1.191초)만 해결했다. joined WA 실기 종료에서는
   radio thread가 15초 뒤에도 살아 있었다. process exit 후 selector stale-AP 청소와 양 카드 post-RX는
   PASS했지만 joined-session teardown root cause는 thread stack 확보 전까지 미해결이다.
@@ -110,7 +117,7 @@
 | 1 | PoC 재현 | ✅ 100% |
 | **2a** | 릴레이 인프라 (RemoteTransport+relay 서버+FSM 훅) | ✅ 100% |
 | **2b** | LAN 2브리지 실기 | 🔄 ~70% — 단독 트레이드·양방향 조인 실증, E2E 양방향 교환만 잔여 |
-| **2b'** | framerelay 코어 | ✅ STEP 6~10 discovery→visible trade menu live 완료 — leader select/confirm/finish 잔여 |
+| **2b'** | framerelay 코어 | ✅ discovery→visible trade menu live 완료; leader select 구현/실기 대기 — confirm/finish 잔여 |
 | 3 | 세션 시스템 + GUI (PySide6 확정, `docs/13-userside-app-plan.md`) | 설계 완료 |
 | 4 | 프로덕션 배포 (WSL2 길 A, `docs/12-wsl2-poc-windows.md`) | α G1~G4는 8192EU PASS, G5/G6 잔여 |
 
