@@ -317,6 +317,10 @@ class Sim:
         self._parent_child_linkcmd_epoch = 0
         self._parent_child_ready_cursor = None
         self._parent_set_mons_sent = False
+        self._parent_child_confirm_ready = False
+        self._parent_local_confirm_started = False
+        self._parent_local_confirm_complete = False
+        self._parent_start_trade_sent = False
         self._parent_child_cmd = rfu.idle_slot()
         self._parent_child_queue = deque()
         # Emission is FREE-RUN: _drive_reliable emits one child slot ('T') per local VBlank, on our own
@@ -542,6 +546,10 @@ class Sim:
                             self._parent_child_ready_cursor = cursor
                             self.log(f"[sim] child READY_TO_TRADE cursor={cursor}; "
                                      f"parent SET_MONS gate armed")
+                        elif (cmd == trademod.INIT_BLOCK and self._parent_set_mons_sent
+                              and not self._parent_child_confirm_ready):
+                            self._parent_child_confirm_ready = True
+                            self.log("[sim] child INIT_BLOCK; parent START_TRADE gate armed")
                     parsed = rfu.parse_slot(reflected)
                     if parsed and parsed["op"] == rfu.READY_EXIT_STANDBY:
                         count = parsed["count"]
@@ -884,7 +892,18 @@ class Sim:
                 self.log("[sim] parent UNI started: SEND_PLAYER_IDS + LinkPlayer request")
                 self.info("Switch entered the two-player room bootstrap.")
                 return rfu.serialize([rfu.SEND_BLOCK_REQ, 0])
+            if (self._parent_local_confirm_started
+                    and not self._parent_local_confirm_complete
+                    and getattr(self.engine, "sender", None) is None
+                    and getattr(self.engine, "_pending_push", None) is None):
+                self._parent_local_confirm_complete = True
+                self.log("[sim] parent INIT_BLOCK complete")
             words = self.engine.tick() or [0] * 7
+            sender = getattr(self.engine, "sender", None)
+            if (sender is not None and not self._parent_local_confirm_started
+                    and int.from_bytes(sender.data[0:2], "little") == trademod.INIT_BLOCK):
+                self._parent_local_confirm_started = True
+                self.log("[sim] parent INIT_BLOCK started")
 
             # Parent and child do NOT initiate the entry standbys symmetrically.  The mature
             # TradeEngine is a child and eagerly emits counts 0..3; exposing those from parent row
@@ -955,10 +974,24 @@ class Sim:
                 start_parent_command(trademod.SET_MONS_TO_TRADE, self.engine.trade_slot)
                 self.engine.host_cursor = child_cursor
                 self.engine.state = trademod.S6_CONFIRM
+                self.engine._run_confirm()
                 self._parent_set_mons_sent = True
                 self.log(f"[sim] parent SET_MONS_TO_TRADE local_cursor={self.engine.trade_slot} "
                          f"child_cursor={child_cursor}")
                 self.info("Both Pokémon selected; opening the confirmation screen.")
+                return rfu.serialize(self.engine.tick())
+
+            if (self._parent_set_mons_sent
+                    and not self._parent_start_trade_sent
+                    and self._parent_local_confirm_complete
+                    and self._parent_child_confirm_ready
+                    and getattr(self.engine, "sender", None) is None):
+                start_parent_command(trademod.START_TRADE)
+                self.engine.state = trademod.S7_ANIM
+                self.engine._anim_wait = self.engine.anim_delay
+                self._parent_start_trade_sent = True
+                self.log("[sim] parent START_TRADE; both confirmations complete")
+                self.info("Both sides confirmed; starting the trade animation.")
                 return rfu.serialize(self.engine.tick())
 
             parsed_own = rfu.parse_slot(rfu.serialize(words))
