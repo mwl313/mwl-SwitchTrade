@@ -410,7 +410,13 @@ class PiaHostTest(unittest.TestCase):
         # a one-trade session with the leader broadcast and enters the proven count-11/12 exit path.
         sim._parent_party_request_index = None
         engine.leader_local_cancel_ready = True
+        sim._parent_final_cancel_wait = 2
         engine.sender = None
+        for _ in range(2):
+            sim.rel.on_ack(sim.rel.out_seq)
+            batches.clear()
+            sim._drive_parent_reliable()
+            self.assertFalse(sim._parent_final_cancel_sent)
         sim.rel.on_ack(sim.rel.out_seq)
         batches.clear()
         sim._drive_parent_reliable()
