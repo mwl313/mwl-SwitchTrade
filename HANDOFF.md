@@ -7,6 +7,41 @@
 
 ---
 
+## 2026-08-24 override — trading-room live PASS; post-seat counts 2/3 fixed
+
+The live `0a8d9a0` retest passed every parent-host gate through interactive room movement. Child
+LinkPlayer fragments `0..16` all occupied parent row one in order, both trainer cards and standby
+counts 0/1 passed, both avatars entered the trading room, and held-key movement remained stable.
+
+The first new failure occurred only after the user sat and initiated the trade. Decrypted Pia showed:
+
+```text
+child READY 0x16 -> parent READY
+child READY_EXIT_STANDBY count=2 (repeated)
+parent READY_EXIT_STANDBY count=3 (repeated; no parent count=2)
+```
+
+This was a software role-inversion deadlock, not radio/Reliable loss. Parent mode applied the
+child-initiated leader rule only to counts 0/1, while the reused follower TradeEngine advanced to
+count 3 as soon as reflected child count 2 set its apparent `barrier.host_count`.
+
+`ff81318` extends the existing parent shim through all four entry counts `0..3`: reply twice with the
+child's exact count, preserve the measured gaps only after 0/1, and suppress follower-engine entry
+standbys until the child initiates each round. The guest path is unchanged. Verification is parent/Pia
+12/12, WSL ordinary 135/135, and Windows relay 4/4 (139 passes total).
+
+Next live gate: use `ff81318`, enter the CODEX room, sit, and initiate trade. Required order is child 2
+-> parent 2, child 3 -> parent 3, then trade-menu/party traffic. Do not retune discovery, radio, CCMP,
+Pia, Reliable, or row-one FIFO; all passed in the same capture. Authoritative analysis:
+`mwl-SwitchTrade/docs/38-live-trading-room-pass-post-seat-standby-fix-20260824.md`.
+
+Evidence is local/ignored at
+`logs/golden/pc_host_parent_reflection_fifo_live_20260824_175304/`. Joined-session teardown remains a
+separate defect: the radio thread exceeded its 15-second grace, but selector recovery and both post-RX
+health checks passed.
+
+---
+
 ## 2026-08-24 override — parent Reliable and NI gates live-proven/implemented
 
 The first corrected one-Switch host capture crossed ARP and Pia, then showed
