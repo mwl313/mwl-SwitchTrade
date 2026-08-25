@@ -68,12 +68,13 @@
    - Keep radio and protocol behavior in WSL rather than the browser layer.
 
 10. **Build the first-demo interface and native Windows executable.**
-    - Main: `Host a Trade Group`, `Join a Trade Group`, and `Configuration`.
-    - Host: group name, public/private choice, create action, then Trade Group Lobby.
-    - Join: browse public groups or enter a passcode, then Trade Group Lobby.
-    - Configuration: detected adapter, driver/capability/readiness state, safe adapter selection,
+    - Home: `Create a Trade Room`, `Browse Public Rooms`, private room-code entry, and `Settings`.
+    - Create: room name, code-only/private choice or an explicitly labeled public preview, then the
+      persistent Trade Room.
+    - Join: browse clearly labeled public sample rooms or enter a private room code, then the Trade Room.
+    - Settings: detected adapter, driver/capability/readiness state, safe adapter selection,
       repair/recheck, and diagnostics.
-    - Lobby: group/code, endpoint readiness, Switch instructions, connection progress, leave/cancel,
+    - Trade Room: room/code, connection readiness, Switch instructions, connection progress, leave,
       and diagnostic run ID.
     - Decouple group ownership/member identity from the per-attempt Switch room role. Either member can
       select **Create the room on my Switch**; the other member automatically receives intuitive
@@ -81,7 +82,10 @@
     - When both trainers enter the trading room, show their parties in two side-by-side 2-by-3 grids.
       Hover/focus/click on a Pokémon opens a compact detail popover for validated stats, IVs, EVs,
       moves, trainer data, and observed/derived confidence.
-    - Apply the owner's forthcoming complete UI overhaul before the beta experience is frozen.
+    - Use the approved Linkline native UI baseline in
+      `docs/56-native-ui-ux-redesign-handoff-20260825.md`, preserve the owner overrides recorded in
+      `docs/57`, and complete the final GPT/owner review from `docs/62`; keep backend-dependent controls
+      truthful and mapped to the frozen `docs/58`–`docs/61` contracts.
     - Public-group browsing may use explicit mock/demo data until the real public service exists.
     - Ship the primary client as native WPF, with no Electron, Chromium, WebView2, or external browser.
     - Retain the HTML/CSS build as an optional debug/alternate client using the same local API.
@@ -169,13 +173,13 @@
 ## First product-demo screenflow
 
 ```text
-Main -> Host a Trade Group -> Trade Group Lobby
-Main -> Join a Trade Group -> Browse Public Groups -> Trade Group Lobby
-                           -> Enter Group with Passcode -> Trade Group Lobby
-Main -> Configuration
+Home -> Create a Trade Room -> Trade Room
+Home -> Browse Public Rooms (Demo Preview) -> Trade Room (Demo Preview)
+Home -> Join a private Trade Room -> Trade Room
+Home -> Settings
 ```
 
-The real first milestone is a private/passcode Switch-to-Switch group. Public-group screens may be
+The real first milestone is a private/code-only Switch-to-Switch Trade Room. Public-room screens may be
 demonstrated with clearly labeled mock/local data; the production directory and matchmaking service
 remain backlog work.
 
@@ -185,9 +189,11 @@ As of the `0.2.0-beta.0` internal build:
 
 - Tasks 1-5 have working foundations: one integration branch, profile-driven hardware policy,
   Windows/WSL preflight, health-gated endpoint launch, structured run logs, and support bundles.
-- Tasks 7-11 are implemented for internal validation: the feature-neutral RFU tunnel, relay-backed
+- Tasks 7-11 have internal-validation foundations: the feature-neutral RFU tunnel, relay-backed
   private sessions, real control API, native WPF frontend, optional static web frontend, and
-  launcher/state integration.
+  launcher/state integration. The WPF presentation has the approved Linkline foundation and labeled
+  UI previews; authoritative two-member room state, either-member creator assignment, and live party
+  data remain release-blocking backend work.
 - The tunnel mirrors the leader Switch's original LDN application advertisement and carries opaque
   Reliable AppData. It does not depend on trade opcodes, the Pokémon decoder, or a specific future
   two-player activity.

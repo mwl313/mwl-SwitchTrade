@@ -1,7 +1,13 @@
 # Beta distribution preflight checklist — 2026-08-25
 
-> Status: approved architecture, execution intentionally paused.
-> Start gate: the owner will add final GUI fixes and feature additions before this checklist begins.
+> Status: Gate 0 contracts are frozen; final GPT/owner UI, asset, legal-notice, and support approval
+> remains before implementation proceeds through Gates 1–8.
+> UI baseline: `docs/56-native-ui-ux-redesign-handoff-20260825.md` and the owner overrides in
+> `docs/57-native-ui-overhaul-implementation-report-20260825.md` are the preliminary redesign source.
+> Latest UI evidence: `docs/57-native-ui-overhaul-implementation-report-20260825.md`.
+> Final-overhaul handoff: `docs/62-final-ui-overhaul-gpt-handoff-20260825.md`.
+> Frozen contracts: `room-control.v1` (`docs/58`), `party-commit.v1` (`docs/59`), and
+> `privacy-statistics.v1` (`docs/60`), with the private-beta baseline in `docs/61`.
 > Distribution target: one `SwitchTradeSetup.exe`, one installed `SwitchTrade.exe`, one hidden isolated
 > SwitchTrade WSL runtime, and separately hosted authoritative group, relay, and consented statistics
 > services.
@@ -16,6 +22,38 @@
 - [x] Source package includes SHA-256 verification for the rootfs and native EXE.
 - [x] Throwaway-distro install, repair, retained rollback runtime, uninstall, and explicit purge passed.
 - [x] Pinned WSL runtime suite passed 174 tests without Switch hardware.
+
+## Current gate summary and execution order
+
+| Order | Gate | Current state | Release-blocking result still needed |
+|---:|---|---|---|
+| 1 | Gate 0 | Final GPT/owner approval | Approve the final contract-grounded UX plus public icons/assets, legal/privacy notices, and real support destination |
+| 2 | Gates 4–5 contracts | Frozen, not implemented | Build the authoritative two-member room service and the frozen versioned UI/control contracts |
+| 3 | Gate 4 local integration | Partial foundations | Make the installed EXE, isolated WSL runtime, health gate, endpoint, decoder observer, logs, and shutdown behave as one product |
+| 4 | Gate 5 remote services | Development relay only | Deploy authenticated authoritative rooms, production opaque relay, and optional consented commit ingestion |
+| 5 | Gates 1–3 | Packaging foundations only | Build the signed one-piece installer, first-run prerequisite flow, and reversible custom-kernel integration |
+| 6 | Gate 6 | Not qualified | Pass clean-machine install, repair, update, rollback, uninstall, privacy, and signing tests |
+| 7 | Gate 7 | Waiting for production stack and second RTL8192EU | Pass two-PC/two-Switch hardware, trade, decoder, teardown, reuse, and network-fault qualification |
+| 8 | Gate 8 | Not started | Sign, publish, archive, review, and approve the private beta |
+
+Installer implementation remains blocked until the final GPT/owner review closes the last Gate 0 item.
+
+## Next implementation tranche — do this before packaging
+
+1. [ ] Give GPT `docs/62-final-ui-overhaul-gpt-handoff-20260825.md`, approve and implement the final
+   contract-grounded WPF overhaul, and approve the remaining public icon/logo, notice, and support
+   decisions. This closes Gate 0.
+2. [ ] Implement and internally test the authenticated server-authoritative two-member room state
+   machine, reconnect tokens, atomic room-creator claims, ordered events, expiration, and recovery.
+3. [ ] Refactor the endpoint/control API so stable member/tunnel identity is independent of each
+   attempt's room creator/joiner radio role, then connect the WPF state model to verified live events.
+4. [ ] Integrate the installed WSL lifecycle, full health/recovery state, logs/support bundles, passive
+   decoder party snapshots, and idempotent successful-trade detection without making trading depend on
+   decoding or analytics.
+5. [ ] Run no-Switch internal tests for simultaneous claims, reconnects, restarts, malformed/stale
+   events, decoder fixtures, failed/rolled-back trades, analytics disabled/offline, and UI transitions.
+6. [ ] Only after steps 1–5 pass, implement Gates 1–3 packaging and then run Gates 6–8 lifecycle,
+   hardware, network, signing, and private-beta qualification.
 
 ## Immediate-task scope imported from the current product TODO
 
@@ -38,8 +76,8 @@ This preflight checklist is the release-blocking superset of the immediate tasks
   injection. Covered by Gates 4 and 7.
 - [ ] Complete the local JSON control API for readiness, hardware, authoritative groups, sessions,
   diagnostics, recovery, and shutdown. Covered by Gates 4 and 5.
-- [ ] Complete and freeze the first-demo native UI, including the owner's forthcoming overhaul and the
-  party-display requirements below. Covered by Gate 0.
+- [x] Complete and freeze the first-demo native presentation baseline and honest UI-only previews.
+  Live authoritative room and party state remain implementation work in Gates 4–5.
 - [ ] Integrate the EXE with the installed WSL control service, launcher, health gate, endpoint, logs,
   authoritative lobby, decoder observer, and clean shutdown. Covered by Gates 1, 2, 4, and 5.
 - [ ] Deploy the production relay plus authoritative lobby and consented committed-trade statistics
@@ -51,34 +89,40 @@ This preflight checklist is the release-blocking superset of the immediate tasks
 
 ## Gate 0 — freeze the beta experience
 
-- [ ] Add the owner's final GUI fixes and feature additions to this checklist.
-- [ ] Incorporate and approve the owner's forthcoming complete UI overhaul before freezing the screen
-  flow; do not treat the current visual design as final.
-- [ ] Update `docs/54-native-ui-flow-and-runtime-structure-20260825.md` with the final screen flow.
-- [ ] Mark functional, demonstration-only, experimental, and unavailable UI actions explicitly.
-- [ ] Freeze a two-member private-group model with server-authoritative membership, connection,
+- [x] Save and incorporate the owner's complete native UI/UX handoff as the redesign baseline.
+- [x] Replace the old Emerald/pixel shell with the Linkline WPF presentation foundation and honest
+  UI-only flows; backend-dependent screens remain subject to later gates.
+- [x] Update `docs/54-native-ui-flow-and-runtime-structure-20260825.md` with the implemented screen flow.
+- [x] Mark functional, demonstration-only, experimental, and unavailable UI actions explicitly.
+- [x] Freeze a two-member private-group model with server-authoritative membership, connection,
   readiness, room-role, reconnect, leave, and expiration state.
-- [ ] Separate stable online membership (`member A`/`member B`) and group ownership from the per-attempt
-  Switch room roles (`room creator`/`room joiner`). Either member must be able to create the Direct
-  Connection room without understanding endpoint, RFU parent/child, AP, monitor, host, or guest roles.
-- [ ] Freeze the intuitive room flow: both users prepare, either user chooses **Create the room on my
-  Switch**, the server atomically assigns that member as room creator, and the other UI automatically
-  changes to **Search for your partner's room** with step-by-step Switch instructions.
-- [ ] Define conflict/recovery UX for simultaneous room-creator claims, creator cancellation, a 5 GHz
+- [x] Formalize stable online membership (`member A`/`member B`) and group ownership separately from
+  the per-attempt Switch room roles (`room creator`/`room joiner`). Either member must be able to create
+  the Direct Connection room without understanding endpoint, RFU parent/child, AP, monitor, host, or
+  guest roles.
+- [x] Freeze the authoritative transitions behind the approved room flow: both users prepare, either
+  user chooses **Create the room on my Switch**, the server atomically assigns that member as room
+  creator, and the other UI automatically changes to **Search for your partner's room** with
+  step-by-step Switch instructions.
+- [x] Define and freeze conflict/recovery UX against the final server event model for simultaneous
+  room-creator claims, creator cancellation, a 5 GHz
   room, radio failure, timeout, member disconnect, and transferring the creator role before RFU starts.
-- [ ] Freeze the connected-trading-room layout: two side-by-side player panels, each containing that
+- [x] Freeze the connected-trading-room layout: two side-by-side player panels, each containing that
   player's party in a 2-by-3 grid with empty slots represented explicitly.
-- [ ] Freeze Pokémon detail behavior: pointer hover toggles a compact stat popover, with keyboard focus
+- [x] Freeze Pokémon detail behavior: pointer hover toggles a compact stat popover, with keyboard focus
   and click/tap equivalents for accessibility. Only complete, checksum-valid observed records may be
   presented as fact; incomplete or unknown fields must be labeled.
-- [ ] Freeze the displayed Pokémon fields and terminology, including species, nickname, level, nature,
+- [x] Freeze the displayed Pokémon fields and terminology, including species, nickname, level, nature,
   held item, moves, IVs, EVs, party stats, OT/trainer identifiers, checksum confidence, and whether a
   field is observed, derived, or unavailable.
-- [ ] Freeze the committed-trade statistics contract and privacy UX before implementation: explicit
-  informed consent, purpose, fields, location precision, raw-IP handling, retention, deletion/export,
-  access control, and an option that does not upload party or trade analytics.
-- [ ] Freeze the first beta version, supported Windows versions, and RTL8192EU hardware policy.
-- [ ] Freeze the public-facing name, icons, license notices, privacy text, and support instructions.
+- [x] Freeze the committed-trade statistics contract and external privacy/consent workflow before
+  implementation: explicit informed consent, purpose, fields, location precision, raw-IP handling,
+  retention, deletion/export, access control, and an option that does not upload party or trade
+  analytics. Per owner direction, this workflow is administered outside the client.
+- [x] Freeze the first beta version, supported Windows versions, and RTL8192EU hardware policy.
+- [ ] Approve the final public icon/logo assets, license/legal notices, privacy links/text, and real
+  support destination. The SwitchTrade name and Linkline direction are frozen; GPT/owner asset and
+  product-copy approval remains.
 
 Do not begin installer implementation until Gate 0 is approved.
 
@@ -137,7 +181,9 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
   Join, Ready, or Configuration actions; use a bounded startup/retry/repair flow instead of leaving the
   user at an unexplained `BACKEND OFFLINE` screen.
 - [ ] Replace the ambiguous `BACKEND` label with separate control, relay, radio, and session states.
-- [ ] Add bounded startup timeouts, cancellation, retry, repair routing, and actionable errors.
+- [x] Add bounded local-service startup probes, retry, a recovery screen, and actionable generic errors.
+- [ ] Add startup cancellation, version mismatch handling, retained failure stage, and stage-specific
+  automatic/manual repair routing.
 - [ ] Prevent duplicate control, endpoint, or development-relay processes.
 - [ ] Split endpoint configuration into two independent axes: a stable server-assigned member/tunnel
   identity and a per-attempt server-assigned room creator/joiner radio role. Do not derive local radio
@@ -158,12 +204,12 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
   rollback, communication error, or disconnect. Generate one idempotent committed-trade event only
   after the protocol evidence proves the trade completed.
 - [ ] Keep local party presentation functional when statistics upload is disabled or unavailable.
-- [ ] Decide and document whether closing the window stops everything or leaves an explicit background
-  service running.
+- [x] Decide and document the current close policy: stop an active endpoint session after confirmation,
+  close the UI, and leave the installed local control service available for later reuse.
 - [ ] On full shutdown, stop the endpoint and control service cleanly, release the adapter, and allow
   WSL to become idle.
 - [ ] Recover safely after an EXE crash, WSL crash, USB removal, or interrupted previous session.
-- [ ] Keep radio, driver, and protocol implementation outside the WPF process and behind the local API.
+- [x] Keep radio, driver, and protocol implementation outside the WPF process and behind the local API.
 - [ ] Expose run ID, structured state transitions, RFU/tunnel counters, decoder completeness, recovery
   actions, and a redacted one-action support bundle without exposing passcodes or raw Pokémon data.
 
@@ -212,8 +258,9 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
 - [ ] Confirm kernel rollback restores the exact prior WSL configuration.
 - [ ] Confirm application logs and support bundles contain no keys, captures, passcodes, or private data
   outside the documented privacy manifest.
-- [ ] Verify consent is explicit and versioned, declining analytics does not block trading or local
-  party display, and uninstall/account deletion can exercise the documented server-data deletion path.
+- [ ] Verify the externally administered consent is explicit and versioned, declining analytics does
+  not block trading or local party display, and uninstall/account deletion can exercise the documented
+  server-data deletion path. The client contains no optional analytics/privacy setting.
 - [ ] Verify server-side idempotency records exactly one committed trade across retries and records none
   for cancel, rollback, save failure, communication error, or pre-commit disconnect.
 - [ ] Verify Windows Defender/SmartScreen behavior and signed artifact trust.
@@ -251,8 +298,9 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
 ## Release result
 
 The beta user experience is considered complete only when a user can download one setup executable,
-install with guided consent, launch one native application, connect a supported adapter, and complete
-a two-Switch session without opening a browser, WSL terminal, PowerShell, or developer tool. The EXE
+complete guided installation, launch one native application, connect a supported adapter, and complete
+a two-Switch session without opening a browser, WSL terminal, PowerShell, or developer tool. Optional
+analytics must remain disabled unless the separate external consent workflow has been completed. The EXE
 must automatically reach its installed backend, both members must share one authoritative lobby state,
 either member must be able to create the Switch room, and the connected-room party UI must remain
 functional even when optional server statistics are declined or offline.
