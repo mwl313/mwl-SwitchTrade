@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Provision one isolated SwitchTrade WSL distribution from a packaged app tree.
+set -euo pipefail
+
+SOURCE=""
+TARGET=/opt/switchtrade
+
+die() { printf 'switchtrade provision: %s\n' "$*" >&2; exit 1; }
+
+while (($#)); do
+    case $1 in
+        --source) [[ $# -ge 2 ]] || die "--source requires a directory"; SOURCE=$2; shift 2 ;;
+        *) die "unknown argument: $1" ;;
+    esac
+done
+
+((EUID == 0)) || die "run as root inside the SwitchTrade distribution"
+[[ -d $SOURCE && -f $SOURCE/requirements.txt ]] || die "invalid packaged source: $SOURCE"
+[[ $TARGET == /opt/switchtrade ]] || die "unsafe target: $TARGET"
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y --no-install-recommends \
+    ca-certificates ethtool iproute2 iw libpcap0.8 python3 python3-pip python3-venv \
+    rfkill sudo tcpdump usbutils
+rm -rf /var/lib/apt/lists/*
+python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' || \
+    die "Python 3.12 or newer is required by the pinned LDN runtime"
+
+stage=$(mktemp -d /opt/switchtrade.new.XXXXXX)
+cleanup() { rm -rf -- "$stage"; }
+trap cleanup EXIT
+cp -a "$SOURCE/." "$stage/"
+python3 -m venv "$stage/bridge/.venv"
+"$stage/bridge/.venv/bin/python" -m pip install --disable-pip-version-check \
+    --requirement "$stage/bridge/requirements.txt"
+find "$stage/scripts" -type f -name '*.sh' -exec chmod 0755 {} +
+
+if [[ -e $TARGET ]]; then
+    backup="${TARGET}.previous.$(date -u +%Y%m%dT%H%M%SZ)"
+    mv -- "$TARGET" "$backup"
+    printf '[wsl] previous runtime retained at %s\n' "$backup"
+fi
+mv -- "$stage" "$TARGET"
+trap - EXIT
+
+"$TARGET/bridge/.venv/bin/python" -m switchtrade.endpoint \
+    --role host --session-id PROBE1 --relay-url http://127.0.0.1:9 --dry-run
+printf '[wsl] SwitchTrade runtime provisioned at %s\n' "$TARGET"

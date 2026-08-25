@@ -64,6 +64,7 @@ Linux에서는 `scripts/wsl-radio-prepare.sh --usb-id VID:PID --role ROLE -- COM
 - `SwitchTrade-UI-Kit.zip`: 향후 HTML/CSS frontend용 디자인 reference 원본.
 - `ui/`: UI Kit의 240×160 Canvas 프리미티브를 사용한 제품 데모 frontend.
 - `switchtrade/`: 공유 하드웨어 프로필 reader, 진단/지원 bundle, RFU tunnel envelope, 로컬 control API.
+- `installer/`: isolated SwitchTrade WSL distro bootstrap, launcher, provisioning, and package builder.
 - `docs/`, `handoff/`: 실측 증거, 결정, 다음 작업.
 - WSL kernel build는 별도 `mwl313/wsl2-kernel-build` 리포에 유지한다.
 
@@ -77,6 +78,18 @@ raw 802.11 캡처와 framerelay 실행은 반드시 `scripts/radio-health-gate.s
 재검증한다. 직접 `tcpdump`를 백그라운드로 띄우는 절차는 사용하지 않는다.
 1/6/11은 LDN 구현의 후보 채널이며, 전체 2.4GHz 진단이 필요하면
 `--health-channels 1,2,3,4,5,6,7,8,9,10,11,12,13`으로 확장할 수 있다.
+
+## 0.2.0-beta.0 internal build
+
+Private relay sessions, the feature-neutral RFU endpoint tunnel, real control API integration, static
+desktop frontend, and isolated-distro bootstrap source are implemented. The pinned Linux runtime test
+suite passes without Switch hardware. See
+[`docs/53-beta0-internal-build-20260825.md`](docs/53-beta0-internal-build-20260825.md).
+
+This is an internal beta candidate, not a signed user release. Two physical RTL8192EU endpoints,
+Switch-to-Switch validation, WAN/recovery soak, a versioned minimal rootfs, and clean-machine installer
+qualification remain release gates. The bootstrap currently leaves the global/custom WSL kernel
+configuration unchanged.
 
 ## 핵심 원칙
 

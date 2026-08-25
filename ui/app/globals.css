@@ -65,6 +65,11 @@ body {
   box-shadow: 0 0 10px rgba(94, 255, 185, .65);
 }
 
+.status-light.is-offline {
+  background: #ff6b68;
+  box-shadow: 0 0 10px rgba(255, 107, 104, .45);
+}
+
 .console {
   align-self: center;
   width: min(1040px, calc(100% - 40px));
@@ -94,6 +99,14 @@ body {
   color: var(--muted);
   font: 700 11px/1 'Courier New', monospace;
   letter-spacing: .04em;
+}
+
+.control-error {
+  max-width: 360px;
+  overflow: hidden;
+  color: #ff8985;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 kbd {

@@ -13,6 +13,28 @@ import {
 
 type Screen = 'main' | 'host' | 'join' | 'public' | 'passcode' | 'lobby' | 'configuration';
 type LobbyRole = 'host' | 'guest';
+type HardwareProfile = {
+  usb_id: string;
+  status: string;
+  auto_select: boolean;
+  roles: string[];
+};
+type ApiStatus = { status: string; session_id: string | null };
+type GroupResponse = { group: { name: string; passcode: string } };
+
+const API = process.env.NEXT_PUBLIC_SWITCHTRADE_API ?? 'http://127.0.0.1:8787';
+
+async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API}${path}`, {
+    ...init,
+    headers: { 'Content-Type': 'application/json', ...init?.headers },
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { detail?: string };
+    throw new Error(body.detail ?? `Request failed (${response.status})`);
+  }
+  return response.json() as Promise<T>;
+}
 
 const MAIN_ITEMS = ['Host a Trade Group', 'Join a Trade Group', 'Configuration'];
 const PUBLIC_GROUPS = [
@@ -73,6 +95,10 @@ export default function Home() {
   const [lobbyName, setLobbyName] = useState('MY TRADE GROUP');
   const [lobbyCode, setLobbyCode] = useState('LINK25');
   const [ready, setReady] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [apiStatus, setApiStatus] = useState<ApiStatus>({ status: 'connecting', session_id: null });
+  const [profiles, setProfiles] = useState<HardwareProfile[]>([]);
 
   const itemCount = screen === 'main' ? 3
     : screen === 'host' ? 3
@@ -95,26 +121,67 @@ export default function Home() {
     go('lobby');
   }, [go]);
 
-  const activate = useCallback((index = selection) => {
-    if (screen === 'main') {
-      go((['host', 'join', 'configuration'] as Screen[])[index]);
-    } else if (screen === 'host') {
-      if (index === 1) setVisibility((value) => value === 'PRIVATE' ? 'PUBLIC' : 'PRIVATE');
-      if (index === 2) openLobby('host', clipped(groupName, 'MY TRADE GROUP'), 'LINK25');
-    } else if (screen === 'join') {
-      go(index === 0 ? 'public' : 'passcode');
-    } else if (screen === 'public') {
-      const group = PUBLIC_GROUPS[index];
-      if (group.status === 'OPEN') openLobby('guest', group.name, group.code);
-    } else if (screen === 'passcode') {
-      if (index === 1 && passcode.length >= 4) openLobby('guest', 'PRIVATE TRADE GROUP', passcode);
-    } else if (screen === 'lobby') {
-      if (index === 0) setReady((value) => !value);
-      if (index === 1) go('main');
-    } else if (screen === 'configuration') {
-      if (index === 1) go('main');
+  const activate = useCallback(async (index = selection) => {
+    if (busy) return;
+    setError('');
+    try {
+      if (screen === 'main') {
+        go((['host', 'join', 'configuration'] as Screen[])[index]);
+      } else if (screen === 'host') {
+        if (index === 1) setVisibility((value) => value === 'PRIVATE' ? 'PUBLIC' : 'PRIVATE');
+        if (index === 2) {
+          setBusy(true);
+          const name = clipped(groupName, 'MY TRADE GROUP');
+          const result = await api<GroupResponse>('/api/groups', {
+            method: 'POST',
+            body: JSON.stringify({ name, visibility: visibility.toLowerCase() }),
+          });
+          openLobby('host', result.group.name, result.group.passcode);
+        }
+      } else if (screen === 'join') {
+        go(index === 0 ? 'public' : 'passcode');
+      } else if (screen === 'public') {
+        const group = PUBLIC_GROUPS[index];
+        if (group.status === 'OPEN') openLobby('guest', group.name, group.code);
+      } else if (screen === 'passcode') {
+        if (index === 1 && passcode.length >= 4) {
+          setBusy(true);
+          const result = await api<GroupResponse>('/api/groups/join', {
+            method: 'POST', body: JSON.stringify({ passcode }),
+          });
+          openLobby('guest', result.group.name, result.group.passcode);
+        }
+      } else if (screen === 'lobby') {
+        if (index === 0) {
+          setBusy(true);
+          if (ready) {
+            await api('/api/session/stop', { method: 'POST' });
+            setReady(false);
+          } else {
+            await api('/api/session/start', {
+              method: 'POST', body: JSON.stringify({ role: lobbyRole, passcode: lobbyCode }),
+            });
+            setReady(true);
+          }
+        }
+        if (index === 1) {
+          if (ready) await api('/api/session/stop', { method: 'POST' });
+          setReady(false);
+          go('main');
+        }
+      } else if (screen === 'configuration') {
+        if (index === 0) {
+          const result = await api<{ profiles: HardwareProfile[] }>('/api/hardware/profiles');
+          setProfiles(result.profiles);
+        }
+        if (index === 1) go('main');
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Unexpected error');
+    } finally {
+      setBusy(false);
     }
-  }, [go, groupName, openLobby, passcode, screen, selection]);
+  }, [busy, go, groupName, lobbyCode, lobbyRole, openLobby, passcode, ready, screen, selection, visibility]);
 
   const back = useCallback(() => {
     if (screen === 'main') return;
@@ -172,10 +239,12 @@ export default function Home() {
     } else if (screen === 'configuration') {
       drawBase(context, 'CONFIGURATION');
       drawNeutralWindow(context, { x: 7, y: 25, width: 226, height: 85 });
-      drawBitmapText(context, 'RTL8192EU  0BDA:818B', 19, 37, { color: EMERALD_UI_PALETTE.green, shadow: EMERALD_UI_PALETTE.greenShadow });
-      drawBitmapText(context, 'BETA CANDIDATE / AUTO', 19, 50);
-      drawBitmapText(context, 'RTL8188EU  0BDA:8179', 19, 67, { color: EMERALD_UI_PALETTE.red, shadow: EMERALD_UI_PALETTE.redShadow });
-      drawBitmapText(context, 'QUARANTINED / OBSERVE', 19, 80);
+      const primary = profiles[0];
+      const secondary = profiles[1];
+      drawBitmapText(context, primary ? `ADAPTER  ${primary.usb_id.toUpperCase()}` : 'NO PROFILE DATA', 19, 37, { color: EMERALD_UI_PALETTE.green, shadow: EMERALD_UI_PALETTE.greenShadow });
+      drawBitmapText(context, primary ? `${primary.status.toUpperCase()}${primary.auto_select ? ' / AUTO' : ''}` : 'BACKEND OFFLINE', 19, 50);
+      drawBitmapText(context, secondary ? `ADAPTER  ${secondary.usb_id.toUpperCase()}` : 'EXPANSION PROFILES', 19, 67, { color: EMERALD_UI_PALETTE.red, shadow: EMERALD_UI_PALETTE.redShadow });
+      drawBitmapText(context, secondary ? `${secondary.status.toUpperCase()} / ${secondary.roles.join(',').toUpperCase()}` : 'ADD WITHOUT UI CHANGES', 19, 80);
       drawMenuItem(context, 'RECHECK HARDWARE', 19, 96, selection === 0, EMERALD_UI_PALETTE.blue, EMERALD_UI_PALETTE.blueShadow);
       if (selection === 1) drawSelectionCursor(context, 159, 96);
       drawBitmapText(context, 'BACK', 169, 96);
@@ -195,9 +264,30 @@ export default function Home() {
       drawBitmapText(context, 'LEAVE', 167, 95);
       drawHint(context, ready ? 'Open Direct Corner on your Switch.' : 'Share the code, then mark ready.', ready ? 'The app will guide the next step.' : 'ENTER Select   ESC Back');
     }
-  }, [groupName, lobbyCode, lobbyName, lobbyRole, passcode, ready, screen, selection, visibility]);
+  }, [groupName, lobbyCode, lobbyName, lobbyRole, passcode, profiles, ready, screen, selection, visibility]);
 
   useEffect(draw, [draw]);
+
+  useEffect(() => {
+    let active = true;
+    const refresh = async () => {
+      try {
+        const [status, hardware] = await Promise.all([
+          api<ApiStatus>('/api/status'),
+          api<{ profiles: HardwareProfile[] }>('/api/hardware/profiles'),
+        ]);
+        if (active) {
+          setApiStatus(status);
+          setProfiles(hardware.profiles);
+        }
+      } catch {
+        if (active) setApiStatus({ status: 'offline', session_id: null });
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, 2000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, []);
 
   function onKeyDown(event: React.KeyboardEvent<HTMLCanvasElement>) {
     if (event.key === 'ArrowUp') {
@@ -208,7 +298,7 @@ export default function Home() {
       setSelection((selection + 1) % itemCount);
     } else if (event.key === 'Enter') {
       event.preventDefault();
-      activate();
+      void activate();
     } else if (event.key === 'Escape') {
       event.preventDefault();
       back();
@@ -232,12 +322,15 @@ export default function Home() {
     else if ((screen === 'lobby' || screen === 'configuration') && point.y >= 90 && point.y < 109) index = point.x < 145 ? 0 : 1;
     if (index !== null) {
       setSelection(index);
-      activate(index);
+      void activate(index);
     }
     event.currentTarget.focus();
   }
 
-  const status = screen === 'lobby' && ready ? 'WAITING FOR PEER' : 'DEMO BUILD';
+  const status = apiStatus.status === 'offline' ? 'BACKEND OFFLINE'
+    : apiStatus.status === 'session_ready' ? 'SESSION READY'
+    : screen === 'lobby' && ready ? apiStatus.status.replaceAll('_', ' ').toUpperCase()
+    : 'READY';
 
   return (
     <main className="app-shell">
@@ -247,7 +340,7 @@ export default function Home() {
           <h1>SwitchTrade</h1>
         </div>
         <div className="device-state" aria-label={`Application status: ${status}`}>
-          <span className="status-light" />
+          <span className={`status-light${apiStatus.status === 'offline' ? ' is-offline' : ''}`} />
           {status}
         </div>
       </header>
@@ -274,6 +367,7 @@ export default function Home() {
           <span><kbd>↑</kbd><kbd>↓</kbd> Move</span>
           <span><kbd>Enter</kbd> Confirm</span>
           <span><kbd>Esc</kbd> Back</span>
+          {error ? <span className="control-error" role="alert">{error}</span> : null}
         </footer>
       </section>
     </main>
