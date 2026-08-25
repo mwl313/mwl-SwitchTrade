@@ -22,7 +22,8 @@ type HardwareProfile = {
 type ApiStatus = { status: string; session_id: string | null };
 type GroupResponse = { group: { name: string; passcode: string } };
 
-const API = process.env.NEXT_PUBLIC_SWITCHTRADE_API ?? 'http://127.0.0.1:8787';
+const API = (typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_SWITCHTRADE_API : undefined)
+  ?? 'http://127.0.0.1:8787';
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API}${path}`, {

@@ -61,8 +61,9 @@ Linux에서는 `scripts/wsl-radio-prepare.sh --usb-id VID:PID --role ROLE -- COM
 - `relay/`: 인터넷 세션 릴레이.
 - `scripts/`, `config/`: Windows/WSL 무선 준비와 하드웨어 정책.
 - `tools/`, `tests/`: 캡처/Pokémon payload 분석과 회귀 테스트.
-- `SwitchTrade-UI-Kit.zip`: 향후 HTML/CSS frontend용 디자인 reference 원본.
-- `ui/`: UI Kit의 240×160 Canvas 프리미티브를 사용한 제품 데모 frontend.
+- `SwitchTrade-UI-Kit.zip`: 제품 UI 디자인 reference 원본.
+- `desktop/`: browser engine 없이 동작하는 self-contained WPF Windows 애플리케이션.
+- `ui/`: UI Kit의 240×160 Canvas 프리미티브를 사용한 optional web/debug frontend.
 - `switchtrade/`: 공유 하드웨어 프로필 reader, 진단/지원 bundle, RFU tunnel envelope, 로컬 control API.
 - `installer/`: isolated SwitchTrade WSL distro bootstrap, launcher, provisioning, and package builder.
 - `docs/`, `handoff/`: 실측 증거, 결정, 다음 작업.
@@ -81,8 +82,8 @@ raw 802.11 캡처와 framerelay 실행은 반드시 `scripts/radio-health-gate.s
 
 ## 0.2.0-beta.0 internal build
 
-Private relay sessions, the feature-neutral RFU endpoint tunnel, real control API integration, static
-desktop frontend, and isolated-distro bootstrap source are implemented. The pinned Linux runtime test
+Private relay sessions, the feature-neutral RFU endpoint tunnel, real control API integration, native
+Windows frontend, optional static web frontend, and isolated-distro bootstrap source are implemented. The pinned Linux runtime test
 suite passes without Switch hardware. See
 [`docs/53-beta0-internal-build-20260825.md`](docs/53-beta0-internal-build-20260825.md).
 

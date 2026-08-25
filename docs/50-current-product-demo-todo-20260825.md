@@ -63,7 +63,7 @@
      logging, recovery, and shutdown.
    - Keep radio and protocol behavior in WSL rather than the browser layer.
 
-10. **Build the HTML/CSS first-demo interface.**
+10. **Build the first-demo interface and native Windows executable.**
     - Main: `Host a Trade Group`, `Join a Trade Group`, and `Configuration`.
     - Host: group name, public/private choice, create action, then Trade Group Lobby.
     - Join: browse public groups or enter a passcode, then Trade Group Lobby.
@@ -72,6 +72,8 @@
     - Lobby: group/code, endpoint readiness, Switch instructions, connection progress, leave/cancel,
       and diagnostic run ID.
     - Public-group browsing may use explicit mock/demo data until the real public service exists.
+    - Ship the primary client as native WPF, with no Electron, Chromium, WebView2, or external browser.
+    - Retain the HTML/CSS build as an optional debug/alternate client using the same local API.
 
 11. **Integrate the GUI with the real launcher, health gate, logs, and RFU tunnel.**
     - Show real state, block unsafe actions, surface actionable recovery, and stop cleanly.
@@ -109,7 +111,7 @@
    - Add public listing and matchmaking, authentication, privacy, expiration, abuse/rate controls, and
      regional relay selection. Public demo UI is not evidence that this production service exists.
 
-4. **Polish the HTML/CSS interface.**
+4. **Polish the native interface and optional HTML/CSS client.**
    - Add responsive refinement, visual identity, animation where useful, complete localization, and
      accessibility QA.
 
@@ -153,7 +155,8 @@ As of the `0.2.0-beta.0` internal build:
 - Tasks 1-5 have working foundations: one integration branch, profile-driven hardware policy,
   Windows/WSL preflight, health-gated endpoint launch, structured run logs, and support bundles.
 - Tasks 7-11 are implemented for internal validation: the feature-neutral RFU tunnel, relay-backed
-  private sessions, real control API, static desktop frontend, and launcher/state integration.
+  private sessions, real control API, native WPF frontend, optional static web frontend, and
+  launcher/state integration.
 - The tunnel mirrors the leader Switch's original LDN application advertisement and carries opaque
   Reliable AppData. It does not depend on trade opcodes, the Pokémon decoder, or a specific future
   two-player activity.
