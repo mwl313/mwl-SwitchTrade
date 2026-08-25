@@ -1,0 +1,82 @@
+<UserControl x:Class="SwitchTrade.Desktop.Views.SettingsView"
+             x:Name="Root"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:automation="clr-namespace:System.Windows.Automation;assembly=PresentationCore"
+             xmlns:model="clr-namespace:SwitchTrade.Desktop.Models"
+             Loaded="ViewLoaded" Unloaded="ViewUnloaded" SizeChanged="ViewSizeChanged">
+  <Grid>
+    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+    <TextBlock Grid.Row="0" Text="Settings" Style="{StaticResource ScreenTitle}"
+               automation:AutomationProperties.HeadingLevel="Level1" Margin="0,0,0,18" />
+    <ComboBox x:Name="CompactSelector" Grid.Row="1" ItemsSource="{Binding Sections}" DisplayMemberPath="Label"
+              SelectedValuePath="Value" SelectedValue="{Binding SelectedSection}" Visibility="Collapsed" Margin="0,0,0,18"
+              automation:AutomationProperties.Name="Settings section" />
+
+    <Grid Grid.Row="2">
+      <Grid.ColumnDefinitions><ColumnDefinition x:Name="RailColumn" Width="168" /><ColumnDefinition x:Name="RailGutter" Width="24" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+      <ListBox x:Name="NavigationRail" ItemsSource="{Binding Sections}" SelectedValuePath="Value"
+               SelectedValue="{Binding SelectedSection}" ItemContainerStyle="{StaticResource SettingsNavItem}"
+               BorderThickness="0" Background="Transparent" automation:AutomationProperties.Name="Settings sections">
+        <ListBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}" /></DataTemplate></ListBox.ItemTemplate>
+      </ListBox>
+      <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <Grid Margin="0,0,12,32">
+          <StackPanel x:Name="ConnectionSection">
+            <TextBlock Text="Connection" Style="{StaticResource SectionTitle}" />
+            <TextBlock Text="Local setup" Foreground="{DynamicResource LinkBlueBrush}" FontWeight="SemiBold" Margin="0,0,0,6" />
+            <TextBlock Text="{Binding StatusMessage}" Foreground="{DynamicResource SecondaryTextBrush}" Margin="0,0,0,20" />
+            <TextBlock Text="Wi-Fi adapters" FontWeight="SemiBold" Margin="0,0,0,10" />
+            <ItemsControl ItemsSource="{Binding Adapters}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate DataType="{x:Type model:AdapterProfileViewData}">
+                  <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,14">
+                    <StackPanel>
+                      <Grid>
+                        <TextBlock Text="{Binding FriendlyName}" FontWeight="SemiBold" FontSize="16" />
+                        <TextBlock Text="{Binding SupportLabel}" HorizontalAlignment="Right" Foreground="{DynamicResource SecondaryTextBrush}" />
+                      </Grid>
+                      <TextBlock Text="{Binding Summary}" Margin="0,5,0,0" />
+                      <Expander Header="Technical details" Margin="0,8,0,0">
+                        <TextBlock Text="{Binding TechnicalDetails}" Style="{StaticResource SecondaryText}" Margin="0,6,0,0" />
+                      </Expander>
+                    </StackPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <Button Content="Check again" Command="{Binding RecheckCommand}" Style="{StaticResource SecondaryButton}"
+                    HorizontalAlignment="Left" Margin="0,20,0,0" />
+          </StackPanel>
+
+          <StackPanel x:Name="SupportSection" Visibility="Collapsed">
+            <TextBlock Text="Support" Style="{StaticResource SectionTitle}" />
+            <TextBlock Text="Create a redacted support file when a recovery step does not work." Margin="0,0,0,18" />
+            <Button Content="Create support file" Command="{Binding SupportCommand}" Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left" />
+            <Border Style="{StaticResource SuccessNotice}" Margin="0,18,0,0"
+                    Visibility="{Binding HasSupportFile, Converter={StaticResource BooleanToVisibility}}">
+              <StackPanel>
+                <TextBlock Text="Support file created" FontWeight="SemiBold" Margin="0,0,0,4" />
+                <TextBlock Text="{Binding SupportFilePath}" FontFamily="Cascadia Mono, Consolas" FontSize="13" />
+                <Button Content="Copy location" Command="{Binding CopySupportPathCommand}" Style="{StaticResource TextButton}"
+                        HorizontalAlignment="Left" Margin="-10,6,0,-6" />
+              </StackPanel>
+            </Border>
+            <Border Height="1" Background="{DynamicResource BorderBrush}" Margin="0,28" />
+            <TextBlock Text="About SwitchTrade" Style="{StaticResource SectionTitle}" />
+            <TextBlock Text="SwitchTrade 0.2.0 beta" />
+            <TextBlock Text="Room control v1 · Party commit v1" Style="{StaticResource SecondaryText}" Margin="0,4,0,0" />
+          </StackPanel>
+
+          <StackPanel x:Name="AdvancedSection" Visibility="Collapsed">
+            <TextBlock Text="Advanced" Style="{StaticResource SectionTitle}" />
+            <Border Style="{StaticResource WarningNotice}">
+              <TextBlock Text="The RTL8188EU remains test-only and is not selected for normal trading." />
+            </Border>
+            <TextBlock Text="Driver, USB, and runtime details appear here only for troubleshooting. Normal trading should not require this section." />
+          </StackPanel>
+        </Grid>
+      </ScrollViewer>
+    </Grid>
+  </Grid>
+</UserControl>

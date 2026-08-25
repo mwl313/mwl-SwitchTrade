@@ -14,7 +14,19 @@ public sealed class UserFacingException(string userMessage, string? technicalCod
     public string? TechnicalCode { get; } = technicalCode;
 }
 
-public sealed class ControlApiClient : IDisposable
+public interface IControlGateway : IDisposable
+{
+    Task<ControlStatus?> TryGetStatusAsync(CancellationToken cancellationToken = default);
+    Task<TradeRoomInfo> CreateTradeRoomAsync(TradeRoomCreateRequest request, CancellationToken cancellationToken = default);
+    Task<TradeRoomInfo> JoinTradeRoomAsync(string roomCode, CancellationToken cancellationToken = default);
+    Task StartConnectionAsync(SwitchRoomRole role, string roomCode, CancellationToken cancellationToken = default);
+    Task StopConnectionAsync(CancellationToken cancellationToken = default);
+    Task ReleaseTradeRoomAsync(string roomCode, RoomMembershipRole role, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<AdapterProfileViewData>> GetAdapterProfilesAsync(CancellationToken cancellationToken = default);
+    Task<string> CreateSupportBundleAsync(CancellationToken cancellationToken = default);
+}
+
+public sealed class ControlApiClient : IControlGateway
 {
     public const string ApiBase = "http://127.0.0.1:8787";
 
@@ -23,11 +35,14 @@ public sealed class ControlApiClient : IDisposable
         PropertyNameCaseInsensitive = true,
     };
 
-    private readonly HttpClient _http = new()
+    private readonly HttpClient _http;
+
+    public ControlApiClient(HttpMessageHandler? handler = null)
     {
-        BaseAddress = new Uri(ApiBase),
-        Timeout = TimeSpan.FromSeconds(4),
-    };
+        _http = handler is null ? new HttpClient() : new HttpClient(handler, disposeHandler: true);
+        _http.BaseAddress = new Uri(ApiBase);
+        _http.Timeout = TimeSpan.FromSeconds(4);
+    }
 
     public async Task<ControlStatus?> TryGetStatusAsync(CancellationToken cancellationToken = default)
     {
@@ -50,10 +65,20 @@ public sealed class ControlApiClient : IDisposable
     }
 
     public async Task<TradeRoomInfo> CreateTradeRoomAsync(
-        string name, string visibility, CancellationToken cancellationToken = default)
+        TradeRoomCreateRequest request, CancellationToken cancellationToken = default)
     {
         var result = await PostAsync<GroupResponse>(
-            "/api/groups", new { name, visibility }, cancellationToken);
+            "/api/groups", new
+            {
+                name = request.RoomName,
+                visibility = "private",
+                trainer_display_name = request.TrainerDisplayName,
+                game = request.Game.ToString(),
+                language = request.Language.ToString(),
+                offering = request.Offering,
+                wanted = request.Wanted,
+                note = request.Note,
+            }, cancellationToken);
         return ToTradeRoom(result);
     }
 
@@ -66,12 +91,37 @@ public sealed class ControlApiClient : IDisposable
     }
 
     public async Task StartConnectionAsync(
-        string internalRole, string roomCode, CancellationToken cancellationToken = default) =>
+        SwitchRoomRole role, string roomCode, CancellationToken cancellationToken = default) =>
         _ = await PostAsync<JsonElement>(
-            "/api/session/start", new { role = internalRole, passcode = roomCode }, cancellationToken);
+            "/api/session/start", new
+            {
+                role = role == SwitchRoomRole.Creator ? "host" : "guest",
+                passcode = roomCode,
+            }, cancellationToken);
 
     public async Task StopConnectionAsync(CancellationToken cancellationToken = default) =>
         _ = await PostAsync<JsonElement>("/api/session/stop", new { }, cancellationToken);
+
+    public async Task ReleaseTradeRoomAsync(
+        string roomCode, RoomMembershipRole role, CancellationToken cancellationToken = default)
+    {
+        var path = role == RoomMembershipRole.Owner
+            ? $"/api/groups/{Uri.EscapeDataString(roomCode)}"
+            : $"/api/groups/{Uri.EscapeDataString(roomCode)}/members/me";
+        try
+        {
+            using var response = await _http.DeleteAsync(path, cancellationToken);
+            await EnsureSuccess(response, cancellationToken);
+        }
+        catch (HttpRequestException)
+        {
+            throw new UserFacingException("SwitchTrade’s local service is not available.", "local_service_unavailable");
+        }
+        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new UserFacingException("SwitchTrade took too long to respond. Try again.", "request_timeout");
+        }
+    }
 
     public async Task<IReadOnlyList<AdapterProfileViewData>> GetAdapterProfilesAsync(
         CancellationToken cancellationToken = default)
@@ -189,7 +239,19 @@ public sealed class ControlApiClient : IDisposable
         result.Group?.Passcode ?? "",
         result.Group?.Visibility ?? "private",
         result.Group?.Participants ?? 1,
-        result.Scope ?? "local_demo");
+        result.Scope ?? "local_demo",
+        result.Group?.TrainerDisplayName ?? "",
+        ParseGame(result.Group?.Game),
+        ParseLanguage(result.Group?.Language),
+        result.Group?.Offering ?? "",
+        result.Group?.Wanted ?? "",
+        result.Group?.Note ?? "");
+
+    private static GameVersionChoice ParseGame(string? value) =>
+        Enum.TryParse<GameVersionChoice>(value, ignoreCase: true, out var parsed) ? parsed : GameVersionChoice.None;
+
+    private static GameLanguage ParseLanguage(string? value) =>
+        Enum.TryParse<GameLanguage>(value, ignoreCase: true, out var parsed) ? parsed : GameLanguage.None;
 
     public void Dispose() => _http.Dispose();
 
@@ -204,7 +266,17 @@ public sealed class ControlApiClient : IDisposable
         string? Error);
 
     private sealed record GroupResponse(string? Scope, GroupDto? Group);
-    private sealed record GroupDto(string? Name, string? Passcode, string? Visibility, int Participants);
+    private sealed record GroupDto(
+        string? Name,
+        string? Passcode,
+        string? Visibility,
+        int Participants,
+        [property: JsonPropertyName("trainer_display_name")] string? TrainerDisplayName,
+        string? Game,
+        string? Language,
+        string? Offering,
+        string? Wanted,
+        string? Note);
     private sealed record ProfilesResponse(IReadOnlyList<ProfileDto>? Profiles);
     private sealed record ProfileDto(
         [property: JsonPropertyName("usb_id")] string? UsbId,

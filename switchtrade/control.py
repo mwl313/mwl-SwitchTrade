@@ -28,6 +28,13 @@ UI_ROOT = Path(__file__).resolve().parents[1] / "apps" / "web" / "dist-desktop"
 class CreateGroup(BaseModel):
     name: str = Field(min_length=1, max_length=22)
     visibility: str = Field(pattern="^(private|public)$")
+    trainer_display_name: str = Field(default="", max_length=20)
+    game: str = Field(default="None", pattern="^(None|FireRed|LeafGreen)$")
+    language: str = Field(
+        default="None", pattern="^(None|English|Japanese|French|German|Italian|Spanish)$")
+    offering: str = Field(default="", max_length=80)
+    wanted: str = Field(default="", max_length=80)
+    note: str = Field(default="", max_length=120)
 
 
 class JoinGroup(BaseModel):
@@ -47,6 +54,12 @@ class Group:
     visibility: str
     state: str = "waiting_for_switch"
     participants: int = 1
+    trainer_display_name: str = ""
+    game: str = "None"
+    language: str = "None"
+    offering: str = ""
+    wanted: str = ""
+    note: str = ""
 
     def public(self) -> dict:
         data = asdict(self)
@@ -109,7 +122,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         CORSMiddleware,
         allow_origins=["http://127.0.0.1:3000", "http://localhost:3000"],
         allow_origin_regex=r"http://(127\.0\.0\.1|localhost):\d+",
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["Content-Type"],
     )
 
@@ -155,7 +168,15 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             code = state.relay.create_session()
         except RelayError as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
-        group = Group(payload.name.strip(), code, payload.visibility)
+        group = Group(
+            payload.name.strip(), code, payload.visibility,
+            trainer_display_name=payload.trainer_display_name.strip(),
+            game=payload.game,
+            language=payload.language,
+            offering=payload.offering.strip(),
+            wanted=payload.wanted.strip(),
+            note=payload.note.strip(),
+        )
         with state.lock:
             state.groups[code] = group
         state.log.event("group_created", group_name=group.name, visibility=group.visibility, passcode=code)
@@ -179,6 +200,31 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             group.participants += 1
         state.log.event("group_joined", group_name=group.name, passcode=code)
         return {"scope": "local_demo", "group": asdict(group), "run_id": state.log.run_id}
+
+    @app.delete("/api/groups/{passcode}")
+    def close_group(passcode: str, request: Request) -> dict:
+        state = runtime(request)
+        code = passcode.upper()
+        with state.lock:
+            group = state.groups.pop(code, None)
+        if group is None:
+            raise HTTPException(status_code=404, detail="group not found")
+        state.log.event("group_closed", group_name=group.name, passcode=code)
+        return {"status": "closed", "run_id": state.log.run_id}
+
+    @app.delete("/api/groups/{passcode}/members/me")
+    def leave_group(passcode: str, request: Request) -> dict:
+        state = runtime(request)
+        code = passcode.upper()
+        with state.lock:
+            group = state.groups.get(code)
+            if group is None:
+                raise HTTPException(status_code=404, detail="group not found")
+            group.participants = max(0, group.participants - 1)
+            if group.participants == 0:
+                state.groups.pop(code, None)
+        state.log.event("group_left", group_name=group.name, passcode=code)
+        return {"status": "left", "run_id": state.log.run_id}
 
     @app.post("/api/session/stop")
     def stop_session(request: Request) -> dict:

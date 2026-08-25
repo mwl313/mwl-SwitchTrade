@@ -1,0 +1,98 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:automation="clr-namespace:System.Windows.Automation;assembly=PresentationCore"
+                    xmlns:controls="clr-namespace:SwitchTrade.Desktop.Controls">
+  <BooleanToVisibilityConverter x:Key="BooleanToVisibility" />
+  <controls:InverseBooleanToVisibilityConverter x:Key="InverseBooleanToVisibility" />
+  <Style TargetType="Window"><Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" /></Style>
+  <Style x:Key="SurfaceCard" TargetType="Border">
+    <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="10" />
+    <Setter Property="Padding" Value="24" />
+  </Style>
+  <Style x:Key="OpenSection" TargetType="Border">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Padding" Value="0" />
+  </Style>
+  <Style x:Key="InlineNotice" TargetType="Border">
+    <Setter Property="Background" Value="{DynamicResource BlueTintBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource LinkBlueBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="Padding" Value="14,12" />
+    <Setter Property="Margin" Value="0,0,0,20" />
+  </Style>
+  <Style x:Key="WarningNotice" TargetType="Border" BasedOn="{StaticResource InlineNotice}">
+    <Setter Property="Background" Value="{DynamicResource WarningTintBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource WarningBrush}" />
+  </Style>
+  <Style x:Key="ErrorNotice" TargetType="Border" BasedOn="{StaticResource InlineNotice}">
+    <Setter Property="Background" Value="{DynamicResource DangerTintBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource DangerBrush}" />
+  </Style>
+  <Style x:Key="SuccessNotice" TargetType="Border" BasedOn="{StaticResource InlineNotice}">
+    <Setter Property="Background" Value="{DynamicResource SuccessTintBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource SuccessBrush}" />
+  </Style>
+  <Style x:Key="DemoBadge" TargetType="Border">
+    <Setter Property="Background" Value="{DynamicResource BlueTintBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource LinkBlueBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="Padding" Value="8,4" />
+  </Style>
+  <Style x:Key="SettingsNavItem" TargetType="ListBoxItem">
+    <Setter Property="MinHeight" Value="44" />
+    <Setter Property="Padding" Value="12,10" />
+    <Setter Property="Margin" Value="0,0,0,4" />
+    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="ListBoxItem">
+          <Border x:Name="Root" Background="Transparent" CornerRadius="6" Padding="{TemplateBinding Padding}"
+                  BorderThickness="1" BorderBrush="Transparent">
+            <ContentPresenter />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Root" Property="Background" Value="{DynamicResource SurfaceSubtleBrush}" /></Trigger>
+            <Trigger Property="IsSelected" Value="True">
+              <Setter TargetName="Root" Property="Background" Value="{DynamicResource BlueTintBrush}" />
+              <Setter TargetName="Root" Property="BorderBrush" Value="{DynamicResource LinkBlueBrush}" />
+              <Setter Property="FontWeight" Value="SemiBold" />
+            </Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Root" Property="BorderBrush" Value="{DynamicResource FocusBrush}" /></Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+  <Style x:Key="ResultListItem" TargetType="ListBoxItem">
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="automation:AutomationProperties.Name" Value="{Binding AccessibleName}" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="ListBoxItem">
+          <Border x:Name="Root" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="{TemplateBinding BorderThickness}" Padding="{TemplateBinding Padding}" CornerRadius="6">
+            <ContentPresenter />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Root" Property="Background" Value="{DynamicResource SurfaceSubtleBrush}" /></Trigger>
+            <Trigger Property="IsSelected" Value="True">
+              <Setter TargetName="Root" Property="Background" Value="{DynamicResource BlueTintBrush}" />
+              <Setter TargetName="Root" Property="BorderBrush" Value="{DynamicResource LinkBlueBrush}" />
+            </Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Root" Property="BorderBrush" Value="{DynamicResource FocusBrush}" /></Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+</ResourceDictionary>

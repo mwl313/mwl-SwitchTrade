@@ -41,6 +41,8 @@
 | [docs/60-external-consent-and-statistics-contract-v1-20260825.md](docs/60-external-consent-and-statistics-contract-v1-20260825.md) | 외부 동의, 최소 통계 수집, 보존·삭제 계약 v1 |
 | [docs/61-private-beta-release-baseline-20260825.md](docs/61-private-beta-release-baseline-20260825.md) | Private beta 플랫폼, RTL8192EU, 기능·버전 기준선 |
 | [docs/62-final-ui-overhaul-gpt-handoff-20260825.md](docs/62-final-ui-overhaul-gpt-handoff-20260825.md) | 최종 GPT/owner WPF UI overhaul 입력 및 Gate 0 승인 기준 |
+| [docs/63-second-native-ui-overhaul-codex-handoff-20260825.md](docs/63-second-native-ui-overhaul-codex-handoff-20260825.md) | GPT의 두 번째 native UI audit 및 Codex 구현 지침 |
+| [docs/64-second-native-ui-overhaul-implementation-report-20260825.md](docs/64-second-native-ui-overhaul-implementation-report-20260825.md) | 두 번째 native WPF audit 구현 결과, C1–C12 결정, 검증 기록 |
 | [docs/30-native-fixed-handshake-20260824.md](docs/30-native-fixed-handshake-20260824.md) | Native two-Switch fixed-channel gold, PC-host root cause, and byte-verified Session fix |
 | [handoff/HANDOFF-20260824-wsl-dual-radio.md](handoff/HANDOFF-20260824-wsl-dual-radio.md) | WSL 두 카드 최종 상태, 확장 구조, 다음 G5/G6 절차 |
 | [handoff/HANDOFF-20260824-native-host-session.md](handoff/HANDOFF-20260824-native-host-session.md) | Next-agent gate for PC-host Pia and host/parent Reliable work |

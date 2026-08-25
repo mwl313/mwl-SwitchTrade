@@ -151,6 +151,35 @@ class TunnelIntegrationTest(unittest.TestCase):
                 self.assertEqual(response.status_code, 200, response.text)
                 self.assertEqual(response.json()["group"]["passcode"], code)
 
+    def test_control_group_preserves_invitation_fields_and_releases_membership(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary, relay_url=self.base)) as api:
+                response = api.post("/api/groups", json={
+                    "name": "Kanto Trade",
+                    "visibility": "private",
+                    "trainer_display_name": "Leaf",
+                    "game": "LeafGreen",
+                    "language": "English",
+                    "offering": "Pinsir",
+                    "wanted": "Scyther",
+                    "note": "Version-exclusive swap",
+                })
+                self.assertEqual(response.status_code, 200, response.text)
+                group = response.json()["group"]
+                self.assertEqual(group["trainer_display_name"], "Leaf")
+                self.assertEqual(group["game"], "LeafGreen")
+                self.assertEqual(group["offering"], "Pinsir")
+                code = group["passcode"]
+
+                response = api.post("/api/groups/join", json={"passcode": code})
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["group"]["participants"], 2)
+
+                response = api.delete(f"/api/groups/{code}/members/me")
+                self.assertEqual(response.status_code, 200, response.text)
+                response = api.delete(f"/api/groups/{code}")
+                self.assertEqual(response.status_code, 200, response.text)
+
     def test_endpoint_command_is_argument_safe(self):
         with tempfile.TemporaryDirectory() as temporary:
             state = Path(temporary) / "endpoint state.json"
