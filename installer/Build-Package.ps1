@@ -1,12 +1,13 @@
 [CmdletBinding()]
 param(
-    [string]$OutputRoot = (Join-Path $PSScriptRoot '..\artifacts'),
+    [string]$OutputRoot = '',
     [string]$Rootfs = '',
     [switch]$NoArchive
 )
 
 $ErrorActionPreference = 'Stop'
 $Repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+if (-not $OutputRoot) { $OutputRoot = Join-Path $Repo 'artifacts' }
 $Version = (& git -C $Repo rev-parse --short HEAD).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'cannot determine repository revision' }
 $dirty = & git -C $Repo status --porcelain
