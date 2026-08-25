@@ -6,8 +6,8 @@ named `SwitchTrade` distribution and never edits the user's global `.wslconfig`.
 ## Build
 
 1. Install the pinned test/runtime dependencies under Python 3.12 or newer.
-2. In `ui`, run `pnpm build:desktop` (the optional local web/debug frontend).
-3. Run `desktop/Publish.ps1 -Output artifacts/native/SwitchTrade` to build the self-contained native
+2. In `apps/web`, run `pnpm build:desktop` (the optional local web/debug frontend).
+3. Run `apps/desktop/Publish.ps1 -Output artifacts/native/SwitchTrade` to build the self-contained native
    Windows executable.
 4. Commit the exact source being packaged; the builder refuses a dirty worktree.
 5. Run `installer/Build-Package.ps1 -Rootfs PATH -DesktopExe artifacts/native/SwitchTrade/SwitchTrade.exe`.

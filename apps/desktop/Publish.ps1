@@ -2,7 +2,7 @@
 param([string]$Output = '')
 
 $ErrorActionPreference = 'Stop'
-$Repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$Repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 if (-not $Output) { $Output = Join-Path $Repo 'artifacts\native\SwitchTrade' }
 $Project = Join-Path $PSScriptRoot 'SwitchTrade.Desktop\SwitchTrade.Desktop.csproj'
 

@@ -27,7 +27,7 @@ PROJECT_ROOT = next(
     (str(parent) for parent in Path(__file__).resolve().parents
      if (parent / "relay" / "server.py").is_file()),
     os.path.abspath(os.path.join(EMU_ROOT, "..")),
-)  # MWL-SwitchTrade/ (works for both main/emu and a junction into _related/)
+)  # MWL-SwitchTrade/ production checkout
 sys.path.insert(0, PROJECT_ROOT)
 sys.path.insert(0, EMU_ROOT)
 

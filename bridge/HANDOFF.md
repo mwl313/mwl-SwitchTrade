@@ -73,7 +73,7 @@ answered.
 Commit `823288b` adds a one-time 120-frame menu-build wait after the final post-save block, then
 sends the existing final cancel. It passes the focused wire regression, 136 ordinary WSL tests, and
 4/4 Windows relay tests. This is not hardware-proven yet. The next live run must offer
-`mons/0001_BULBASAUR_user_20260824.pk3` (last run used Rattata) and prove final cancel, counts 11/12,
+`archive/pokemon/fixtures/0001_BULBASAUR_user_20260824.pk3` (last run used Rattata) and prove final cancel, counts 11/12,
 room exit, and no native communication error. Do not modify lower layers; join, Reliable, trade,
 finish, save, and party re-entry all passed.
 

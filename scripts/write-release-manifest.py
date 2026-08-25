@@ -42,8 +42,8 @@ def main() -> None:
         ROOT / "bridge" / "requirements.txt",
         ROOT / "test-requirements.txt",
         ROOT / "config" / "wsl-radio-hardware.tsv",
-        ROOT / "ui" / "package.json",
-        ROOT / "ui" / "pnpm-lock.yaml",
+        ROOT / "apps" / "web" / "package.json",
+        ROOT / "apps" / "web" / "pnpm-lock.yaml",
     ]
     manifest = {
         "schema": 1,

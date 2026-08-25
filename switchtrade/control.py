@@ -22,7 +22,7 @@ from switchtrade.hardware import DEFAULT_PROFILE_PATH, load_profiles
 from switchtrade.relay_client import RelayClient, RelayError
 
 
-UI_ROOT = Path(__file__).resolve().parents[1] / "ui" / "dist-desktop"
+UI_ROOT = Path(__file__).resolve().parents[1] / "apps" / "web" / "dist-desktop"
 
 
 class CreateGroup(BaseModel):

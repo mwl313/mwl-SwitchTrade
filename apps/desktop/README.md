@@ -9,7 +9,7 @@ The maintained screen flow, feature inventory, and layer terminology are documen
 Build a self-contained x64 executable from Windows PowerShell:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\desktop\Publish.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\apps\desktop\Publish.ps1
 ```
 
 The output is a single `artifacts/native/SwitchTrade/SwitchTrade.exe`. A standalone copy can display

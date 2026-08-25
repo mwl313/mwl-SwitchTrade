@@ -18,7 +18,7 @@
 - Added a local FastAPI control surface for status, shared hardware profiles, local-demo group
   creation/join, session stop, and support-bundle export.
 - Implemented the main/host/join/public/passcode/configuration/lobby demo screens using the exact
-  approved Emerald Canvas primitives and bitmap glyph data from `SwitchTrade-UI-Kit.zip`.
+  approved Emerald Canvas primitives and bitmap glyph data from `assets/ui/SwitchTrade-UI-Kit.zip`.
 - Added a release-manifest generator and a Windows bootstrap-installer design covering WSL,
   USB/IP, custom-kernel consumption, reboot resume, coexistence, repair, uninstall, and rollback.
 

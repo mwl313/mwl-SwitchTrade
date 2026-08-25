@@ -174,7 +174,7 @@ soak 근거는 RTL8192EU에만 있으므로 8188EU의 profile 상태는 역할�
   아직 `hostapd` beacon 또는 실제 Switch join 성공을 뜻하지는 않는다.
 - WSL repo-local `.venv`에 `requirements.txt`의 pinned runtime을 설치했고 `ldn.load_keys()`까지
   통과했다. VM2에서 실기 사용 중인 `prod.keys`를 SHA-256으로 대조해 `/root/.switch/prod.keys`에
-  mode 0600으로 설치했다. `backup-vm-20260821/prod.keys`는 VM2 파일과 hash가 달라 사용하지 않았다.
+  mode 0600으로 설치했다. `archive/legacy/vm-20260821/prod.keys`는 VM2 파일과 hash가 달라 사용하지 않았다.
 - `run_trade.sh --dry-run --radio-usb-id 0bda:818b`는 WSL에서 emu 경로, 기본 `.venv` Python,
   exact USB sysfs와 `phy0`를 모두 자동 발견했다.
 - 첫 실제 WSL `HostTransport` 실행은 `NL80211_CMD_NEW_KEY`에서 `ENOENT`가 났다. kernel config의

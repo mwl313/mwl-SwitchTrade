@@ -26,7 +26,7 @@ still pending; do not claim graceful completion until it passes.
 
 1. Run both WSL radio health gates before capture.
 2. Use RTL8192EU as host and RTL8188EU as observer on the discovered room channel.
-3. Offer `mons/0001_BULBASAUR_user_20260824.pk3` (the last run offered Rattata).
+3. Offer `archive/pokemon/fixtures/0001_BULBASAUR_user_20260824.pk3` (the last run offered Rattata).
 4. Let the user perform one complete trade; do not stop at menu re-entry.
 5. Observe the 120-frame delay, `BOTH_CANCEL_TRADE`, counts 11/12, room exit, and close-link exchange.
 6. Stop capture, record kernel-drop counters, and run both post-RX health gates.
