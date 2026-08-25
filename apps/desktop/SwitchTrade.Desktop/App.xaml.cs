@@ -81,6 +81,8 @@ public partial class App : Application
             throw new NotSupportedException();
         public Task<TradeRoomInfo> JoinTradeRoomAsync(string roomCode, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
+        public Task<AuthoritativeRoomProjection?> TryGetTradeRoomAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<AuthoritativeRoomProjection?>(null);
         public Task StartConnectionAsync(SwitchRoomRole role, RoomMembershipRole membershipRole,
             string roomCode, CancellationToken cancellationToken = default)
         {

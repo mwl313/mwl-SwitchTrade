@@ -170,6 +170,20 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
         RaiseChanged();
     }
 
+    public void ApplyRoom(AuthoritativeRoomProjection room)
+    {
+        if (Context is null) return;
+        Context = Context with
+        {
+            MembershipRole = room.MembershipRole,
+            SwitchRole = room.SwitchRole,
+            Room = Context.Room with { Participants = room.Participants },
+        };
+        if (ConnectionState == LegacyConnectionState.Idle)
+            StatusText = room.PartnerOnline ? "Both trainers are in this Trade Room" : "Waiting for your partner";
+        RaiseChanged();
+    }
+
     public void ForceClear()
     {
         Context = null;

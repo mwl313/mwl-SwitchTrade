@@ -163,8 +163,14 @@ def run_endpoint(args) -> int:
         "phy": args.phy, "channel": args.channel,
     })
     log = EndpointLog(logger)
+    member_token = None
+    if args.member_token_file:
+        member_token = Path(args.member_token_file).read_text(encoding="utf-8").strip()
+        if len(member_token) < 32:
+            raise ValueError("member credential file is invalid")
     tunnel = TunnelClient(
         args.relay_url, args.session_id, plan["tunnel_role"], log=log,
+        member_token=member_token,
     ).start()
     transport = sim = observer = None
     outcome = "failed"
@@ -299,6 +305,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--state-file")
     parser.add_argument("--party-state-file")
     parser.add_argument("--attempt-id")
+    parser.add_argument("--member-token-file")
     parser.add_argument("--connect-timeout", type=float, default=20)
     parser.add_argument("--radio-timeout", type=float, default=60)
     parser.add_argument("--room-timeout", type=float, default=300)

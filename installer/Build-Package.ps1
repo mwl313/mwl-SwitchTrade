@@ -3,6 +3,12 @@ param(
     [string]$OutputRoot = '',
     [string]$Rootfs = '',
     [string]$DesktopExe = '',
+    [string]$Kernel = '',
+    [string]$KernelModules = '',
+    [string]$KernelManifest = '',
+    [string]$UsbipdMsi = '',
+    [string]$UsbipdVersion = '5.3.0',
+    [string]$RelayUrl = 'http://127.0.0.1:8788',
     [switch]$NoArchive
 )
 
@@ -62,11 +68,77 @@ if ($DesktopExe) {
         Set-Content -LiteralPath (Join-Path $windows 'SwitchTrade.exe.sha256') -Encoding Ascii
 }
 
+if ($Kernel -or $KernelModules -or $KernelManifest) {
+    if (-not $Kernel -or -not $KernelManifest) {
+        throw '-Kernel and -KernelManifest must be supplied together'
+    }
+    $kernelPayload = Join-Path $Stage 'payload\kernel'
+    New-Item -ItemType Directory -Force -Path $kernelPayload | Out-Null
+    $resolvedManifest = (Resolve-Path -LiteralPath $KernelManifest).Path
+    $metadata = Get-Content -Raw -LiteralPath $resolvedManifest | ConvertFrom-Json
+    $resolvedKernel = (Resolve-Path -LiteralPath $Kernel).Path
+    if (-not $metadata.kernel_release -or -not $metadata.kernel_sha256) {
+        throw 'kernel manifest is missing required release/checksum fields'
+    }
+    if ((Get-FileHash -Algorithm SHA256 -LiteralPath $resolvedKernel).Hash.ToLowerInvariant() -ne
+        ([string]$metadata.kernel_sha256).ToLowerInvariant()) {
+        throw 'kernel artifact does not match its release manifest'
+    }
+    Copy-Item -LiteralPath $resolvedKernel -Destination (Join-Path $kernelPayload 'kernel')
+    Copy-Item -LiteralPath $resolvedManifest -Destination (Join-Path $kernelPayload 'manifest.json')
+    if ($KernelModules) {
+        $resolvedModules = (Resolve-Path -LiteralPath $KernelModules).Path
+        if (-not $metadata.modules_sha256 -or
+            (Get-FileHash -Algorithm SHA256 -LiteralPath $resolvedModules).Hash.ToLowerInvariant() -ne
+            ([string]$metadata.modules_sha256).ToLowerInvariant()) {
+            throw 'kernel modules artifact does not match its release manifest'
+        }
+        Copy-Item -LiteralPath $resolvedModules -Destination (Join-Path $kernelPayload 'modules')
+    }
+}
+
+if ($UsbipdMsi) {
+    $prerequisiteRoot = Join-Path $Stage 'payload\prerequisites'
+    New-Item -ItemType Directory -Force -Path $prerequisiteRoot | Out-Null
+    $resolvedUsbipd = (Resolve-Path -LiteralPath $UsbipdMsi).Path
+    $packagedUsbipd = Join-Path $prerequisiteRoot 'usbipd-win.msi'
+    Copy-Item -LiteralPath $resolvedUsbipd -Destination $packagedUsbipd
+    @{
+        version = $UsbipdVersion
+        sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $packagedUsbipd).Hash.ToLowerInvariant()
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $prerequisiteRoot 'usbipd-win.json') -Encoding UTF8
+}
+
+$relay = [Uri]$RelayUrl
+if (-not $relay.IsAbsoluteUri -or $relay.Scheme -notin @('http', 'https')) {
+    throw 'relay URL must be an absolute HTTP(S) URL'
+}
+@{
+    schema = 1
+    relay_url = $RelayUrl.TrimEnd('/')
+    environment = if ($relay.IsLoopback) { 'internal-test' } else { 'private-beta' }
+} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Stage 'payload\release-config.json') -Encoding UTF8
+
 $manifestArgs = @(
     (Join-Path $Repo 'scripts\write-release-manifest.py'), '--output', (Join-Path $Stage 'manifest.json')
 )
 & python @manifestArgs
 if ($LASTEXITCODE -ne 0) { throw 'release manifest generation failed' }
+$manifestPath = Join-Path $Stage 'manifest.json'
+$manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+$manifest | Add-Member -NotePropertyName release_config_sha256 -NotePropertyValue `
+    ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $Stage 'payload\release-config.json')).Hash.ToLowerInvariant())
+$manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+
+$setupProject = Join-Path $Repo 'installer\bootstrap\SwitchTrade.Setup.csproj'
+& dotnet publish $setupProject -c Release -r win-x64 --self-contained true `
+    -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
+    -p:EnableCompressionInSingleFile=true -p:DebugType=None -p:DebugSymbols=false `
+    -o (Join-Path $Stage 'setup-build')
+if ($LASTEXITCODE -ne 0) { throw 'native setup bootstrapper build failed' }
+Move-Item -LiteralPath (Join-Path $Stage 'setup-build\SwitchTradeSetup.exe') `
+    -Destination (Join-Path $Stage 'SwitchTradeSetup.exe')
+Remove-Item -LiteralPath (Join-Path $Stage 'setup-build') -Recurse -Force
 
 if (-not $NoArchive) {
     $archive = "$Stage.zip"

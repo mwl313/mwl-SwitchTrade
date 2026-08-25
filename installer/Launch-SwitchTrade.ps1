@@ -39,28 +39,6 @@ if (-not $created) {
 
 try {
 
-function Test-Administrator {
-    $principal = New-Object Security.Principal.WindowsPrincipal(
-        [Security.Principal.WindowsIdentity]::GetCurrent()
-    )
-    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-}
-
-function Quote-Argument([string]$Value) {
-    return '"' + $Value.Replace('"', '\"') + '"'
-}
-
-if (-not (Test-Administrator)) {
-    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Quote-Argument $PSCommandPath),
-        '-Distro', (Quote-Argument $Distro))
-    if ($RelayUrl) { $arguments += @('-RelayUrl', (Quote-Argument $RelayUrl)) }
-    if ($BusId) { $arguments += @('-BusId', (Quote-Argument $BusId)) }
-    if ($UsbId) { $arguments += @('-UsbId', (Quote-Argument $UsbId)) }
-    if ($NoBrowser) { $arguments += '-NoBrowser' }
-    Start-Process powershell.exe -Verb RunAs -WindowStyle Hidden -ArgumentList $arguments
-    return
-}
-
 if (-not (Test-Path -LiteralPath $Preflight -PathType Leaf)) {
     throw "SwitchTrade installation is incomplete: $Preflight"
 }

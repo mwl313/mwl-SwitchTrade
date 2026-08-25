@@ -165,6 +165,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 return;
             }
             ApplyStatus(status);
+            if (_activeTradeRoom is not null)
+            {
+                var room = await Gateway.TryGetTradeRoomAsync();
+                if (room is not null) RoomCoordinator.ApplyRoom(room);
+            }
             await RefreshPartiesAsync();
         }
         finally { _refreshing = false; }

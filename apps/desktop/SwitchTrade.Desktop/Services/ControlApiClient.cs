@@ -19,6 +19,7 @@ public interface IControlGateway : IDisposable
     Task<ControlStatus?> TryGetStatusAsync(CancellationToken cancellationToken = default);
     Task<TradeRoomInfo> CreateTradeRoomAsync(TradeRoomCreateRequest request, CancellationToken cancellationToken = default);
     Task<TradeRoomInfo> JoinTradeRoomAsync(string roomCode, CancellationToken cancellationToken = default);
+    Task<AuthoritativeRoomProjection?> TryGetTradeRoomAsync(CancellationToken cancellationToken = default);
     Task StartConnectionAsync(SwitchRoomRole role, RoomMembershipRole membershipRole,
         string roomCode, CancellationToken cancellationToken = default);
     Task StopConnectionAsync(CancellationToken cancellationToken = default);
@@ -46,7 +47,7 @@ public sealed class ControlApiClient : IControlGateway
     {
         _http = handler is null ? new HttpClient() : new HttpClient(handler, disposeHandler: true);
         _http.BaseAddress = new Uri(ApiBase);
-        _http.Timeout = TimeSpan.FromSeconds(4);
+        _http.Timeout = TimeSpan.FromSeconds(30);
     }
 
     public async Task<ControlStatus?> TryGetStatusAsync(CancellationToken cancellationToken = default)
@@ -91,8 +92,8 @@ public sealed class ControlApiClient : IControlGateway
     public async Task<TradeRoomInfo> CreateTradeRoomAsync(
         TradeRoomCreateRequest request, CancellationToken cancellationToken = default)
     {
-        var result = await PostAsync<GroupResponse>(
-            "/api/groups", new
+        var result = await PostAsync<RoomResponse>(
+            "/api/v1/trade-room", new
             {
                 name = request.RoomName,
                 visibility = "private",
@@ -103,27 +104,52 @@ public sealed class ControlApiClient : IControlGateway
                 wanted = request.Wanted,
                 note = request.Note,
             }, cancellationToken);
-        return ToTradeRoom(result);
+        return ToTradeRoom(result.Room, request.Offering, request.Wanted, request.Note);
     }
 
     public async Task<TradeRoomInfo> JoinTradeRoomAsync(
         string roomCode, CancellationToken cancellationToken = default)
     {
-        var result = await PostAsync<GroupResponse>(
-            "/api/groups/join", new { passcode = roomCode }, cancellationToken);
-        return ToTradeRoom(result);
+        var result = await PostAsync<RoomResponse>(
+            "/api/v1/trade-room/join", new { passcode = roomCode, trainer_display_name = "Trainer" },
+            cancellationToken);
+        return ToTradeRoom(result.Room);
     }
 
     public async Task StartConnectionAsync(
         SwitchRoomRole role, RoomMembershipRole membershipRole,
         string roomCode, CancellationToken cancellationToken = default) =>
-        _ = await PostAsync<JsonElement>(
-            "/api/v1/session/start", new
+        _ = await PostAsync<JsonElement>("/api/v1/trade-room/connect", new { }, cancellationToken);
+
+    public async Task<AuthoritativeRoomProjection?> TryGetTradeRoomAsync(
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            using var response = await _http.GetAsync("/api/v1/trade-room", cancellationToken);
+            if (!response.IsSuccessStatusCode) return null;
+            var room = await response.Content.ReadFromJsonAsync<AuthorityRoomDto>(JsonOptions, cancellationToken);
+            if (room is null) return null;
+            var local = room.Members?.FirstOrDefault(member => member.IsLocal);
+            var partner = room.Members?.FirstOrDefault(member => !member.IsLocal);
+            var membership = room.OwnerMemberId == room.LocalMemberId
+                ? RoomMembershipRole.Owner : RoomMembershipRole.Member;
+            var switchRole = room.Attempt?.LocalSwitchRole?.ToLowerInvariant() switch
             {
-                tunnel_seat = membershipRole == RoomMembershipRole.Owner ? "member_a" : "member_b",
-                switch_room_role = role == SwitchRoomRole.Creator ? "creator" : "finder",
-                passcode = roomCode,
-            }, cancellationToken);
+                "creator" => SwitchRoomRole.Creator,
+                "finder" => SwitchRoomRole.Finder,
+                _ => SwitchRoomRole.Unassigned,
+            };
+            var active = room.Members?.Where(member => member.OnlineState != "left").ToArray() ?? [];
+            return new(room.RoomVersion, active.Length, room.State ?? "waiting_for_partner", membership,
+                switchRole, partner?.OnlineState == "online",
+                active.Length == 2 && active.All(member => member.ReadyState == "ready"));
+        }
+        catch (HttpRequestException) { return null; }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return null; }
+        catch (JsonException) { return null; }
+        catch (NotSupportedException) { return null; }
+    }
 
     public async Task StopConnectionAsync(CancellationToken cancellationToken = default) =>
         _ = await PostAsync<JsonElement>("/api/v1/session/stop", new { }, cancellationToken);
@@ -132,8 +158,8 @@ public sealed class ControlApiClient : IControlGateway
         string roomCode, RoomMembershipRole role, CancellationToken cancellationToken = default)
     {
         var path = role == RoomMembershipRole.Owner
-            ? $"/api/groups/{Uri.EscapeDataString(roomCode)}"
-            : $"/api/groups/{Uri.EscapeDataString(roomCode)}/members/me";
+            ? "/api/v1/trade-room"
+            : "/api/v1/trade-room/members/me";
         try
         {
             using var response = await _http.DeleteAsync(path, cancellationToken);
@@ -402,18 +428,14 @@ public sealed class ControlApiClient : IControlGateway
         throw new UserFacingException(message, detail);
     }
 
-    private static TradeRoomInfo ToTradeRoom(GroupResponse result) => new(
-        result.Group?.Name ?? "Private Trade Room",
-        result.Group?.Passcode ?? "",
-        result.Group?.Visibility ?? "private",
-        result.Group?.Participants ?? 1,
-        result.Scope ?? "local_demo",
-        result.Group?.TrainerDisplayName ?? "",
-        ParseGame(result.Group?.Game),
-        ParseLanguage(result.Group?.Language),
-        result.Group?.Offering ?? "",
-        result.Group?.Wanted ?? "",
-        result.Group?.Note ?? "");
+    private static TradeRoomInfo ToTradeRoom(AuthorityRoomDto? room, string offering = "",
+        string wanted = "", string note = "") => new(
+        room?.Name ?? "Private Trade Room", room?.RoomCode ?? "",
+        room?.Visibility ?? "private",
+        room?.Members?.Count(member => member.OnlineState != "left") ?? 1,
+        "authoritative", room?.Profile?.OwnerDisplayName ?? "",
+        ParseGame(room?.Profile?.Game), ParseLanguage(room?.Profile?.Language),
+        offering, wanted, note);
 
     private static GameVersionChoice ParseGame(string? value) =>
         Enum.TryParse<GameVersionChoice>(value, ignoreCase: true, out var parsed) ? parsed : GameVersionChoice.None;
@@ -466,6 +488,33 @@ public sealed class ControlApiClient : IControlGateway
         string? Offering,
         string? Wanted,
         string? Note);
+    private sealed record RoomResponse(
+        [property: JsonPropertyName("contract_version")] string? ContractVersion,
+        AuthorityRoomDto? Room);
+    private sealed record AuthorityRoomDto(
+        [property: JsonPropertyName("room_id")] string? RoomId,
+        [property: JsonPropertyName("room_version")] int RoomVersion,
+        string? Name,
+        string? Visibility,
+        [property: JsonPropertyName("room_code")] string? RoomCode,
+        RoomProfileDto? Profile,
+        [property: JsonPropertyName("owner_member_id")] string? OwnerMemberId,
+        [property: JsonPropertyName("local_member_id")] string? LocalMemberId,
+        string? State,
+        IReadOnlyList<AuthorityMemberDto>? Members,
+        AuthorityAttemptDto? Attempt);
+    private sealed record RoomProfileDto(
+        [property: JsonPropertyName("owner_display_name")] string? OwnerDisplayName,
+        string? Game,
+        string? Language);
+    private sealed record AuthorityMemberDto(
+        [property: JsonPropertyName("member_id")] string? MemberId,
+        string? Seat,
+        [property: JsonPropertyName("is_local")] bool IsLocal,
+        [property: JsonPropertyName("online_state")] string? OnlineState,
+        [property: JsonPropertyName("ready_state")] string? ReadyState);
+    private sealed record AuthorityAttemptDto(
+        [property: JsonPropertyName("local_switch_role")] string? LocalSwitchRole);
     private sealed record ProfilesResponse(IReadOnlyList<ProfileDto>? Profiles);
     private sealed record ProfileDto(
         [property: JsonPropertyName("usb_id")] string? UsbId,

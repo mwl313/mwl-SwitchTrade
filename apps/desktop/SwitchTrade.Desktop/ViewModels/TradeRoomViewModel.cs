@@ -55,11 +55,15 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
     public string PartnerSummary => IsDemoPreview ? "Sample party" : PartnerParty is null ? "Party data unavailable" : "Verified live party";
     public string MainInstruction => IsDemoPreview
         ? "Preview the connected trading layout"
+        : Context?.SwitchRole == SwitchRoomRole.Unassigned
+            ? "Both trainers can press Connect this Switch. SwitchTrade will assign one creator safely."
         : Context?.SwitchRole == SwitchRoomRole.Creator
             ? "Create the room on your Switch"
             : "Find your partner’s room";
     public string InstructionDetails => IsDemoPreview
         ? "All trainers, parties, and connection details on this screen are sample data."
+        : Context?.SwitchRole == SwitchRoomRole.Unassigned
+            ? "When both trainers are ready, SwitchTrade will show each person the correct create or find instruction."
         : Context?.SwitchRole == SwitchRoomRole.Creator
             ? "Open Direct Connection in the game and create a room. Keep it open while SwitchTrade looks for it."
             : "Open room search in Direct Connection and keep the results open while SwitchTrade prepares your partner’s room.";
@@ -67,7 +71,7 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
         "Performance", "CA1822:Mark members as static",
         Justification = "The notice is a bindable property of the screen projection.")]
     public string LimitationNotice =>
-        "Compatibility mode — shared Ready state, partner presence, and either-trainer room assignment are not live until the authoritative room service is connected.";
+        "Room membership, readiness, and creator assignment are synchronized by SwitchTrade’s online room service.";
     public string ConnectionActionText => _coordinator?.ConnectionState == LegacyConnectionState.Idle
         ? "Connect this Switch"
         : "End connection";

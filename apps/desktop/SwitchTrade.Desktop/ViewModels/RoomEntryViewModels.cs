@@ -130,7 +130,7 @@ public sealed class CreateTradeRoomScreenViewModel : ScreenViewModel
             IsBusy = true;
             var room = await Shell.Gateway.CreateTradeRoomAsync(request, _requestCancellation.Token);
             if (!ReferenceEquals(Shell.CurrentScreen, this)) return;
-            Shell.OpenTradeRoom(room, RoomMembershipRole.Owner, SwitchRoomRole.Creator, request);
+            Shell.OpenTradeRoom(room, RoomMembershipRole.Owner, SwitchRoomRole.Unassigned, request);
         }
         catch (OperationCanceledException) when (_requestCancellation.IsCancellationRequested) { }
         catch (UserFacingException error) { ErrorMessage = error.UserMessage; }
@@ -219,7 +219,7 @@ public sealed class JoinPrivateRoomScreenViewModel : ScreenViewModel
             var room = await Shell.Gateway.JoinTradeRoomAsync(submittedCode, _requestCancellation.Token);
             if (!ReferenceEquals(Shell.CurrentScreen, this) ||
                 !string.Equals(submittedCode, RoomCode, StringComparison.Ordinal)) return;
-            Shell.OpenTradeRoom(room, RoomMembershipRole.Member, SwitchRoomRole.Finder);
+            Shell.OpenTradeRoom(room, RoomMembershipRole.Member, SwitchRoomRole.Unassigned);
         }
         catch (OperationCanceledException) when (_requestCancellation.IsCancellationRequested) { }
         catch (UserFacingException error) { ErrorMessage = error.UserMessage; }
