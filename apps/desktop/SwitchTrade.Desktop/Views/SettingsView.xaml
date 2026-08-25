@@ -11,6 +11,7 @@
 
     <TabControl Grid.Row="1" SelectedValuePath="Tag" SelectedValue="{Binding SelectedSection}"
                 Background="Transparent" BorderBrush="{DynamicResource BorderBrush}"
+                ItemContainerStyle="{StaticResource SettingsTabItem}"
                 automation:AutomationProperties.Name="Settings tabs">
       <TabItem Header="Connection" Tag="{x:Static vm:SettingsSection.Connection}">
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
