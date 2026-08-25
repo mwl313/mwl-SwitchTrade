@@ -15,7 +15,7 @@
   production path에서 제거했다. privacy/analytics client/server 기능은 owner 지시대로 미구현이다.
 - Native `SwitchTradeSetup.exe`, isolated distro provisioning, prerequisite/VMware/USB health gate,
   atomic update/rollback/uninstall, reversible `.wslconfig` kernel lifecycle을 구현했다.
-- WSL 전체 196 tests(+Windows-only 1 skip), focused Windows 32 tests, WPF/Setup Release build와 kernel rollback simulation이
+- WSL 전체 196 tests(+Windows-only 2 skips), focused Windows 33 tests, WPF/Setup Release build와 kernel rollback simulation이
   통과했다. 상세와 남은 external Gate 6 항목: `docs/66-gates1-6-authority-distribution-report-20260826.md`.
 
 **2026-08-21**: 트레이드 2세션 연속 성공 — 마일스톤 M0 달성 (워크플로우 v1 재현)

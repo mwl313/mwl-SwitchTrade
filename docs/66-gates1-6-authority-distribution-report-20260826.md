@@ -67,8 +67,8 @@ committed-trade server database was implemented.
 
 ## Internal evidence
 
-- Linux/WSL repository suite: 196 passed, 1 Windows-only lifecycle test skipped.
-- Focused Windows authority, tunnel, diagnostics, decoder, and lifecycle suite: 32 passed.
+- Linux/WSL repository suite: 196 passed, 2 Windows-only lifecycle tests skipped.
+- Focused Windows authority, tunnel, diagnostics, decoder, and lifecycle suite: 33 passed.
 - WPF Release build: zero warnings and zero errors; native self-test passed.
 - Setup Release build: zero warnings and zero errors.
 - Kernel lifecycle simulation: install v1, update v2, release rollback to v1, and byte-exact restoration

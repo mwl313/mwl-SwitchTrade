@@ -47,7 +47,7 @@ function Test-Setup {
     $vmware = Get-Service VMUSBArbService -ErrorAction SilentlyContinue
     $computer = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
     $wslVersion = if (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
-        ((& wsl.exe --version 2>$null) -join ' ').Replace([char]0, '').Trim()
+        ((& wsl.exe --version 2>$null) -join ' ').Replace([string][char]0, '').Trim()
     } else { 'Absent' }
     [pscustomobject]@{
         Windows64Bit = [Environment]::Is64BitOperatingSystem
