@@ -1,7 +1,8 @@
-# Beta distribution preflight checklist — 2026-08-25
+# Beta distribution preflight checklist — updated 2026-08-26
 
-> Status: Gate 0 contracts are frozen and the second native UI audit has been implemented; final
-> GPT/owner visual, asset, legal-notice, and support approval remains before Gates 1–8.
+> Status: Gate 0 contracts and the second native UI overhaul are implemented. Owner corrections through
+> commit `d632df6` passed native build and UI Automation; final owner/GPT visual approval plus asset,
+> legal-notice, and support-destination approval remains before Gates 1–8.
 > UI baseline: `docs/56-native-ui-ux-redesign-handoff-20260825.md` and the owner overrides in
 > `docs/57-native-ui-overhaul-implementation-report-20260825.md` are the preliminary redesign source.
 > Latest UI evidence: `docs/64-second-native-ui-overhaul-implementation-report-20260825.md`.
@@ -28,7 +29,7 @@
 
 | Order | Gate | Current state | Release-blocking result still needed |
 |---:|---|---|---|
-| 1 | Gate 0 | Second overhaul implemented; final approval pending | Approve the native build plus public icons/assets, legal notices, and real support destination |
+| 1 | Gate 0 | Overhaul and owner corrections implemented; final approval pending | Approve the native build plus public icons/assets, legal notices, and real support destination |
 | 2 | Gates 4–5 contracts | Frozen, not implemented | Build the authoritative two-member room service and the frozen versioned UI/control contracts |
 | 3 | Gate 4 local integration | Partial foundations | Make the installed EXE, isolated WSL runtime, health gate, endpoint, decoder observer, logs, and shutdown behave as one product |
 | 4 | Gate 5 remote services | Development relay only | Deploy authenticated authoritative rooms, production opaque relay, and optional consented commit ingestion |
@@ -97,6 +98,8 @@ This preflight checklist is the release-blocking superset of the immediate tasks
 - [x] Implement the second native pass: Fluent Light primitives, split views and view models,
   adaptive layouts, stable focus geometry/restoration, High Contrast resources, reduced-motion
   handling, and coordinator-owned active-room state.
+- [x] Apply the 2026-08-26 owner correction pass: persistent Connection/Support/Advanced tabs,
+  normalized ComboBox geometry, distinct fixed Back/action bars, and Partner-first compact party order.
 - [x] Update `docs/54-native-ui-flow-and-runtime-structure-20260825.md` with the implemented screen flow.
 - [x] Mark functional, demonstration-only, experimental, and unavailable UI actions explicitly.
 - [x] Freeze a two-member private-group model with server-authoritative membership, connection,
