@@ -84,7 +84,7 @@
       </StackPanel>
     </ScrollViewer>
 
-    <Border Grid.Row="2" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0" Padding="0,16,0,20">
+    <Border Grid.Row="2" Style="{StaticResource StickyActionBar}">
       <Button Command="{Binding CreateCommand}" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Right" MinWidth="190">
         <StackPanel Orientation="Horizontal">
           <ProgressBar IsIndeterminate="True" Width="16" Height="16" Margin="0,0,10,0"

@@ -12,14 +12,15 @@
     <Setter Property="VerticalContentAlignment" Value="Center" />
   </Style>
   <Style TargetType="ComboBox">
-    <Setter Property="MinHeight" Value="44" />
-    <Setter Property="Padding" Value="10,7" />
+    <Setter Property="Height" Value="44" />
+    <Setter Property="Padding" Value="12,0" />
     <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
     <Setter Property="FontSize" Value="15" />
     <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
     <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
     <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
     <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
   </Style>
   <Style TargetType="RadioButton">
     <Setter Property="MinHeight" Value="36" />

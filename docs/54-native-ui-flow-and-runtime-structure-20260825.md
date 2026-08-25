@@ -62,17 +62,18 @@ flowchart TD
 
 | UI area | Implemented behavior | Truth boundary |
 |---|---|---|
-| Global shell | Native WPF Fluent Light primitives with Linkline tokens, fixed wordmark header, reserved Back row, readiness popover, Settings, per-screen scrolling, adaptive margins, keyboard navigation, restrained scene transitions, and live-region announcements | Back appearing never moves the wordmark; readiness is local setup status, not a claim that a partner or Switch is connected |
+| Global shell | Native WPF Fluent Light primitives with Linkline tokens, fixed wordmark header, a white bordered Back action bar, readiness popover, Settings, per-screen scrolling, adaptive margins, keyboard navigation, restrained scene transitions, and live-region announcements | Back appearing never moves the wordmark; the action bar stays visually separate from scrolling canvas content; readiness is local setup status, not a claim that a partner or Switch is connected |
 | Startup | Checks `127.0.0.1:8787`, attempts the installed hidden launcher, retries for a bounded period, and routes to Home or Recovery | The progress copy is presentation state, not invented per-stage telemetry |
 | Startup Recovery | Try again, Settings, explicitly labeled interface preview, and expandable technical context | Preview does not start online, radio, or Switch behavior |
 | Home | Three fixed-width rectangular actions for Create, Browse Public Rooms, and private code entry, plus Settings and an attention notice when in preview/recovery state | Public browsing is labeled as preview |
 | Create a Trade Room | Always-visible room/trainer/game/language/offer/wanted/note fields, Private/Public radio selection, required-field validation, and real private-room creation through the existing local API | Room name, trainer name, game, and language are required; Game and Language default to `None`; Public creates a local Demo Preview only |
 | Join a private Trade Room | Normalizes or pastes a shared code, locks editing while one atomic Join request is active, and enters the Trade Room on success | The compatibility API cannot yet provide authoritative presence/reconnect state |
 | Browse Public Rooms | Interactive local search, field selector, availability/game/language filters, sorting, selection, empty state, and sample detail panel | Every public-room surface says `Public Rooms Preview` or `Demo Preview`; no network directory is queried |
+| Settings tabs | Connection, Support, and Advanced remain visible as native tabs at every supported width; there is no compact dropdown replacement | Changing tabs does not alter room/session state |
 | Settings · Connection | Reads profile-driven adapter compatibility, support state, summary, and technical details; permits recheck | It does not claim to select, repair, attach, or live-probe an adapter |
 | Settings · Support | Requests the real local support-bundle endpoint and reports a friendly result | Requires the installed local service |
 | Trade Room · real | Coordinator-owned room identity that survives Settings/navigation, code/invitation copy, role-specific Switch instructions, current endpoint start/stop, truthful recovery, owner-close/member-leave semantics, and safe app shutdown | Shared Ready, authoritative membership, role election, reconnect, and live parties remain unavailable in the compatibility API |
-| Trade Room · demo | Two side-by-side parties, six explicit slots each, neutral initial placeholders, pointer tooltips, click/Enter selection, detailed stats, and Escape dismissal | All trainers, Pokémon, network quality, and party fields are sample data |
+| Trade Room · demo | Two side-by-side parties at wide widths; compact layouts stack Partner above You. Each has six explicit slots, neutral initial placeholders, pointer tooltips, click/Enter selection, detailed stats, and Escape dismissal | All trainers, Pokémon, network quality, and party fields are sample data |
 
 ## Navigation and keyboard behavior
 
@@ -81,6 +82,8 @@ flowchart TD
 - Narrow scenes use a fixed 640-DIP column anchored to the left content edge under the wordmark and
   Back control. Wide Public/Trade Room scenes use the same left edge and expand rightward within the
   shared 1000-DIP content boundary.
+- Combo boxes use the same fixed 44-DIP control height as adjacent fields. Create and real Trade Room
+  action footers use a white bordered sticky action bar distinct from the scrolling canvas.
 - `Alt+Left` and `Escape` go back; in Demo party details, `Escape` closes details first.
 - `Ctrl+,` opens Settings and `F5` refreshes local service status.
 - Leaving or closing a real Trade Room asks for confirmation and stops an active endpoint session.
