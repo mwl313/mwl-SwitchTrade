@@ -164,7 +164,14 @@ class Runtime:
         credentials = self.read_authority()
         if not credentials.get("room_id") or not credentials.get("member_token"):
             raise RelayError("no active trade room")
-        return self.relay.room(credentials["room_id"], credentials["member_token"])
+        try:
+            return self.relay.room(credentials["room_id"], credentials["member_token"])
+        except RelayError as error:
+            if "401" not in str(error) or not credentials.get("reconnect_token"):
+                raise
+            response = self.relay.reconnect_trade_room(
+                credentials["room_id"], credentials["reconnect_token"])
+            return self.save_authority(response)
 
     def sync_authoritative_phase(self, endpoint: dict, parties: dict) -> None:
         phase = (

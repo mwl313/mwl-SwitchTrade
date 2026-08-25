@@ -5,6 +5,8 @@ param(
     [string]$Distro = 'SwitchTrade',
     [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'Programs\SwitchTrade'),
     [string]$DistroRoot = (Join-Path $env:LOCALAPPDATA 'SwitchTrade\wsl'),
+    [string]$BusId = '',
+    [string]$UsbId = '',
     [switch]$AcceptGlobalKernelChange,
     [switch]$AcceptPrerequisiteChanges,
     [switch]$AcceptVmwareRelease,
@@ -44,9 +46,13 @@ function Test-Setup {
     $distros = Get-Distros
     $vmware = Get-Service VMUSBArbService -ErrorAction SilentlyContinue
     $computer = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
+    $wslVersion = if (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
+        ((& wsl.exe --version 2>$null) -join ' ').Replace([char]0, '').Trim()
+    } else { 'Absent' }
     [pscustomobject]@{
         Windows64Bit = [Environment]::Is64BitOperatingSystem
         WslInstalled = [bool](Get-Command wsl.exe -ErrorAction SilentlyContinue)
+        WslVersion = $wslVersion
         UsbipdInstalled = [bool](Get-Command usbipd.exe -ErrorAction SilentlyContinue)
         DistroInstalled = $distros -contains $Distro
         PayloadPresent = Test-Path -LiteralPath $Payload -PathType Container
@@ -124,6 +130,24 @@ if (-not $audit.Windows64Bit) { throw 'SwitchTrade requires 64-bit Windows.' }
 if ($audit.WindowsBuild -lt 26100) { throw 'SwitchTrade private beta requires Windows 11 24H2 build 26100 or newer.' }
 if ($audit.FreeSpaceGB -lt 8) { throw 'SwitchTrade requires at least 8 GB of free space for safe install and rollback.' }
 if (-not $audit.VirtualizationReady) { throw 'Hardware virtualization/Hyper-V is not available to WSL 2.' }
+if (-not $audit.PayloadPresent) { throw "application payload is missing: $Payload" }
+$releaseManifest = Get-Content -Raw -LiteralPath (Join-Path $PackageRoot 'manifest.json') | ConvertFrom-Json
+if (-not (Test-Path -LiteralPath $ReleaseConfig -PathType Leaf) -or
+    (Get-FileSha256 $ReleaseConfig) -ne
+    ([string]$releaseManifest.release_config_sha256).ToLowerInvariant()) {
+    throw 'signed installation configuration checksum verification failed'
+}
+if (Test-Path -LiteralPath $DesktopExe -PathType Leaf) {
+    if (-not (Test-Path -LiteralPath $DesktopHash -PathType Leaf)) {
+        throw "desktop checksum is missing: $DesktopHash"
+    }
+    $expectedDesktopHash = ((Get-Content -LiteralPath $DesktopHash -TotalCount 1) -split '\s+')[0]
+    $actualDesktopHash = Get-FileSha256 $DesktopExe
+    if ($expectedDesktopHash -notmatch '^[0-9a-fA-F]{64}$' -or
+        $expectedDesktopHash.ToLowerInvariant() -ne $actualDesktopHash) {
+        throw 'SwitchTrade desktop checksum verification failed.'
+    }
+}
 if (-not $audit.WslInstalled) {
     if (-not $AcceptPrerequisiteChanges) {
         throw 'WSL 2 is required and may require a reboot. Rerun after accepting prerequisite changes.'
@@ -142,7 +166,7 @@ if (-not $audit.UsbipdInstalled) {
         throw 'the pinned usbipd-win installer is missing from this package'
     }
     $usbipdMetadata = Get-Content -Raw -LiteralPath $UsbipdManifest | ConvertFrom-Json
-    if ((Get-FileHash -Algorithm SHA256 -LiteralPath $UsbipdMsi).Hash.ToLowerInvariant() -ne
+    if ((Get-FileSha256 $UsbipdMsi) -ne
         ([string]$usbipdMetadata.sha256).ToLowerInvariant()) {
         throw 'usbipd-win installer checksum verification failed'
     }
@@ -155,26 +179,6 @@ if ($audit.VmwareUsbArbitrator -eq 'Running') {
     }
     Stop-Service VMUSBArbService -Force
 }
-if (-not $audit.PayloadPresent) { throw "application payload is missing: $Payload" }
-$releaseManifest = Get-Content -Raw -LiteralPath (Join-Path $PackageRoot 'manifest.json') | ConvertFrom-Json
-if (-not (Test-Path -LiteralPath $ReleaseConfig -PathType Leaf) -or
-    (Get-FileHash -Algorithm SHA256 -LiteralPath $ReleaseConfig).Hash.ToLowerInvariant() -ne
-    ([string]$releaseManifest.release_config_sha256).ToLowerInvariant()) {
-    throw 'signed installation configuration checksum verification failed'
-}
-
-if (Test-Path -LiteralPath $DesktopExe -PathType Leaf) {
-    if (-not (Test-Path -LiteralPath $DesktopHash -PathType Leaf)) {
-        throw "desktop checksum is missing: $DesktopHash"
-    }
-    $expectedDesktopHash = ((Get-Content -LiteralPath $DesktopHash -TotalCount 1) -split '\s+')[0]
-    $actualDesktopHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $DesktopExe).Hash.ToLowerInvariant()
-    if ($expectedDesktopHash -notmatch '^[0-9a-fA-F]{64}$' -or
-        $expectedDesktopHash.ToLowerInvariant() -ne $actualDesktopHash) {
-        throw 'SwitchTrade desktop checksum verification failed.'
-    }
-}
-
 if (-not $audit.DistroInstalled) {
     if (-not $audit.RootfsPresent) {
         throw "the SwitchTrade distro is absent and this package has no rootfs: $Rootfs"
@@ -183,7 +187,7 @@ if (-not $audit.DistroInstalled) {
         throw "rootfs checksum is missing: $RootfsHash"
     }
     $expectedHash = ((Get-Content -LiteralPath $RootfsHash -TotalCount 1) -split '\s+')[0]
-    $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Rootfs).Hash.ToLowerInvariant()
+    $actualHash = Get-FileSha256 $Rootfs
     if ($expectedHash -notmatch '^[0-9a-fA-F]{64}$' -or $expectedHash.ToLowerInvariant() -ne $actualHash) {
         throw 'SwitchTrade rootfs checksum verification failed.'
     }
@@ -212,6 +216,20 @@ $source = Convert-ToWslPath $Payload
 $provision = Convert-ToWslPath (Join-Path $PackageRoot 'installer\provision-wsl.sh')
 & wsl.exe -d $Distro -u root -- bash $provision --source $source
 if ($LASTEXITCODE -ne 0) { throw 'SwitchTrade WSL provisioning failed.' }
+
+$radioPreflight = Join-Path $Payload 'scripts\windows\wsl-radio-preflight.ps1'
+$profileFile = Join-Path $Payload 'config\wsl-radio-hardware.tsv'
+$preflightArguments = @{
+    Distro = $Distro; ProfileFile = $profileFile; Prepare = $true; AutoAttach = $true
+}
+if ($BusId) { $preflightArguments.BusId = $BusId }
+if ($UsbId) { $preflightArguments.UsbId = @($UsbId) }
+& $radioPreflight @preflightArguments
+if ($LASTEXITCODE -ne 0) { throw 'SwitchTrade USB/WSL ownership preflight failed.' }
+& wsl.exe -d $Distro -u root --cd /opt/switchtrade -- `
+    ./scripts/wsl-radio-prepare.sh --role guest --health-channels 1,6,11 `
+    --target-channel 6 -- true
+if ($LASTEXITCODE -ne 0) { throw 'SwitchTrade driver/RX health gate failed.' }
 
 $installParent = Split-Path -Parent $InstallRoot
 New-Item -ItemType Directory -Force -Path $installParent | Out-Null

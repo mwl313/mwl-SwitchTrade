@@ -526,6 +526,8 @@ class AuthorityStore:
                             member["online_state"] = "offline"
                             changed = True
                             event = "member.offline"
+                        else:
+                            continue
                     else:
                         continue
                     room["room_version"] += 1

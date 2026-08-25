@@ -1,12 +1,22 @@
-# STATUS — 진행 상태 (2026-08-25)
+# STATUS — 진행 상태 (2026-08-26)
 
-> 마지막 갱신: 2026-08-25 — **production-beta 통합 · RTL8192EU-only beta 계획 확정**
+> 마지막 갱신: 2026-08-26 — **Gate 1–6 자동화 범위 구현 · 외부/실기 qualification 대기**
 >
 > 현재 실행 순서와 future backlog의 authoritative 문서:
 > `docs/50-current-product-demo-todo-20260825.md`.
 > 기술적 근거와 상세 beta gate는 `docs/49-production-beta-priorities-20260825.md`에 보존한다.
 
 ## 🏆 핵심 성과
+
+**2026-08-26**: Gate 4/5 authoritative room 경로와 Gates 1–3 배포 lifecycle 구현
+- 2-seat SQLite authority, hash-only scoped/reconnect credentials, UUIDv7/idempotency, atomic creator
+  claim, ordered events, heartbeat/expiry/rate limit, credentialed opaque RFU WebSocket을 구현했다.
+- WPF/WSL가 authoritative seat와 per-attempt creator/finder 역할을 사용하며 owner/guest 추론을
+  production path에서 제거했다. privacy/analytics client/server 기능은 owner 지시대로 미구현이다.
+- Native `SwitchTradeSetup.exe`, isolated distro provisioning, prerequisite/VMware/USB health gate,
+  atomic update/rollback/uninstall, reversible `.wslconfig` kernel lifecycle을 구현했다.
+- WSL 전체 196 tests(+Windows-only 1 skip), focused Windows 32 tests, WPF/Setup Release build와 kernel rollback simulation이
+  통과했다. 상세와 남은 external Gate 6 항목: `docs/66-gates1-6-authority-distribution-report-20260826.md`.
 
 **2026-08-21**: 트레이드 2세션 연속 성공 — 마일스톤 M0 달성 (워크플로우 v1 재현)
 **2026-08-22 낮**: P0+P1 안정화 패치 전체 실기 검증 — T0~T3 통과(7/8) (`docs/11-실기테스트-리포트-20260822.md`)

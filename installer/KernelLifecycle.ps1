@@ -11,7 +11,12 @@ function Invoke-BoundedWslShutdown {
 }
 
 function Get-FileSha256([string]$Path) {
-    return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+    $stream = [IO.File]::OpenRead([IO.Path]::GetFullPath($Path))
+    try {
+        $algorithm = [Security.Cryptography.SHA256]::Create()
+        try { return ([BitConverter]::ToString($algorithm.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() }
+        finally { $algorithm.Dispose() }
+    } finally { $stream.Dispose() }
 }
 
 function Set-Wsl2Values {
