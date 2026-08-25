@@ -50,23 +50,29 @@
     <Setter Property="CornerRadius" Value="6" />
     <Setter Property="Padding" Value="8,4" />
   </Style>
-  <Style x:Key="SettingsNavItem" TargetType="ListBoxItem">
+  <Style x:Key="SettingsTabItem" TargetType="TabItem">
     <Setter Property="MinHeight" Value="44" />
-    <Setter Property="Padding" Value="12,10" />
-    <Setter Property="Margin" Value="0,0,0,4" />
-    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    <Setter Property="MinWidth" Value="118" />
+    <Setter Property="Padding" Value="16,10" />
+    <Setter Property="Margin" Value="0,0,8,0" />
+    <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
+    <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+    <Setter Property="FocusVisualStyle" Value="{x:Null}" />
     <Setter Property="Template">
       <Setter.Value>
-        <ControlTemplate TargetType="ListBoxItem">
-          <Border x:Name="Root" Background="Transparent" CornerRadius="6" Padding="{TemplateBinding Padding}"
-                  BorderThickness="1" BorderBrush="Transparent">
-            <ContentPresenter />
+        <ControlTemplate TargetType="TabItem">
+          <Border x:Name="Root" Background="{TemplateBinding Background}" CornerRadius="7"
+                  Padding="{TemplateBinding Padding}" BorderThickness="1"
+                  BorderBrush="{TemplateBinding BorderBrush}">
+            <ContentPresenter ContentSource="Header" HorizontalAlignment="Center" VerticalAlignment="Center" />
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Root" Property="Background" Value="{DynamicResource SurfaceSubtleBrush}" /></Trigger>
             <Trigger Property="IsSelected" Value="True">
               <Setter TargetName="Root" Property="Background" Value="{DynamicResource BlueTintBrush}" />
               <Setter TargetName="Root" Property="BorderBrush" Value="{DynamicResource LinkBlueBrush}" />
+              <Setter Property="Foreground" Value="{DynamicResource LinkBlueBrush}" />
               <Setter Property="FontWeight" Value="SemiBold" />
             </Trigger>
             <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Root" Property="BorderBrush" Value="{DynamicResource FocusBrush}" /></Trigger>
