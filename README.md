@@ -36,6 +36,11 @@
 | [docs/51-windows-installer-bootstrap-design-20260825.md](docs/51-windows-installer-bootstrap-design-20260825.md) | Windows 설치·WSL 구성·재부팅 재개·롤백 설계 |
 | [docs/54-native-ui-flow-and-runtime-structure-20260825.md](docs/54-native-ui-flow-and-runtime-structure-20260825.md) | Native UI 화면 흐름, 기능표, 런타임 계층과 용어 정의 |
 | [docs/55-beta-distribution-preflight-checklist-20260825.md](docs/55-beta-distribution-preflight-checklist-20260825.md) | Beta 단일 설치·실행 패키지 구현 및 출시 전 체크리스트 |
+| [docs/58-authoritative-room-control-event-contract-v1-20260825.md](docs/58-authoritative-room-control-event-contract-v1-20260825.md) | 서버 권위 Trade Room, 역할, 복구, UI 이벤트 계약 v1 |
+| [docs/59-party-snapshot-and-trade-commit-contract-v1-20260825.md](docs/59-party-snapshot-and-trade-commit-contract-v1-20260825.md) | 수동 디코더 party snapshot 및 fail-closed trade commit 계약 v1 |
+| [docs/60-external-consent-and-statistics-contract-v1-20260825.md](docs/60-external-consent-and-statistics-contract-v1-20260825.md) | 외부 동의, 최소 통계 수집, 보존·삭제 계약 v1 |
+| [docs/61-private-beta-release-baseline-20260825.md](docs/61-private-beta-release-baseline-20260825.md) | Private beta 플랫폼, RTL8192EU, 기능·버전 기준선 |
+| [docs/62-final-ui-overhaul-gpt-handoff-20260825.md](docs/62-final-ui-overhaul-gpt-handoff-20260825.md) | 최종 GPT/owner WPF UI overhaul 입력 및 Gate 0 승인 기준 |
 | [docs/30-native-fixed-handshake-20260824.md](docs/30-native-fixed-handshake-20260824.md) | Native two-Switch fixed-channel gold, PC-host root cause, and byte-verified Session fix |
 | [handoff/HANDOFF-20260824-wsl-dual-radio.md](handoff/HANDOFF-20260824-wsl-dual-radio.md) | WSL 두 카드 최종 상태, 확장 구조, 다음 G5/G6 절차 |
 | [handoff/HANDOFF-20260824-native-host-session.md](handoff/HANDOFF-20260824-native-host-session.md) | Next-agent gate for PC-host Pia and host/parent Reliable work |
