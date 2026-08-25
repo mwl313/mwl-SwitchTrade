@@ -65,3 +65,25 @@ def load_profiles(path: str | Path = DEFAULT_PROFILE_PATH) -> tuple[HardwareProf
     if len(auto) != 1:
         raise ValueError(f"{path}: expected exactly one auto-select profile, found {auto}")
     return tuple(profiles)
+
+
+def select_profile(usb_id: str | None = None,
+                   path: str | Path = DEFAULT_PROFILE_PATH) -> HardwareProfile:
+    """Select an explicit adapter or the registry's sole automatic candidate."""
+    profiles = load_profiles(path)
+    if usb_id is None:
+        return next(profile for profile in profiles if profile.auto_select)
+    wanted = usb_id.lower()
+    try:
+        return next(profile for profile in profiles if profile.usb_id == wanted)
+    except StopIteration as error:
+        raise ValueError(f"unsupported USB adapter {wanted}") from error
+
+
+def require_role(profile: HardwareProfile, role: str) -> HardwareProfile:
+    if role not in profile.roles:
+        raise ValueError(
+            f"{profile.usb_id} status={profile.status} does not support role {role!r}; "
+            f"allowed={','.join(profile.roles) or 'none'}"
+        )
+    return profile

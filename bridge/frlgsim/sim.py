@@ -451,8 +451,8 @@ class Sim:
                     continue
                 if self.conn is None:                 # offline replay: feed frames as they arrive
                     self._note_in_seq(rl.seq)
-                    if rl.flagsA & 0x01 and rl.payload[:1] == b"\x57":
-                        self._on_gba_in(rl.payload)
+                    if rl.flagsA & 0x01:
+                        self._on_reliable_app(rl.flagsA, rl.payload)
                 elif rl.flagsA & 0x01:                # live AppData: PROCESS AS IT ARRIVES (the emulator
                     # is order-tolerant - it reassembles blocks by fragment index and re-pulls), so we
                     # deliver each UNIQUE frame the instant it lands (never stall the synchronous RFU
@@ -462,8 +462,7 @@ class Sim:
                     self._ack_owed = True
                     if rl.seq not in self._seen_in:
                         self._note_in_seq(rl.seq)
-                        if rl.payload[:1] == b"\x57":
-                            self._on_gba_in(rl.payload)
+                        self._on_reliable_app(rl.flagsA, rl.payload)
                     self.rel.note_received(rl.seq)       # contiguous recv_next + recv_ooo for the selective ack
                 else:                                 # live FLAGSA_CTRL: peer's bulk-ack of OUR sends
                     ackid, mask = reliable.parse_bulk_ack(rl.payload)
@@ -481,6 +480,16 @@ class Sim:
                 self.conn.on_message(m.proto, m.payload, tick=self._tick)
         self.rx_count += 1
         return True
+
+    def _on_reliable_app(self, flags_a, payload):
+        """Dispatch one Reliable application frame.
+
+        The emulator consumes only GBA ``W`` frames. A feature-neutral tunnel
+        overrides this hook to forward every application frame, including the
+        stream-opening title metadata, without teaching the tunnel game opcodes.
+        """
+        if payload[:1] == b"\x57":
+            self._on_gba_in(payload)
 
     def _on_gba_in(self, payload):
         """Dispatch one IN emulator frame (host/parent) by type.

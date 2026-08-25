@@ -37,7 +37,14 @@ def main() -> None:
     parser.add_argument("--firmware", default="unverified")
     parser.add_argument("--usb-id", default="unverified")
     args = parser.parse_args()
-    tracked = [ROOT / "requirements.txt", ROOT / "bridge" / "requirements.txt", ROOT / "config" / "wsl-radio-hardware.tsv"]
+    tracked = [
+        ROOT / "requirements.txt",
+        ROOT / "bridge" / "requirements.txt",
+        ROOT / "test-requirements.txt",
+        ROOT / "config" / "wsl-radio-hardware.tsv",
+        ROOT / "ui" / "package.json",
+        ROOT / "ui" / "pnpm-lock.yaml",
+    ]
     manifest = {
         "schema": 1,
         "created_utc": datetime.now(timezone.utc).isoformat(),

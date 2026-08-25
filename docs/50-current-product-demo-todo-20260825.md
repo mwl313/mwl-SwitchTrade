@@ -145,3 +145,24 @@ Main -> Configuration
 The real first milestone is a private/passcode Switch-to-Switch group. Public-group screens may be
 demonstrated with clearly labeled mock/local data; the production directory and matchmaking service
 remain backlog work.
+
+## Implementation snapshot — beta.0 internal build
+
+As of the `0.2.0-beta.0` internal build:
+
+- Tasks 1-5 have working foundations: one integration branch, profile-driven hardware policy,
+  Windows/WSL preflight, health-gated endpoint launch, structured run logs, and support bundles.
+- Tasks 7-11 are implemented for internal validation: the feature-neutral RFU tunnel, relay-backed
+  private sessions, real control API, static desktop frontend, and launcher/state integration.
+- The tunnel mirrors the leader Switch's original LDN application advertisement and carries opaque
+  Reliable AppData. It does not depend on trade opcodes, the Pokémon decoder, or a specific future
+  two-player activity.
+- Task 14 has a reproducible package/bootstrap foundation. It provisions only the named
+  `SwitchTrade` distro and deliberately leaves the global/custom WSL kernel policy unchanged.
+- Task 6 still needs the second RTL8192EU and hardware qualification. Tasks 12-13 still need the
+  requested real two-endpoint Switch test and reliability campaign. The final signed clean-machine
+  installer still needs a versioned rootfs, signing, reboot/repair/uninstall verification, and release
+  approval.
+
+Internal software validation is recorded in `docs/53-beta0-internal-build-20260825.md`. This snapshot
+does not promote RTL8188EU or claim real Switch-to-Switch certification.

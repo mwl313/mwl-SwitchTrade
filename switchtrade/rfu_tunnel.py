@@ -22,6 +22,7 @@ class Kind(IntEnum):
     HEARTBEAT = 2
     PEER_READY = 3
     PEER_CLOSE = 4
+    ADVERTISEMENT = 5
 
 
 class Direction(IntEnum):
@@ -95,17 +96,22 @@ class Envelope:
 
 
 class SequenceGate:
-    """Reject reconnect-stale epochs and duplicate/out-of-order WebSocket frames."""
+    """Reject duplicate/out-of-order frames and already-retired epochs."""
 
     def __init__(self):
-        self.epoch = -1
+        self.epoch: int | None = None
         self.sequence = -1
         self.gaps = 0
+        self._retired_epochs: set[int] = set()
 
     def accept(self, envelope: Envelope) -> bool:
-        if envelope.epoch < self.epoch:
-            return False
-        if envelope.epoch > self.epoch:
+        if self.epoch is None:
+            self.epoch = envelope.epoch
+            self.sequence = -1
+        elif envelope.epoch != self.epoch:
+            if envelope.epoch in self._retired_epochs:
+                return False
+            self._retired_epochs.add(self.epoch)
             self.epoch = envelope.epoch
             self.sequence = -1
         if envelope.sequence <= self.sequence:
@@ -114,6 +120,17 @@ class SequenceGate:
             self.gaps += envelope.sequence - self.sequence - 1
         self.sequence = envelope.sequence
         return True
+
+
+def direction_for_role(role: str) -> Direction:
+    """Return the only wire direction a group role may transmit."""
+    try:
+        return {
+            "host": Direction.HOST_TO_GUEST,
+            "guest": Direction.GUEST_TO_HOST,
+        }[role]
+    except KeyError as error:
+        raise ValueError("role must be host or guest") from error
 
 
 class BoundedOutbox:
