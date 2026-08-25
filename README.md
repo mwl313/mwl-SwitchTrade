@@ -30,6 +30,7 @@
 | [docs/50-current-product-demo-todo-20260825.md](docs/50-current-product-demo-todo-20260825.md) | **현재 제품 데모 즉시/백로그 TODO와 화면 흐름 (권위 문서)** |
 | [docs/49-production-beta-priorities-20260825.md](docs/49-production-beta-priorities-20260825.md) | 프로덕션 베타의 기술적 근거와 출시 게이트 |
 | [docs/51-windows-installer-bootstrap-design-20260825.md](docs/51-windows-installer-bootstrap-design-20260825.md) | Windows 설치·WSL 구성·재부팅 재개·롤백 설계 |
+| [docs/54-native-ui-flow-and-runtime-structure-20260825.md](docs/54-native-ui-flow-and-runtime-structure-20260825.md) | Native UI 화면 흐름, 기능표, 런타임 계층과 용어 정의 |
 | [docs/30-native-fixed-handshake-20260824.md](docs/30-native-fixed-handshake-20260824.md) | Native two-Switch fixed-channel gold, PC-host root cause, and byte-verified Session fix |
 | [handoff/HANDOFF-20260824-wsl-dual-radio.md](handoff/HANDOFF-20260824-wsl-dual-radio.md) | WSL 두 카드 최종 상태, 확장 구조, 다음 G5/G6 절차 |
 | [handoff/HANDOFF-20260824-native-host-session.md](handoff/HANDOFF-20260824-native-host-session.md) | Next-agent gate for PC-host Pia and host/parent Reliable work |
