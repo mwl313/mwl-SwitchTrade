@@ -25,6 +25,16 @@ class InstallerLifecycleTests(unittest.TestCase):
             self.assertIn(value, builder)
 
     @unittest.skipUnless(shutil.which("powershell"), "Windows PowerShell is required")
+    def test_setup_audit_is_read_only_and_powershell5_compatible(self):
+        result = subprocess.run([
+            "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+            str(ROOT / "installer" / "SwitchTradeSetup.ps1"), "-Action", "Audit",
+        ], cwd=ROOT, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("WindowsBuild", result.stdout)
+        self.assertIn("Distro", result.stdout)
+
+    @unittest.skipUnless(shutil.which("powershell"), "Windows PowerShell is required")
     def test_kernel_update_release_rollback_and_exact_uninstall_restore(self):
         with tempfile.TemporaryDirectory() as temporary:
             result = subprocess.run([
