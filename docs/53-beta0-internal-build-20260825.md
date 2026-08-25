@@ -71,6 +71,9 @@ internet tunnel format merely because their RFU payloads differ.
   starting the local services.
 - `installer/Build-Package.ps1` packages tracked source plus the static frontend and refuses a dirty
   worktree. It can consume a separately built rootfs artifact.
+- `installer/Build-Rootfs.sh` produced a 44,521,402-byte Ubuntu 26.04 (`resolute`) minimal rootfs. The
+  final package embeds it with SHA-256 verification; it does not copy the user's existing Ubuntu
+  distribution.
 - These scripts do not write `.wslconfig`, select a custom kernel, reset WSL, or modify another distro.
   The future kernel artifact can therefore be added as a versioned installer input without coupling it
   to application features or hardware profiles.
@@ -88,6 +91,9 @@ No Switch or radio was used for this build, as requested.
   provisioning and endpoint launch scripts.
 - Desktop UI production build, TypeScript checking, ESLint, and FastAPI static-serving smoke test
   passed.
+- A uniquely named throwaway WSL distro passed package checksum verification, clean import,
+  provisioning, runtime/profile/UI smoke checks, repair with previous-runtime retention, and explicit
+  isolated uninstall/purge. The unrelated `Ubuntu` distro remained installed.
 
 The root pytest configuration now ignores archived/reference repositories. Windows-only execution is
 not authoritative for Linux sysfs/LDN tests; the full suite was run inside WSL with the pinned runtime.
@@ -99,10 +105,9 @@ not authoritative for Linux sysfs/LDN tests; the full suite was run inside WSL w
    save, return, exit, and immediate reuse.
 3. Run LAN/WAN loss, delay, reconnect, radio recovery, and repeated-session soak tests with captured
    run IDs and support bundles.
-4. Supply and verify a minimal versioned WSL rootfs. The kernel choice is intentionally deferred; the
-   current bootstrap does not alter it.
-5. Test setup/repair/uninstall on a clean Windows machine and one with unrelated existing WSL distros,
-   then sign the installer and artifacts.
+4. Test reboot/resume and the same setup/repair/uninstall path on a genuinely clean external Windows
+   machine. The kernel choice is intentionally deferred; the current bootstrap does not alter it.
+5. Sign the installer and artifacts and add atomic update/rollback release policy.
 6. Configure a reachable relay URL for cross-network use. The package's localhost relay default is for
    single-machine/internal validation only.
 

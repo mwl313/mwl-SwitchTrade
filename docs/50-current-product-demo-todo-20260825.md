@@ -157,12 +157,13 @@ As of the `0.2.0-beta.0` internal build:
 - The tunnel mirrors the leader Switch's original LDN application advertisement and carries opaque
   Reliable AppData. It does not depend on trade opcodes, the Pokémon decoder, or a specific future
   two-player activity.
-- Task 14 has a reproducible package/bootstrap foundation. It provisions only the named
-  `SwitchTrade` distro and deliberately leaves the global/custom WSL kernel policy unchanged.
+- Task 14 has a checksummed minimal-rootfs package/bootstrap foundation. Its isolated install, repair,
+  rollback retention, and uninstall/purge path passed a throwaway-distro test. It provisions only the
+  named `SwitchTrade` distro and deliberately leaves the global/custom WSL kernel policy unchanged.
 - Task 6 still needs the second RTL8192EU and hardware qualification. Tasks 12-13 still need the
   requested real two-endpoint Switch test and reliability campaign. The final signed clean-machine
-  installer still needs a versioned rootfs, signing, reboot/repair/uninstall verification, and release
-  approval.
+  installer still needs signing, reboot/resume validation, a genuinely clean external-machine test,
+  and release approval.
 
 Internal software validation is recorded in `docs/53-beta0-internal-build-20260825.md`. This snapshot
 does not promote RTL8188EU or claim real Switch-to-Switch certification.
