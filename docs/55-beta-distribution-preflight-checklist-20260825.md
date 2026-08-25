@@ -1,8 +1,10 @@
 # Beta distribution preflight checklist — updated 2026-08-26
 
-> Status: Gate 0 contracts and the second native UI overhaul are implemented. Owner corrections through
-> commit `d632df6` passed native build and UI Automation; final owner/GPT visual approval plus asset,
-> legal-notice, and support-destination approval remains before Gates 1–8.
+> Status: On 2026-08-26 the owner explicitly deferred Gate 0 and authorized Gate 4 engineering to
+> continue. This is not Gate 0 approval: final owner/GPT visual approval plus asset, legal-notice, and
+> support-destination approval remains release-blocking before packaging and private-beta approval.
+> Gate 4 now has internally tested lifecycle, readiness, role-axis, decoder, live-party, shutdown, and
+> diagnostic foundations; authoritative room state and trade-commit classification remain open.
 > UI baseline: `docs/56-native-ui-ux-redesign-handoff-20260825.md` and the owner overrides in
 > `docs/57-native-ui-overhaul-implementation-report-20260825.md` are the preliminary redesign source.
 > Latest UI evidence: `docs/64-second-native-ui-overhaul-implementation-report-20260825.md`.
@@ -29,9 +31,9 @@
 
 | Order | Gate | Current state | Release-blocking result still needed |
 |---:|---|---|---|
-| 1 | Gate 0 | Overhaul and owner corrections implemented; final approval pending | Approve the native build plus public icons/assets, legal notices, and real support destination |
-| 2 | Gates 4–5 contracts | Frozen, not implemented | Build the authoritative two-member room service and the frozen versioned UI/control contracts |
-| 3 | Gate 4 local integration | Partial foundations | Make the installed EXE, isolated WSL runtime, health gate, endpoint, decoder observer, logs, and shutdown behave as one product |
+| 1 | Gate 4 local integration | Active; core local foundations implemented | Finish authoritative event consumption, role transition/retry, allowlisted repairs, and fail-closed trade commits |
+| 2 | Gate 0 | Owner-deferred, not approved | Approve the native build plus public icons/assets, legal notices, and real support destination before packaging/release |
+| 3 | Gates 4–5 contracts | Frozen; local readiness/party portions implemented | Build the authoritative two-member room service and connect its ordered events |
 | 4 | Gate 5 remote services | Development relay only | Deploy authenticated authoritative rooms, production opaque relay, and optional consented commit ingestion |
 | 5 | Gates 1–3 | Packaging foundations only | Build the signed one-piece installer, first-run prerequisite flow, and reversible custom-kernel integration |
 | 6 | Gate 6 | Not qualified | Pass clean-machine install, repair, update, rollback, uninstall, privacy, and signing tests |
@@ -39,20 +41,22 @@
 | 8 | Gate 8 | Not started | Sign, publish, archive, review, and approve the private beta |
 
 Installer implementation remains blocked until the final GPT/owner review closes the last Gate 0 item.
+The owner exception authorizes Gate 4 implementation only.
 
 ## Next implementation tranche — do this before packaging
 
 1. [x] Give GPT the final handoff/audit and implement its contract-grounded WPF overhaul without
    reintroducing the removed Privacy tab. Evidence is in `docs/64`.
-2. [ ] Obtain final owner/GPT visual approval and approve the remaining public icon/logo, legal-notice,
-   and real support-destination decisions. This closes Gate 0.
+2. [ ] Owner-deferred: obtain final owner/GPT visual approval and approve the remaining public
+   icon/logo, legal-notice, and real support-destination decisions before packaging. This closes Gate 0.
 3. [ ] Implement and internally test the authenticated server-authoritative two-member room state
    machine, reconnect tokens, atomic room-creator claims, ordered events, expiration, and recovery.
-4. [ ] Refactor the endpoint/control API so stable member/tunnel identity is independent of each
-   attempt's room creator/joiner radio role, then connect the WPF state model to verified live events.
-5. [ ] Integrate the installed WSL lifecycle, full health/recovery state, logs/support bundles, passive
-   decoder party snapshots, and idempotent successful-trade detection without making trading depend on
-   decoding or analytics.
+4. [ ] The endpoint/control split between stable member/tunnel identity and per-attempt creator/finder
+   role is implemented. Connect those axes to authoritative member seats, claims, and ordered live
+   events after the Gate 5 room service exists.
+5. [ ] WSL lifecycle, versioned readiness, retained recovery state, redacted support summaries, and
+   passive live party snapshots are implemented internally. Add allowlisted repair routing and the
+   idempotent successful-trade classifier without making trading depend on decoding or analytics.
 6. [ ] Run no-Switch internal tests for simultaneous claims, reconnects, restarts, malformed/stale
    events, decoder fixtures, failed/rolled-back trades, analytics disabled/offline, and UI transitions.
 7. [ ] Only after steps 1–6 pass, implement Gates 1–3 packaging and then run Gates 6–8 lifecycle,
@@ -183,43 +187,48 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
 
 ## Gate 4 — make the EXE and WSL behave as one app
 
-- [ ] Add single-instance protection for the Windows client and local runtime.
-- [ ] Start the isolated WSL distro and control service automatically and without a terminal window.
-- [ ] Prove the installed local control API is healthy and version-compatible before enabling Host,
+- [x] Add single-instance protection for the Windows client and local runtime.
+- [x] Start the isolated WSL distro and control service automatically and without a terminal window.
+- [x] Prove the installed local control API is healthy and version-compatible before enabling Host,
   Join, Ready, or Configuration actions; use a bounded startup/retry/repair flow instead of leaving the
   user at an unexplained `BACKEND OFFLINE` screen.
-- [ ] Replace the ambiguous `BACKEND` label with separate control, relay, radio, and session states.
+- [x] Replace the ambiguous `BACKEND` label with separate control, relay, radio, and session states.
 - [x] Add bounded local-service startup probes, retry, a recovery screen, and actionable generic errors.
 - [x] Add startup cancellation so retry and shutdown safely supersede an in-flight probe.
-- [ ] Add version mismatch handling, retained failure stage, and stage-specific
-  automatic/manual repair routing.
-- [ ] Prevent duplicate control, endpoint, or development-relay processes.
-- [ ] Split endpoint configuration into two independent axes: a stable server-assigned member/tunnel
-  identity and a per-attempt server-assigned room creator/joiner radio role. Do not derive local radio
+- [x] Add version mismatch handling, retained failure stage, and allowlisted recovery-action metadata.
+- [x] Implement retained-session `/api/v1/app/retry`, an allowlisted adapter health-gate repair, and
+  bind radio-stage failures to the native repair action without accepting free-form commands.
+- [ ] Add the signed update path and finish stage-specific native routing for non-radio failures.
+- [x] Prevent duplicate control, endpoint, or development-relay processes.
+- [x] Split endpoint configuration into two independent axes: a stable member/tunnel identity and a
+  per-attempt room creator/joiner radio role. Do not derive local radio
   behavior from group ownership or from the words host/guest in the UI.
+- [ ] Replace the temporary local owner/member-to-seat and locally selected radio-role values with the
+  authoritative assignments from Gate 5; never let ownership become tunnel identity in production.
 - [ ] Support role transition safely: the selected creator-side endpoint discovers/joins the real
   Switch room, while the other endpoint opens the mirrored room. Teardown, re-election, and retry must
   return both adapters to a known healthy state.
 - [ ] Subscribe or poll for server-authoritative group membership, both members' ready/online states,
   room-role assignment, radio readiness, Switch connection, trading-room entry, session failure, and
   leave state; never infer the remote member's state from local button clicks.
-- [ ] Passively tee both local and remote Reliable AppData streams to a bounded decoder observer at the
+- [x] Passively tee both local and remote Reliable AppData streams to a bounded decoder observer at the
   endpoint boundary without delaying, mutating, or making the RFU tunnel depend on decoding.
-- [ ] Reassemble party blocks independently by member/direction, publish only complete checksum-valid
+- [x] Reassemble party blocks independently by member/direction, publish only complete checksum-valid
   party snapshots through the local control API, and clear them on session teardown.
-- [ ] Detect confirmed trading-room entry and render the two side-by-side 2-by-3 party grids; update or
+- [x] Detect confirmed trading-room entry and render the two side-by-side 2-by-3 party grids; update or
   invalidate the view when the game sends a newer party state.
-- [ ] Detect a successful trade commit separately from offer, acceptance, animation, save attempt,
+- [x] Detect a successful trade commit separately from offer, acceptance, animation, save attempt,
   rollback, communication error, or disconnect. Generate one idempotent committed-trade event only
   after the protocol evidence proves the trade completed.
-- [ ] Keep local party presentation functional when statistics upload is disabled or unavailable.
+- [x] Keep local party presentation functional when statistics upload is disabled or unavailable.
 - [x] Decide and document the current close policy: stop an active endpoint session after confirmation,
   close the UI, and leave the installed local control service available for later reuse.
-- [ ] On full shutdown, stop the endpoint and control service cleanly, release the adapter, and allow
-  WSL to become idle.
-- [ ] Recover safely after an EXE crash, WSL crash, USB removal, or interrupted previous session.
+- [x] On full shutdown, stop the endpoint, development relay, and control service cleanly, release the
+  adapter, and allow WSL to become idle.
+- [x] Recover safely after an EXE crash, WSL crash, USB removal, or interrupted previous session;
+  physical USB-removal and WSL-crash qualification remains in Gates 6–7.
 - [x] Keep radio, driver, and protocol implementation outside the WPF process and behind the local API.
-- [ ] Expose run ID, structured state transitions, RFU/tunnel counters, decoder completeness, recovery
+- [x] Expose run ID, structured state transitions, RFU/tunnel counters, decoder completeness, recovery
   actions, and a redacted one-action support bundle without exposing passcodes or raw Pokémon data.
 
 ## Gate 5 — production relay, authoritative groups, and consented statistics

@@ -14,6 +14,8 @@ import time
 
 from switchtrade.diagnostics import RunLogger
 from switchtrade.hardware import require_role, select_profile
+from switchtrade.party_observer import PassivePartyObserver
+from switchtrade.process_guard import AlreadyRunningError, SingleInstanceLock
 from switchtrade.rfu_tunnel import Kind
 from switchtrade.tunnel_client import TunnelClient
 
@@ -30,12 +32,18 @@ from frlgsim.sim import MS_PER_VBLANK  # noqa: E402
 from frlgsim.tunnel import TunnelSim  # noqa: E402
 
 
-GROUP_TO_RADIO_ROLE = {"host": "guest", "guest": "host"}
+SEAT_TO_TUNNEL_ROLE = {"member_a": "host", "member_b": "guest"}
+SWITCH_TO_RADIO_ROLE = {"creator": "guest", "finder": "host"}
+LEGACY_ROLE_AXES = {
+    "host": ("member_a", "creator"),
+    "guest": ("member_b", "finder"),
+}
 
 
 class StateReporter:
-    def __init__(self, path: str | None):
+    def __init__(self, path: str | None, defaults: dict | None = None):
         self.path = Path(path).expanduser() if path else None
+        self.defaults = defaults or {}
 
     def write(self, state: str, **fields) -> None:
         if self.path is None:
@@ -45,6 +53,9 @@ class StateReporter:
         temporary.write_text(json.dumps({
             "state": state,
             "updated_utc": datetime.now(timezone.utc).isoformat(),
+            "pid": os.getpid(),
+            "process_kind": "rfu-endpoint",
+            **self.defaults,
             **fields,
         }, separators=(",", ":")) + "\n", encoding="utf-8")
         temporary.replace(self.path)
@@ -65,11 +76,24 @@ class EndpointLog:
         self.logger.event("milestone", message=message)
 
 
-def runtime_plan(group_role: str, usb_id: str | None = None) -> dict:
-    radio_role = GROUP_TO_RADIO_ROLE[group_role]
+def runtime_plan(identity: str, usb_id: str | None = None,
+                 *, switch_room_role: str | None = None) -> dict:
+    """Resolve stable tunnel identity separately from temporary radio behavior."""
+    if identity in LEGACY_ROLE_AXES:
+        tunnel_seat, legacy_switch_role = LEGACY_ROLE_AXES[identity]
+        switch_room_role = switch_room_role or legacy_switch_role
+    else:
+        tunnel_seat = identity
+    if tunnel_seat not in SEAT_TO_TUNNEL_ROLE:
+        raise ValueError("tunnel seat must be member_a or member_b")
+    if switch_room_role not in SWITCH_TO_RADIO_ROLE:
+        raise ValueError("Switch room role must be creator or finder")
+    radio_role = SWITCH_TO_RADIO_ROLE[switch_room_role]
     profile = require_role(select_profile(usb_id), radio_role)
     return {
-        "group_role": group_role,
+        "tunnel_seat": tunnel_seat,
+        "tunnel_role": SEAT_TO_TUNNEL_ROLE[tunnel_seat],
+        "switch_room_role": switch_room_role,
         "radio_role": radio_role,
         "usb_id": profile.usb_id,
         "driver_strategy": profile.strategy,
@@ -120,27 +144,49 @@ def _connection(transport, role: str, name: str, log: EndpointLog):
 
 
 def run_endpoint(args) -> int:
-    plan = runtime_plan(args.role, args.usb_id)
+    identity = args.tunnel_seat or args.role
+    if identity is None:
+        raise ValueError("--tunnel-seat is required")
+    plan = runtime_plan(identity, args.usb_id, switch_room_role=args.switch_room_role)
     if args.dry_run:
         print(plan)
         return 0
 
-    state = StateReporter(args.state_file)
-    state.write("initializing", radio_checked=False, tunnel_connected=False)
+    state = StateReporter(args.state_file, {
+        "session_id": args.session_id,
+        "attempt_id": args.attempt_id or args.session_id,
+    })
+    state.write("initializing", radio_checked=False, tunnel_connected=False,
+                failure_stage=None, recovery_action=None, **plan)
     logger = RunLogger("rfu-endpoint", args.runs_root, {
         **plan, "session_id": args.session_id, "relay_url": args.relay_url,
         "phy": args.phy, "channel": args.channel,
     })
     log = EndpointLog(logger)
-    tunnel = TunnelClient(args.relay_url, args.session_id, args.role, log=log).start()
-    transport = sim = None
+    tunnel = TunnelClient(
+        args.relay_url, args.session_id, plan["tunnel_role"], log=log,
+    ).start()
+    transport = sim = observer = None
     outcome = "failed"
+    failure_stage = "relay"
+    stopping = False
+
+    def stop(*_):
+        nonlocal stopping
+        stopping = True
+        if sim is None:
+            raise InterruptedError("endpoint shutdown requested")
+
+    signal.signal(signal.SIGINT, stop)
+    signal.signal(signal.SIGTERM, stop)
     try:
         if not tunnel.wait_connected(args.connect_timeout):
             raise TimeoutError(f"relay connection failed: {tunnel.last_error or 'timeout'}")
-        state.write("relay_connected", radio_checked=False, tunnel_connected=True)
+        state.write("relay_connected", radio_checked=False, tunnel_connected=True,
+                    failure_stage=None, recovery_action=None, **plan)
 
-        if args.role == "host":
+        failure_stage = "radio"
+        if plan["switch_room_role"] == "creator":
             log.info("Create a Direct Connection room on the leader Switch.")
             transport = transportmod.LiveTransport(
                 nickname=args.name, keys_path=args.keys, phyname=args.phy,
@@ -161,43 +207,70 @@ def run_endpoint(args) -> int:
             transport.start(timeout=args.radio_timeout)
 
         state.write("radio_ready", radio_checked=True, tunnel_connected=True,
-                    usb_id=plan["usb_id"], radio_role=plan["radio_role"])
+                    failure_stage=None, recovery_action=None, **plan)
 
-        connection, our_var = _connection(transport, args.role, args.name, log)
+        legacy_radio_role = "host" if plan["switch_room_role"] == "creator" else "guest"
+        connection, our_var = _connection(transport, legacy_radio_role, args.name, log)
         crypto = cryptomod.PiaCrypto(transport.ssid)
+        party_state = Path(args.party_state_file) if args.party_state_file else (
+            Path(args.state_file).with_name("party-state.json") if args.state_file else
+            logger.run_dir / "party-state.json"
+        )
+        observer = PassivePartyObserver(
+            party_state, args.attempt_id or args.session_id, plan["tunnel_seat"], log=log,
+        ).start()
         sim = TunnelSim(
             transport, crypto, transport.our_ip, transport.host_ip, tunnel,
-            conn=connection, our_var=our_var, parent=args.role == "guest",
+            conn=connection, our_var=our_var, parent=plan["switch_room_role"] == "finder",
+            observer=observer, local_seat=plan["tunnel_seat"],
             capture_path=str(logger.run_dir / "pia.jsonl"), log=log,
         )
+        failure_stage = "session"
         log.info("RFU endpoint ready; opaque feature-neutral forwarding active.")
         state.write("session_ready", radio_checked=True, tunnel_connected=True,
-                    usb_id=plan["usb_id"], radio_role=plan["radio_role"])
+                    decoder_status="ready", party_state_file=str(party_state),
+                    failure_stage=None, recovery_action=None, **plan)
 
-        stopping = False
-
-        def stop(*_):
-            nonlocal stopping
-            stopping = True
-
-        signal.signal(signal.SIGINT, stop)
-        signal.signal(signal.SIGTERM, stop)
         period = MS_PER_VBLANK / 1000.0
         deadline = time.monotonic()
+        next_report = deadline + 1.0
         while not stopping and not sim.host_disconnected:
             sim.tick()
             deadline += period
+            if time.monotonic() >= next_report:
+                state.write(
+                    "session_ready", radio_checked=True,
+                    tunnel_connected=tunnel.connected.is_set(), decoder_status="ready",
+                    party_state_file=str(party_state), tunnel_counters=dict(tunnel.stats),
+                    rfu_counters={"rx_datagrams": sim.rx_count, "tx_datagrams": sim.tx_count},
+                    decoder_counters=dict(observer.stats), failure_stage=None,
+                    recovery_action=None, **plan,
+                )
+                next_report += 1.0
             time.sleep(max(0, deadline - time.monotonic()))
         outcome = "completed"
-        state.write("completed", radio_checked=True, tunnel_connected=False)
+        state.write("completed", radio_checked=True, tunnel_connected=False,
+                    decoder_status="stopped", failure_stage=None,
+                    recovery_action=None, **plan)
+        return 0
+    except InterruptedError:
+        outcome = "completed"
+        state.write("completed", radio_checked=transport is not None,
+                    tunnel_connected=False, decoder_status="stopped",
+                    failure_stage=None, recovery_action=None, **plan)
         return 0
     except Exception as error:
         log(f"[endpoint] fatal: {error}")
         logger.event("endpoint_failed", level="error", error=str(error))
         state.write("failed", radio_checked=transport is not None,
-                    tunnel_connected=tunnel.connected.is_set(), error=str(error))
+                    tunnel_connected=tunnel.connected.is_set(), error=str(error),
+                    failure_stage=failure_stage, recovery_action=(
+                        "retry" if failure_stage in {"relay", "session"} else "recheck_adapter"
+                    ), **plan)
         return 1
     finally:
+        if observer is not None:
+            observer.stop(clear=True)
         if sim is not None:
             sim.close()
         if transport is not None:
@@ -208,8 +281,12 @@ def run_endpoint(args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--role", choices=("host", "guest"), required=True,
-                        help="online group role; host joins the leader Switch room, guest mirrors it")
+    parser.add_argument("--tunnel-seat", choices=("member_a", "member_b"),
+                        help="stable server-assigned tunnel identity")
+    parser.add_argument("--switch-room-role", choices=("creator", "finder"),
+                        help="per-attempt radio behavior")
+    parser.add_argument("--role", choices=("host", "guest"),
+                        help="temporary compatibility input; prefer the two independent role axes")
     parser.add_argument("--relay-url", required=True)
     parser.add_argument("--session-id", required=True)
     parser.add_argument("--usb-id", help="profiled VID:PID; defaults to the registry auto candidate")
@@ -220,6 +297,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--target-bssid")
     parser.add_argument("--runs-root")
     parser.add_argument("--state-file")
+    parser.add_argument("--party-state-file")
+    parser.add_argument("--attempt-id")
     parser.add_argument("--connect-timeout", type=float, default=20)
     parser.add_argument("--radio-timeout", type=float, default=60)
     parser.add_argument("--room-timeout", type=float, default=300)
@@ -228,7 +307,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    raise SystemExit(run_endpoint(build_parser().parse_args()))
+    try:
+        with SingleInstanceLock("endpoint"):
+            raise SystemExit(run_endpoint(build_parser().parse_args()))
+    except AlreadyRunningError as error:
+        raise SystemExit(str(error)) from error
 
 
 if __name__ == "__main__":

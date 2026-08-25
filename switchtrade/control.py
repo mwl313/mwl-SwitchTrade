@@ -9,20 +9,26 @@ import os
 import json
 import subprocess
 import threading
+import time
+import signal
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from switchtrade import __version__
-from switchtrade.diagnostics import RunLogger
+from switchtrade.diagnostics import RunLogger, default_runs_root
 from switchtrade.endpoint import runtime_plan
 from switchtrade.hardware import DEFAULT_PROFILE_PATH, load_profiles
+from switchtrade.process_guard import AlreadyRunningError, SingleInstanceLock
 from switchtrade.relay_client import RelayClient, RelayError
 
 
 UI_ROOT = Path(__file__).resolve().parents[1] / "apps" / "web" / "dist-desktop"
+READINESS_CONTRACT = "app-readiness.v1"
+ROOM_CONTRACT = "room-control.v1"
+PARTY_CONTRACT = "party-commit.v1"
 
 
 class CreateGroup(BaseModel):
@@ -42,8 +48,16 @@ class JoinGroup(BaseModel):
 
 
 class StartSession(BaseModel):
-    role: str = Field(pattern="^(host|guest)$")
+    tunnel_seat: str | None = Field(default=None, pattern="^(member_a|member_b)$")
+    switch_room_role: str | None = Field(default=None, pattern="^(creator|finder)$")
+    role: str | None = Field(default=None, pattern="^(host|guest)$")
     passcode: str = Field(min_length=4, max_length=8, pattern="^[A-Za-z0-9]+$")
+    usb_id: str | None = Field(default=None, pattern="^[0-9A-Fa-f]{4}:[0-9A-Fa-f]{4}$")
+    attempt_id: str | None = Field(default=None, max_length=80)
+
+
+class RepairRequest(BaseModel):
+    action: str = Field(pattern="^recheck_adapter$")
     usb_id: str | None = Field(default=None, pattern="^[0-9A-Fa-f]{4}:[0-9A-Fa-f]{4}$")
 
 
@@ -78,7 +92,69 @@ class Runtime:
         self.relay = RelayClient(relay_url)
         self.endpoint: subprocess.Popen | None = None
         self.endpoint_session: str | None = None
-        self.endpoint_state = self.log.run_dir / "endpoint-state.json"
+        runtime_root = (Path(runs_root) / "runtime" if runs_root else
+                        default_runs_root().parent / "runtime")
+        runtime_root.mkdir(parents=True, exist_ok=True)
+        self.endpoint_state = runtime_root / "endpoint-state.json"
+        self.party_state = runtime_root / "party-state.json"
+        self.shutdown_requested = False
+        previous = self.read_endpoint()
+        if self._verified_endpoint_pid(previous) is not None:
+            self.endpoint_session = previous.get("session_id")
+            self.log.event("orphan_endpoint_recovered", pid=previous.get("pid"),
+                           stage=previous.get("state"))
+
+    def read_endpoint(self) -> dict:
+        try:
+            value = json.loads(self.endpoint_state.read_text(encoding="utf-8"))
+            return value if isinstance(value, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def read_parties(self) -> dict:
+        try:
+            value = json.loads(self.party_state.read_text(encoding="utf-8"))
+            return value if isinstance(value, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def endpoint_running(self) -> bool:
+        if self.endpoint and self.endpoint.poll() is None:
+            return True
+        endpoint = self.read_endpoint()
+        return self._verified_endpoint_pid(endpoint) is not None
+
+    @staticmethod
+    def _verified_endpoint_pid(endpoint: dict) -> int | None:
+        pid = endpoint.get("pid")
+        if not isinstance(pid, int) or pid <= 1 or endpoint.get("process_kind") != "rfu-endpoint":
+            return None
+        if os.name == "nt":
+            return None
+        try:
+            command = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ")
+        except OSError:
+            return None
+        return pid if b"switchtrade.endpoint" in command else None
+
+    def stop_endpoint(self) -> None:
+        process = self.endpoint
+        if process and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        elif (pid := self._verified_endpoint_pid(self.read_endpoint())) is not None:
+            os.kill(pid, signal.SIGTERM)
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline and self._verified_endpoint_pid(self.read_endpoint()) == pid:
+                time.sleep(0.1)
+            if self._verified_endpoint_pid(self.read_endpoint()) == pid:
+                os.kill(pid, signal.SIGKILL)
+        self.endpoint = None
+        self.endpoint_session = None
 
 def _wsl_path(path: Path) -> str:
     value = str(path.resolve())
@@ -87,13 +163,25 @@ def _wsl_path(path: Path) -> str:
     return value
 
 
-def endpoint_command(role: str, passcode: str, relay_url: str,
-                     usb_id: str | None = None, state_file: Path | None = None) -> list[str]:
-    args = ["--role", role, "--session-id", passcode, "--relay-url", relay_url]
+def endpoint_command(identity: str, passcode: str, relay_url: str,
+                     usb_id: str | None = None, state_file: Path | None = None,
+                     *, switch_room_role: str | None = None,
+                     party_state_file: Path | None = None,
+                     attempt_id: str | None = None) -> list[str]:
+    if identity in {"host", "guest"} and switch_room_role is None:
+        args = ["--role", identity]
+    else:
+        args = ["--tunnel-seat", identity, "--switch-room-role", switch_room_role or ""]
+    args += ["--session-id", passcode, "--relay-url", relay_url]
     if usb_id:
         args += ["--usb-id", usb_id.lower()]
     if state_file:
         args += ["--state-file", _wsl_path(state_file) if os.name == "nt" else str(state_file)]
+    if party_state_file:
+        args += ["--party-state-file", _wsl_path(party_state_file)
+                 if os.name == "nt" else str(party_state_file)]
+    if attempt_id:
+        args += ["--attempt-id", attempt_id]
     if os.name == "nt":
         distro = os.environ.get("SWITCHTRADE_WSL_DISTRO", "SwitchTrade")
         root = os.environ.get("SWITCHTRADE_WSL_ROOT", "/opt/switchtrade")
@@ -113,8 +201,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             "SWITCHTRADE_RELAY_URL", "http://127.0.0.1:8788"))
         app.state.runtime = runtime
         yield
-        if runtime.endpoint and runtime.endpoint.poll() is None:
-            runtime.endpoint.terminate()
+        runtime.stop_endpoint()
         runtime.log.close("api_stopped")
 
     app = FastAPI(title="SwitchTrade Control API", version=__version__, lifespan=lifespan)
@@ -129,15 +216,116 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     def runtime(request: Request) -> Runtime:
         return request.app.state.runtime
 
+    def readiness_axis(status: str, message: str, code: str,
+                       action: str | None = None) -> dict:
+        return {
+            "status": status,
+            "user_message": message,
+            "technical_code": code,
+            "primary_action": action,
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+
+    def readiness_payload(state: Runtime) -> dict:
+        endpoint = state.read_endpoint()
+        parties = state.read_parties()
+        running = state.endpoint_running()
+        endpoint_status = endpoint.get("state", "starting" if running else "idle")
+        tunnel_connected = bool(endpoint.get("tunnel_connected", False))
+        radio_checked = bool(endpoint.get("radio_checked", False))
+        failure_stage = endpoint.get("failure_stage")
+        failure_action = endpoint.get("recovery_action")
+        failed = endpoint_status == "failed"
+        axes = {
+            "control": readiness_axis(
+                "ready", "The local SwitchTrade service is ready.", "control.ready"),
+            "relay": readiness_axis(
+                "ready" if tunnel_connected else ("failed" if failed and failure_stage == "relay" else "unknown"),
+                "The online relay is connected." if tunnel_connected else "The relay is checked when a connection starts.",
+                "relay.ready" if tunnel_connected else "relay.not_checked",
+                failure_action if failure_stage == "relay" else None),
+            "radio": readiness_axis(
+                "ready" if radio_checked else ("failed" if failed and failure_stage == "radio" else "unknown"),
+                "The Switch radio is ready." if radio_checked else "The adapter is checked when a connection starts.",
+                "radio.ready" if radio_checked else "radio.not_checked",
+                failure_action if failure_stage == "radio" else None),
+            "session": readiness_axis(
+                "ready" if endpoint_status == "session_ready" else
+                ("checking" if running and not failed else "failed" if failed else "unavailable"),
+                "Both endpoint layers are active." if endpoint_status == "session_ready" else
+                "No Switch connection is active." if not running else "The Switch connection is being prepared.",
+                f"session.{endpoint_status}", failure_action if failed else None),
+            "decoder": readiness_axis(
+                "ready" if parties.get("observer_status") == "ready" else
+                ("degraded" if parties.get("observer_status") == "degraded" else "unavailable"),
+                "Party observation is active." if parties.get("observer_status") == "ready" else
+                "Party display is unavailable; trading is unaffected.",
+                f"decoder.{parties.get('observer_status', 'unavailable')}"),
+        }
+        return {
+            "contract_version": READINESS_CONTRACT,
+            "product_version": __version__,
+            "compatible": True,
+            "supported_contracts": [READINESS_CONTRACT, ROOM_CONTRACT, PARTY_CONTRACT],
+            "run_id": state.log.run_id,
+            "endpoint_process_running": running,
+            "session_id": state.endpoint_session,
+            "states": axes,
+            "failure": None if not failed else {
+                "stage": failure_stage or "session",
+                "code": f"{failure_stage or 'session'}.failed",
+                "message": endpoint.get("error") or "The connection failed.",
+                "recoverable": bool(failure_action),
+                "primary_action": failure_action,
+            },
+            "role_assignment": {
+                "tunnel_seat": endpoint.get("tunnel_seat"),
+                "switch_room_role": endpoint.get("switch_room_role"),
+                "role_locked": radio_checked and running,
+            },
+            "counters": {
+                "tunnel": endpoint.get("tunnel_counters", {}),
+                "rfu": endpoint.get("rfu_counters", {}),
+                "decoder": endpoint.get("decoder_counters", parties.get("stats", {})),
+            },
+        }
+
+    def launch_session(state: Runtime, *, code: str, tunnel_seat: str,
+                       switch_room_role: str, usb_id: str | None,
+                       attempt_id: str | None = None) -> dict:
+        try:
+            state.relay.status(code)
+            plan = runtime_plan(tunnel_seat, usb_id, switch_room_role=switch_room_role)
+        except (RelayError, ValueError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        with state.lock:
+            if state.endpoint_running():
+                raise HTTPException(status_code=409, detail="a session is already running")
+            state.endpoint_state.unlink(missing_ok=True)
+            state.party_state.unlink(missing_ok=True)
+            command = endpoint_command(
+                plan["tunnel_seat"], code, state.relay_url, usb_id,
+                state.endpoint_state, switch_room_role=plan["switch_room_role"],
+                party_state_file=state.party_state, attempt_id=attempt_id or code,
+            )
+            try:
+                state.endpoint = subprocess.Popen(command, cwd=Path(__file__).resolve().parents[1])
+            except OSError as error:
+                raise HTTPException(status_code=503, detail=f"endpoint launch failed: {error}") from error
+            state.endpoint_session = code
+        state.log.event(
+            "session_started", passcode=code, tunnel_seat=plan["tunnel_seat"],
+            switch_room_role=plan["switch_room_role"], usb_id=plan["usb_id"],
+            pid=state.endpoint.pid,
+        )
+        return {"status": "starting", "session_id": code, "hardware": plan,
+                "run_id": state.log.run_id}
+
     @app.get("/api/status")
     def status(request: Request) -> dict:
         state = runtime(request)
-        endpoint = {}
-        try:
-            endpoint = json.loads(state.endpoint_state.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            pass
-        running = bool(state.endpoint and state.endpoint.poll() is None)
+        endpoint = state.read_endpoint()
+        running = state.endpoint_running()
         return {
             "status": endpoint.get("state", "starting" if running else "ready"),
             "version": __version__,
@@ -147,6 +335,28 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             "tunnel_connected": bool(endpoint.get("tunnel_connected", False)),
             "session_id": state.endpoint_session,
             "error": endpoint.get("error"),
+        }
+
+    @app.get("/api/v1/app/readiness")
+    def app_readiness(request: Request) -> dict:
+        return readiness_payload(runtime(request))
+
+    @app.get("/api/v1/trade-room/parties")
+    def trade_room_parties(request: Request) -> dict:
+        state = runtime(request)
+        parties = state.read_parties()
+        if parties:
+            return parties
+        return {
+            "contract_version": PARTY_CONTRACT,
+            "attempt_id": state.endpoint_session,
+            "observer_status": "unavailable",
+            "trading_room_confirmed": False,
+            "parties": {
+                seat: {"status": "unavailable", "reason": "session_not_active", "snapshot": None}
+                for seat in ("member_a", "member_b")
+            },
+            "stats": {},
         }
 
     @app.get("/api/hardware/profiles")
@@ -230,45 +440,116 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     def stop_session(request: Request) -> dict:
         state = runtime(request)
         state.log.event("session_stop_requested")
-        if state.endpoint and state.endpoint.poll() is None:
-            state.endpoint.terminate()
-            try:
-                state.endpoint.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                state.endpoint.kill()
-        state.endpoint = None
-        state.endpoint_session = None
+        with state.lock:
+            state.stop_endpoint()
         return {"status": "stopped", "run_id": state.log.run_id}
+
+    @app.post("/api/v1/session/stop")
+    def stop_session_v1(request: Request) -> dict:
+        return stop_session(request)
 
     @app.post("/api/session/start")
     def start_session(payload: StartSession, request: Request) -> dict:
         state = runtime(request)
-        if state.endpoint and state.endpoint.poll() is None:
-            raise HTTPException(status_code=409, detail="a session is already running")
+        if payload.tunnel_seat and payload.switch_room_role:
+            identity = payload.tunnel_seat
+            switch_role = payload.switch_room_role
+        elif payload.role:
+            identity = payload.role
+            switch_role = None
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="tunnel_seat and switch_room_role are required",
+            )
         code = payload.passcode.upper()
         try:
-            state.relay.status(code)
-            plan = runtime_plan(payload.role, payload.usb_id)
-        except (RelayError, ValueError) as error:
+            plan = runtime_plan(identity, payload.usb_id, switch_room_role=switch_role)
+        except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
-        state.endpoint_state.unlink(missing_ok=True)
-        command = endpoint_command(payload.role, code, state.relay_url, payload.usb_id,
-                                   state.endpoint_state)
+        return launch_session(
+            state, code=code, tunnel_seat=plan["tunnel_seat"],
+            switch_room_role=plan["switch_room_role"], usb_id=payload.usb_id,
+            attempt_id=payload.attempt_id,
+        )
+
+    @app.post("/api/v1/session/start")
+    def start_session_v1(payload: StartSession, request: Request) -> dict:
+        return start_session(payload, request)
+
+    @app.post("/api/v1/app/retry")
+    def retry_app(request: Request) -> dict:
+        state = runtime(request)
+        previous = state.read_endpoint()
+        if state.endpoint_running():
+            raise HTTPException(status_code=409, detail="the current session is still running")
+        required = ("session_id", "tunnel_seat", "switch_room_role")
+        if any(not previous.get(name) for name in required):
+            raise HTTPException(status_code=409, detail="no recoverable session is available")
+        state.log.event("session_retry_requested", stage=previous.get("failure_stage"))
+        return launch_session(
+            state, code=previous["session_id"], tunnel_seat=previous["tunnel_seat"],
+            switch_room_role=previous["switch_room_role"], usb_id=previous.get("usb_id"),
+            attempt_id=previous.get("attempt_id"),
+        )
+
+    @app.post("/api/v1/app/repair")
+    def repair_app(payload: RepairRequest, request: Request) -> dict:
+        state = runtime(request)
+        previous = state.read_endpoint()
+        switch_role = previous.get("switch_room_role", "creator")
         try:
-            state.endpoint = subprocess.Popen(command, cwd=Path(__file__).resolve().parents[1])
-        except OSError as error:
-            raise HTTPException(status_code=503, detail=f"endpoint launch failed: {error}") from error
-        state.endpoint_session = code
-        state.log.event("session_started", role=payload.role, passcode=code,
-                        usb_id=plan["usb_id"], pid=state.endpoint.pid)
-        return {"status": "starting", "session_id": code, "hardware": plan,
-                "run_id": state.log.run_id}
+            plan = runtime_plan(
+                previous.get("tunnel_seat", "member_a"), payload.usb_id or previous.get("usb_id"),
+                switch_room_role=switch_role,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        prepare = Path(__file__).resolve().parents[1] / "scripts" / "wsl-radio-prepare.sh"
+        command = [str(prepare), "--usb-id", plan["usb_id"], "--role", plan["radio_role"]]
+        state.log.event("repair_started", action=payload.action, usb_id=plan["usb_id"])
+        try:
+            result = subprocess.run(
+                command, cwd=prepare.parent.parent, capture_output=True, text=True,
+                timeout=45, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            state.log.event("repair_failed", level="error", action=payload.action,
+                            error=type(error).__name__)
+            raise HTTPException(status_code=503, detail="adapter repair did not complete") from error
+        if result.returncode != 0:
+            state.log.event("repair_failed", level="error", action=payload.action,
+                            exit_code=result.returncode)
+            raise HTTPException(status_code=503, detail="adapter health gate did not pass")
+        state.log.event("repair_completed", action=payload.action, usb_id=plan["usb_id"])
+        return {"status": "repaired", "action": payload.action,
+                "usb_id": plan["usb_id"], "run_id": state.log.run_id}
 
     @app.post("/api/support-bundle")
     def support_bundle(request: Request) -> dict:
         state = runtime(request)
-        path = state.log.support_bundle()
+        path = state.log.support_bundle(summary=readiness_payload(state))
         return {"status": "created", "path": str(path), "run_id": state.log.run_id}
+
+    @app.post("/api/v1/support-bundle")
+    def support_bundle_v1(request: Request) -> dict:
+        return support_bundle(request)
+
+    @app.post("/api/v1/app/shutdown")
+    def shutdown_app(request: Request, background_tasks: BackgroundTasks) -> dict:
+        state = runtime(request)
+        with state.lock:
+            state.stop_endpoint()
+            state.shutdown_requested = True
+        state.log.event("full_shutdown_requested")
+        if state.relay.base_url in {"http://127.0.0.1:8788", "http://localhost:8788"}:
+            try:
+                state.relay.shutdown()
+            except RelayError as error:
+                state.log.event("development_relay_shutdown_skipped", reason=str(error))
+        if os.environ.get("SWITCHTRADE_ALLOW_PROCESS_SHUTDOWN") == "1":
+            background_tasks.add_task(lambda: (time.sleep(0.1), os.kill(os.getpid(), 15)))
+        return {"status": "stopping", "run_id": state.log.run_id}
 
     if UI_ROOT.is_dir():
         app.mount("/", StaticFiles(directory=UI_ROOT, html=True), name="frontend")
@@ -281,7 +562,11 @@ app = create_app()
 
 def main() -> None:
     import uvicorn
-    uvicorn.run("switchtrade.control:app", host="127.0.0.1", port=8787, reload=False)
+    try:
+        with SingleInstanceLock("control"):
+            uvicorn.run("switchtrade.control:app", host="127.0.0.1", port=8787, reload=False)
+    except AlreadyRunningError as error:
+        raise SystemExit(str(error)) from error
 
 
 if __name__ == "__main__":

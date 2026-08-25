@@ -8,7 +8,35 @@ public sealed record ControlStatus(
     bool RadioChecked,
     bool TunnelConnected,
     string? SessionId,
-    string? Error);
+    string? Error,
+    string ContractVersion = "legacy.status",
+    bool Compatible = false,
+    IReadOnlyDictionary<string, ReadinessAxis>? States = null,
+    string? FailureStage = null,
+    string? RecoveryAction = null)
+{
+    public ReadinessAxis Axis(string name) => States is not null && States.TryGetValue(name, out var axis)
+        ? axis
+        : new ReadinessAxis("unknown", "Not checked", $"{name}.unknown", null);
+}
+
+public sealed record ReadinessAxis(
+    string Status,
+    string UserMessage,
+    string TechnicalCode,
+    string? PrimaryAction)
+{
+    public string Display => Status switch
+    {
+        "ready" => "Ready",
+        "checking" => "Checking",
+        "degraded" => "Degraded",
+        "blocked" => "Blocked",
+        "failed" => "Failed",
+        "unavailable" => "Not active",
+        _ => "Not checked",
+    };
+}
 
 public enum SwitchRoomRole { Creator, Finder }
 public enum RoomMembershipRole { Owner, Member }
@@ -116,7 +144,8 @@ public sealed record PokemonPreviewViewData(
     SixValues? Evs,
     IReadOnlyList<MovePreview> Moves,
     TrainerPreview? Trainer,
-    bool IsEmpty = false)
+    bool IsEmpty = false,
+    bool IsLive = false)
 {
     public string Initial => IsEmpty || string.IsNullOrWhiteSpace(Species) ? "—" : Species[..1];
     public string LevelText => IsEmpty ? "Empty slot" : $"Lv. {Level}";
@@ -126,7 +155,7 @@ public sealed record PokemonPreviewViewData(
     public string EvsText => Evs?.Display ?? "Unavailable";
     public string MovesText => Moves.Count == 0 ? "Unavailable" : string.Join(" · ", Moves.Select(move => move.Name));
     public string TrainerText => Trainer?.Display ?? "Unavailable";
-    public string ValidityLabel => IsEmpty ? "No Pokémon" : "Sample preview";
+    public string ValidityLabel => IsEmpty ? "No Pokémon" : IsLive ? "Verified live data" : "Sample preview";
     public string AccessibleName => IsEmpty
         ? "Empty party slot"
         : $"View sample details for {Nickname}, {Species}, level {Level}";
@@ -136,3 +165,16 @@ public sealed record PartyPreviewViewData(
     string Heading,
     string Accent,
     IReadOnlyList<PokemonPreviewViewData> Slots);
+
+public sealed record LivePartyProjection(
+    PartyPreviewViewData? MemberA,
+    PartyPreviewViewData? MemberB,
+    string ObserverStatus,
+    bool TradingRoomConfirmed,
+    IReadOnlyList<TradeCommitProjection> Commits);
+
+public sealed record TradeCommitProjection(
+    string CommitId,
+    int TradeIndex,
+    string Outcome,
+    DateTimeOffset? CommittedAt);

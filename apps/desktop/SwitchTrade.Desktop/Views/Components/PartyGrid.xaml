@@ -25,7 +25,7 @@
                 <StackPanel MaxWidth="280">
                   <TextBlock Text="{Binding Nickname}" FontWeight="SemiBold" />
                   <TextBlock Text="{Binding Species}" />
-                  <TextBlock Text="Sample preview · Select for details" Style="{StaticResource SecondaryText}" Margin="0,4,0,0" />
+                  <TextBlock Text="{Binding ValidityLabel}" Style="{StaticResource SecondaryText}" Margin="0,4,0,0" />
                 </StackPanel>
               </Button.ToolTip>
               <Grid>

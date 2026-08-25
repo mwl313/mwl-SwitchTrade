@@ -6,13 +6,16 @@ namespace SwitchTrade.Desktop.ViewModels;
 public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
 {
     private readonly ActiveTradeRoomCoordinator? _coordinator;
+    private readonly HashSet<string> _seenCommits = [];
     private PokemonPreviewViewData? _selectedPokemon;
+    private string _tradeCommitStatus = "";
 
     public TradeRoomScreenViewModel(MainViewModel shell, ActiveTradeRoomCoordinator coordinator) : base(shell)
     {
         _coordinator = coordinator;
         _coordinator.Changed += CoordinatorChanged;
         ConnectionCommand = new AsyncCommand(ToggleConnectionAsync, CanToggleConnection);
+        RepairAdapterCommand = new AsyncCommand(shell.RepairAdapterAsync, () => HasAdapterRepair);
         LeaveCommand = new AsyncCommand(LeaveAsync, () => !_coordinator.IsPending);
         CopyCodeCommand = new RelayCommand(() => Shell.Copy(RoomCode, "Room code copied"));
         CopyInvitationCommand = new RelayCommand(() => Shell.Copy(InvitationText, "Invitation copied"));
@@ -28,6 +31,7 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
         YouParty = parties.You;
         PartnerParty = parties.Partner;
         ConnectionCommand = new AsyncCommand(() => Task.CompletedTask, () => false);
+        RepairAdapterCommand = new AsyncCommand(() => Task.CompletedTask, () => false);
         LeaveCommand = new AsyncCommand(() => shell.GoBackAsync());
         CopyCodeCommand = new RelayCommand(() => { }, () => false);
         CopyInvitationCommand = new RelayCommand(() => { }, () => false);
@@ -47,8 +51,8 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
     public bool HasRoomCode => IsRealRoom && !string.IsNullOrWhiteSpace(RoomCode);
     public bool IsOwner => Context?.MembershipRole == RoomMembershipRole.Owner;
     public string MembershipActionText => IsOwner ? "Close Trade Room" : "Leave Trade Room";
-    public string YouSummary => IsDemoPreview ? "Sample party" : "Local compatibility connection";
-    public string PartnerSummary => IsDemoPreview ? "Sample party" : "Partner presence is not available yet";
+    public string YouSummary => IsDemoPreview ? "Sample party" : YouParty is null ? "Party data unavailable" : "Verified live party";
+    public string PartnerSummary => IsDemoPreview ? "Sample party" : PartnerParty is null ? "Party data unavailable" : "Verified live party";
     public string MainInstruction => IsDemoPreview
         ? "Preview the connected trading layout"
         : Context?.SwitchRole == SwitchRoomRole.Creator
@@ -72,6 +76,8 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
         : _coordinator?.StatusText ?? "Connection not started";
     public bool IsConnectionPending => _coordinator?.IsPending == true;
     public bool HasRecovery => !string.IsNullOrWhiteSpace(_coordinator?.RecoveryMessage);
+    public bool HasAdapterRepair => HasRecovery && Shell.RecoveryTechnicalDetails.Contains(
+        "radio.failed", StringComparison.OrdinalIgnoreCase);
     public string RecoveryMessage => _coordinator?.RecoveryMessage ?? "";
     public string StageHeading => IsDemoPreview
         ? "Sample party view"
@@ -99,8 +105,19 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
             return message;
         }
     }
-    public PartyPreviewViewData? YouParty { get; }
-    public PartyPreviewViewData? PartnerParty { get; }
+    public PartyPreviewViewData? YouParty { get; private set; }
+    public PartyPreviewViewData? PartnerParty { get; private set; }
+    public bool HasPartyData => YouParty is not null || PartnerParty is not null;
+    public string TradeCommitStatus
+    {
+        get => _tradeCommitStatus;
+        private set
+        {
+            if (!Set(ref _tradeCommitStatus, value)) return;
+            OnPropertyChanged(nameof(HasTradeCommit));
+        }
+    }
+    public bool HasTradeCommit => !string.IsNullOrWhiteSpace(TradeCommitStatus);
     public PokemonPreviewViewData? SelectedPokemon
     {
         get => _selectedPokemon;
@@ -112,6 +129,7 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
     }
     public bool HasSelectedPokemon => SelectedPokemon is not null;
     public AsyncCommand ConnectionCommand { get; }
+    public AsyncCommand RepairAdapterCommand { get; }
     public AsyncCommand LeaveCommand { get; }
     public RelayCommand CopyCodeCommand { get; }
     public RelayCommand CopyInvitationCommand { get; }
@@ -134,6 +152,26 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
         if (await Shell.ConfirmAndReleaseRoomAsync()) Shell.ShowHome();
     }
 
+    public void ApplyLiveParties(LivePartyProjection projection)
+    {
+        if (IsDemoPreview) return;
+        var localIsA = Context?.MembershipRole == RoomMembershipRole.Owner;
+        YouParty = localIsA ? projection.MemberA : projection.MemberB;
+        PartnerParty = localIsA ? projection.MemberB : projection.MemberA;
+        OnPropertyChanged(nameof(YouParty));
+        OnPropertyChanged(nameof(PartnerParty));
+        OnPropertyChanged(nameof(HasPartyData));
+        OnPropertyChanged(nameof(YouSummary));
+        OnPropertyChanged(nameof(PartnerSummary));
+        if (projection.TradingRoomConfirmed && _coordinator is not null)
+            Shell.Announce("Both verified parties are available.");
+        foreach (var commit in projection.Commits.Where(commit => _seenCommits.Add(commit.CommitId)))
+        {
+            TradeCommitStatus = $"Trade {commit.TradeIndex} completed and was verified after saving.";
+            Shell.Announce(TradeCommitStatus);
+        }
+    }
+
     private void CoordinatorChanged(object? sender, EventArgs e)
     {
         OnPropertyChanged(nameof(RoomName));
@@ -146,10 +184,12 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
         OnPropertyChanged(nameof(ConnectionStatus));
         OnPropertyChanged(nameof(IsConnectionPending));
         OnPropertyChanged(nameof(HasRecovery));
+        OnPropertyChanged(nameof(HasAdapterRepair));
         OnPropertyChanged(nameof(RecoveryMessage));
         OnPropertyChanged(nameof(StageHeading));
         OnPropertyChanged(nameof(LinklineState));
         ConnectionCommand.RaiseCanExecuteChanged();
+        RepairAdapterCommand.RaiseCanExecuteChanged();
         LeaveCommand.RaiseCanExecuteChanged();
     }
 

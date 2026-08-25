@@ -45,6 +45,16 @@
               <StackPanel>
                 <TextBlock Text="Connection needs attention" FontWeight="SemiBold" Margin="0,0,0,4" />
                 <TextBlock Text="{Binding RecoveryMessage}" />
+                <Button Content="Repair adapter" Command="{Binding RepairAdapterCommand}"
+                        Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left" Margin="0,10,0,0"
+                        Visibility="{Binding HasAdapterRepair, Converter={StaticResource BooleanToVisibility}}" />
+              </StackPanel>
+            </Border>
+            <Border Style="{StaticResource SuccessNotice}"
+                    Visibility="{Binding HasTradeCommit, Converter={StaticResource BooleanToVisibility}}">
+              <StackPanel>
+                <TextBlock Text="Trade verified" FontWeight="SemiBold" Margin="0,0,0,4" />
+                <TextBlock Text="{Binding TradeCommitStatus}" />
               </StackPanel>
             </Border>
             <TextBlock Text="{Binding StageHeading}" Style="{StaticResource SectionTitle}" />
@@ -62,7 +72,39 @@
               </Grid>
             </Border>
             <TextBlock Text="Party details will appear after the passive live decoder is connected. Trading does not depend on party display."
-                       Style="{StaticResource SecondaryText}" Margin="0,18,0,0" />
+                       Style="{StaticResource SecondaryText}" Margin="0,18,0,12" />
+            <Border Style="{StaticResource SurfaceCard}" Margin="0,0,0,18" BorderBrush="{DynamicResource LinkBlueBrush}"
+                    Visibility="{Binding HasSelectedPokemon, Converter={StaticResource BooleanToVisibility}}"
+                    automation:AutomationProperties.LiveSetting="Polite">
+              <StackPanel>
+                <Grid>
+                  <StackPanel>
+                    <TextBlock Text="{Binding SelectedPokemon.Nickname}" Style="{StaticResource SectionTitle}" />
+                    <TextBlock Foreground="{DynamicResource SecondaryTextBrush}">
+                      <Run Text="{Binding SelectedPokemon.Species}" /><Run Text=" · Verified live data" />
+                    </TextBlock>
+                  </StackPanel>
+                  <Button Content="Close details" Command="{Binding ClearPokemonCommand}" Style="{StaticResource TextButton}" HorizontalAlignment="Right" VerticalAlignment="Top" />
+                </Grid>
+                <Border Height="1" Background="{DynamicResource BorderBrush}" Margin="0,16" />
+                <TextBlock Text="{Binding SelectedPokemon.Nature, StringFormat=Nature: {0}}" />
+                <TextBlock Text="{Binding SelectedPokemon.HeldItemText, StringFormat=Held item: {0}}" />
+                <TextBlock Text="{Binding SelectedPokemon.StatsText, StringFormat=Party stats: {0}}" Margin="0,8,0,0" />
+                <TextBlock Text="{Binding SelectedPokemon.IvsText, StringFormat=IVs: {0}}" />
+                <TextBlock Text="{Binding SelectedPokemon.EvsText, StringFormat=EVs: {0}}" />
+                <TextBlock Text="{Binding SelectedPokemon.MovesText, StringFormat=Moves: {0}}" Margin="0,8,0,0" />
+                <TextBlock Text="{Binding SelectedPokemon.TrainerText, StringFormat=Trainer: {0}}" Margin="0,8,0,0" />
+              </StackPanel>
+            </Border>
+            <Grid x:Name="LivePartyLayout"
+                  Visibility="{Binding HasPartyData, Converter={StaticResource BooleanToVisibility}}">
+              <Grid.ColumnDefinitions><ColumnDefinition x:Name="LiveYouPartyColumn" /><ColumnDefinition x:Name="LivePartyGutterColumn" Width="18" /><ColumnDefinition x:Name="LivePartnerPartyColumn" /></Grid.ColumnDefinitions>
+              <Grid.RowDefinitions><RowDefinition /><RowDefinition x:Name="LivePartyRowGutter" Height="0" /><RowDefinition /></Grid.RowDefinitions>
+              <components:PartyGrid x:Name="LiveYouPartyGrid" Heading="You" Slots="{Binding YouParty.Slots}"
+                                    SelectCommand="{Binding SelectPokemonCommand}" AccentBrush="{DynamicResource BlueTintBrush}" />
+              <components:PartyGrid x:Name="LivePartnerPartyGrid" Grid.Column="2" Heading="Partner" Slots="{Binding PartnerParty.Slots}"
+                                    SelectCommand="{Binding SelectPokemonCommand}" AccentBrush="{DynamicResource TealTintBrush}" />
+            </Grid>
           </StackPanel>
         </ScrollViewer>
         <Border Grid.Row="1" Style="{StaticResource StickyActionBar}">

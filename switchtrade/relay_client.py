@@ -40,3 +40,6 @@ class RelayClient:
 
     def status(self, session_id: str) -> dict:
         return self._request("GET", f"/session/{session_id}")
+
+    def shutdown(self) -> dict:
+        return self._request("POST", "/shutdown")

@@ -25,6 +25,8 @@ New-Item -ItemType Directory -Force -Path (Join-Path $Stage 'payload\app') | Out
 $app = Join-Path $Stage 'payload\app'
 $sourceArchive = Join-Path $Stage 'source.tar'
 $runtimePaths = @('apps/web', 'bridge', 'config', 'relay', 'scripts', 'switchtrade', 'tests',
+    'tools/payload_decoder.py', 'tools/pk3-tool.py', 'tools/species_map.py',
+    'tools/stats.py', 'tools/basestats.py', 'tools/charmap_jp.py',
     'pytest.ini', 'requirements.txt', 'test-requirements.txt', 'README.md')
 & git -C $Repo archive --format=tar --output=$sourceArchive HEAD -- @runtimePaths
 if ($LASTEXITCODE -ne 0) { throw 'could not archive tracked runtime source' }

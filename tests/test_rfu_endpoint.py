@@ -27,6 +27,14 @@ class FakeTunnel:
         return inbound
 
 
+class FakeObserver:
+    def __init__(self):
+        self.frames = []
+
+    def submit(self, seat, role, payload):
+        self.frames.append((seat, role, bytes(payload)))
+
+
 class RfuEndpointTest(unittest.TestCase):
     def _sim(self, parent=False):
         tunnel = FakeTunnel()
@@ -54,6 +62,29 @@ class RfuEndpointTest(unittest.TestCase):
         self.assertIsInstance(sequence, int)
         self.assertEqual(flags, 0x07)
         self.assertEqual(payload, b"\x57raw-rfu")
+
+    def test_passive_observer_receives_both_streams_without_changing_forwarding(self):
+        observer = FakeObserver()
+        tunnel = FakeTunnel()
+        sim = TunnelSim(
+            object(), object(), "169.254.1.2", "169.254.1.1", tunnel,
+            conn=None, our_var=0xC493, parent=False, observer=observer,
+            local_seat="member_a",
+        )
+        batches = []
+        sim._tx_reliable_batch = lambda batch: batches.extend(batch)
+        sim._on_reliable_app(0x01, b"local")
+        tunnel.inbound.append(Envelope(
+            "ABC123", Direction.GUEST_TO_HOST, 0, 1, 1, 0,
+            b"remote", kind=Kind.RFU, flags=0x01,
+        ))
+        sim._drive_tunnel_reliable()
+        self.assertEqual(tunnel.sent[0][0], b"local")
+        self.assertEqual(batches[0][2], b"remote")
+        self.assertEqual(observer.frames, [
+            ("member_a", "parent", b"local"),
+            ("member_b", "child", b"remote"),
+        ])
 
     def test_non_appdata_and_control_frames_are_not_injected(self):
         sim, tunnel, batches = self._sim()
