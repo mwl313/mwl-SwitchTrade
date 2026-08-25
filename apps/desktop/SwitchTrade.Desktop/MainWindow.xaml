@@ -73,7 +73,9 @@
       </Grid>
     </Border>
 
-    <Grid Grid.Row="1" Background="{DynamicResource CanvasBrush}">
+    <Border Grid.Row="1" Background="{DynamicResource SurfaceBrush}"
+            BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+      <Grid>
       <Button x:Name="BackButton" Command="{Binding BackCommand}" Style="{StaticResource TextButton}"
               HorizontalAlignment="Left" VerticalAlignment="Center" Margin="46,0,0,0"
               Visibility="{Binding CanGoBack, Converter={StaticResource BooleanToVisibility}}"
@@ -85,7 +87,8 @@
           <TextBlock Text="Back" />
         </StackPanel>
       </Button>
-    </Grid>
+      </Grid>
+    </Border>
 
     <controls:ScenePresenter x:Name="ScenePresenter" Grid.Row="2" Content="{Binding CurrentScreen}"
                              MaxWidth="1000" Margin="56,8,32,24" HorizontalAlignment="Left"

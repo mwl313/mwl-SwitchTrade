@@ -83,3 +83,12 @@ path; they do not pretend to be the future authenticated `room-control.v1` servi
 
 The next Gate 0 action is final owner/GPT visual approval plus final public assets, legal notices, and
 support destination. Backend implementation then follows the ordered gates in `docs/55`.
+
+## Owner follow-up corrections — 2026-08-26
+
+- Restored Settings to three native tabs at every window width; the compact dropdown was removed.
+- Normalized Create/Public combo boxes to a fixed 44-DIP height with vertically centered content.
+- Gave the fixed Back bar and sticky Create/connection action footers a white surface plus separating
+  border so they remain distinct from the gray scrolling canvas.
+- Reordered the compact party layout so Partner appears above You; the wide layout remains You-left and
+  Partner-right.
