@@ -13,6 +13,31 @@ $AppRoot = Join-Path $InstallRoot "app"
 $ProfileFile = Join-Path $AppRoot "config\wsl-radio-hardware.tsv"
 $Preflight = Join-Path $AppRoot "scripts\windows\wsl-radio-preflight.ps1"
 $ConfigFile = Join-Path $InstallRoot "config.json"
+$ExpectedReadinessContract = "app-readiness.v1"
+
+function Get-ControlReadiness {
+    try {
+        return Invoke-RestMethod -Uri "http://127.0.0.1:8787/api/v1/app/readiness" -TimeoutSec 1
+    } catch {
+        return $null
+    }
+}
+
+$existing = Get-ControlReadiness
+if ($existing -and $existing.contract_version -eq $ExpectedReadinessContract) {
+    if (-not $NoBrowser) { Start-Process "http://127.0.0.1:8787/" }
+    exit 0
+}
+
+$created = $false
+$launchMutex = New-Object System.Threading.Mutex($true, "Local\SwitchTrade.RuntimeLauncher", [ref]$created)
+if (-not $created) {
+    if (-not $launchMutex.WaitOne(15000)) {
+        throw "Another SwitchTrade startup is still running. Try again."
+    }
+}
+
+try {
 
 function Test-Administrator {
     $principal = New-Object Security.Principal.WindowsPrincipal(
@@ -33,7 +58,7 @@ if (-not (Test-Administrator)) {
     if ($UsbId) { $arguments += @('-UsbId', (Quote-Argument $UsbId)) }
     if ($NoBrowser) { $arguments += '-NoBrowser' }
     Start-Process powershell.exe -Verb RunAs -WindowStyle Hidden -ArgumentList $arguments
-    exit
+    return
 }
 
 if (-not (Test-Path -LiteralPath $Preflight -PathType Leaf)) {
@@ -54,24 +79,35 @@ if ($UsbId) { $preflightArguments += @('-UsbId', $UsbId) }
 $python = "/opt/switchtrade/bridge/.venv/bin/python"
 $processes = @()
 if ($RelayUrl -match '^http://(127\.0\.0\.1|localhost):8788/?$') {
+    $relayReady = $false
+    try {
+        $relay = Invoke-RestMethod -Uri "http://127.0.0.1:8788/health" -TimeoutSec 1
+        $relayReady = $relay.status -eq "ready"
+    } catch { }
+    if (-not $relayReady) {
+        $processes += Start-Process wsl.exe -WindowStyle Hidden -PassThru -ArgumentList @(
+            '-d', $Distro, '-u', 'root', '--cd', '/opt/switchtrade', '--',
+            'env', 'SWITCHTRADE_ALLOW_PROCESS_SHUTDOWN=1', $python, '-m', 'relay.server'
+        )
+    }
+}
+$existing = Get-ControlReadiness
+if (-not $existing) {
     $processes += Start-Process wsl.exe -WindowStyle Hidden -PassThru -ArgumentList @(
         '-d', $Distro, '-u', 'root', '--cd', '/opt/switchtrade', '--',
-        $python, '-m', 'uvicorn', 'relay.server:app', '--host', '127.0.0.1', '--port', '8788'
+        'env', "SWITCHTRADE_RELAY_URL=$RelayUrl", 'SWITCHTRADE_ALLOW_PROCESS_SHUTDOWN=1',
+        $python, '-m', 'switchtrade.control'
     )
 }
-$processes += Start-Process wsl.exe -WindowStyle Hidden -PassThru -ArgumentList @(
-    '-d', $Distro, '-u', 'root', '--cd', '/opt/switchtrade', '--',
-    'env', "SWITCHTRADE_RELAY_URL=$RelayUrl", $python, '-m', 'switchtrade.control'
-)
 
 $ready = $false
 for ($attempt = 0; $attempt -lt 40; $attempt++) {
-    try {
-        $response = Invoke-RestMethod -Uri "http://127.0.0.1:8787/api/status" -TimeoutSec 2
-        if ($response.status) { $ready = $true; break }
-    } catch {
-        Start-Sleep -Milliseconds 500
+    $response = Get-ControlReadiness
+    if ($response -and $response.contract_version -eq $ExpectedReadinessContract -and $response.compatible) {
+        $ready = $true
+        break
     }
+    Start-Sleep -Milliseconds 500
 }
 if (-not $ready) {
     $processes | Where-Object { -not $_.HasExited } | Stop-Process -Force
@@ -80,3 +116,7 @@ if (-not $ready) {
 
 if (-not $NoBrowser) { Start-Process "http://127.0.0.1:8787/" }
 Write-Host "SwitchTrade is ready at http://127.0.0.1:8787/"
+} finally {
+    try { $launchMutex.ReleaseMutex() } catch { }
+    $launchMutex.Dispose()
+}

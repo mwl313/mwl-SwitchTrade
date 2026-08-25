@@ -17,6 +17,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private bool _isServiceReady;
     private string _readinessText = "Starting SwitchTrade";
     private string _announcement = "";
+    private string _controlStateText = "Checking";
+    private string _relayStateText = "Not checked";
+    private string _radioStateText = "Not checked";
+    private string _sessionStateText = "Not active";
+    private string _recoverySummary = "The installed local service did not respond.";
+    private string _recoveryTechnicalDetails = "Local setup · The desktop app could not reach 127.0.0.1:8787.";
 
     internal IControlGateway Gateway { get; }
     internal PublicRoomPreviewProvider PreviewProvider { get; }
@@ -78,6 +84,17 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         private set => Set(ref _announcement, value);
     }
 
+    public string ControlStateText { get => _controlStateText; private set => Set(ref _controlStateText, value); }
+    public string RelayStateText { get => _relayStateText; private set => Set(ref _relayStateText, value); }
+    public string RadioStateText { get => _radioStateText; private set => Set(ref _radioStateText, value); }
+    public string SessionStateText { get => _sessionStateText; private set => Set(ref _sessionStateText, value); }
+    public string RecoverySummary { get => _recoverySummary; private set => Set(ref _recoverySummary, value); }
+    public string RecoveryTechnicalDetails
+    {
+        get => _recoveryTechnicalDetails;
+        private set => Set(ref _recoveryTechnicalDetails, value);
+    }
+
     public bool CanGoBack => _history.Count > 0 && CurrentScreen is not HomeScreenViewModel;
     public AsyncCommand BackCommand { get; }
     public RelayCommand SettingsCommand { get; }
@@ -120,12 +137,17 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (status is not null)
         {
             ApplyStatus(status);
-            ShowHome();
+            await RefreshPartiesAsync(cancellationToken);
+            if (IsServiceReady) ShowHome();
+            else CurrentScreen = new RecoveryScreenViewModel(this);
             return;
         }
 
         IsServiceReady = false;
         ReadinessText = "Setup needs attention";
+        ControlStateText = "Unavailable";
+        RecoverySummary = "The installed local service did not respond.";
+        RecoveryTechnicalDetails = "control.unavailable · 127.0.0.1:8787 did not answer the bounded readiness probe.";
         CurrentScreen = new RecoveryScreenViewModel(this);
     }
 
@@ -143,14 +165,20 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 return;
             }
             ApplyStatus(status);
+            await RefreshPartiesAsync();
         }
         finally { _refreshing = false; }
     }
 
     private void ApplyStatus(ControlStatus status)
     {
-        IsServiceReady = true;
-        ReadinessText = status.Status switch
+        var control = status.Axis("control");
+        ControlStateText = control.Display;
+        RelayStateText = status.Axis("relay").Display;
+        RadioStateText = status.Axis("radio").Display;
+        SessionStateText = status.Axis("session").Display;
+        IsServiceReady = status.Compatible && control.Status == "ready";
+        ReadinessText = !status.Compatible ? "Update or repair required" : status.Status switch
         {
             "initializing" or "starting" => "Preparing connection",
             "relay_connected" => "Connected online",
@@ -158,7 +186,20 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             "failed" => "Connection needs attention",
             _ => "Ready",
         };
+        RecoverySummary = !status.Compatible
+            ? "The desktop app and installed SwitchTrade runtime are not compatible."
+            : status.Error ?? "The installed runtime needs attention.";
+        RecoveryTechnicalDetails = !status.Compatible
+            ? $"app.version_mismatch · UI expects {ControlApiClient.ReadinessContract} / 0.2.x; runtime reported {status.ContractVersion} / {status.Version}."
+            : $"{status.FailureStage ?? "control"}.failed · run {status.RunId} · action {status.RecoveryAction ?? "retry"}";
         RoomCoordinator.ApplyStatus(status);
+    }
+
+    private async Task RefreshPartiesAsync(CancellationToken cancellationToken = default)
+    {
+        if (_activeTradeRoom is null) return;
+        var parties = await Gateway.TryGetPartiesAsync(cancellationToken);
+        if (parties is not null) _activeTradeRoom.ApplyLiveParties(parties);
     }
 
     public void ShowHome()
@@ -270,6 +311,22 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     internal string ReadClipboard() => _clipboard.TryGetText(out var text) ? text : "";
+
+    internal async Task<bool> RepairAdapterAsync()
+    {
+        try
+        {
+            await Gateway.RepairAdapterAsync();
+            Announce("The adapter health check passed. End the failed connection and try again.");
+            await RefreshAsync();
+            return true;
+        }
+        catch (UserFacingException error)
+        {
+            Announce(error.UserMessage);
+            return false;
+        }
+    }
 
     internal void Announce(string message)
     {

@@ -57,7 +57,8 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
         RaiseChanged();
         try
         {
-            await _gateway.StartConnectionAsync(Context.SwitchRole, Context.Room.RoomCode, cancellationToken);
+            await _gateway.StartConnectionAsync(
+                Context.SwitchRole, Context.MembershipRole, Context.Room.RoomCode, cancellationToken);
             StatusText = "Preparing the connection. Follow the Switch instructions.";
             RaiseChanged();
             return true;

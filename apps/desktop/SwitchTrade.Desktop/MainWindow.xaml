@@ -53,11 +53,16 @@
               <TextBlock Text="Local setup" FontWeight="SemiBold" Margin="0,0,0,8" />
               <Grid>
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                <TextBlock Text="App service" />
-                <TextBlock Grid.Column="1" Text="{Binding ReadinessText}" Foreground="{DynamicResource SecondaryTextBrush}" />
+                <Grid.RowDefinitions><RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition /></Grid.RowDefinitions>
+                <TextBlock Text="Control service" />
+                <TextBlock Grid.Column="1" Text="{Binding ControlStateText}" Foreground="{DynamicResource SecondaryTextBrush}" />
+                <TextBlock Grid.Row="1" Text="Online relay" Margin="0,6,0,0" />
+                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding RelayStateText}" Margin="0,6,0,0" Foreground="{DynamicResource SecondaryTextBrush}" />
+                <TextBlock Grid.Row="2" Text="Switch radio" Margin="0,6,0,0" />
+                <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding RadioStateText}" Margin="0,6,0,0" Foreground="{DynamicResource SecondaryTextBrush}" />
+                <TextBlock Grid.Row="3" Text="Trade session" Margin="0,6,0,0" />
+                <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding SessionStateText}" Margin="0,6,0,0" Foreground="{DynamicResource SecondaryTextBrush}" />
               </Grid>
-              <TextBlock Text="Partner, adapter, and Switch states appear only when the installed service reports them."
-                         Style="{StaticResource SecondaryText}" Margin="0,10,0,0" />
             </StackPanel>
           </Border>
         </Popup>

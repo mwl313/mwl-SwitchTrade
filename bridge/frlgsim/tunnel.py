@@ -23,10 +23,13 @@ class TunnelSim(Sim):
 
     def __init__(self, transport, pia_crypto, our_ip, peer_ip, tunnel, *, conn,
                  our_var, parent=False, compress=False, capture_path=None,
-                 log=lambda *args: None):
+                 observer=None, local_seat="member_a", log=lambda *args: None):
         self.tunnel = tunnel
         self._pending_remote = deque()
         self.parent = bool(parent)
+        self.observer = observer
+        self.local_seat = local_seat
+        self.remote_seat = "member_b" if local_seat == "member_a" else "member_a"
         super().__init__(
             transport, pia_crypto, _NoGameEngine(), our_ip, peer_ip,
             conn=conn, our_var=our_var, compress=compress,
@@ -37,6 +40,9 @@ class TunnelSim(Sim):
     def _on_reliable_app(self, flags_a, payload):
         """Forward exact application bytes; no RFU opcode or activity knowledge."""
         self.tunnel.send(payload, kind=Kind.RFU, flags=flags_a)
+        if self.observer is not None:
+            sender_role = "child" if self.parent else "parent"
+            self.observer.submit(self.local_seat, sender_role, payload)
 
     def _drain_tunnel(self):
         for envelope in self.tunnel.poll():
@@ -59,6 +65,9 @@ class TunnelSim(Sim):
             if not flags & 0x01:
                 self.log(f"[tunnel] rejected non-AppData RFU flags=0x{flags:02x}")
                 continue
+            if self.observer is not None:
+                sender_role = "parent" if self.parent else "child"
+                self.observer.submit(self.remote_seat, sender_role, envelope.payload)
             seq = self.rel.queue(envelope.payload, flags, now_ms)
             batch.append((seq, flags, envelope.payload))
 

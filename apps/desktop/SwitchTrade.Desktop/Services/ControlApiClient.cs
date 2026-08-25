@@ -19,16 +19,21 @@ public interface IControlGateway : IDisposable
     Task<ControlStatus?> TryGetStatusAsync(CancellationToken cancellationToken = default);
     Task<TradeRoomInfo> CreateTradeRoomAsync(TradeRoomCreateRequest request, CancellationToken cancellationToken = default);
     Task<TradeRoomInfo> JoinTradeRoomAsync(string roomCode, CancellationToken cancellationToken = default);
-    Task StartConnectionAsync(SwitchRoomRole role, string roomCode, CancellationToken cancellationToken = default);
+    Task StartConnectionAsync(SwitchRoomRole role, RoomMembershipRole membershipRole,
+        string roomCode, CancellationToken cancellationToken = default);
     Task StopConnectionAsync(CancellationToken cancellationToken = default);
     Task ReleaseTradeRoomAsync(string roomCode, RoomMembershipRole role, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<AdapterProfileViewData>> GetAdapterProfilesAsync(CancellationToken cancellationToken = default);
+    Task<LivePartyProjection?> TryGetPartiesAsync(CancellationToken cancellationToken = default);
+    Task RepairAdapterAsync(CancellationToken cancellationToken = default);
     Task<string> CreateSupportBundleAsync(CancellationToken cancellationToken = default);
 }
 
 public sealed class ControlApiClient : IControlGateway
 {
     public const string ApiBase = "http://127.0.0.1:8787";
+    public const string ReadinessContract = "app-readiness.v1";
+    private const string CompatibleProductPrefix = "0.2.";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -50,13 +55,32 @@ public sealed class ControlApiClient : IControlGateway
         probeTimeout.CancelAfter(TimeSpan.FromMilliseconds(500));
         try
         {
-            using var response = await _http.GetAsync("/api/status", probeTimeout.Token);
+            using var response = await _http.GetAsync("/api/v1/app/readiness", probeTimeout.Token);
             if (!response.IsSuccessStatusCode) return null;
-            var dto = await response.Content.ReadFromJsonAsync<StatusDto>(JsonOptions, probeTimeout.Token);
-            return dto is null ? null : new ControlStatus(
-                dto.Status ?? "ready", dto.Version ?? "unknown", dto.RunId ?? "",
-                dto.EndpointProcessRunning, dto.RadioChecked, dto.TunnelConnected,
-                dto.SessionId, dto.Error);
+            var dto = await response.Content.ReadFromJsonAsync<ReadinessDto>(JsonOptions, probeTimeout.Token);
+            if (dto is null) return null;
+            var states = (dto.States ?? new Dictionary<string, ReadinessAxisDto>())
+                .ToDictionary(
+                    item => item.Key,
+                    item => new ReadinessAxis(
+                        item.Value.Status ?? "unknown",
+                        item.Value.UserMessage ?? "Not checked",
+                        item.Value.TechnicalCode ?? $"{item.Key}.unknown",
+                        item.Value.PrimaryAction),
+                    StringComparer.OrdinalIgnoreCase);
+            var session = states.TryGetValue("session", out var sessionAxis)
+                ? sessionAxis.TechnicalCode.Replace("session.", "", StringComparison.OrdinalIgnoreCase)
+                : "idle";
+            var compatible = dto.Compatible && dto.ContractVersion == ReadinessContract &&
+                             (dto.ProductVersion?.StartsWith(CompatibleProductPrefix, StringComparison.Ordinal) ?? false);
+            return new ControlStatus(
+                session, dto.ProductVersion ?? "unknown", dto.RunId ?? "",
+                dto.EndpointProcessRunning,
+                states.TryGetValue("radio", out var radio) && radio.Status == "ready",
+                states.TryGetValue("relay", out var relay) && relay.Status == "ready",
+                dto.SessionId, dto.Failure?.Message,
+                dto.ContractVersion ?? "unknown", compatible, states,
+                dto.Failure?.Stage, dto.Failure?.PrimaryAction);
         }
         catch (HttpRequestException) { return null; }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return null; }
@@ -91,16 +115,18 @@ public sealed class ControlApiClient : IControlGateway
     }
 
     public async Task StartConnectionAsync(
-        SwitchRoomRole role, string roomCode, CancellationToken cancellationToken = default) =>
+        SwitchRoomRole role, RoomMembershipRole membershipRole,
+        string roomCode, CancellationToken cancellationToken = default) =>
         _ = await PostAsync<JsonElement>(
-            "/api/session/start", new
+            "/api/v1/session/start", new
             {
-                role = role == SwitchRoomRole.Creator ? "host" : "guest",
+                tunnel_seat = membershipRole == RoomMembershipRole.Owner ? "member_a" : "member_b",
+                switch_room_role = role == SwitchRoomRole.Creator ? "creator" : "finder",
                 passcode = roomCode,
             }, cancellationToken);
 
     public async Task StopConnectionAsync(CancellationToken cancellationToken = default) =>
-        _ = await PostAsync<JsonElement>("/api/session/stop", new { }, cancellationToken);
+        _ = await PostAsync<JsonElement>("/api/v1/session/stop", new { }, cancellationToken);
 
     public async Task ReleaseTradeRoomAsync(
         string roomCode, RoomMembershipRole role, CancellationToken cancellationToken = default)
@@ -175,9 +201,151 @@ public sealed class ControlApiClient : IControlGateway
     public async Task<string> CreateSupportBundleAsync(CancellationToken cancellationToken = default)
     {
         var result = await PostAsync<SupportBundleResponse>(
-            "/api/support-bundle", new { }, cancellationToken);
+            "/api/v1/support-bundle", new { }, cancellationToken);
         return result.Path ?? "Support file created";
     }
+
+    public async Task RepairAdapterAsync(CancellationToken cancellationToken = default) =>
+        _ = await PostAsync<JsonElement>(
+            "/api/v1/app/repair", new { action = "recheck_adapter" }, cancellationToken);
+
+    public async Task<LivePartyProjection?> TryGetPartiesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        using var probeTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        probeTimeout.CancelAfter(TimeSpan.FromMilliseconds(650));
+        try
+        {
+            using var response = await _http.GetAsync("/api/v1/trade-room/parties", probeTimeout.Token);
+            if (!response.IsSuccessStatusCode) return null;
+            using var document = await JsonDocument.ParseAsync(
+                await response.Content.ReadAsStreamAsync(probeTimeout.Token),
+                cancellationToken: probeTimeout.Token);
+            var root = document.RootElement;
+            var status = Text(root, "observer_status") ?? "unavailable";
+            var confirmed = root.TryGetProperty("trading_room_confirmed", out var confirmedValue) &&
+                            confirmedValue.ValueKind == JsonValueKind.True;
+            var commits = ParseCommits(root);
+            if (!root.TryGetProperty("parties", out var parties))
+                return new(null, null, status, confirmed, commits);
+            return new(
+                ParseParty(parties, "member_a", "Member A", "Blue"),
+                ParseParty(parties, "member_b", "Member B", "Teal"),
+                status, confirmed, commits);
+        }
+        catch (HttpRequestException) { return null; }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return null; }
+        catch (JsonException) { return null; }
+    }
+
+    private static PartyPreviewViewData? ParseParty(
+        JsonElement parties, string seat, string heading, string accent)
+    {
+        if (!parties.TryGetProperty(seat, out var party) ||
+            Text(party, "status") != "available" ||
+            !party.TryGetProperty("snapshot", out var snapshot) ||
+            snapshot.ValueKind != JsonValueKind.Object ||
+            !snapshot.TryGetProperty("slots", out var slots)) return null;
+        var result = new List<PokemonPreviewViewData>();
+        foreach (var slot in slots.EnumerateArray())
+        {
+            var occupied = slot.TryGetProperty("occupied", out var occupiedValue) &&
+                           occupiedValue.ValueKind == JsonValueKind.True;
+            if (!occupied)
+            {
+                result.Add(new("", "", 0, "", null, null, null, null, [], null, true, true));
+                continue;
+            }
+            var stats = Object(slot, "stats");
+            var ivs = Object(slot, "ivs");
+            var evs = Object(slot, "evs");
+            var moves = new List<MovePreview>();
+            if (slot.TryGetProperty("moves", out var moveValues))
+            {
+                foreach (var move in moveValues.EnumerateArray())
+                {
+                    var name = FieldText(move, "name");
+                    var id = FieldInt(move, "move_id");
+                    if (!string.IsNullOrWhiteSpace(name)) moves.Add(new(name));
+                    else if (id is > 0) moves.Add(new($"Move #{id}"));
+                }
+            }
+            var trainer = Object(slot, "trainer");
+            result.Add(new(
+                FieldText(slot, "nickname") ?? "Unknown",
+                FieldText(slot, "species") ?? "Unknown",
+                FieldInt(slot, "level") ?? 0,
+                FieldText(slot, "nature") ?? "Unavailable",
+                ItemLabel(FieldInt(slot, "held_item")),
+                new BattleStats(
+                    FieldInt(slot, "current_hp") ?? 0,
+                    FieldInt(stats, "attack") ?? 0,
+                    FieldInt(stats, "defense") ?? 0,
+                    FieldInt(stats, "sp_attack") ?? 0,
+                    FieldInt(stats, "sp_defense") ?? 0,
+                    FieldInt(stats, "speed") ?? 0),
+                Six(ivs), Six(evs), moves,
+                new TrainerPreview(
+                    FieldText(trainer, "name") ?? "Unknown",
+                    FieldInt(trainer, "trainer_id"),
+                    Language(FieldInt(trainer, "language"))),
+                IsLive: true));
+        }
+        while (result.Count < 6)
+            result.Add(new("", "", 0, "", null, null, null, null, [], null, true, true));
+        return new(heading, accent, result.Take(6).ToArray());
+    }
+
+    private static List<TradeCommitProjection> ParseCommits(JsonElement root)
+    {
+        if (!root.TryGetProperty("commits", out var values) ||
+            values.ValueKind != JsonValueKind.Array) return [];
+        var result = new List<TradeCommitProjection>();
+        foreach (var value in values.EnumerateArray())
+        {
+            var id = Text(value, "commit_id");
+            if (string.IsNullOrWhiteSpace(id)) continue;
+            var index = value.TryGetProperty("trade_index", out var indexValue) &&
+                        indexValue.TryGetInt32(out var number) ? number : 0;
+            DateTimeOffset? committedAt = DateTimeOffset.TryParse(
+                Text(value, "committed_at"), out var parsed) ? parsed : null;
+            result.Add(new(id, index, Text(value, "outcome") ?? "committed", committedAt));
+        }
+        return result;
+    }
+
+    private static JsonElement Object(JsonElement parent, string name) =>
+        parent.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Object
+            ? value : default;
+    private static string? Text(JsonElement parent, string name) =>
+        parent.ValueKind == JsonValueKind.Object && parent.TryGetProperty(name, out var value) &&
+        value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+    private static string? FieldText(JsonElement parent, string name)
+    {
+        var field = Object(parent, name);
+        return Text(field, "value");
+    }
+    private static int? FieldInt(JsonElement parent, string name)
+    {
+        var field = Object(parent, name);
+        return field.ValueKind == JsonValueKind.Object && field.TryGetProperty("value", out var value) &&
+               value.TryGetInt32(out var number) ? number : null;
+    }
+    private static SixValues Six(JsonElement value) => new(
+        FieldInt(value, "hp") ?? 0, FieldInt(value, "attack") ?? 0,
+        FieldInt(value, "defense") ?? 0, FieldInt(value, "sp_attack") ?? 0,
+        FieldInt(value, "sp_defense") ?? 0, FieldInt(value, "speed") ?? 0);
+    private static string? ItemLabel(int? id) => id is null or 0 ? null : $"Item #{id}";
+    private static GameLanguage Language(int? id) => id switch
+    {
+        1 => GameLanguage.Japanese,
+        2 => GameLanguage.English,
+        3 => GameLanguage.French,
+        4 => GameLanguage.Italian,
+        5 => GameLanguage.German,
+        7 => GameLanguage.Spanish,
+        _ => GameLanguage.None,
+    };
 
     private async Task<T> PostAsync<T>(string path, object body, CancellationToken cancellationToken)
     {
@@ -264,6 +432,27 @@ public sealed class ControlApiClient : IControlGateway
         [property: JsonPropertyName("tunnel_connected")] bool TunnelConnected,
         [property: JsonPropertyName("session_id")] string? SessionId,
         string? Error);
+
+    private sealed record ReadinessDto(
+        [property: JsonPropertyName("contract_version")] string? ContractVersion,
+        [property: JsonPropertyName("product_version")] string? ProductVersion,
+        bool Compatible,
+        [property: JsonPropertyName("run_id")] string? RunId,
+        [property: JsonPropertyName("endpoint_process_running")] bool EndpointProcessRunning,
+        [property: JsonPropertyName("session_id")] string? SessionId,
+        IReadOnlyDictionary<string, ReadinessAxisDto>? States,
+        FailureDto? Failure);
+    private sealed record ReadinessAxisDto(
+        string? Status,
+        [property: JsonPropertyName("user_message")] string? UserMessage,
+        [property: JsonPropertyName("technical_code")] string? TechnicalCode,
+        [property: JsonPropertyName("primary_action")] string? PrimaryAction);
+    private sealed record FailureDto(
+        string? Stage,
+        string? Code,
+        string? Message,
+        bool Recoverable,
+        [property: JsonPropertyName("primary_action")] string? PrimaryAction);
 
     private sealed record GroupResponse(string? Scope, GroupDto? Group);
     private sealed record GroupDto(

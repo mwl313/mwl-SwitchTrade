@@ -15,6 +15,8 @@ public sealed class RecoveryScreenViewModel : ScreenViewModel
     }
 
     public override string Title => "SwitchTrade couldn’t start";
+    public string RecoverySummary => Shell.RecoverySummary;
+    public string RecoveryTechnicalDetails => Shell.RecoveryTechnicalDetails;
     public AsyncCommand RetryCommand { get; }
     public RelayCommand PreviewCommand { get; }
     public RelayCommand SettingsCommand { get; }
@@ -25,9 +27,9 @@ public sealed class HomeScreenViewModel : ScreenViewModel
     public HomeScreenViewModel(MainViewModel shell, bool interfacePreview = false) : base(shell)
     {
         IsInterfacePreview = interfacePreview;
-        CreateCommand = new RelayCommand(shell.OpenCreate);
+        CreateCommand = new RelayCommand(shell.OpenCreate, () => shell.IsServiceReady);
         PublicCommand = new RelayCommand(shell.OpenPublicRooms);
-        JoinCommand = new RelayCommand(shell.OpenPrivateJoin);
+        JoinCommand = new RelayCommand(shell.OpenPrivateJoin, () => shell.IsServiceReady);
     }
 
     public override string Title => "Home";
@@ -43,6 +45,8 @@ public sealed class HomeScreenViewModel : ScreenViewModel
     public override void NotifyShellState()
     {
         base.NotifyShellState();
+        CreateCommand.RaiseCanExecuteChanged();
+        JoinCommand.RaiseCanExecuteChanged();
         OnPropertyChanged(nameof(ShowAttention));
         OnPropertyChanged(nameof(AttentionText));
     }

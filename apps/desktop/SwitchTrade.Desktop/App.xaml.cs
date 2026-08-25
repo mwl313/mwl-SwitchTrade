@@ -7,9 +7,13 @@ using SwitchTrade.Desktop.ViewModels;
 
 namespace SwitchTrade.Desktop;
 
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "Design", "CA1001:Types that own disposable fields should be disposable",
+    Justification = "WPF owns the Application lifetime; OnExit releases the single-instance mutex.")]
 public partial class App : Application
 {
     private ResourceDictionary? _highContrastResources;
+    private Mutex? _singleInstance;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -58,6 +62,12 @@ public partial class App : Application
                      coordinatorWorks && memberReleaseWorks ? 0 : 1);
             return;
         }
+        _singleInstance = new Mutex(true, "Local\\SwitchTrade.Desktop", out var createdNew);
+        if (!createdNew)
+        {
+            Shutdown(0);
+            return;
+        }
         new MainWindow().Show();
     }
 
@@ -71,7 +81,8 @@ public partial class App : Application
             throw new NotSupportedException();
         public Task<TradeRoomInfo> JoinTradeRoomAsync(string roomCode, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
-        public Task StartConnectionAsync(SwitchRoomRole role, string roomCode, CancellationToken cancellationToken = default)
+        public Task StartConnectionAsync(SwitchRoomRole role, RoomMembershipRole membershipRole,
+            string roomCode, CancellationToken cancellationToken = default)
         {
             LastSwitchRole = role;
             return Task.CompletedTask;
@@ -84,6 +95,9 @@ public partial class App : Application
         }
         public Task<IReadOnlyList<AdapterProfileViewData>> GetAdapterProfilesAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<AdapterProfileViewData>>([]);
+        public Task<LivePartyProjection?> TryGetPartiesAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<LivePartyProjection?>(null);
+        public Task RepairAdapterAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<string> CreateSupportBundleAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult("");
         public void Dispose() { }
@@ -92,6 +106,12 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         SystemParameters.StaticPropertyChanged -= SystemSettingChanged;
+        if (_singleInstance is not null)
+        {
+            try { _singleInstance.ReleaseMutex(); }
+            catch (ApplicationException) { }
+            _singleInstance.Dispose();
+        }
         base.OnExit(e);
     }
 

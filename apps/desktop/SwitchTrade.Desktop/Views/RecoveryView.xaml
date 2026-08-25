@@ -12,7 +12,7 @@
                  FontSize="16" LineHeight="24" Margin="0,0,0,24" />
       <Border Style="{StaticResource ErrorNotice}">
         <StackPanel>
-          <TextBlock Text="The SwitchTrade service did not respond." FontWeight="SemiBold" Margin="0,0,0,4" />
+          <TextBlock Text="{Binding RecoverySummary}" FontWeight="SemiBold" Margin="0,0,0,4" />
           <TextBlock Text="No online room or Switch connection was started." />
         </StackPanel>
       </Border>
@@ -22,7 +22,7 @@
         <Button Content="View interface preview" Command="{Binding PreviewCommand}" Style="{StaticResource TextButton}" Margin="0,0,0,8" />
       </WrapPanel>
       <Expander Header="Technical details" Margin="0,20,0,0">
-        <TextBlock Text="Local setup · The desktop app could not reach 127.0.0.1:8787."
+        <TextBlock Text="{Binding RecoveryTechnicalDetails}"
                    Style="{StaticResource SecondaryText}" Margin="0,10,0,0" />
       </Expander>
     </StackPanel>

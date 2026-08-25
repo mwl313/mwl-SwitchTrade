@@ -1,4 +1,6 @@
 import asyncio
+from fastapi import BackgroundTasks
+import os
 import secrets
 import string
 import time
@@ -6,6 +8,7 @@ import time
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 
 from switchtrade.rfu_tunnel import Direction, Envelope, Kind, direction_for_role
+from switchtrade.process_guard import AlreadyRunningError, SingleInstanceLock
 
 HEARTBEAT_TIMEOUT = 30.0
 SESSION_ID_CHARS = string.ascii_uppercase + string.digits
@@ -19,6 +22,19 @@ MAX_MESSAGE_BYTES = (1 << 20) + 256
 SESSION_TTL = 6 * 60 * 60
 
 app = FastAPI()
+
+
+@app.get("/health")
+async def health() -> dict:
+    return {"status": "ready", "service": "switchtrade-development-relay"}
+
+
+@app.post("/shutdown")
+async def shutdown(background_tasks: BackgroundTasks) -> dict:
+    if os.environ.get("SWITCHTRADE_ALLOW_PROCESS_SHUTDOWN") != "1":
+        raise HTTPException(status_code=409, detail="relay shutdown is not enabled")
+    background_tasks.add_task(lambda: (time.sleep(0.1), os.kill(os.getpid(), 15)))
+    return {"status": "stopping"}
 
 
 class Session:
@@ -142,3 +158,16 @@ async def ws_session(websocket: WebSocket, sid: str, role: str = "host",
             if getattr(session, role) is websocket:
                 setattr(session, role, None)
             session.last_activity = time.monotonic()
+
+
+def main() -> None:
+    import uvicorn
+    try:
+        with SingleInstanceLock("development-relay"):
+            uvicorn.run("relay.server:app", host="127.0.0.1", port=8788, reload=False)
+    except AlreadyRunningError as error:
+        raise SystemExit(str(error)) from error
+
+
+if __name__ == "__main__":
+    main()

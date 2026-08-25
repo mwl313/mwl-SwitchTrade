@@ -18,7 +18,10 @@ import zipfile
 
 
 RUN_ID = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{8}$")
-SENSITIVE_NAMES = ("password", "passcode", "passphrase", "secret", "token", "master_key", "prod.keys")
+SENSITIVE_NAMES = (
+    "password", "passcode", "passphrase", "secret", "token", "master_key", "prod.keys",
+    "session_id", "room_code",
+)
 
 
 def default_runs_root() -> Path:
@@ -101,7 +104,8 @@ class RunLogger:
     def close(self, outcome: str = "stopped") -> None:
         self.event("run_finished", outcome=outcome)
 
-    def support_bundle(self, destination: str | Path | None = None) -> Path:
+    def support_bundle(self, destination: str | Path | None = None,
+                       summary: dict | None = None) -> Path:
         destination = Path(destination) if destination else self.root / f"support-{self.run_id}.zip"
         manifest = {
             "run_id": self.run_id,
@@ -115,6 +119,11 @@ class RunLogger:
                 if path.is_file():
                     bundle.write(path, name)
             bundle.writestr("privacy-manifest.json", json.dumps(manifest, indent=2) + "\n")
+            if summary is not None:
+                bundle.writestr(
+                    "runtime-summary.json",
+                    json.dumps(_redact(summary), ensure_ascii=False, indent=2) + "\n",
+                )
         self.event("support_bundle_created", path=destination)
         return destination
 
