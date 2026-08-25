@@ -5,6 +5,7 @@ param(
     [string]$Distro = 'SwitchTrade',
     [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'Programs\SwitchTrade'),
     [string]$DistroRoot = (Join-Path $env:LOCALAPPDATA 'SwitchTrade\wsl'),
+    [switch]$NoShortcut,
     [switch]$PurgeDistro
 )
 
@@ -57,6 +58,12 @@ if ($Action -eq 'Uninstall') {
             if ($LASTEXITCODE -ne 0) { throw "failed to unregister $Distro" }
         }
     }
+    $shortcutPath = Join-Path $env:USERPROFILE 'Desktop\SwitchTrade.lnk'
+    if (-not $NoShortcut -and (Test-Path -LiteralPath $shortcutPath -PathType Leaf)) {
+        if ($PSCmdlet.ShouldProcess($shortcutPath, 'Remove SwitchTrade shortcut')) {
+            Remove-Item -LiteralPath $shortcutPath -Force
+        }
+    }
     Write-Host "SwitchTrade application removed.$(if ($PurgeDistro) { ' Distro purge requested.' })"
     exit
 }
@@ -96,11 +103,13 @@ $provision = Convert-ToWslPath (Join-Path $PackageRoot 'installer\provision-wsl.
 & wsl.exe -d $Distro -u root -- bash $provision --source $source
 if ($LASTEXITCODE -ne 0) { throw 'SwitchTrade WSL provisioning failed.' }
 
-$shell = New-Object -ComObject WScript.Shell
-$shortcut = $shell.CreateShortcut((Join-Path $env:USERPROFILE 'Desktop\SwitchTrade.lnk'))
-$shortcut.TargetPath = 'powershell.exe'
-$shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $InstallRoot 'installer\Launch-SwitchTrade.ps1')`""
-$shortcut.WorkingDirectory = $InstallRoot
-$shortcut.Save()
+if (-not $NoShortcut) {
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut((Join-Path $env:USERPROFILE 'Desktop\SwitchTrade.lnk'))
+    $shortcut.TargetPath = 'powershell.exe'
+    $shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $InstallRoot 'installer\Launch-SwitchTrade.ps1')`""
+    $shortcut.WorkingDirectory = $InstallRoot
+    $shortcut.Save()
+}
 
 Write-Host "SwitchTrade $Action completed. The custom/global WSL kernel configuration was not changed."
