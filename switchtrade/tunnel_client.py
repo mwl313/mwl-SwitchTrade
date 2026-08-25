@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import inspect
 import queue
 import secrets
 import threading
@@ -58,13 +59,15 @@ class TunnelClient:
 
     def __init__(self, relay_url: str, session_id: str, role: str, *,
                  capacity: int = 256, log=lambda *args: None,
-                 heartbeat_interval: float = HEARTBEAT_INTERVAL):
+                 heartbeat_interval: float = HEARTBEAT_INTERVAL,
+                 member_token: str | None = None):
         self.session_id = session_id
         self.role = role
         self.direction = direction_for_role(role)
         self.url = relay_websocket_url(relay_url, session_id, role)
         self.log = log
         self.heartbeat_interval = heartbeat_interval
+        self.member_token = member_token
         self._outbox: queue.Queue[_Pending] = queue.Queue(maxsize=capacity)
         self._inbox: queue.Queue[Envelope] = queue.Queue(maxsize=capacity)
         self._stop = threading.Event()
@@ -156,7 +159,12 @@ class TunnelClient:
         first = True
         while not self._stop.is_set():
             try:
-                async with websockets.connect(self.url, max_size=(1 << 20) + 256) as websocket:
+                connect_args = {"max_size": (1 << 20) + 256}
+                if self.member_token:
+                    header_name = ("additional_headers" if "additional_headers" in
+                                   inspect.signature(websockets.connect).parameters else "extra_headers")
+                    connect_args[header_name] = {"Authorization": f"Bearer {self.member_token}"}
+                async with websockets.connect(self.url, **connect_args) as websocket:
                     self._epoch = (self._epoch + 1) & 0xFFFFFFFF
                     self._sequence = 0
                     self._clear_outbox()

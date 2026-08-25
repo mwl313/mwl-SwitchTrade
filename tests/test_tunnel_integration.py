@@ -10,6 +10,8 @@ import sys
 import time
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import MagicMock, patch
 from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +20,7 @@ sys.path.insert(0, str(ROOT))
 from switchtrade.rfu_tunnel import Direction, Kind
 from switchtrade.tunnel_client import TunnelClient
 from switchtrade.control import create_app, endpoint_command
+from relay.authority import uuid7
 from fastapi.testclient import TestClient
 
 
@@ -61,6 +64,13 @@ class TunnelIntegrationTest(unittest.TestCase):
         with urlopen(Request(f"{self.base}/session/create", method="POST"), timeout=5) as response:
             return json.load(response)["session_id"]
 
+    def _authority_request(self, path: str, payload: dict, headers: dict) -> dict:
+        request = Request(f"{self.base}{path}", method="POST",
+                          data=json.dumps(payload).encode(),
+                          headers={"Content-Type": "application/json", **headers})
+        with urlopen(request, timeout=5) as response:
+            return json.load(response)
+
     @staticmethod
     def _wait(client: TunnelClient, kind: Kind, timeout: float = 5):
         deadline = time.monotonic() + timeout
@@ -99,6 +109,32 @@ class TunnelIntegrationTest(unittest.TestCase):
             self.assertEqual(host.stats["dropped"], 0)
             self.assertEqual(guest.stats["dropped"], 0)
         finally:
+            host.stop()
+            guest.stop()
+
+    def test_authoritative_websocket_requires_seat_credential_and_stays_opaque(self):
+        first = self._authority_request("/v1/trade-rooms", {
+            "name": "Opaque Relay", "trainer_display_name": "Leaf",
+            "game": "LeafGreen", "language": "English",
+        }, {"Idempotency-Key": uuid7(), "X-SwitchTrade-Client": "opaque-a"})
+        second = self._authority_request("/v1/trade-rooms:join", {
+            "room_code": first["room"]["room_code"], "trainer_display_name": "Red",
+        }, {"Idempotency-Key": uuid7(), "X-SwitchTrade-Client": "opaque-b"})
+        sid = first["room"]["room_code"]
+        rejected = TunnelClient(self.base, sid, "host", heartbeat_interval=0.2).start()
+        host = TunnelClient(self.base, sid, "host", heartbeat_interval=0.2,
+                            member_token=first["member_token"]).start()
+        guest = TunnelClient(self.base, sid, "guest", heartbeat_interval=0.2,
+                             member_token=second["member_token"]).start()
+        try:
+            self.assertFalse(rejected.wait_connected(0.5))
+            self.assertTrue(host.wait_connected(5))
+            self.assertTrue(guest.wait_connected(5))
+            arbitrary = bytes(range(256)) * 3
+            host.send(arbitrary)
+            self.assertEqual(self._wait(guest, Kind.RFU).payload, arbitrary)
+        finally:
+            rejected.stop()
             host.stop()
             guest.stop()
 
@@ -150,6 +186,45 @@ class TunnelIntegrationTest(unittest.TestCase):
                 response = guest_api.post("/api/groups/join", json={"passcode": code})
                 self.assertEqual(response.status_code, 200, response.text)
                 self.assertEqual(response.json()["group"]["passcode"], code)
+
+    def test_authoritative_controls_assign_one_creator_without_exposing_credentials(self):
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            with TestClient(create_app(runs_root=first, relay_url=self.base)) as first_api, \
+                    TestClient(create_app(runs_root=second, relay_url=self.base)) as second_api:
+                created = first_api.post("/api/v1/trade-room", json={
+                    "name": "Authority Test", "visibility": "private",
+                    "trainer_display_name": "Leaf", "game": "LeafGreen", "language": "English",
+                })
+                self.assertEqual(created.status_code, 200, created.text)
+                code = created.json()["room"]["room_code"]
+                joined = second_api.post("/api/v1/trade-room/join", json={
+                    "passcode": code, "trainer_display_name": "Red",
+                })
+                self.assertEqual(joined.status_code, 200, joined.text)
+                self.assertNotIn("token", created.text.lower())
+                self.assertNotIn("token", joined.text.lower())
+
+                processes = []
+                def process(*_args, **_kwargs):
+                    value = MagicMock()
+                    value.pid = 1000 + len(processes)
+                    value.poll.return_value = None
+                    processes.append(value)
+                    return value
+
+                with patch("switchtrade.control.subprocess.Popen", side_effect=process):
+                    with ThreadPoolExecutor(max_workers=2) as executor:
+                        responses = list(executor.map(
+                            lambda client: client.post("/api/v1/trade-room/connect"),
+                            (first_api, second_api),
+                        ))
+                self.assertTrue(all(response.status_code == 200 for response in responses),
+                                [response.text for response in responses])
+                roles = {response.json()["room"]["attempt"]["local_switch_role"]
+                         for response in responses}
+                self.assertEqual(roles, {"creator", "finder"})
+                seats = {response.json()["hardware"]["tunnel_seat"] for response in responses}
+                self.assertEqual(seats, {"member_a", "member_b"})
 
     def test_control_group_preserves_invitation_fields_and_releases_membership(self):
         with tempfile.TemporaryDirectory() as temporary:

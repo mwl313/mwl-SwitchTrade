@@ -41,10 +41,13 @@ class DiagnosticsTests(unittest.TestCase):
     def test_redaction_and_support_bundle(self):
         with tempfile.TemporaryDirectory() as temporary:
             logger = RunLogger("test", temporary)
-            logger.event("credentials", passcode="ABC123", session_id="ABC123", packets=4)
+            logger.event("credentials", passcode="ABC123", session_id="ABC123",
+                         member_token="MEMBER-SECRET", reconnect_token="RECONNECT-SECRET", packets=4)
             event = json.loads(logger._events.read_text(encoding="utf-8").splitlines()[-1])
             self.assertEqual(event["passcode"], "<redacted>")
             self.assertEqual(event["session_id"], "<redacted>")
+            self.assertEqual(event["member_token"], "<redacted>")
+            self.assertEqual(event["reconnect_token"], "<redacted>")
             self.assertEqual(event["packets"], 4)
             bundle = logger.support_bundle(summary={"session_id": "ABC123", "packets": 4})
             with zipfile.ZipFile(bundle) as archive:

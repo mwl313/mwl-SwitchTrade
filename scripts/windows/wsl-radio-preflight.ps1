@@ -4,6 +4,7 @@ param(
     [string[]]$UsbId = @(),
     [string]$BusId = "",
     [switch]$Prepare,
+    [switch]$AllowVmwareStop,
     [switch]$AutoAttach,
     [string]$ProfileFile = (Join-Path $PSScriptRoot "..\..\config\wsl-radio-hardware.tsv")
 )
@@ -37,14 +38,10 @@ if (-not (Get-Command usbipd -ErrorAction SilentlyContinue)) {
 if ($AutoAttach -and -not $Prepare) {
     Fail "-AutoAttach requires -Prepare"
 }
-if ($Prepare) {
-    $principal = New-Object Security.Principal.WindowsPrincipal(
-        [Security.Principal.WindowsIdentity]::GetCurrent()
-    )
-    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        Fail "-Prepare must run in an elevated PowerShell"
-    }
-}
+$principal = New-Object Security.Principal.WindowsPrincipal(
+    [Security.Principal.WindowsIdentity]::GetCurrent()
+)
+$isAdministrator = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
 $profiles = @(
     Get-Content -LiteralPath $ProfileFile | ForEach-Object {
@@ -70,9 +67,10 @@ if ($UsbId.Count -gt 0) {
 
 $vmware = Get-Service -Name VMUSBArbService -ErrorAction SilentlyContinue
 if ($vmware -and $vmware.Status -eq 'Running') {
-    if (-not $Prepare) {
-        Fail "VMware USB Arbitrator is running and can reclaim a dongle; rerun elevated with -Prepare"
+    if (-not $Prepare -or -not $AllowVmwareStop) {
+        Fail "VMware USB Arbitrator can reclaim this adapter. Close VMware and stop VMUSBArbService, or run Repair and approve releasing it."
     }
+    if (-not $isAdministrator) { Fail "stopping VMware USB ownership requires administrator repair" }
     Stop-Service -Name VMUSBArbService -Force
     Write-Host "[windows] stopped VMware USB Arbitrator for this Windows session"
 }
@@ -124,6 +122,9 @@ foreach ($entry in $matched) {
             Fail "$id ($($device.BusId)) is not attached to WSL; rerun elevated with -Prepare"
         }
         if (-not $device.PersistedGuid) {
+            if (-not $isAdministrator) {
+                Fail "$id ($($device.BusId)) is not bound. Run SwitchTrade Setup Repair once as administrator."
+            }
             Invoke-Usbipd @('bind', '--busid', [string]$device.BusId)
         }
         Invoke-Usbipd @('attach', '--wsl', '--busid', [string]$device.BusId)

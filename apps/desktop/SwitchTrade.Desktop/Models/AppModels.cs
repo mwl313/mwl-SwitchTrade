@@ -38,7 +38,7 @@ public sealed record ReadinessAxis(
     };
 }
 
-public enum SwitchRoomRole { Creator, Finder }
+public enum SwitchRoomRole { Unassigned, Creator, Finder }
 public enum RoomMembershipRole { Owner, Member }
 public enum GameVersionChoice { None, FireRed, LeafGreen }
 public enum GameLanguage { None, English, Japanese, French, German, Italian, Spanish }
@@ -69,6 +69,15 @@ public sealed record TradeRoomInfo(
     string Offering = "",
     string Wanted = "",
     string Note = "");
+
+public sealed record AuthoritativeRoomProjection(
+    int RoomVersion,
+    int Participants,
+    string State,
+    RoomMembershipRole MembershipRole,
+    SwitchRoomRole SwitchRole,
+    bool PartnerOnline,
+    bool BothReady);
 
 public sealed record AdapterProfileViewData(
     string FriendlyName,

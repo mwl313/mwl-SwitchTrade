@@ -11,6 +11,7 @@ import subprocess
 import threading
 import time
 import signal
+import secrets
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,6 +46,7 @@ class CreateGroup(BaseModel):
 
 class JoinGroup(BaseModel):
     passcode: str = Field(min_length=4, max_length=8, pattern="^[A-Za-z0-9]+$")
+    trainer_display_name: str = Field(default="Trainer", min_length=1, max_length=40)
 
 
 class StartSession(BaseModel):
@@ -97,7 +99,18 @@ class Runtime:
         runtime_root.mkdir(parents=True, exist_ok=True)
         self.endpoint_state = runtime_root / "endpoint-state.json"
         self.party_state = runtime_root / "party-state.json"
+        self.authority_state = runtime_root / "room-authority.json"
+        self.member_token_file = runtime_root / "member-token"
+        self.client_id_file = runtime_root / "client-id"
+        try:
+            self.client_id = self.client_id_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            self.client_id = secrets.token_hex(16)
+            self.client_id_file.write_text(self.client_id + "\n", encoding="utf-8")
+            os.chmod(self.client_id_file, 0o600)
         self.shutdown_requested = False
+        self.last_published_phase: str | None = None
+        self.last_authority_heartbeat = 0.0
         previous = self.read_endpoint()
         if self._verified_endpoint_pid(previous) is not None:
             self.endpoint_session = previous.get("session_id")
@@ -117,6 +130,65 @@ class Runtime:
             return value if isinstance(value, dict) else {}
         except (OSError, ValueError):
             return {}
+
+    def read_authority(self) -> dict:
+        try:
+            value = json.loads(self.authority_state.read_text(encoding="utf-8"))
+            return value if isinstance(value, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def save_authority(self, response: dict) -> dict:
+        room = response.get("room") or {}
+        value = {
+            "room_id": room.get("room_id"),
+            "room_code": room.get("room_code"),
+            "member_token": response.get("member_token"),
+            "reconnect_token": response.get("reconnect_token"),
+        }
+        temporary = self.authority_state.with_suffix(".tmp")
+        temporary.write_text(json.dumps(value), encoding="utf-8")
+        os.chmod(temporary, 0o600)
+        temporary.replace(self.authority_state)
+        token = response.get("member_token")
+        if token:
+            self.member_token_file.write_text(str(token), encoding="utf-8")
+            os.chmod(self.member_token_file, 0o600)
+        return room
+
+    def clear_authority(self) -> None:
+        self.authority_state.unlink(missing_ok=True)
+        self.member_token_file.unlink(missing_ok=True)
+
+    def authoritative_room(self) -> dict:
+        credentials = self.read_authority()
+        if not credentials.get("room_id") or not credentials.get("member_token"):
+            raise RelayError("no active trade room")
+        return self.relay.room(credentials["room_id"], credentials["member_token"])
+
+    def sync_authoritative_phase(self, endpoint: dict, parties: dict) -> None:
+        phase = (
+            "trading_room" if parties.get("trading_room_confirmed") else
+            "failed" if endpoint.get("state") == "failed" else
+            "completed" if endpoint.get("state") == "completed" else None
+        )
+        if phase is None or phase == self.last_published_phase:
+            return
+        credentials = self.read_authority()
+        try:
+            room = self.authoritative_room()
+            attempt = room.get("attempt")
+            if not attempt or attempt.get("phase") == phase:
+                self.last_published_phase = phase
+                return
+            self.relay.room_command(
+                room["room_id"], credentials["member_token"],
+                f"/attempts/{attempt['attempt_id']}:phase", {"phase": phase},
+            )
+            self.last_published_phase = phase
+        except RelayError as error:
+            self.log.event("authority_phase_sync_failed", level="warning", phase=phase,
+                           error=type(error).__name__)
 
     def endpoint_running(self) -> bool:
         if self.endpoint and self.endpoint.poll() is None:
@@ -167,7 +239,8 @@ def endpoint_command(identity: str, passcode: str, relay_url: str,
                      usb_id: str | None = None, state_file: Path | None = None,
                      *, switch_room_role: str | None = None,
                      party_state_file: Path | None = None,
-                     attempt_id: str | None = None) -> list[str]:
+                     attempt_id: str | None = None,
+                     member_token_file: Path | None = None) -> list[str]:
     if identity in {"host", "guest"} and switch_room_role is None:
         args = ["--role", identity]
     else:
@@ -182,6 +255,9 @@ def endpoint_command(identity: str, passcode: str, relay_url: str,
                  if os.name == "nt" else str(party_state_file)]
     if attempt_id:
         args += ["--attempt-id", attempt_id]
+    if member_token_file:
+        args += ["--member-token-file", _wsl_path(member_token_file)
+                 if os.name == "nt" else str(member_token_file)]
     if os.name == "nt":
         distro = os.environ.get("SWITCHTRADE_WSL_DISTRO", "SwitchTrade")
         root = os.environ.get("SWITCHTRADE_WSL_ROOT", "/opt/switchtrade")
@@ -229,6 +305,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     def readiness_payload(state: Runtime) -> dict:
         endpoint = state.read_endpoint()
         parties = state.read_parties()
+        state.sync_authoritative_phase(endpoint, parties)
         running = state.endpoint_running()
         endpoint_status = endpoint.get("state", "starting" if running else "idle")
         tunnel_connected = bool(endpoint.get("tunnel_connected", False))
@@ -292,7 +369,8 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
 
     def launch_session(state: Runtime, *, code: str, tunnel_seat: str,
                        switch_room_role: str, usb_id: str | None,
-                       attempt_id: str | None = None) -> dict:
+                       attempt_id: str | None = None,
+                       member_token_file: Path | None = None) -> dict:
         try:
             state.relay.status(code)
             plan = runtime_plan(tunnel_seat, usb_id, switch_room_role=switch_room_role)
@@ -307,6 +385,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 plan["tunnel_seat"], code, state.relay_url, usb_id,
                 state.endpoint_state, switch_room_role=plan["switch_room_role"],
                 party_state_file=state.party_state, attempt_id=attempt_id or code,
+                member_token_file=member_token_file,
             )
             try:
                 state.endpoint = subprocess.Popen(command, cwd=Path(__file__).resolve().parents[1])
@@ -320,6 +399,39 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         )
         return {"status": "starting", "session_id": code, "hardware": plan,
                 "run_id": state.log.run_id}
+
+    def authoritative_command(state: Runtime, path: str, payload: dict | None = None,
+                              method: str = "POST") -> dict:
+        credentials = state.read_authority()
+        if not credentials.get("room_id") or not credentials.get("member_token"):
+            raise HTTPException(status_code=409, detail="no active authoritative trade room")
+        try:
+            return state.relay.room_command(
+                credentials["room_id"], credentials["member_token"], path,
+                payload, method=method,
+            )
+        except RelayError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
+    def group_from_room(room: dict) -> dict:
+        profile = room.get("profile") or {}
+        return {
+            "name": room.get("name", "Private Trade Room"),
+            "passcode": room.get("room_code", ""),
+            "visibility": room.get("visibility", "private"),
+            "state": room.get("state", "waiting_for_switch"),
+            "participants": len([m for m in room.get("members", []) if m.get("online_state") != "left"]),
+            "trainer_display_name": profile.get("owner_display_name", ""),
+            "game": profile.get("game", "None"),
+            "language": profile.get("language", "None"),
+            "offering": "", "wanted": "", "note": "",
+            "room_id": room.get("room_id"),
+            "room_version": room.get("room_version"),
+            "local_member_id": room.get("local_member_id"),
+            "local_seat": next((m.get("seat") for m in room.get("members", []) if m.get("is_local")), None),
+            "is_owner": room.get("owner_member_id") == room.get("local_member_id"),
+            "switch_room_role": (room.get("attempt") or {}).get("local_switch_role"),
+        }
 
     @app.get("/api/status")
     def status(request: Request) -> dict:
@@ -359,6 +471,140 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             "stats": {},
         }
 
+    @app.post("/api/v1/trade-room")
+    def create_trade_room(payload: CreateGroup, request: Request) -> dict:
+        state = runtime(request)
+        try:
+            response = state.relay.create_trade_room({
+                "name": payload.name.strip(),
+                "visibility": "private",
+                "trainer_display_name": payload.trainer_display_name.strip(),
+                "game": payload.game,
+                "language": payload.language,
+            }, state.client_id)
+        except RelayError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        room = state.save_authority(response)
+        state.log.event("authoritative_room_created", room_id=room.get("room_id"))
+        return {"contract_version": ROOM_CONTRACT, "room": room, "run_id": state.log.run_id}
+
+    @app.post("/api/v1/trade-room/join")
+    def join_trade_room(payload: JoinGroup, request: Request) -> dict:
+        state = runtime(request)
+        try:
+            response = state.relay.join_trade_room(
+                payload.passcode.upper(), payload.trainer_display_name.strip(), state.client_id)
+        except RelayError as error:
+            status = 404 if "404" in str(error) else 409 if "409" in str(error) else 503
+            raise HTTPException(status_code=status, detail=str(error)) from error
+        room = state.save_authority(response)
+        state.log.event("authoritative_room_joined", room_id=room.get("room_id"))
+        return {"contract_version": ROOM_CONTRACT, "room": room, "run_id": state.log.run_id}
+
+    @app.get("/api/v1/trade-room")
+    def get_trade_room(request: Request) -> dict:
+        state = runtime(request)
+        try:
+            room = state.authoritative_room()
+            if time.monotonic() - state.last_authority_heartbeat >= 10:
+                credentials = state.read_authority()
+                room = state.relay.room_command(
+                    room["room_id"], credentials["member_token"], "/heartbeat")
+                state.last_authority_heartbeat = time.monotonic()
+            return room
+        except RelayError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @app.get("/api/v1/trade-room/events")
+    def get_trade_room_events(request: Request, after: int = 0) -> dict:
+        state = runtime(request)
+        credentials = state.read_authority()
+        if not credentials.get("room_id") or not credentials.get("member_token"):
+            raise HTTPException(status_code=404, detail="no active trade room")
+        try:
+            return state.relay.room_events(
+                credentials["room_id"], credentials["member_token"], after)
+        except RelayError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @app.post("/api/v1/trade-room/connect")
+    def connect_trade_room(request: Request) -> dict:
+        state = runtime(request)
+        credentials = state.read_authority()
+        try:
+            room = state.authoritative_room()
+            local = next(member for member in room["members"] if member["is_local"])
+            if local["ready_state"] != "ready":
+                room = state.relay.room_command(
+                    room["room_id"], credentials["member_token"], "/ready", {"ready": True})
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                room = state.authoritative_room()
+                active = [m for m in room["members"] if m["online_state"] != "left"]
+                if len(active) == 2 and all(m["ready_state"] == "ready" for m in active):
+                    break
+                time.sleep(0.25)
+            else:
+                raise HTTPException(
+                    status_code=409,
+                    detail="both trainers must press Connect this Switch before the attempt starts",
+                )
+            if not room.get("attempt") or room["attempt"].get("phase") in {"completed", "canceled", "failed"}:
+                try:
+                    room = state.relay.room_command(
+                        room["room_id"], credentials["member_token"], "/attempts")
+                except RelayError as error:
+                    if "409" not in str(error):
+                        raise
+                    room = state.authoritative_room()
+            attempt = room.get("attempt")
+            if not attempt:
+                raise HTTPException(status_code=409, detail="connection attempt was not created")
+            try:
+                room = state.relay.room_command(
+                    room["room_id"], credentials["member_token"],
+                    f"/attempts/{attempt['attempt_id']}:claim-creator",
+                )
+            except RelayError as error:
+                if "409" not in str(error):
+                    raise
+                room = state.authoritative_room()
+            attempt = room["attempt"]
+            switch_role = attempt["local_switch_role"]
+            if switch_role not in {"creator", "finder"}:
+                raise HTTPException(status_code=409, detail="room creator assignment is incomplete")
+            if not attempt["role_locked"]:
+                room = state.relay.room_command(
+                    room["room_id"], credentials["member_token"],
+                    f"/attempts/{attempt['attempt_id']}:lock-role",
+                )
+            local = next(member for member in room["members"] if member["is_local"])
+            result = launch_session(
+                state, code=room["room_code"], tunnel_seat=local["seat"],
+                switch_room_role=switch_role, usb_id=None,
+                attempt_id=attempt["attempt_id"], member_token_file=state.member_token_file,
+            )
+            result["room"] = room
+            return result
+        except RelayError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @app.delete("/api/v1/trade-room/members/me")
+    def leave_trade_room(request: Request) -> dict:
+        state = runtime(request)
+        room = authoritative_command(state, "/members/me", method="DELETE")
+        state.clear_authority()
+        return {"status": "left", "room_version": room.get("room_version"),
+                "run_id": state.log.run_id}
+
+    @app.delete("/api/v1/trade-room")
+    def close_trade_room(request: Request) -> dict:
+        state = runtime(request)
+        room = authoritative_command(state, "", method="DELETE")
+        state.clear_authority()
+        return {"status": "closed", "room_version": room.get("room_version"),
+                "run_id": state.log.run_id}
+
     @app.get("/api/hardware/profiles")
     def hardware_profiles(request: Request) -> dict:
         state = runtime(request)
@@ -381,15 +627,11 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         group = Group(
             payload.name.strip(), code, payload.visibility,
             trainer_display_name=payload.trainer_display_name.strip(),
-            game=payload.game,
-            language=payload.language,
-            offering=payload.offering.strip(),
-            wanted=payload.wanted.strip(),
-            note=payload.note.strip(),
+            game=payload.game, language=payload.language,
+            offering=payload.offering.strip(), wanted=payload.wanted.strip(), note=payload.note.strip(),
         )
         with state.lock:
             state.groups[code] = group
-        state.log.event("group_created", group_name=group.name, visibility=group.visibility, passcode=code)
         return {"scope": "local_demo", "group": asdict(group), "run_id": state.log.run_id}
 
     @app.post("/api/groups/join")
@@ -408,18 +650,15 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             if group.participants >= 2:
                 raise HTTPException(status_code=409, detail="group is full")
             group.participants += 1
-        state.log.event("group_joined", group_name=group.name, passcode=code)
         return {"scope": "local_demo", "group": asdict(group), "run_id": state.log.run_id}
 
     @app.delete("/api/groups/{passcode}")
     def close_group(passcode: str, request: Request) -> dict:
         state = runtime(request)
-        code = passcode.upper()
         with state.lock:
-            group = state.groups.pop(code, None)
+            group = state.groups.pop(passcode.upper(), None)
         if group is None:
             raise HTTPException(status_code=404, detail="group not found")
-        state.log.event("group_closed", group_name=group.name, passcode=code)
         return {"status": "closed", "run_id": state.log.run_id}
 
     @app.delete("/api/groups/{passcode}/members/me")
@@ -433,7 +672,6 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             group.participants = max(0, group.participants - 1)
             if group.participants == 0:
                 state.groups.pop(code, None)
-        state.log.event("group_left", group_name=group.name, passcode=code)
         return {"status": "left", "run_id": state.log.run_id}
 
     @app.post("/api/session/stop")
@@ -442,6 +680,20 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         state.log.event("session_stop_requested")
         with state.lock:
             state.stop_endpoint()
+        credentials = state.read_authority()
+        try:
+            room = state.authoritative_room()
+            attempt = room.get("attempt")
+            if attempt and attempt.get("phase") not in {"completed", "canceled", "failed"}:
+                state.relay.room_command(
+                    room["room_id"], credentials["member_token"],
+                    f"/attempts/{attempt['attempt_id']}:phase", {"phase": "canceled"},
+                )
+            state.relay.room_command(
+                room["room_id"], credentials["member_token"], "/ready", {"ready": False})
+            state.last_published_phase = "canceled"
+        except RelayError:
+            state.log.event("authority_teardown_sync_failed", level="warning")
         return {"status": "stopped", "run_id": state.log.run_id}
 
     @app.post("/api/v1/session/stop")
@@ -483,6 +735,8 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         previous = state.read_endpoint()
         if state.endpoint_running():
             raise HTTPException(status_code=409, detail="the current session is still running")
+        if state.read_authority().get("member_token"):
+            return connect_trade_room(request)
         required = ("session_id", "tunnel_seat", "switch_room_role")
         if any(not previous.get(name) for name in required):
             raise HTTPException(status_code=409, detail="no recoverable session is available")
