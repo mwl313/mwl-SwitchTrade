@@ -61,6 +61,10 @@
 9. **Build the early GUI control backend.**
    - Expose a small local JSON API for readiness, hardware configuration, group operations, sessions,
      logging, recovery, and shutdown.
+   - Connect the installed native EXE automatically to the isolated WSL control API; no developer
+     checkout, browser, terminal, or separately installed Python may be required.
+   - Back private groups with a server-authoritative two-member state for membership, online/ready
+     status, reconnect, room-role assignment, session phase, leave, and expiration.
    - Keep radio and protocol behavior in WSL rather than the browser layer.
 
 10. **Build the first-demo interface and native Windows executable.**
@@ -71,23 +75,49 @@
       repair/recheck, and diagnostics.
     - Lobby: group/code, endpoint readiness, Switch instructions, connection progress, leave/cancel,
       and diagnostic run ID.
+    - Decouple group ownership/member identity from the per-attempt Switch room role. Either member can
+      select **Create the room on my Switch**; the other member automatically receives intuitive
+      room-search instructions after an atomic server assignment.
+    - When both trainers enter the trading room, show their parties in two side-by-side 2-by-3 grids.
+      Hover/focus/click on a Pokémon opens a compact detail popover for validated stats, IVs, EVs,
+      moves, trainer data, and observed/derived confidence.
+    - Apply the owner's forthcoming complete UI overhaul before the beta experience is frozen.
     - Public-group browsing may use explicit mock/demo data until the real public service exists.
     - Ship the primary client as native WPF, with no Electron, Chromium, WebView2, or external browser.
     - Retain the HTML/CSS build as an optional debug/alternate client using the same local API.
 
 11. **Integrate the GUI with the real launcher, health gate, logs, and RFU tunnel.**
-    - Show real state, block unsafe actions, surface actionable recovery, and stop cleanly.
+   - Show real state, block unsafe actions, surface actionable recovery, and stop cleanly.
+   - Add a passive, bounded decoder observer at the locally terminated Reliable boundary. Party display
+     and trading must not depend on decoder or analytics availability.
+   - Emit exactly one idempotent committed-trade event only after protocol evidence distinguishes a
+     completed trade from offer, animation, failed save, rollback, cancel, or disconnect.
 
-12. **Run the first production Switch-to-Switch test.**
-    - Use two RTL8192EU endpoints.
-    - Complete room entry, movement, chair interaction, trade, save, menu return, and graceful exit.
-    - Confirm that production does not depend on the PC-to-Switch emulator path.
+12. **Deploy the production relay, authoritative lobby, and consented trade-statistics service.**
+   - Keep RFU forwarding opaque while the server authoritatively manages exactly two member seats,
+     readiness, reconnect tokens, room-creator assignment, and session lifecycle.
+   - Store locally validated successful-trade records only with explicit consent and a versioned privacy
+     contract. The proposed record includes UTC timestamp, both exchanged Pokémon, both trainers'
+     approved trainer/link metadata, session provenance, server-observed source IP, and disclosed coarse
+     IP-derived location.
+   - Treat raw IP, location, trainer IDs, and Pokémon data as sensitive: minimize and separate analytics,
+     restrict and audit raw access, encrypt data, use short retention for raw IP, use pseudonymous
+     identifiers for statistics, and support deletion/export and consent withdrawal.
+   - Trading and local party display must continue when analytics is declined or unavailable.
 
-13. **Run reliability and network-failure testing.**
-    - Repeat trades and reconnects on LAN and WAN.
-    - Exercise loss, delay, endpoint/tunnel restart, disconnect, stale-session rejection, and recovery.
+13. **Run the first production Switch-to-Switch test.**
+   - Use two RTL8192EU endpoints.
+   - Complete room entry, movement, chair interaction, trade, save, menu return, and graceful exit.
+   - Validate both possible room creators and the two 2-by-3 party displays against known Switch data.
+   - Confirm that production does not depend on the PC-to-Switch emulator path.
 
-14. **Package the private demo/beta.**
+14. **Run reliability and network-failure testing.**
+   - Repeat trades and reconnects on LAN and WAN.
+   - Exercise loss, delay, endpoint/tunnel restart, disconnect, stale-session rejection, and recovery.
+   - Prove committed-trade ingestion is idempotent and does not record canceled, failed, or rolled-back
+     attempts.
+
+15. **Package the private demo/beta.**
     - Ship a signed Windows bootstrap installer that detects/installs WSL, the isolated SwitchTrade
       distro/runtime, the versioned custom kernel artifact, USB/IP, the desktop app, and frontend.
     - Resume safely after the one Windows reboot that may be required for initial WSL enablement;
@@ -115,8 +145,9 @@
    - Add responsive refinement, visual identity, animation where useful, complete localization, and
      accessibility QA.
 
-5. **Add trade decoding and history to the GUI.**
-   - Integrate the completed payload decoder and show exchanged Pokémon with explicit privacy controls.
+5. **Expand optional trade history and statistics presentation.**
+   - The beta already requires live two-party display and consented committed-trade ingestion. Later add
+     history search, filters, exports, richer aggregate dashboards, and other nonessential presentation.
 
 6. **Measure and improve movement latency.**
    - Compare native and tunneled cadence before tuning batching, pacing, queues, or transport behavior.
@@ -160,10 +191,10 @@ As of the `0.2.0-beta.0` internal build:
 - The tunnel mirrors the leader Switch's original LDN application advertisement and carries opaque
   Reliable AppData. It does not depend on trade opcodes, the Pokémon decoder, or a specific future
   two-player activity.
-- Task 14 has a checksummed minimal-rootfs package/bootstrap foundation. Its isolated install, repair,
+- Task 15 has a checksummed minimal-rootfs package/bootstrap foundation. Its isolated install, repair,
   rollback retention, and uninstall/purge path passed a throwaway-distro test. It provisions only the
   named `SwitchTrade` distro and deliberately leaves the global/custom WSL kernel policy unchanged.
-- Task 6 still needs the second RTL8192EU and hardware qualification. Tasks 12-13 still need the
+- Task 6 still needs the second RTL8192EU and hardware qualification. Tasks 13-14 still need the
   requested real two-endpoint Switch test and reliability campaign. The final signed clean-machine
   installer still needs signing, reboot/resume validation, a genuinely clean external-machine test,
   and release approval.
