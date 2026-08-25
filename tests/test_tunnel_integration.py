@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import socket
 import subprocess
@@ -35,10 +36,13 @@ class TunnelIntegrationTest(unittest.TestCase):
     def setUpClass(cls):
         cls.port = _port()
         cls.base = f"http://127.0.0.1:{cls.port}"
+        cls.relay_state = tempfile.TemporaryDirectory()
+        environment = dict(os.environ)
+        environment["SWITCHTRADE_AUTH_DB"] = str(Path(cls.relay_state.name) / "authority.sqlite3")
         cls.proc = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "relay.server:app", "--host", "127.0.0.1",
              "--port", str(cls.port), "--log-level", "warning"],
-            cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+            cwd=ROOT, env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
         )
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
@@ -59,6 +63,7 @@ class TunnelIntegrationTest(unittest.TestCase):
             cls.proc.wait(5)
         except subprocess.TimeoutExpired:
             cls.proc.kill()
+        cls.relay_state.cleanup()
 
     def _session(self) -> str:
         with urlopen(Request(f"{self.base}/session/create", method="POST"), timeout=5) as response:

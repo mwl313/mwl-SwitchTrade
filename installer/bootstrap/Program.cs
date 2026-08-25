@@ -41,6 +41,18 @@ internal static class Program
             if (option == "--accept-prerequisite-changes") start.ArgumentList.Add("-AcceptPrerequisiteChanges");
             if (option == "--accept-vmware-release") start.ArgumentList.Add("-AcceptVmwareRelease");
             if (option == "--no-shortcut") start.ArgumentList.Add("-NoShortcut");
+            if (option.StartsWith("--bus-id=", StringComparison.OrdinalIgnoreCase) &&
+                System.Text.RegularExpressions.Regex.IsMatch(option[9..], @"^\d+-\d+$"))
+            {
+                start.ArgumentList.Add("-BusId");
+                start.ArgumentList.Add(option[9..]);
+            }
+            if (option.StartsWith("--usb-id=", StringComparison.OrdinalIgnoreCase) &&
+                System.Text.RegularExpressions.Regex.IsMatch(option[9..], @"^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$"))
+            {
+                start.ArgumentList.Add("-UsbId");
+                start.ArgumentList.Add(option[9..]);
+            }
         }
 
         try

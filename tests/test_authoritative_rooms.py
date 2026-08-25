@@ -1,8 +1,10 @@
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import tempfile
+import time
 import unittest
 import uuid
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -103,6 +105,36 @@ class AuthoritativeRoomTests(unittest.TestCase):
         snapshot = relay_server.authority.snapshot(room_id, first["member_token"])
         self.assertEqual(snapshot["room_id"], room_id)
         self.assertEqual(snapshot["local_member_id"], first["room"]["local_member_id"])
+
+    def test_reconnect_rotates_both_credentials(self):
+        first = self._create()
+        room_id = first["room"]["room_id"]
+        response = self.client.post(f"/v1/trade-rooms/{room_id}:reconnect", json={
+            "reconnect_token": first["reconnect_token"],
+        })
+        self.assertEqual(response.status_code, 200, response.text)
+        rotated = response.json()
+        self.assertNotEqual(rotated["member_token"], first["member_token"])
+        self.assertNotEqual(rotated["reconnect_token"], first["reconnect_token"])
+        old = self.client.get(f"/v1/trade-rooms/{room_id}", headers={
+            "Authorization": f"Bearer {first['member_token']}"})
+        self.assertEqual(old.status_code, 401)
+        current = self.client.get(f"/v1/trade-rooms/{room_id}", headers={
+            "Authorization": f"Bearer {rotated['member_token']}"})
+        self.assertEqual(current.status_code, 200)
+
+    def test_presence_moves_through_bounded_reconnect_window(self):
+        first = self._create()
+        room_id = first["room"]["room_id"]
+        baseline = time.time()
+        with patch("relay.authority.time.time", return_value=baseline + 31):
+            relay_server.authority.sweep_presence()
+        room = relay_server.authority.snapshot(room_id, first["member_token"])
+        self.assertEqual(room["members"][0]["online_state"], "reconnecting")
+        with patch("relay.authority.time.time", return_value=baseline + 122):
+            relay_server.authority.sweep_presence()
+        room = relay_server.authority.snapshot(room_id, first["member_token"])
+        self.assertEqual(room["members"][0]["online_state"], "offline")
 
 
 if __name__ == "__main__":

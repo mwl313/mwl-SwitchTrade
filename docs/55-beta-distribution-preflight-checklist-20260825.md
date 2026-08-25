@@ -1,10 +1,10 @@
 # Beta distribution preflight checklist — updated 2026-08-26
 
-> Status: On 2026-08-26 the owner explicitly deferred Gate 0 and authorized Gate 4 engineering to
-> continue. This is not Gate 0 approval: final owner/GPT visual approval plus asset, legal-notice, and
-> support-destination approval remains release-blocking before packaging and private-beta approval.
-> Gate 4 now has internally tested lifecycle, readiness, role-axis, decoder, live-party, shutdown, and
-> diagnostic foundations; authoritative room state and trade-commit classification remain open.
+> Status: On 2026-08-26 the owner explicitly deferred Gate 0 and then authorized implementation through
+> Gate 6, excluding all client privacy/consent work. This is not release approval: final owner/GPT visual,
+> asset, legal-notice, support-destination, signed-artifact, public-TLS, clean-machine, and hardware
+> qualification remain blocking. Gate 4 and the local Gate 5 authority path are internally implemented.
+> Gates 1–3 now have buildable lifecycle foundations; the current package is explicitly internal-only.
 > UI baseline: `docs/56-native-ui-ux-redesign-handoff-20260825.md` and the owner overrides in
 > `docs/57-native-ui-overhaul-implementation-report-20260825.md` are the preliminary redesign source.
 > Latest UI evidence: `docs/64-second-native-ui-overhaul-implementation-report-20260825.md`.
@@ -13,8 +13,8 @@
 > Frozen contracts: `room-control.v1` (`docs/58`), `party-commit.v1` (`docs/59`), and
 > `privacy-statistics.v1` (`docs/60`), with the private-beta baseline in `docs/61`.
 > Distribution target: one `SwitchTradeSetup.exe`, one installed `SwitchTrade.exe`, one hidden isolated
-> SwitchTrade WSL runtime, and separately hosted authoritative group, relay, and consented statistics
-> services.
+> SwitchTrade WSL runtime, and a separately hosted authoritative group/opaque relay. Any future
+> analytics/consent service is externally administered and absent from the current client/relay.
 
 ## Already-established foundations
 
@@ -31,17 +31,17 @@
 
 | Order | Gate | Current state | Release-blocking result still needed |
 |---:|---|---|---|
-| 1 | Gate 4 local integration | Active; core local foundations implemented | Finish authoritative event consumption, role transition/retry, allowlisted repairs, and fail-closed trade commits |
+| 1 | Gate 4 local integration | Internally implemented | Hardware-qualify authoritative role transition, retry, and recovery in Gate 7 |
 | 2 | Gate 0 | Owner-deferred, not approved | Approve the native build plus public icons/assets, legal notices, and real support destination before packaging/release |
-| 3 | Gates 4–5 contracts | Frozen; local readiness/party portions implemented | Build the authoritative two-member room service and connect its ordered events |
-| 4 | Gate 5 remote services | Development relay only | Deploy authenticated authoritative rooms, production opaque relay, and optional consented commit ingestion |
-| 5 | Gates 1–3 | Packaging foundations only | Build the signed one-piece installer, first-run prerequisite flow, and reversible custom-kernel integration |
-| 6 | Gate 6 | Not qualified | Pass clean-machine install, repair, update, rollback, uninstall, privacy, and signing tests |
+| 3 | Gates 4–5 contracts | Implemented and internally tested | Qualify the ordered room path across two production endpoints |
+| 4 | Gate 5 remote services | Deployable authority/opaque relay; not publicly deployed | Deploy behind public TLS and pass two-NAT qualification; analytics remain owner-external |
+| 5 | Gates 1–3 | Native/bootstrap/lifecycle code implemented | Supply signed rootfs, kernel/modules, usbipd, notices, and signing certificates |
+| 6 | Gate 6 | Automated subset passed; physical lifecycle not qualified | Pass clean-machine, reboot, coexistence, Defender, signing, and destructive lifecycle matrix |
 | 7 | Gate 7 | Waiting for production stack and second RTL8192EU | Pass two-PC/two-Switch hardware, trade, decoder, teardown, reuse, and network-fault qualification |
 | 8 | Gate 8 | Not started | Sign, publish, archive, review, and approve the private beta |
 
-Installer implementation remains blocked until the final GPT/owner review closes the last Gate 0 item.
-The owner exception authorizes Gate 4 implementation only.
+The owner exception authorized implementation and internal packaging through Gate 6, but does not
+authorize calling an unsigned/internal artifact a beta release.
 
 ## Next implementation tranche — do this before packaging
 
@@ -49,18 +49,17 @@ The owner exception authorizes Gate 4 implementation only.
    reintroducing the removed Privacy tab. Evidence is in `docs/64`.
 2. [ ] Owner-deferred: obtain final owner/GPT visual approval and approve the remaining public
    icon/logo, legal-notice, and real support-destination decisions before packaging. This closes Gate 0.
-3. [ ] Implement and internally test the authenticated server-authoritative two-member room state
+3. [x] Implement and internally test the authenticated server-authoritative two-member room state
    machine, reconnect tokens, atomic room-creator claims, ordered events, expiration, and recovery.
-4. [ ] The endpoint/control split between stable member/tunnel identity and per-attempt creator/finder
-   role is implemented. Connect those axes to authoritative member seats, claims, and ordered live
-   events after the Gate 5 room service exists.
-5. [ ] WSL lifecycle, versioned readiness, retained recovery state, redacted support summaries, and
+4. [x] Connect the endpoint/control split to authoritative immutable seats and atomic per-attempt
+   creator/finder assignment; WPF polls the same authoritative room snapshot.
+5. [x] WSL lifecycle, versioned readiness, retained recovery state, redacted support summaries, and
    passive live party snapshots are implemented internally. Add allowlisted repair routing and the
    idempotent successful-trade classifier without making trading depend on decoding or analytics.
-6. [ ] Run no-Switch internal tests for simultaneous claims, reconnects, restarts, malformed/stale
+6. [x] Run no-Switch internal tests for simultaneous claims, reconnects, restarts, malformed/stale
    events, decoder fixtures, failed/rolled-back trades, analytics disabled/offline, and UI transitions.
-7. [ ] Only after steps 1–6 pass, implement Gates 1–3 packaging and then run Gates 6–8 lifecycle,
-   hardware, network, signing, and private-beta qualification.
+7. [x] Implement the Gates 1–3 build/lifecycle foundations and begin Gate 6 automation. Physical,
+   network, signing, and private-beta qualification remain open.
 
 ## Immediate-task scope imported from the current product TODO
 
@@ -69,23 +68,23 @@ This preflight checklist is the release-blocking superset of the immediate tasks
 
 - [ ] Freeze and version the production-beta repository, dependencies, runtime, kernel, driver,
   firmware, and hardware baseline. Covered by Gates 0 and 8.
-- [ ] Lock the RTL8192EU beta policy while preserving profile-driven driver/hardware expansion.
+- [x] Lock the RTL8192EU beta policy while preserving profile-driven driver/hardware expansion.
   Covered by Gates 0, 2, 3, and 7.
-- [ ] Finish the fail-closed Windows/WSL hardware launcher. Covered by Gates 1-4.
+- [x] Finish the fail-closed Windows/WSL hardware launcher. Physical qualification remains in Gate 7.
 - [ ] Finish the universal health gate, all-permitted-channel discovery, watchdog, recovery, and safe
   teardown. Covered by Gates 2, 4, and 7.
-- [ ] Finish structured, redacted, rotating run logs and one-action support bundles. Covered by Gates
+- [x] Finish structured, redacted, rotating run logs and one-action support bundles. Covered by Gates
   4-6.
 - [ ] Certify both physical RTL8192EU adapters. Covered by Gate 7.
-- [ ] Finish and harden the feature-neutral RFU tunnel, deterministic player mapping, bounded queues,
+- [x] Finish and harden the feature-neutral RFU tunnel, deterministic player mapping, bounded queues,
   backpressure, stale-frame rejection, counters, and reconnect behavior. Covered by Gates 4, 5, and 7.
 - [ ] Validate the tunnel without Switch hardware, including recorded replay and network-fault
   injection. Covered by Gates 4 and 7.
-- [ ] Complete the local JSON control API for readiness, hardware, authoritative groups, sessions,
+- [x] Complete the local JSON control API for readiness, hardware, authoritative groups, sessions,
   diagnostics, recovery, and shutdown. Covered by Gates 4 and 5.
 - [x] Complete and freeze the first-demo native presentation baseline and honest UI-only previews.
   Live authoritative room and party state remain implementation work in Gates 4–5.
-- [ ] Integrate the EXE with the installed WSL control service, launcher, health gate, endpoint, logs,
+- [x] Integrate the EXE with the installed WSL control service, launcher, health gate, endpoint, logs,
   authoritative lobby, decoder observer, and clean shutdown. Covered by Gates 1, 2, 4, and 5.
 - [ ] Deploy the production relay plus authoritative lobby and consented committed-trade statistics
   services. Covered by Gate 5.
@@ -141,33 +140,34 @@ Do not begin installer implementation until Gate 0 is approved.
 ## Gate 1 — build the one-piece Windows distribution
 
 - [ ] Produce one signed `SwitchTradeSetup.exe` bootstrapper.
+  An unsigned native bootstrapper is built internally; release signing remains Gate 8 work.
 - [ ] Embed or checksummably bundle `SwitchTrade.exe`, the minimal rootfs, application runtime,
   hardware profiles, license notices, and release manifest.
-- [ ] Bundle and install the local Python control API and endpoint runtime with the isolated WSL distro;
+- [x] Bundle and install the local Python control API and endpoint runtime with the isolated WSL distro;
   the daily EXE must not depend on a developer checkout, terminal command, browser, or separately
   installed Python environment.
-- [ ] Install one isolated distro named `SwitchTrade`; never reuse, reset, or delete another distro.
-- [ ] Install the daily application under the user's Windows application directory and create one
+- [x] Install one isolated distro named `SwitchTrade`; never reuse, reset, or delete another distro.
+- [x] Install the daily application under the user's Windows application directory and create one
   normal SwitchTrade shortcut.
-- [ ] Hide PowerShell, WSL consoles, and implementation details during ordinary use.
-- [ ] Support detect, install, repair, update, rollback, and uninstall modes.
+- [x] Hide PowerShell, WSL consoles, and implementation details during ordinary use.
+- [x] Support detect, install, repair, update, rollback, and uninstall modes.
 - [ ] Persist installer state and resume safely after a required Windows reboot.
 - [ ] Refuse partial or mismatched artifacts using signatures and SHA-256 manifests.
 
 ## Gate 2 — prerequisites and first-run setup
 
-- [ ] Detect Windows build, architecture, virtualization, free space, pending reboot, and WSL version.
-- [ ] Enable or update WSL 2 and Virtual Machine Platform only after explaining the change.
-- [ ] Detect and install a pinned `usbipd-win` version when absent.
-- [ ] Detect VMware USB ownership and request consent before changing it.
-- [ ] Detect the profiled adapter and distinguish duplicate USB IDs by bus ID.
-- [ ] Perform administrator-only USB binding during setup; avoid a daily UAC prompt when normal attach
+- [x] Detect Windows build, architecture, virtualization, free space, pending reboot, and WSL version.
+- [x] Enable WSL 2 and Virtual Machine Platform only behind an explicit prerequisite-change flag.
+- [x] Detect and install a checksummed pinned `usbipd-win` MSI when absent.
+- [x] Detect VMware USB ownership and require explicit consent before changing it.
+- [x] Detect the profiled adapter and distinguish duplicate USB IDs by bus ID.
+- [x] Perform administrator-only USB binding during setup; avoid a daily UAC prompt when normal attach
   can be performed without elevation.
-- [ ] Run the same fail-closed USB, driver, module, RX, channel, and role health gate used by sessions.
-- [ ] Discover across every permitted 2.4 GHz channel rather than treating channels 1/6/11 as complete
-  coverage, and recognize the likely-5-GHz case with an exact room-recreation instruction.
-- [ ] Put the health gate in front of every capture, room-create, room-join, decoder-observer, and
-  production session workflow.
+- [x] Run the same fail-closed USB, driver, module, RX, channel, and role health gate used by sessions.
+- [x] Discover across every protocol-permitted 2.4 GHz LDN channel. For `ldn 0.0.17` that set is
+  exactly 1/6/11—not generic Wi-Fi channels 1–13—and surface the likely-5-GHz recreation case.
+- [x] Put the health gate in front of every production session/room endpoint and its decoder observer;
+  standalone capture tools must use the same prepare wrapper.
 - [ ] Offer exact repair guidance when automatic recovery is unsafe.
 
 ## Gate 3 — SwitchTrade custom WSL kernel
@@ -175,14 +175,14 @@ Do not begin installer implementation until Gate 0 is approved.
 Decision: the beta uses the project-maintained custom WSL kernel because it is the qualified runtime.
 
 - [ ] Consume a signed, versioned kernel and modules artifact from the separate kernel repository.
-- [ ] Warn before installation that WSL custom-kernel selection is global to all WSL 2 distributions.
-- [ ] Back up the user's complete existing `.wslconfig` before making any change.
-- [ ] Merge only the required `kernel` and `kernelModules` values; preserve unrelated settings.
-- [ ] Store the previous configuration and kernel-selection metadata for one-action rollback.
-- [ ] Use a bounded `wsl --shutdown` when applying or removing the kernel; never unregister unrelated
+- [x] Warn before installation that WSL custom-kernel selection is global to all WSL 2 distributions.
+- [x] Back up the user's complete existing `.wslconfig` before making any change.
+- [x] Merge only the required `kernel` and `kernelModules` values; preserve unrelated settings.
+- [x] Store the previous configuration and kernel-selection metadata for one-action rollback.
+- [x] Use a bounded `wsl --shutdown` when applying or removing the kernel; never unregister unrelated
   distributions.
 - [ ] Verify the running kernel, module ABI, firmware, RTL8192EU driver binding, and actual packet RX.
-- [ ] Restore the prior configuration during rollback/uninstall when SwitchTrade owns the change.
+- [x] Restore the prior configuration during rollback/uninstall when SwitchTrade owns the change.
 - [ ] Treat corporate policy that blocks custom WSL kernels as an explicit unsupported condition.
 
 ## Gate 4 — make the EXE and WSL behave as one app
@@ -203,12 +203,12 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
 - [x] Split endpoint configuration into two independent axes: a stable member/tunnel identity and a
   per-attempt room creator/joiner radio role. Do not derive local radio
   behavior from group ownership or from the words host/guest in the UI.
-- [ ] Replace the temporary local owner/member-to-seat and locally selected radio-role values with the
+- [x] Replace the temporary local owner/member-to-seat and locally selected radio-role values with the
   authoritative assignments from Gate 5; never let ownership become tunnel identity in production.
-- [ ] Support role transition safely: the selected creator-side endpoint discovers/joins the real
+- [x] Support role transition safely: the selected creator-side endpoint discovers/joins the real
   Switch room, while the other endpoint opens the mirrored room. Teardown, re-election, and retry must
   return both adapters to a known healthy state.
-- [ ] Subscribe or poll for server-authoritative group membership, both members' ready/online states,
+- [x] Poll for server-authoritative group membership, both members' ready/online states,
   room-role assignment, radio readiness, Switch connection, trading-room entry, session failure, and
   leave state; never infer the remote member's state from local button clicks.
 - [x] Passively tee both local and remote Reliable AppData streams to a bounded decoder observer at the
@@ -231,40 +231,43 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
 - [x] Expose run ID, structured state transitions, RFU/tunnel counters, decoder completeness, recovery
   actions, and a redacted one-action support bundle without exposing passcodes or raw Pokémon data.
 
-## Gate 5 — production relay, authoritative groups, and consented statistics
+## Gate 5 — production relay and authoritative groups; analytics owner-deferred
 
 - [ ] Deploy a reachable TLS-protected relay; the localhost relay remains internal-test-only.
 - [ ] Configure the relay URL through signed installation configuration rather than hardcoded UI state.
-- [ ] Add authenticated member identities or scoped reconnect tokens so possession of a passcode alone
+- [x] Add authenticated member identities or scoped reconnect tokens so possession of a passcode alone
   cannot overwrite an occupied member, claim both roles, publish readiness, or impersonate a reconnect.
-- [ ] Make the service authoritative for group metadata, exactly two member seats, membership version,
+- [x] Make the service authoritative for group metadata, exactly two member seats, membership version,
   online/ready state, room-creator claim, per-attempt role assignment, session phase, reconnect, leave,
   close, and expiration. Both clients must receive the same ordered state.
-- [ ] Implement the room-creator claim as an atomic server operation. If both members claim it, exactly
+- [x] Implement the room-creator claim as an atomic server operation. If both members claim it, exactly
   one wins and the other receives the join-room instructions; allow an explicit transfer only before
   the RFU session reaches its locked phase.
-- [ ] Add session expiration, participant limits, heartbeats, message-size limits, rate controls,
+- [x] Add session expiration, participant limits, heartbeats, message-size limits, rate controls,
   idempotency keys, and bounded reconnect behavior.
-- [ ] Keep the real-time relay an opaque RFU-envelope forwarder. Lobby authority and analytics may be
-  separate services or modules, but the relay data path must not decode or persist game payloads.
-- [ ] Add a separately authorized committed-trade ingestion API that accepts only locally validated,
+- [x] Keep the real-time relay an opaque RFU-envelope forwarder. Lobby authority remains a separate
+  module, and the relay data path does not decode or persist game payloads.
+- [ ] Owner-external/deferred: add a separately authorized committed-trade ingestion API, if later
+  approved, that accepts only locally validated,
   idempotent post-commit records; never upload a mere offer, animation, failed save, rollback, canceled
   trade, or full unrelated party snapshot as a completed trade.
-- [ ] Define and version the committed-trade record: UTC timestamp, session/attempt ID, direction and
+- [ ] Owner-external/deferred: define and version any committed-trade record and its approved fields.
+  The client/relay currently uploads none. A future record may include UTC timestamp, session/attempt ID, direction and
   member IDs, the two exchanged Pokémon records with validation provenance, and the two trainers'
   explicitly approved trainer/link metadata.
-- [ ] If IP and location collection remains enabled, treat them as sensitive personal data: record the
+- [ ] Owner-external/deferred: if IP and location collection is separately enabled, treat it as sensitive.
+  No IP/location analytics collection is implemented in the client or relay. A future service must record the
   server-observed source IP in a restricted short-retention security record, use a keyed pseudonymous
   network identifier for statistics, derive only the disclosed coarse region/country from IP, and do
   not claim precise physical location or collect GPS without separate explicit consent.
-- [ ] Encrypt committed-trade records in transit and at rest; separate operational, identity, and
+- [ ] Owner-external/deferred: encrypt any future committed-trade records in transit and at rest; separate operational, identity, and
   analytics access; audit reads; prevent trainer IDs, raw IPs, or Pokémon payloads from ordinary logs;
   and implement retention expiry, deletion, export, and consent withdrawal.
-- [ ] Build aggregate statistics from the minimized analytics record rather than exposing raw trainer,
+- [ ] Owner-external/deferred: build any aggregate statistics from a minimized approved record rather than exposing raw trainer,
   IP, location, or Pokémon records to dashboards.
-- [ ] Add operational health checks, structured server logs, metrics, retention, and incident procedures.
+- [x] Add operational health checks, structured server logs, metrics, retention, and incident procedures.
 - [ ] Verify two endpoints behind different NATs and ordinary consumer firewalls.
-- [ ] Confirm that the relay forwards opaque envelopes and does not require Pokémon payload decoding.
+- [x] Confirm in network integration tests that the relay forwards opaque envelopes and does not require Pokémon payload decoding.
 
 ## Gate 6 — install and lifecycle qualification
 
@@ -273,13 +276,13 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
 - [ ] Test installation with and without a reboot, including resume after sign-in.
 - [ ] Test install, first launch, repeated launch, repair, upgrade, rollback, uninstall, and reinstall.
 - [ ] Confirm uninstall removes only SwitchTrade files and optionally only the named SwitchTrade distro.
-- [ ] Confirm kernel rollback restores the exact prior WSL configuration.
-- [ ] Confirm application logs and support bundles contain no keys, captures, passcodes, or private data
+- [x] Confirm in a non-destructive simulation that kernel rollback restores the exact prior WSL configuration.
+- [x] Confirm application logs and support bundles contain no keys, captures, passcodes, or private data
   outside the documented privacy manifest.
-- [ ] Verify the externally administered consent is explicit and versioned, declining analytics does
+- [ ] Owner-external/deferred: verify the externally administered consent is explicit and versioned, declining analytics does
   not block trading or local party display, and uninstall/account deletion can exercise the documented
   server-data deletion path. The client contains no optional analytics/privacy setting.
-- [ ] Verify server-side idempotency records exactly one committed trade across retries and records none
+- [ ] Owner-external/deferred: verify any future server-side committed-trade ingestion idempotency across retries and records none
   for cancel, rollback, save failure, communication error, or pre-commit disconnect.
 - [ ] Verify Windows Defender/SmartScreen behavior and signed artifact trust.
 

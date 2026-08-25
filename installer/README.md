@@ -10,6 +10,8 @@ named `SwitchTrade` distribution and never edits the user's global `.wslconfig`.
    Windows executable.
 3. Commit the exact source being packaged; the builder refuses a dirty worktree.
 4. Run `installer/Build-Package.ps1 -Rootfs PATH -DesktopExe artifacts/native/SwitchTrade/SwitchTrade.exe`.
+   Release builds also pass the signed external `-Kernel`, `-KernelManifest`, optional
+   `-KernelModules`, pinned `-UsbipdMsi`, and production `-RelayUrl` inputs.
 
 Pass `-Rootfs PATH` to include a versioned minimal WSL rootfs. Without it, the resulting archive is an
 internal upgrade/repair package for a machine that already has the `SwitchTrade` distro; a clean
@@ -32,7 +34,10 @@ The retired web/demo frontend is not bundled into the WSL runtime or required by
   runtime for rollback.
 - `Uninstall` removes application files only.
 - The distro is unregistered only when `Uninstall -PurgeDistro` is explicitly requested.
-- Neither setup nor launch changes the custom/stock WSL kernel selection.
+- Setup changes global WSL kernel selection only when a verified kernel bundle is present and the user
+  supplies `--accept-global-kernel-change`; it preserves the prior `.wslconfig` for exact rollback.
+- Ordinary launch never self-elevates. Setup/Repair performs binding; daily attach uses that retained
+  binding and fails with an exact repair action if administrator work is required.
 
 The localhost relay default is for internal same-machine validation. A cross-network beta must supply
 a reachable HTTPS relay URL in the installed `config.json`.
