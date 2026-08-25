@@ -87,9 +87,10 @@ suite passes without Switch hardware. See
 [`docs/53-beta0-internal-build-20260825.md`](docs/53-beta0-internal-build-20260825.md).
 
 This is an internal beta candidate, not a signed user release. Two physical RTL8192EU endpoints,
-Switch-to-Switch validation, WAN/recovery soak, a versioned minimal rootfs, and clean-machine installer
-qualification remain release gates. The bootstrap currently leaves the global/custom WSL kernel
-configuration unchanged.
+Switch-to-Switch validation, WAN/recovery soak, external clean-machine/reboot qualification, and
+artifact signing remain release gates. A checksummed minimal rootfs and isolated install/repair/
+uninstall cycle now pass internally. The bootstrap leaves the global/custom WSL kernel configuration
+unchanged.
 
 ## 핵심 원칙
 
