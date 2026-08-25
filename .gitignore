@@ -1,11 +1,8 @@
-
-# Legacy safety checkout only. Production source is tracked under bridge/.
-/emu/
-/_related/
-/related/
+# Nested reference repositories are evidence only; production source is tracked under bridge/.
+/archive/references/
 __pycache__/
 /logs/
-/ui/dist-desktop/
+/apps/web/dist-desktop/
 /artifacts/
 **/bin/
 **/obj/

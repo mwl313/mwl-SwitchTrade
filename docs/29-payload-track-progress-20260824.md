@@ -59,7 +59,7 @@ The standard-library test suite currently passes **13 tests**:
 - encrypted `.ek3` detection;
 - zero/truncated/oversized-input negative cases.
 
-The existing tracked `mons/0373_SALAMENCE.pk3` fixture validates to species SALAMENCE, checksum OK, and the expected IV values. Raw golden pcaps are intentionally rejected by the candidate scanner until the protocol agent supplies decrypted/reassembled payload blocks.
+The existing tracked `archive/pokemon/fixtures/0373_SALAMENCE.pk3` fixture validates to species SALAMENCE, checksum OK, and the expected IV values. Raw golden pcaps are intentionally rejected by the candidate scanner until the protocol agent supplies decrypted/reassembled payload blocks.
 
 ## What remains blocked on the protocol handoff
 

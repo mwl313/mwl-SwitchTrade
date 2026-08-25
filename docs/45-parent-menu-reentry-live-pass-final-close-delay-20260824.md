@@ -74,7 +74,7 @@ known optional WSL relay issue        uvicorn not installed
 
 ## Next live gate
 
-Offer `mons/0001_BULBASAUR_user_20260824.pk3` next, following the requested Rattata/Bulbasaur
+Offer `archive/pokemon/fixtures/0001_BULBASAUR_user_20260824.pk3` next, following the requested Rattata/Bulbasaur
 alternation. Complete one trade and leave the session under host control. PASS requires:
 
 1. the same successful save and return to the trade screen;

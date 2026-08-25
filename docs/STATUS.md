@@ -234,7 +234,7 @@
 
 ## 파일/백업
 
-- 트레이드 결과: `received-20260821/`, `received-20260821-2/`
-- VM 백업: `backup-vm-20260821/`
+- 트레이드 결과: `archive/pokemon/received-20260821/`, `archive/pokemon/received-20260821-2/`
+- VM 백업: `archive/legacy/vm-20260821/`
 - 워크플로우: `docs/04-trade-workflow.md` (래퍼 v6.1 기준)
 - T4 로그 백업(Mac /tmp): `logs_t4h3.txt`, `logs_t4g.txt` — 영구 보관 원하면 received/로 이동 필요

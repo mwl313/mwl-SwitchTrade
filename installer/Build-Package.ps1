@@ -15,22 +15,23 @@ $dirty = & git -C $Repo status --porcelain
 if ($dirty) { throw 'refusing to package a dirty worktree; commit the beta source first' }
 $Stage = Join-Path $OutputRoot "SwitchTrade-beta-$Version"
 
-if (-not (Test-Path -LiteralPath (Join-Path $Repo 'ui\dist-desktop\index.html'))) {
-    throw 'desktop frontend is not built; run pnpm build:desktop in ui first'
+$webDist = Join-Path $Repo 'apps\web\dist-desktop'
+if (-not (Test-Path -LiteralPath (Join-Path $webDist 'index.html'))) {
+    throw 'web/debug frontend is not built; run pnpm build:desktop in apps/web first'
 }
 if (Test-Path -LiteralPath $Stage) { throw "package stage already exists: $Stage" }
 New-Item -ItemType Directory -Force -Path (Join-Path $Stage 'payload\app') | Out-Null
 
 $app = Join-Path $Stage 'payload\app'
 $sourceArchive = Join-Path $Stage 'source.tar'
-$runtimePaths = @('bridge', 'config', 'relay', 'scripts', 'switchtrade', 'tests', 'ui',
+$runtimePaths = @('apps/web', 'bridge', 'config', 'relay', 'scripts', 'switchtrade', 'tests',
     'pytest.ini', 'requirements.txt', 'test-requirements.txt', 'README.md')
 & git -C $Repo archive --format=tar --output=$sourceArchive HEAD -- @runtimePaths
 if ($LASTEXITCODE -ne 0) { throw 'could not archive tracked runtime source' }
 & tar -xf $sourceArchive -C $app
 if ($LASTEXITCODE -ne 0) { throw 'could not extract tracked runtime source' }
 Remove-Item -LiteralPath $sourceArchive
-Copy-Item -LiteralPath (Join-Path $Repo 'ui\dist-desktop') -Destination (Join-Path $app 'ui') -Recurse -Force
+Copy-Item -LiteralPath $webDist -Destination (Join-Path $app 'apps\web\dist-desktop') -Recurse -Force
 $installerArchive = Join-Path $Stage 'installer.tar'
 & git -C $Repo archive --format=tar --output=$installerArchive HEAD -- installer
 if ($LASTEXITCODE -ne 0) { throw 'could not archive installer source' }

@@ -14,7 +14,7 @@
 #   4. 실행 전 stale frlgtrade.py 프로세스 정리 (docs/09-testing-audit D-9).
 #   5. 본체 워치독: timeout 900 — VM hang 최후 방어 (아래 [run] 주석의 근거 참조).
 #   6. 종료 후 카드 인터페이스 up 복구 유지.
-#   7. --dry-run: 카드 감지 / emu 경로 / phy 상태만 출력하고 실행하지 않음
+#   7. --dry-run: 카드 감지 / runtime 경로 / phy 상태만 출력하고 실행하지 않음
 #      (Mac 오프라인 검증용 — Mac엔 카드가 없으므로 "미감지"가 정상 출력).
 #   8. radio-health-gate.sh로 실제 RX를 확인한 뒤에만 frlgtrade 시작.
 #
@@ -37,8 +37,6 @@ readonly SCRIPT_DIR
 if [[ -z ${EMU_DIR:-} ]]; then
     if [[ -f "$SCRIPT_DIR/../bridge/frlgtrade.py" ]]; then
         EMU_DIR="$SCRIPT_DIR/../bridge"
-    elif [[ -f "$SCRIPT_DIR/../emu/frlgtrade.py" ]]; then
-        EMU_DIR="$SCRIPT_DIR/../emu"
     elif [[ -f "/home/aria/emu/frlgtrade.py" ]]; then
         EMU_DIR="/home/aria/emu"          # VM 표준 배포 위치 (~/에 래퍼를 놓을 때)
     else

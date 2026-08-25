@@ -11,7 +11,7 @@ The strongest end-to-end proof is the received Magikarp:
 - its canonical payload SHA-256 is `54133b532e93943ba3dce6fd89d9e0f06c8ba87d70890fa9da760b8f715f3181`;
 - that hash matches `logs/golden/pc_host_atomic_exit_switcha_retry_live_20260824_212450/received.pk3`.
 
-The offered Rattata is also independently grounded: its canonical hash is `b008f35eb33502a75ae7b86e1ee9f4ce4abfde689adf0e26187a41b6a112635c`, matching `mons/0019_RATTATA_user_20260824.pk3`.
+The offered Rattata is also independently grounded: its canonical hash is `b008f35eb33502a75ae7b86e1ee9f4ce4abfde689adf0e26187a41b6a112635c`, matching `archive/pokemon/fixtures/0019_RATTATA_user_20260824.pk3`.
 
 ## Capture and decoder evidence
 

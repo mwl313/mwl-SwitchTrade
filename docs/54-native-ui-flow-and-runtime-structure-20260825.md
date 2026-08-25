@@ -155,8 +155,8 @@ the tunnel when their payloads remain inside the established RFU boundary.
 
 ## Files that require a documentation check
 
-- `desktop/SwitchTrade.Desktop/MainWindow.xaml`
-- `desktop/SwitchTrade.Desktop/MainWindow.xaml.cs`
-- `desktop/SwitchTrade.Desktop/App.xaml.cs`
+- `apps/desktop/SwitchTrade.Desktop/MainWindow.xaml`
+- `apps/desktop/SwitchTrade.Desktop/MainWindow.xaml.cs`
+- `apps/desktop/SwitchTrade.Desktop/App.xaml.cs`
 - `switchtrade/control.py`
 - `installer/Launch-SwitchTrade.ps1`

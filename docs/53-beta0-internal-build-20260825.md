@@ -58,7 +58,7 @@ internet tunnel format merely because their RFU payloads differ.
 - The supplied Emerald-style UI now drives the real private create/join/start/stop API flow and shows
   backend/hardware state. Public groups remain intentionally demonstrative; the real public directory
   is backlog.
-- `desktop/SwitchTrade.Desktop` provides the distributable native WPF client. Its self-contained
+- `apps/desktop/SwitchTrade.Desktop` provides the distributable native WPF client. Its self-contained
   `SwitchTrade.exe` uses native Windows controls and has no Electron, Chromium, WebView2, or browser
   dependency. It starts the installed WSL launcher and uses the same localhost JSON API, so radio,
   driver, and future feature expansion remain behind the modular backend boundary.
