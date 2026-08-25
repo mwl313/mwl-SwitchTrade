@@ -39,7 +39,11 @@ Remove-Item -LiteralPath $installerArchive
 
 if ($Rootfs) {
     $resolvedRootfs = (Resolve-Path -LiteralPath $Rootfs).Path
-    Copy-Item -LiteralPath $resolvedRootfs -Destination (Join-Path $Stage 'payload\switchtrade-rootfs.tar.gz')
+    $packagedRootfs = Join-Path $Stage 'payload\switchtrade-rootfs.tar.gz'
+    Copy-Item -LiteralPath $resolvedRootfs -Destination $packagedRootfs
+    $rootfsHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $packagedRootfs).Hash.ToLowerInvariant()
+    "$rootfsHash  switchtrade-rootfs.tar.gz" |
+        Set-Content -LiteralPath (Join-Path $Stage 'payload\switchtrade-rootfs.sha256') -Encoding Ascii
 }
 
 $manifestArgs = @(

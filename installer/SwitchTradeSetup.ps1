@@ -12,6 +12,7 @@ $ErrorActionPreference = 'Stop'
 $PackageRoot = Split-Path -Parent $PSScriptRoot
 $Payload = Join-Path $PackageRoot 'payload\app'
 $Rootfs = Join-Path $PackageRoot 'payload\switchtrade-rootfs.tar.gz'
+$RootfsHash = Join-Path $PackageRoot 'payload\switchtrade-rootfs.sha256'
 
 function Get-Distros {
     if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) { return @() }
@@ -69,6 +70,14 @@ if (-not $audit.PayloadPresent) { throw "application payload is missing: $Payloa
 if (-not $audit.DistroInstalled) {
     if (-not $audit.RootfsPresent) {
         throw "the SwitchTrade distro is absent and this package has no rootfs: $Rootfs"
+    }
+    if (-not (Test-Path -LiteralPath $RootfsHash -PathType Leaf)) {
+        throw "rootfs checksum is missing: $RootfsHash"
+    }
+    $expectedHash = ((Get-Content -LiteralPath $RootfsHash -TotalCount 1) -split '\s+')[0]
+    $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Rootfs).Hash.ToLowerInvariant()
+    if ($expectedHash -notmatch '^[0-9a-fA-F]{64}$' -or $expectedHash.ToLowerInvariant() -ne $actualHash) {
+        throw 'SwitchTrade rootfs checksum verification failed.'
     }
     New-Item -ItemType Directory -Force -Path $DistroRoot | Out-Null
     & wsl.exe --import $Distro $DistroRoot $Rootfs --version 2

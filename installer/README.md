@@ -14,6 +14,10 @@ Pass `-Rootfs PATH` to include a versioned minimal WSL rootfs. Without it, the r
 internal upgrade/repair package for a machine that already has the `SwitchTrade` distro; a clean
 install intentionally fails with an exact missing-rootfs error.
 
+`Build-Rootfs.sh OUTPUT.tar.gz` creates a minimal x86-64 Ubuntu rootfs with no kernel. The package
+builder records a SHA-256 checksum and setup verifies it before import. The kernel remains a separate
+release input because WSL distributions do not contain the WSL kernel.
+
 ## Setup safety
 
 - `SwitchTradeSetup.ps1 -Action Audit` is read-only.
