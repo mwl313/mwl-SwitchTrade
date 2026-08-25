@@ -2,6 +2,7 @@
 param(
     [string]$OutputRoot = '',
     [string]$Rootfs = '',
+    [string]$DesktopExe = '',
     [switch]$NoArchive
 )
 
@@ -44,6 +45,18 @@ if ($Rootfs) {
     $rootfsHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $packagedRootfs).Hash.ToLowerInvariant()
     "$rootfsHash  switchtrade-rootfs.tar.gz" |
         Set-Content -LiteralPath (Join-Path $Stage 'payload\switchtrade-rootfs.sha256') -Encoding Ascii
+}
+
+if ($DesktopExe) {
+    $resolvedDesktop = (Resolve-Path -LiteralPath $DesktopExe).Path
+    if ([IO.Path]::GetExtension($resolvedDesktop) -ne '.exe') { throw 'desktop artifact must be an .exe' }
+    $windows = Join-Path $Stage 'windows'
+    New-Item -ItemType Directory -Force -Path $windows | Out-Null
+    $packagedDesktop = Join-Path $windows 'SwitchTrade.exe'
+    Copy-Item -LiteralPath $resolvedDesktop -Destination $packagedDesktop
+    $desktopHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $packagedDesktop).Hash.ToLowerInvariant()
+    "$desktopHash  SwitchTrade.exe" |
+        Set-Content -LiteralPath (Join-Path $windows 'SwitchTrade.exe.sha256') -Encoding Ascii
 }
 
 $manifestArgs = @(

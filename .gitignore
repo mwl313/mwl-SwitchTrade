@@ -7,3 +7,5 @@ __pycache__/
 /logs/
 /ui/dist-desktop/
 /artifacts/
+**/bin/
+**/obj/

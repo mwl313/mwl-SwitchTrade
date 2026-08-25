@@ -6,9 +6,11 @@ named `SwitchTrade` distribution and never edits the user's global `.wslconfig`.
 ## Build
 
 1. Install the pinned test/runtime dependencies under Python 3.12 or newer.
-2. In `ui`, run `pnpm build:desktop`.
-3. Commit the exact source being packaged; the builder refuses a dirty worktree.
-4. Run `installer/Build-Package.ps1`.
+2. In `ui`, run `pnpm build:desktop` (the optional local web/debug frontend).
+3. Run `desktop/Publish.ps1 -Output artifacts/native/SwitchTrade` to build the self-contained native
+   Windows executable.
+4. Commit the exact source being packaged; the builder refuses a dirty worktree.
+5. Run `installer/Build-Package.ps1 -Rootfs PATH -DesktopExe artifacts/native/SwitchTrade/SwitchTrade.exe`.
 
 Pass `-Rootfs PATH` to include a versioned minimal WSL rootfs. Without it, the resulting archive is an
 internal upgrade/repair package for a machine that already has the `SwitchTrade` distro; a clean
@@ -17,6 +19,10 @@ install intentionally fails with an exact missing-rootfs error.
 `Build-Rootfs.sh OUTPUT.tar.gz` creates a minimal x86-64 Ubuntu rootfs with no kernel. The package
 builder records a SHA-256 checksum and setup verifies it before import. The kernel remains a separate
 release input because WSL distributions do not contain the WSL kernel.
+
+The packaged `SwitchTrade.exe` is a native WPF application. It does not embed or launch Electron,
+Chromium, WebView2, or the user's browser. On an installed copy it starts the adjacent WSL launcher
+and communicates with the modular runtime through the localhost JSON control API.
 
 ## Setup safety
 

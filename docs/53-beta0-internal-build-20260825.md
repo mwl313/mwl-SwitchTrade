@@ -8,7 +8,7 @@ Switch. It is not yet hardware-certified or ready for public distribution.
 The runtime path is now:
 
 ```text
-HTML/CSS UI
+native WPF Windows UI (optional HTML/CSS debug UI)
   -> local control API
   -> profile/role selection
   -> Windows USB ownership preflight
@@ -58,8 +58,13 @@ internet tunnel format merely because their RFU payloads differ.
 - The supplied Emerald-style UI now drives the real private create/join/start/stop API flow and shows
   backend/hardware state. Public groups remain intentionally demonstrative; the real public directory
   is backlog.
+- `desktop/SwitchTrade.Desktop` provides the distributable native WPF client. Its self-contained
+  `SwitchTrade.exe` uses native Windows controls and has no Electron, Chromium, WebView2, or browser
+  dependency. It starts the installed WSL launcher and uses the same localhost JSON API, so radio,
+  driver, and future feature expansion remain behind the modular backend boundary.
 - A separate Vite desktop build produces static `index.html`/CSS/JavaScript and is served directly by
-  FastAPI. Node is a build dependency, not a beta runtime dependency.
+  FastAPI for debug/alternate-client use. Node is a build dependency, not a beta runtime dependency.
+  Its former blank-screen failure was fixed by guarding Node-only `process.env` access in the browser.
 
 ### Bootstrap/package foundation
 
@@ -69,8 +74,9 @@ internet tunnel format merely because their RFU payloads differ.
   the previous runtime, and requires Python 3.12+ because the pinned LDN package uses that syntax.
 - `installer/Launch-SwitchTrade.ps1` performs Windows USB ownership/attachment preflight before
   starting the local services.
-- `installer/Build-Package.ps1` packages tracked source plus the static frontend and refuses a dirty
-  worktree. It can consume a separately built rootfs artifact.
+- `installer/Build-Package.ps1` packages tracked source, the static debug frontend, and an optional
+  checksummed native EXE, and refuses a dirty worktree. It can consume a separately built rootfs
+  artifact.
 - `installer/Build-Rootfs.sh` produced a 44,521,402-byte Ubuntu 26.04 (`resolute`) minimal rootfs. The
   final package embeds it with SHA-256 verification; it does not copy the user's existing Ubuntu
   distribution.
@@ -89,8 +95,8 @@ No Switch or radio was used for this build, as requested.
 - Python compilation passed for `switchtrade`, `relay`, and `bridge/frlgsim`.
 - PowerShell parser validation passed for all installer scripts; Bash syntax validation passed for the
   provisioning and endpoint launch scripts.
-- Desktop UI production build, TypeScript checking, ESLint, and FastAPI static-serving smoke test
-  passed.
+- Native WPF build and self-contained single-file EXE self-test passed. The optional web UI production
+  build, TypeScript checking, ESLint, and FastAPI static-serving smoke test also passed.
 - A uniquely named throwaway WSL distro passed package checksum verification, clean import,
   provisioning, runtime/profile/UI smoke checks, repair with previous-runtime retention, and explicit
   isolated uninstall/purge. The unrelated `Ubuntu` distro remained installed.

@@ -14,6 +14,8 @@ $PackageRoot = Split-Path -Parent $PSScriptRoot
 $Payload = Join-Path $PackageRoot 'payload\app'
 $Rootfs = Join-Path $PackageRoot 'payload\switchtrade-rootfs.tar.gz'
 $RootfsHash = Join-Path $PackageRoot 'payload\switchtrade-rootfs.sha256'
+$DesktopExe = Join-Path $PackageRoot 'windows\SwitchTrade.exe'
+$DesktopHash = Join-Path $PackageRoot 'windows\SwitchTrade.exe.sha256'
 
 function Get-Distros {
     if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) { return @() }
@@ -74,6 +76,18 @@ if (-not $audit.WslInstalled) { throw 'WSL is not installed. Run wsl --install, 
 if (-not $audit.UsbipdInstalled) { throw 'usbipd-win is required. Install it, then rerun setup.' }
 if (-not $audit.PayloadPresent) { throw "application payload is missing: $Payload" }
 
+if (Test-Path -LiteralPath $DesktopExe -PathType Leaf) {
+    if (-not (Test-Path -LiteralPath $DesktopHash -PathType Leaf)) {
+        throw "desktop checksum is missing: $DesktopHash"
+    }
+    $expectedDesktopHash = ((Get-Content -LiteralPath $DesktopHash -TotalCount 1) -split '\s+')[0]
+    $actualDesktopHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $DesktopExe).Hash.ToLowerInvariant()
+    if ($expectedDesktopHash -notmatch '^[0-9a-fA-F]{64}$' -or
+        $expectedDesktopHash.ToLowerInvariant() -ne $actualDesktopHash) {
+        throw 'SwitchTrade desktop checksum verification failed.'
+    }
+}
+
 if (-not $audit.DistroInstalled) {
     if (-not $audit.RootfsPresent) {
         throw "the SwitchTrade distro is absent and this package has no rootfs: $Rootfs"
@@ -95,6 +109,9 @@ New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
 Copy-Item -LiteralPath (Join-Path $PackageRoot 'installer') -Destination $InstallRoot -Recurse -Force
 Copy-Item -LiteralPath $Payload -Destination $InstallRoot -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $PackageRoot 'manifest.json') -Destination $InstallRoot -Force
+if (Test-Path -LiteralPath $DesktopExe -PathType Leaf) {
+    Copy-Item -LiteralPath $DesktopExe -Destination (Join-Path $InstallRoot 'SwitchTrade.exe') -Force
+}
 @{ relay_url = 'http://127.0.0.1:8788' } | ConvertTo-Json |
     Set-Content -LiteralPath (Join-Path $InstallRoot 'config.json') -Encoding UTF8
 
@@ -106,8 +123,11 @@ if ($LASTEXITCODE -ne 0) { throw 'SwitchTrade WSL provisioning failed.' }
 if (-not $NoShortcut) {
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut((Join-Path $env:USERPROFILE 'Desktop\SwitchTrade.lnk'))
-    $shortcut.TargetPath = 'powershell.exe'
-    $shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $InstallRoot 'installer\Launch-SwitchTrade.ps1')`""
+    $installedDesktop = Join-Path $InstallRoot 'SwitchTrade.exe'
+    $shortcut.TargetPath = if (Test-Path -LiteralPath $installedDesktop) { $installedDesktop } else { 'powershell.exe' }
+    $shortcut.Arguments = if (Test-Path -LiteralPath $installedDesktop) { '' } else {
+        "-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $InstallRoot 'installer\Launch-SwitchTrade.ps1')`""
+    }
     $shortcut.WorkingDirectory = $InstallRoot
     $shortcut.Save()
 }
