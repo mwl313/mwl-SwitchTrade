@@ -3,6 +3,9 @@
 This is the primary product-demo client. It is a native WPF application and does not use Electron,
 Chromium, WebView2, or an external browser.
 
+The maintained screen flow, feature inventory, and layer terminology are documented in
+`docs/54-native-ui-flow-and-runtime-structure-20260825.md`.
+
 Build a self-contained x64 executable from Windows PowerShell:
 
 ```powershell
