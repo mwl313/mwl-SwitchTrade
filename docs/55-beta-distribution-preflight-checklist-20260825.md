@@ -1,10 +1,11 @@
 # Beta distribution preflight checklist — 2026-08-25
 
-> Status: Gate 0 contracts are frozen; final GPT/owner UI, asset, legal-notice, and support approval
-> remains before implementation proceeds through Gates 1–8.
+> Status: Gate 0 contracts are frozen and the second native UI audit has been implemented; final
+> GPT/owner visual, asset, legal-notice, and support approval remains before Gates 1–8.
 > UI baseline: `docs/56-native-ui-ux-redesign-handoff-20260825.md` and the owner overrides in
 > `docs/57-native-ui-overhaul-implementation-report-20260825.md` are the preliminary redesign source.
-> Latest UI evidence: `docs/57-native-ui-overhaul-implementation-report-20260825.md`.
+> Latest UI evidence: `docs/64-second-native-ui-overhaul-implementation-report-20260825.md`.
+> Second-overhaul audit: `docs/63-second-native-ui-overhaul-codex-handoff-20260825.md`.
 > Final-overhaul handoff: `docs/62-final-ui-overhaul-gpt-handoff-20260825.md`.
 > Frozen contracts: `room-control.v1` (`docs/58`), `party-commit.v1` (`docs/59`), and
 > `privacy-statistics.v1` (`docs/60`), with the private-beta baseline in `docs/61`.
@@ -27,7 +28,7 @@
 
 | Order | Gate | Current state | Release-blocking result still needed |
 |---:|---|---|---|
-| 1 | Gate 0 | Final GPT/owner approval | Approve the final contract-grounded UX plus public icons/assets, legal/privacy notices, and real support destination |
+| 1 | Gate 0 | Second overhaul implemented; final approval pending | Approve the native build plus public icons/assets, legal notices, and real support destination |
 | 2 | Gates 4–5 contracts | Frozen, not implemented | Build the authoritative two-member room service and the frozen versioned UI/control contracts |
 | 3 | Gate 4 local integration | Partial foundations | Make the installed EXE, isolated WSL runtime, health gate, endpoint, decoder observer, logs, and shutdown behave as one product |
 | 4 | Gate 5 remote services | Development relay only | Deploy authenticated authoritative rooms, production opaque relay, and optional consented commit ingestion |
@@ -40,19 +41,20 @@ Installer implementation remains blocked until the final GPT/owner review closes
 
 ## Next implementation tranche — do this before packaging
 
-1. [ ] Give GPT `docs/62-final-ui-overhaul-gpt-handoff-20260825.md`, approve and implement the final
-   contract-grounded WPF overhaul, and approve the remaining public icon/logo, notice, and support
-   decisions. This closes Gate 0.
-2. [ ] Implement and internally test the authenticated server-authoritative two-member room state
+1. [x] Give GPT the final handoff/audit and implement its contract-grounded WPF overhaul without
+   reintroducing the removed Privacy tab. Evidence is in `docs/64`.
+2. [ ] Obtain final owner/GPT visual approval and approve the remaining public icon/logo, legal-notice,
+   and real support-destination decisions. This closes Gate 0.
+3. [ ] Implement and internally test the authenticated server-authoritative two-member room state
    machine, reconnect tokens, atomic room-creator claims, ordered events, expiration, and recovery.
-3. [ ] Refactor the endpoint/control API so stable member/tunnel identity is independent of each
+4. [ ] Refactor the endpoint/control API so stable member/tunnel identity is independent of each
    attempt's room creator/joiner radio role, then connect the WPF state model to verified live events.
-4. [ ] Integrate the installed WSL lifecycle, full health/recovery state, logs/support bundles, passive
+5. [ ] Integrate the installed WSL lifecycle, full health/recovery state, logs/support bundles, passive
    decoder party snapshots, and idempotent successful-trade detection without making trading depend on
    decoding or analytics.
-5. [ ] Run no-Switch internal tests for simultaneous claims, reconnects, restarts, malformed/stale
+6. [ ] Run no-Switch internal tests for simultaneous claims, reconnects, restarts, malformed/stale
    events, decoder fixtures, failed/rolled-back trades, analytics disabled/offline, and UI transitions.
-6. [ ] Only after steps 1–5 pass, implement Gates 1–3 packaging and then run Gates 6–8 lifecycle,
+7. [ ] Only after steps 1–6 pass, implement Gates 1–3 packaging and then run Gates 6–8 lifecycle,
    hardware, network, signing, and private-beta qualification.
 
 ## Immediate-task scope imported from the current product TODO
@@ -92,6 +94,9 @@ This preflight checklist is the release-blocking superset of the immediate tasks
 - [x] Save and incorporate the owner's complete native UI/UX handoff as the redesign baseline.
 - [x] Replace the old Emerald/pixel shell with the Linkline WPF presentation foundation and honest
   UI-only flows; backend-dependent screens remain subject to later gates.
+- [x] Implement the second native pass: Fluent Light primitives, split views and view models,
+  adaptive layouts, stable focus geometry/restoration, High Contrast resources, reduced-motion
+  handling, and coordinator-owned active-room state.
 - [x] Update `docs/54-native-ui-flow-and-runtime-structure-20260825.md` with the implemented screen flow.
 - [x] Mark functional, demonstration-only, experimental, and unavailable UI actions explicitly.
 - [x] Freeze a two-member private-group model with server-authoritative membership, connection,
@@ -120,9 +125,9 @@ This preflight checklist is the release-blocking superset of the immediate tasks
   retention, deletion/export, access control, and an option that does not upload party or trade
   analytics. Per owner direction, this workflow is administered outside the client.
 - [x] Freeze the first beta version, supported Windows versions, and RTL8192EU hardware policy.
-- [ ] Approve the final public icon/logo assets, license/legal notices, privacy links/text, and real
-  support destination. The SwitchTrade name and Linkline direction are frozen; GPT/owner asset and
-  product-copy approval remains.
+- [ ] Approve the final public icon/logo assets, license/legal notices, and real support destination.
+  The SwitchTrade name and Linkline direction are frozen; no Privacy tab or client analytics control
+  is part of this approval.
 
 Do not begin installer implementation until Gate 0 is approved.
 
@@ -182,7 +187,8 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
   user at an unexplained `BACKEND OFFLINE` screen.
 - [ ] Replace the ambiguous `BACKEND` label with separate control, relay, radio, and session states.
 - [x] Add bounded local-service startup probes, retry, a recovery screen, and actionable generic errors.
-- [ ] Add startup cancellation, version mismatch handling, retained failure stage, and stage-specific
+- [x] Add startup cancellation so retry and shutdown safely supersede an in-flight probe.
+- [ ] Add version mismatch handling, retained failure stage, and stage-specific
   automatic/manual repair routing.
 - [ ] Prevent duplicate control, endpoint, or development-relay processes.
 - [ ] Split endpoint configuration into two independent axes: a stable server-assigned member/tunnel

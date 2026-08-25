@@ -72,6 +72,20 @@ Each member has at most one current snapshot for an attempt.
         "sp_attack": {"value": 19, "provenance": "observed"},
         "sp_defense": {"value": 22, "provenance": "observed"}
       },
+      "evs": {
+        "hp": {"value": 12, "provenance": "observed"},
+        "attack": {"value": 0, "provenance": "observed"},
+        "defense": {"value": 8, "provenance": "observed"},
+        "speed": {"value": 0, "provenance": "observed"},
+        "sp_attack": {"value": 20, "provenance": "observed"},
+        "sp_defense": {"value": 16, "provenance": "observed"}
+      },
+      "moves": [
+        {"slot": 1, "name": {"value": "Vine Whip", "provenance": "observed"}, "pp": {"value": 25, "provenance": "observed"}, "pp_ups": {"value": 0, "provenance": "observed"}},
+        {"slot": 2, "name": {"value": "Sleep Powder", "provenance": "observed"}, "pp": {"value": 15, "provenance": "observed"}, "pp_ups": {"value": 0, "provenance": "observed"}},
+        {"slot": 3, "name": {"value": "Leech Seed", "provenance": "observed"}, "pp": {"value": 10, "provenance": "observed"}, "pp_ups": {"value": 0, "provenance": "observed"}},
+        {"slot": 4, "name": {"value": "Tackle", "provenance": "observed"}, "pp": {"value": 35, "provenance": "observed"}, "pp_ups": {"value": 0, "provenance": "observed"}}
+      ],
       "trainer": {
         "name": {"value": "RED", "provenance": "observed"},
         "trainer_id": {"value": 12345, "provenance": "observed"},
@@ -86,6 +100,10 @@ Each member has at most one current snapshot for an attempt.
 The array always represents six ordered slots. Empty slots use `occupied=false` and omit Pokémon
 fields. Every displayed field carries `observed`, `derived`, or `unavailable` provenance; the client
 must not invent a zero, default label, or estimated value.
+
+`moves` always contains four ordered slots. An unknown/empty move slot uses unavailable provenanced
+values rather than an invented name or PP. `evs` contains all six named stats. DTOs keep these fields
+structured; the client must not parse localized or preformatted presentation strings.
 
 ## 4. Publication and invalidation
 

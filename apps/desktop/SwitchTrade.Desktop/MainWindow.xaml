@@ -1,8 +1,10 @@
 <Window x:Class="SwitchTrade.Desktop.MainWindow"
+        x:Name="RootWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:automation="clr-namespace:System.Windows.Automation;assembly=PresentationCore"
-        Title="SwitchTrade" Width="1120" Height="780" MinWidth="760" MinHeight="600"
+        xmlns:controls="clr-namespace:SwitchTrade.Desktop.Controls"
+        Title="SwitchTrade" Width="1120" Height="780" MinWidth="760" MinHeight="560"
         WindowStartupLocation="CenterScreen" Background="{DynamicResource CanvasBrush}"
         FontFamily="Segoe UI Variable Text, Segoe UI" FontSize="15"
         UseLayoutRounding="True" SnapsToDevicePixels="True">
@@ -15,59 +17,81 @@
 
     <Border Grid.Row="0" Background="{DynamicResource SurfaceBrush}"
             BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
-      <Grid Margin="56,0,28,0" HorizontalAlignment="Stretch">
+      <Grid x:Name="HeaderContent" Margin="56,0,28,0" HorizontalAlignment="Stretch">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="*" />
           <ColumnDefinition Width="Auto" />
-          <ColumnDefinition Width="16" />
+          <ColumnDefinition Width="8" />
           <ColumnDefinition Width="Auto" />
         </Grid.ColumnDefinitions>
 
         <TextBlock Grid.Column="0" Text="SwitchTrade" VerticalAlignment="Center"
                    FontFamily="Segoe UI Variable Display, Segoe UI" FontWeight="SemiBold"
-                   FontSize="21" Foreground="{DynamicResource PrimaryTextBrush}" />
+                   FontSize="22" Foreground="{DynamicResource PrimaryTextBrush}" />
 
-        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"
-                    automation:AutomationProperties.Name="{Binding ReadinessText}"
-                    automation:AutomationProperties.LiveSetting="Polite">
-          <Ellipse Width="8" Height="8" Margin="0,0,8,0">
-            <Ellipse.Style>
-              <Style TargetType="Ellipse">
-                <Setter Property="Fill" Value="{DynamicResource WarningBrush}" />
-                <Style.Triggers>
-                  <DataTrigger Binding="{Binding IsServiceReady}" Value="True">
-                    <Setter Property="Fill" Value="{DynamicResource SuccessBrush}" />
-                  </DataTrigger>
-                </Style.Triggers>
-              </Style>
-            </Ellipse.Style>
-          </Ellipse>
-          <TextBlock Text="{Binding ReadinessText}" VerticalAlignment="Center"
-                     Foreground="{DynamicResource SecondaryTextBrush}" FontSize="13" />
-        </StackPanel>
+        <ToggleButton x:Name="ReadinessButton" Grid.Column="1" VerticalAlignment="Center"
+                      MinHeight="44" Padding="10,8" Background="Transparent" BorderBrush="Transparent"
+                      Foreground="{DynamicResource LinkBlueBrush}"
+                      automation:AutomationProperties.Name="Open local setup status">
+          <StackPanel Orientation="Horizontal">
+            <Ellipse Width="8" Height="8" Margin="0,0,8,0" VerticalAlignment="Center">
+              <Ellipse.Style>
+                <Style TargetType="Ellipse">
+                  <Setter Property="Fill" Value="{DynamicResource WarningBrush}" />
+                  <Style.Triggers><DataTrigger Binding="{Binding IsServiceReady}" Value="True"><Setter Property="Fill" Value="{DynamicResource SuccessBrush}" /></DataTrigger></Style.Triggers>
+                </Style>
+              </Ellipse.Style>
+            </Ellipse>
+            <TextBlock Text="{Binding ReadinessText}" VerticalAlignment="Center" FontSize="13" />
+          </StackPanel>
+        </ToggleButton>
+        <Popup IsOpen="{Binding IsChecked, ElementName=ReadinessButton}" PlacementTarget="{Binding ElementName=ReadinessButton}"
+               Placement="Bottom" StaysOpen="False" AllowsTransparency="True">
+          <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource ControlBorderBrush}"
+                  BorderThickness="1" CornerRadius="10" Padding="18" Width="300" Margin="0,8,0,0">
+            <StackPanel>
+              <TextBlock Text="Local setup" FontWeight="SemiBold" Margin="0,0,0,8" />
+              <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                <TextBlock Text="App service" />
+                <TextBlock Grid.Column="1" Text="{Binding ReadinessText}" Foreground="{DynamicResource SecondaryTextBrush}" />
+              </Grid>
+              <TextBlock Text="Partner, adapter, and Switch states appear only when the installed service reports them."
+                         Style="{StaticResource SecondaryText}" Margin="0,10,0,0" />
+            </StackPanel>
+          </Border>
+        </Popup>
 
-        <Button Grid.Column="3" Content="Settings" Command="{Binding SettingsCommand}"
-                Style="{StaticResource TextButton}"
-                automation:AutomationProperties.Name="Open settings" />
+        <Button Grid.Column="3" Command="{Binding SettingsCommand}" Style="{StaticResource TextButton}"
+                automation:AutomationProperties.Name="Open settings">
+          <StackPanel Orientation="Horizontal">
+            <Path Data="{StaticResource Icon.Settings}" Width="17" Height="17" Stretch="Uniform"
+                  Stroke="{DynamicResource LinkBlueBrush}" StrokeThickness="1.6" Margin="0,0,7,0" />
+            <TextBlock Text="Settings" />
+          </StackPanel>
+        </Button>
       </Grid>
     </Border>
 
     <Grid Grid.Row="1" Background="{DynamicResource CanvasBrush}">
-      <Button Content="Back" Command="{Binding BackCommand}" Style="{StaticResource TextButton}"
+      <Button x:Name="BackButton" Command="{Binding BackCommand}" Style="{StaticResource TextButton}"
               HorizontalAlignment="Left" VerticalAlignment="Center" Margin="46,0,0,0"
               Visibility="{Binding CanGoBack, Converter={StaticResource BooleanToVisibility}}"
-              automation:AutomationProperties.Name="Go back" />
+              automation:AutomationProperties.Name="Go back">
+        <StackPanel Orientation="Horizontal">
+          <Path Data="{StaticResource Icon.Back}" Width="17" Height="17" Stretch="Uniform"
+                Stroke="{DynamicResource LinkBlueBrush}" StrokeThickness="1.8" Margin="0,0,7,0"
+                StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+          <TextBlock Text="Back" />
+        </StackPanel>
+      </Button>
     </Grid>
 
-    <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto"
-                  HorizontalContentAlignment="Stretch"
-                  HorizontalScrollBarVisibility="Disabled" Focusable="False">
-      <ContentControl Content="{Binding CurrentScreen}" MaxWidth="1000"
-                      Margin="56,8,32,40" HorizontalAlignment="Left"
-                      HorizontalContentAlignment="Stretch" VerticalContentAlignment="Top" />
-    </ScrollViewer>
+    <controls:ScenePresenter x:Name="ScenePresenter" Grid.Row="2" Content="{Binding CurrentScreen}"
+                             MaxWidth="1000" Margin="56,8,32,24" HorizontalAlignment="Left"
+                             HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
 
-    <TextBlock Text="{Binding Announcement}" Opacity="0" IsHitTestVisible="False"
+    <TextBlock Text="{Binding Announcement}" Width="1" Height="1" Opacity="0.01" IsHitTestVisible="False"
                automation:AutomationProperties.LiveSetting="Assertive"
                automation:AutomationProperties.Name="{Binding Announcement}" />
   </Grid>

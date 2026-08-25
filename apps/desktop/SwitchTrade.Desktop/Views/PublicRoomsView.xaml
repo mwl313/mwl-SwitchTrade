@@ -1,0 +1,167 @@
+<UserControl x:Class="SwitchTrade.Desktop.Views.PublicRoomsView"
+             x:Name="Root"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:automation="clr-namespace:System.Windows.Automation;assembly=PresentationCore"
+             xmlns:model="clr-namespace:SwitchTrade.Desktop.Models"
+             Loaded="ViewLoaded" SizeChanged="ViewSizeChanged" PreviewKeyDown="ViewKeyDown">
+  <UserControl.Resources>
+    <DataTemplate x:Key="RoomDetailsTemplate" DataType="{x:Type model:PublicRoomPreview}">
+      <StackPanel>
+        <Border Style="{StaticResource DemoBadge}" HorizontalAlignment="Left" Margin="0,0,0,14">
+          <TextBlock Text="Demo Preview" Foreground="{DynamicResource LinkBlueBrush}" FontSize="12" FontWeight="SemiBold" />
+        </Border>
+        <TextBlock Text="{Binding RoomName}" Style="{StaticResource SectionTitle}" />
+        <TextBlock Text="{Binding TrainerDisplayName, StringFormat=Trainer: {0}}" Margin="0,0,0,14" />
+        <TextBlock Text="{Binding GameLabel, StringFormat=Game: {0}}" />
+        <TextBlock Text="{Binding LanguageLabel, StringFormat=Language: {0}}" />
+        <TextBlock Text="{Binding Offering, StringFormat=Offering: {0}}" />
+        <TextBlock Text="{Binding Wanted, StringFormat=Looking for: {0}}" />
+        <TextBlock Text="{Binding Region, StringFormat=Region: {0}}" />
+        <TextBlock Text="{Binding ConnectionQuality, StringFormat=Connection quality: {0}}" />
+        <TextBlock Text="{Binding Occupancy, StringFormat=Availability: {0}}" />
+        <TextBlock Text="{Binding Note}" Foreground="{DynamicResource SecondaryTextBrush}" Margin="0,14,0,20" />
+        <Button Content="Preview Trade Room" Command="{Binding DataContext.PreviewCommand, ElementName=Root}"
+                Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" />
+      </StackPanel>
+    </DataTemplate>
+  </UserControl.Resources>
+
+  <Grid>
+    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+    <StackPanel Grid.Row="0">
+      <TextBlock Text="Browse Public Rooms" Style="{StaticResource ScreenTitle}"
+                 automation:AutomationProperties.HeadingLevel="Level1" />
+      <Border Style="{StaticResource InlineNotice}">
+        <TextBlock Text="Sample rooms in this build. Search and filters work locally; no trainer is contacted." />
+      </Border>
+    </StackPanel>
+
+    <Grid Grid.Row="1" Margin="0,0,0,16">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="150" /><ColumnDefinition Width="10" /><ColumnDefinition Width="*" />
+        <ColumnDefinition Width="10" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="10" />
+        <ColumnDefinition Width="150" /><ColumnDefinition Width="8" /><ColumnDefinition Width="44" />
+      </Grid.ColumnDefinitions>
+      <ComboBox ItemsSource="{Binding SearchByOptions}" DisplayMemberPath="Label" SelectedValuePath="Value"
+                SelectedValue="{Binding SearchBy}" automation:AutomationProperties.Name="Search by" />
+      <Grid Grid.Column="2">
+        <TextBox x:Name="SearchField" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                 automation:AutomationProperties.Name="Search public room samples" />
+        <TextBlock Text="Search rooms" Foreground="{DynamicResource SecondaryTextBrush}"
+                   Margin="13,0,8,0" VerticalAlignment="Center" IsHitTestVisible="False">
+          <TextBlock.Style>
+            <Style TargetType="TextBlock">
+              <Setter Property="Visibility" Value="Collapsed" />
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding Text, ElementName=SearchField}" Value="">
+                  <Setter Property="Visibility" Value="Visible" />
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </TextBlock.Style>
+        </TextBlock>
+      </Grid>
+      <Button Grid.Column="4" Content="{Binding FilterButtonText}" Command="{Binding ToggleFiltersCommand}"
+              Style="{StaticResource SecondaryButton}" />
+      <ComboBox Grid.Column="6" ItemsSource="{Binding SortOptions}" DisplayMemberPath="Label" SelectedValuePath="Value"
+                SelectedValue="{Binding Sort}" automation:AutomationProperties.Name="Sort rooms" />
+      <Button Grid.Column="8" Command="{Binding RefreshCommand}" Style="{StaticResource IconButton}"
+              ToolTip="Refresh sample rooms" automation:AutomationProperties.Name="Refresh sample rooms">
+        <Path Data="{StaticResource Icon.Refresh}" Width="18" Height="18" Stretch="Uniform"
+              Stroke="{DynamicResource PrimaryTextBrush}" StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+      </Button>
+    </Grid>
+
+    <Grid Grid.Row="2" x:Name="ContentArea">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition x:Name="ResultsColumn" Width="*" MinWidth="360" />
+        <ColumnDefinition x:Name="DetailsGutter" Width="20" />
+        <ColumnDefinition x:Name="DetailsColumn" Width="360" />
+      </Grid.ColumnDefinitions>
+      <Border Grid.Column="0" Style="{StaticResource SurfaceCard}" Padding="8">
+        <Grid>
+          <ListBox ItemsSource="{Binding Rooms}" SelectedItem="{Binding SelectedRoom, Mode=TwoWay}"
+                   BorderThickness="0" Background="Transparent" HorizontalContentAlignment="Stretch"
+                   ItemContainerStyle="{StaticResource ResultListItem}"
+                   VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+                   ScrollViewer.CanContentScroll="True"
+                   automation:AutomationProperties.Name="Public room preview results"
+                   SelectionChanged="RoomSelectionChanged">
+            <ListBox.ItemTemplate>
+              <DataTemplate DataType="{x:Type model:PublicRoomPreview}">
+                <Grid Margin="14,12" MinHeight="72">
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                  <StackPanel>
+                    <TextBlock Text="{Binding RoomName}" FontWeight="SemiBold" FontSize="16" />
+                    <TextBlock Text="{Binding TrainerDisplayName, StringFormat=Trainer: {0}}" Style="{StaticResource SecondaryText}" Margin="0,4,0,0" />
+                    <TextBlock Style="{StaticResource SecondaryText}">
+                      <Run Text="Offering: " /><Run Text="{Binding Offering}" /><Run Text="  ·  Looking for: " /><Run Text="{Binding Wanted}" />
+                    </TextBlock>
+                  </StackPanel>
+                  <StackPanel Grid.Column="1" HorizontalAlignment="Right" Margin="12,0,0,0">
+                    <TextBlock Text="{Binding AvailabilityLabel}" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                    <TextBlock Text="{Binding ConnectionQuality}" Style="{StaticResource SecondaryText}" HorizontalAlignment="Right" Margin="0,5,0,0" />
+                    <TextBlock Text="{Binding GameLabel}" Style="{StaticResource SecondaryText}" HorizontalAlignment="Right" />
+                  </StackPanel>
+                </Grid>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+          <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                      Visibility="{Binding HasRooms, Converter={StaticResource InverseBooleanToVisibility}}">
+            <TextBlock Text="No rooms match these filters." FontWeight="SemiBold" TextAlignment="Center" />
+            <Button Content="Reset filters" Command="{Binding ClearFiltersCommand}" Style="{StaticResource TextButton}" Margin="0,8,0,0" />
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <Border x:Name="WideDetails" Grid.Column="2" Style="{StaticResource SurfaceCard}">
+        <Grid>
+          <TextBlock Text="Select a sample room to see its details." Foreground="{DynamicResource SecondaryTextBrush}"
+                     VerticalAlignment="Center" TextAlignment="Center"
+                     Visibility="{Binding HasSelection, Converter={StaticResource InverseBooleanToVisibility}}" />
+          <ContentControl Content="{Binding SelectedRoom}" ContentTemplate="{StaticResource RoomDetailsTemplate}" />
+        </Grid>
+      </Border>
+
+      <Border x:Name="CompactDetails" Grid.ColumnSpan="3" Style="{StaticResource SurfaceCard}"
+              Panel.ZIndex="20" Visibility="Collapsed">
+        <Grid>
+          <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+          <Button Content="Close details" Command="{Binding CloseDetailsCommand}" Style="{StaticResource TextButton}"
+                  HorizontalAlignment="Left" Margin="-10,-8,0,12" />
+          <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <ContentControl Content="{Binding SelectedRoom}" ContentTemplate="{StaticResource RoomDetailsTemplate}" />
+          </ScrollViewer>
+        </Grid>
+      </Border>
+
+      <Border Grid.ColumnSpan="3" HorizontalAlignment="Right" VerticalAlignment="Top" Width="320"
+              Style="{StaticResource SurfaceCard}" Panel.ZIndex="30" Margin="0,0,0,0"
+              Visibility="{Binding IsFilterOpen, Converter={StaticResource BooleanToVisibility}}">
+        <StackPanel>
+          <Grid Margin="0,0,0,14">
+            <TextBlock Text="Filters" Style="{StaticResource SectionTitle}" />
+            <Button Command="{Binding CloseFiltersCommand}" Style="{StaticResource IconButton}" HorizontalAlignment="Right"
+                    ToolTip="Close filters" automation:AutomationProperties.Name="Close filters">
+              <Path Data="{StaticResource Icon.Close}" Width="16" Height="16" Stretch="Uniform"
+                    Stroke="{DynamicResource PrimaryTextBrush}" StrokeThickness="1.7" />
+            </Button>
+          </Grid>
+          <TextBlock Text="Availability" Style="{StaticResource FieldLabel}" />
+          <ComboBox ItemsSource="{Binding AvailabilityOptions}" DisplayMemberPath="Label" SelectedValuePath="Value"
+                    SelectedValue="{Binding Availability}" Margin="0,0,0,14" />
+          <TextBlock Text="Game" Style="{StaticResource FieldLabel}" />
+          <ComboBox ItemsSource="{Binding GameOptions}" DisplayMemberPath="Label" SelectedValuePath="Value"
+                    SelectedValue="{Binding Game}" Margin="0,0,0,14" />
+          <TextBlock Text="Language" Style="{StaticResource FieldLabel}" />
+          <ComboBox ItemsSource="{Binding LanguageOptions}" DisplayMemberPath="Label" SelectedValuePath="Value"
+                    SelectedValue="{Binding Language}" Margin="0,0,0,16" />
+          <Button Content="Reset filters" Command="{Binding ClearFiltersCommand}" Style="{StaticResource TextButton}"
+                  HorizontalAlignment="Left" Visibility="{Binding HasActiveFilters, Converter={StaticResource BooleanToVisibility}}" />
+        </StackPanel>
+      </Border>
+    </Grid>
+  </Grid>
+</UserControl>

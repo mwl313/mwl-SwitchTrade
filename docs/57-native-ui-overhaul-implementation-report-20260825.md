@@ -99,3 +99,6 @@ Owner-adjustment QA confirmed that all three Home actions remain exactly 640 DIP
 and 1400 DIP window widths; the wordmark and scene titles share one left edge; Back appears below that
 line without moving the header; Game and Language default to `None`; completed required fields enable
 the public preview path; and no Privacy tab is exposed.
+
+This document is the first-pass historical report. The second native audit and its implementation are
+recorded in `docs/64-second-native-ui-overhaul-implementation-report-20260825.md`.

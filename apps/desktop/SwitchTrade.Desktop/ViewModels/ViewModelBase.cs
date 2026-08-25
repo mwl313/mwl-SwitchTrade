@@ -36,24 +36,28 @@ public sealed class RelayCommand<T>(Action<T?> execute, Func<T?, bool>? canExecu
     public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
 }
 
-public sealed class AsyncCommand(Func<Task> execute, Func<bool>? canExecute = null) : ICommand
+public sealed class AsyncCommand(Func<Task> execute, Func<bool>? canExecute = null) : ObservableObject, ICommand
 {
     private bool _running;
 
     public event EventHandler? CanExecuteChanged;
+    public bool IsRunning
+    {
+        get => _running;
+        private set
+        {
+            if (!Set(ref _running, value)) return;
+            RaiseCanExecuteChanged();
+        }
+    }
     public bool CanExecute(object? parameter) => !_running && (canExecute?.Invoke() ?? true);
 
     public async void Execute(object? parameter)
     {
         if (!CanExecute(parameter)) return;
-        _running = true;
-        RaiseCanExecuteChanged();
+        IsRunning = true;
         try { await execute(); }
-        finally
-        {
-            _running = false;
-            RaiseCanExecuteChanged();
-        }
+        finally { IsRunning = false; }
     }
 
     public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
@@ -67,4 +71,6 @@ public abstract class ScreenViewModel(MainViewModel shell) : ObservableObject
 
     public virtual void NotifyShellState() => OnPropertyChanged(nameof(IsServiceReady));
     public virtual bool DismissTemporaryLayer() => false;
+    public virtual Task OnNavigatedToAsync() => Task.CompletedTask;
+    public virtual void OnNavigatedFrom() { }
 }

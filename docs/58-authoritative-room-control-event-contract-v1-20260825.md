@@ -53,6 +53,11 @@ Canonical UI snapshot shape:
   "name": "Kanto evening trades",
   "visibility": "private",
   "room_code": "A7K2Q9",
+  "profile": {
+    "owner_display_name": "Leaf",
+    "game": "FireRed",
+    "language": "English"
+  },
   "owner_member_id": "0199...",
   "state": "ready_check",
   "created_at": "2026-08-25T12:00:00Z",
@@ -61,7 +66,10 @@ Canonical UI snapshot shape:
   "members": [],
   "attempt": null,
   "device_readiness": {},
-  "parties": {},
+  "parties": {
+    "member_a": {"status": "available", "snapshot_id": "ps_01...", "snapshot_version": 4},
+    "member_b": {"status": "unavailable", "snapshot_id": null, "snapshot_version": null}
+  },
   "last_event_sequence": 42
 }
 ```
@@ -98,10 +106,12 @@ Allowed room states:
 
 ```text
 waiting_for_partner -> ready_check -> connection_attempt -> trading
+ready_check -> waiting_for_partner
+connection_attempt -> ready_check | waiting_for_partner
 trading -> ready_check | closing
 waiting_for_partner | ready_check | connection_attempt -> closing
 closing -> closed
-any nonterminal state -> expired
+waiting_for_partner | ready_check -> expired
 ```
 
 - `waiting_for_partner`: one occupied seat.
@@ -110,6 +120,23 @@ any nonterminal state -> expired
 - `trading`: both endpoints have confirmed trading-room entry.
 - `closing`: authoritative teardown is in progress.
 - `closed` and `expired`: terminal; no token can reopen the room.
+
+Creator cancellation, pre-lock teardown, and a recoverable retry complete the current attempt and return
+the same room and stable seats to `ready_check`. If a member leaves during `ready_check`, the room returns
+to `waiting_for_partner`. If a member leaves during an unlocked `connection_attempt`, the server first
+cancels/fails that attempt, releases its resources, frees the seat, and then returns the room to
+`waiting_for_partner`. A locked attempt must finish bounded teardown before a seat can be freed.
+
+### 3.3 Room profile and party references
+
+`profile` owns the room name plus the owner's room-scoped display name, game, and language. Optional
+offering, wanted, and note values are invitation/public-directory metadata and are not authoritative
+room or connection state. Private clients may retain them locally for invitation copy; a public
+directory must define its own reviewed record before accepting them.
+
+`parties` contains reference/status metadata only: per member `status`, `snapshot_id`, and
+`snapshot_version`. Full decoded party records exist exclusively at the party endpoint defined by
+`party-commit.v1` and never appear in this room snapshot or room event stream.
 
 ## 4. Device readiness
 
@@ -216,9 +243,12 @@ direction continues to derive from stable seat, never from `switch_room_role`.
 - During `trading_room`, a member loss enters `reconnecting`; the endpoint may buffer only within its
   existing bounded RFU policy. It must not invent remote state.
 - Grace expiry fails the attempt, releases its runtime resources, and marks the member `offline` while
-  retaining the seat until explicit leave or room expiry.
+  retaining the seat until explicit leave, owner removal after grace, or room expiry.
 - Explicit leave invalidates that member's tokens and frees the seat only when no attempt is locked.
-- The owner may close the room; either member may leave.
+- The owner may close the room for both; a non-owner may leave. Window close invokes the same explicit
+  owner-aware action and waits for its acknowledged teardown result.
+- After reconnect grace has elapsed and no attempt is locked, the owner may remove the offline member
+  and reopen that seat. Before that command is acknowledged, the UI says the place is reserved.
 - Waiting-for-partner expiry: 30 minutes without a second seat.
 - Absolute room lifetime: 6 hours.
 - Terminal room metadata may remain in the authoritative store for operational retention, but it is no
@@ -241,10 +271,28 @@ already exists.
 | `POST /v1/trade-rooms/{room_id}/attempts/{attempt_id}:lock-role` | Endpoint reports radio acquisition start |
 | `POST /v1/trade-rooms/{room_id}/attempts/{attempt_id}:cancel` | Cancel and return to ready check |
 | `POST /v1/trade-rooms/{room_id}/attempts/{attempt_id}:retry` | Create next numbered attempt |
+| `POST /v1/trade-rooms/{room_id}/attempts/{attempt_id}:end` | Complete bounded teardown, invalidate parties, and return the room to ready check |
 | `DELETE /v1/trade-rooms/{room_id}/members/me` | Leave safely |
+| `DELETE /v1/trade-rooms/{room_id}/members/{member_id}` | Owner frees an offline seat after reconnect grace and unlocked teardown |
 | `DELETE /v1/trade-rooms/{room_id}` | Owner closes room |
 
 Retries with the same idempotency key return the original status/body and do not increment version.
+
+The `POST /v1/trade-rooms` body is frozen as:
+
+```json
+{
+  "name": "Kanto evening trades",
+  "visibility": "private",
+  "owner_display_name": "Leaf",
+  "game": "FireRed",
+  "language": "English"
+}
+```
+
+For `room-control.v1`, `visibility` is `private`; a real public directory remains out of scope. Optional
+offering, wanted, and note values are not accepted by this command. A client may use them locally in an
+invitation or the explicitly labeled Demo Preview, but must not imply that the room service stored them.
 
 ## 9. Ordered events
 
@@ -272,7 +320,7 @@ Required event families:
 - `attempt.created`, `attempt.creator_assigned`, `attempt.role_locked`, `attempt.phase_changed`
 - `attempt.recovery_required`, `attempt.canceled`, `attempt.failed`, `attempt.completed`
 - `device.readiness_changed`
-- `party.snapshot_updated`, `party.snapshot_invalidated`
+- `party.snapshot.updated`, `party.snapshot.invalidated`
 - `trade.committed`
 
 Events are delivered in monotonically increasing `sequence` order. Clients reject lower/equal sequence
@@ -334,6 +382,26 @@ Required error codes include:
 
 The UI maps `primary_action` to an allowlisted command. Raw exception strings appear only inside
 Technical Details or a support bundle.
+
+Allowed `primary_action` values are:
+
+```text
+retry
+repair
+update
+recheck_adapter
+select_adapter
+retry_attempt
+cancel_and_retry
+return_to_room
+return_home
+create_support_bundle
+wait
+dismiss
+```
+
+The client records and rejects unknown values. It never converts an error action string into a shell
+command or arbitrary API request.
 
 ## 12. Version compatibility
 

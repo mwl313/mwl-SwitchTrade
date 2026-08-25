@@ -4,10 +4,10 @@
 > Maintenance rule: any change to user-visible screens, navigation, controls, status text, API calls,
 > automatic startup, or shutdown behavior must update this document in the same change.
 
-This document describes implemented behavior, not planned behavior. The approved redesign source is
-`docs/56-native-ui-ux-redesign-handoff-20260825.md`. Release-blocking work that is not implemented
-remains in `docs/55-beta-distribution-preflight-checklist-20260825.md`. The final GPT/owner review must
-use `docs/62-final-ui-overhaul-gpt-handoff-20260825.md` and the frozen `docs/58`–`docs/61` contracts.
+This document describes implemented behavior, not planned behavior. The approved first-pass redesign
+is in `docs/56`; the second-pass audit and result are in `docs/63` and `docs/64`.
+Release-blocking work that is not implemented remains in `docs/55`. The frozen backend contracts are
+`docs/58`–`docs/61`.
 
 ## Current UI flow
 
@@ -34,10 +34,9 @@ flowchart TD
     previewHome --> publicRooms
     previewHome --> settings
 
-    create -->|Code only · real local API| realRoom[Trade Room · Current Private Beta]
+    create -->|Private · real local API| realRoom[Trade Room · Compatibility Mode]
     create -->|Listed publicly · preview| demoRoom[Trade Room · Demo Preview]
-    privateJoin -->|Find via real local API| roomPreview[Private room result]
-    roomPreview --> realRoom
+    privateJoin -->|One atomic Join call| realRoom
     publicRooms -->|Search/filter/sort samples| publicPreview[Public room details · Demo Preview]
     publicPreview --> demoRoom
 
@@ -63,16 +62,16 @@ flowchart TD
 
 | UI area | Implemented behavior | Truth boundary |
 |---|---|---|
-| Global shell | Native WPF light theme, fixed wordmark header, reserved Back row below the header, readiness summary, Settings, scrollable content, keyboard navigation, and live-region announcements | Back appearing never moves the wordmark; readiness is the local control-service status, not a claim that a partner or Switch is connected |
+| Global shell | Native WPF Fluent Light primitives with Linkline tokens, fixed wordmark header, reserved Back row, readiness popover, Settings, per-screen scrolling, adaptive margins, keyboard navigation, restrained scene transitions, and live-region announcements | Back appearing never moves the wordmark; readiness is local setup status, not a claim that a partner or Switch is connected |
 | Startup | Checks `127.0.0.1:8787`, attempts the installed hidden launcher, retries for a bounded period, and routes to Home or Recovery | The progress copy is presentation state, not invented per-stage telemetry |
 | Startup Recovery | Try again, Settings, explicitly labeled interface preview, and expandable technical context | Preview does not start online, radio, or Switch behavior |
 | Home | Three fixed-width rectangular actions for Create, Browse Public Rooms, and private code entry, plus Settings and an attention notice when in preview/recovery state | Public browsing is labeled as preview |
 | Create a Trade Room | Always-visible room/trainer/game/language/offer/wanted/note fields, Private/Public radio selection, required-field validation, and real private-room creation through the existing local API | Room name, trainer name, game, and language are required; Game and Language default to `None`; Public creates a local Demo Preview only |
-| Join a private Trade Room | Normalizes a shared code, resolves it through the current API, previews the result, and enters the Trade Room | Occupancy and remote membership are explicitly not authoritative |
+| Join a private Trade Room | Normalizes or pastes a shared code, locks editing while one atomic Join request is active, and enters the Trade Room on success | The compatibility API cannot yet provide authoritative presence/reconnect state |
 | Browse Public Rooms | Interactive local search, field selector, availability/game/language filters, sorting, selection, empty state, and sample detail panel | Every public-room surface says `Public Rooms Preview` or `Demo Preview`; no network directory is queried |
 | Settings · Connection | Reads profile-driven adapter compatibility, support state, summary, and technical details; permits recheck | It does not claim to select, repair, attach, or live-probe an adapter |
 | Settings · Support | Requests the real local support-bundle endpoint and reports a friendly result | Requires the installed local service |
-| Trade Room · real | Room identity, code/invitation copy, user-facing Switch instructions, current endpoint start/stop, status mapping, and safe leave/close | Shared Ready, authoritative membership, either-user creator choice, reconnect, and live parties are named as unavailable |
+| Trade Room · real | Coordinator-owned room identity that survives Settings/navigation, code/invitation copy, role-specific Switch instructions, current endpoint start/stop, truthful recovery, owner-close/member-leave semantics, and safe app shutdown | Shared Ready, authoritative membership, role election, reconnect, and live parties remain unavailable in the compatibility API |
 | Trade Room · demo | Two side-by-side parties, six explicit slots each, neutral initial placeholders, pointer tooltips, click/Enter selection, detailed stats, and Escape dismissal | All trainers, Pokémon, network quality, and party fields are sample data |
 
 ## Navigation and keyboard behavior
@@ -91,14 +90,18 @@ flowchart TD
 
 ## Implemented presentation foundation
 
-- `Themes/Tokens.xaml` owns Linkline colors and common geometry values.
-- `Themes/Controls.xaml` owns typography, card, notice, input, focus, and button styles.
-- `Models/AppModels.cs` contains typed presentation records.
+- `Themes/Colors.Light.xaml`, `Tokens.xaml`, `Typography.xaml`, `Icons.xaml`, and the split
+  `Controls.*.xaml` dictionaries own Fluent Light plus the restrained Linkline identity.
+- `Themes/HighContrast.xaml` is loaded when Windows High Contrast is active; motion follows the
+  Windows client-area animation preference and is suppressed in High Contrast.
+- `Models/AppModels.cs` contains typed room, filter, party, move, stat, IV, EV, and trainer records.
 - `Services/ControlApiClient.cs` is the typed local JSON API boundary and converts technical failures
   into user-facing messages.
 - `Services/PublicRoomPreviewProvider.cs` is the sole source of labeled sample rooms and parties.
-- `ViewModels/MainViewModel.cs` owns shell navigation and per-screen state.
-- `Views/Screens.xaml` contains screen templates; `MainWindow.xaml` is only the persistent shell.
+- `ViewModels/MainViewModel.cs` owns only shell navigation. Split screen view models own local state,
+  while `State/ActiveTradeRoomCoordinator.cs` owns the real room/session independently of the route.
+- `Views/Screens.xaml` is a template registry. Each screen and reusable component has its own XAML and
+  code-behind file; `MainWindow.xaml` remains the persistent shell.
 
 ## Known product gaps (not represented as working UI)
 
@@ -115,6 +118,9 @@ flowchart TD
 - Per owner direction, optional privacy/analytics settings are not presented in the client. Analytics
   remain disabled until the separately administered external consent workflow exists.
 - Production relay deployment, authentication, and two-endpoint internet qualification.
+
+The client intentionally contains no Privacy tab, analytics switch, or consent prompt. That workflow
+is administered outside this client and remains disabled until separately implemented and approved.
 
 ## Runtime structure
 

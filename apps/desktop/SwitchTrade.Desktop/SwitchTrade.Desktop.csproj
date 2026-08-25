@@ -9,5 +9,7 @@
     <RootNamespace>SwitchTrade.Desktop</RootNamespace>
     <Version>0.2.0</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
   </PropertyGroup>
 </Project>

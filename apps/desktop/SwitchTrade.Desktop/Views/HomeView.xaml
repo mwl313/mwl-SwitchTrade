@@ -1,0 +1,27 @@
+<UserControl x:Class="SwitchTrade.Desktop.Views.HomeView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:automation="clr-namespace:System.Windows.Automation;assembly=PresentationCore"
+             xmlns:components="clr-namespace:SwitchTrade.Desktop.Views.Components">
+  <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+    <StackPanel MaxWidth="640" HorizontalAlignment="Left" Margin="0,26,0,32">
+      <TextBlock Text="Trade Pokémon with another trainer" Style="{StaticResource HeroTitle}"
+                 automation:AutomationProperties.HeadingLevel="Level1" />
+      <TextBlock Text="Create a Trade Room, share a code, and connect both Switches."
+                 FontSize="16" Foreground="{DynamicResource SecondaryTextBrush}" Margin="0,0,0,28" />
+      <Border Style="{StaticResource WarningNotice}"
+              Visibility="{Binding ShowAttention, Converter={StaticResource BooleanToVisibility}}">
+        <TextBlock Text="{Binding AttentionText}" />
+      </Border>
+      <components:NavigationActionButton Title="Create a Trade Room"
+                  Description="Start a room and share its code." Icon="{StaticResource Icon.Create}"
+                  Command="{Binding CreateCommand}" Margin="0,0,0,12" />
+      <components:NavigationActionButton Title="Browse Public Rooms"
+                  Description="Explore sample public listings in this build." Badge="Demo Preview"
+                  Icon="{StaticResource Icon.Search}" Command="{Binding PublicCommand}" Margin="0,0,0,12" />
+      <components:NavigationActionButton Title="Join a Private Room"
+                  Description="Enter a code shared by another trainer." Icon="{StaticResource Icon.Join}"
+                  Command="{Binding JoinCommand}" />
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

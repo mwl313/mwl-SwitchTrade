@@ -1,0 +1,48 @@
+<UserControl x:Class="SwitchTrade.Desktop.Views.Components.PartyGrid"
+             x:Name="Root"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:automation="clr-namespace:System.Windows.Automation;assembly=PresentationCore"
+             xmlns:model="clr-namespace:SwitchTrade.Desktop.Models">
+  <Border Style="{StaticResource SurfaceCard}">
+    <StackPanel>
+      <TextBlock Text="{Binding Heading, ElementName=Root}" Style="{StaticResource SectionTitle}" />
+      <ItemsControl ItemsSource="{Binding Slots, ElementName=Root}" KeyboardNavigation.TabNavigation="Once">
+        <ItemsControl.ItemContainerStyle>
+          <Style TargetType="ContentPresenter">
+            <Setter Property="automation:AutomationProperties.Name" Value="{Binding AccessibleName}" />
+          </Style>
+        </ItemsControl.ItemContainerStyle>
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate><UniformGrid Columns="2" Rows="3" /></ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate DataType="{x:Type model:PokemonPreviewViewData}">
+            <Button Command="{Binding SelectCommand, ElementName=Root}" CommandParameter="{Binding}"
+                    Style="{StaticResource SecondaryButton}" Margin="4" MinHeight="106"
+                    HorizontalContentAlignment="Left" automation:AutomationProperties.Name="{Binding AccessibleName}">
+              <Button.ToolTip>
+                <StackPanel MaxWidth="280">
+                  <TextBlock Text="{Binding Nickname}" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding Species}" />
+                  <TextBlock Text="Sample preview · Select for details" Style="{StaticResource SecondaryText}" Margin="0,4,0,0" />
+                </StackPanel>
+              </Button.ToolTip>
+              <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="38" /><ColumnDefinition /></Grid.ColumnDefinitions>
+                <Border Width="32" Height="32" CornerRadius="16" Background="{Binding AccentBrush, ElementName=Root}">
+                  <TextBlock Text="{Binding Initial}" HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="SemiBold" />
+                </Border>
+                <StackPanel Grid.Column="1" Margin="10,0,0,0">
+                  <TextBlock Text="{Binding Nickname}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                  <TextBlock Text="{Binding Species}" Style="{StaticResource SecondaryText}" TextTrimming="CharacterEllipsis" />
+                  <TextBlock Text="{Binding LevelText}" Style="{StaticResource SecondaryText}" />
+                </StackPanel>
+              </Grid>
+            </Button>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </StackPanel>
+  </Border>
+</UserControl>

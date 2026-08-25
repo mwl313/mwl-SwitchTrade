@@ -1,0 +1,29 @@
+<UserControl x:Class="SwitchTrade.Desktop.Views.Components.LinklineControl"
+             x:Name="Root"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:automation="clr-namespace:System.Windows.Automation;assembly=PresentationCore">
+  <Grid automation:AutomationProperties.Name="{Binding StatusText, ElementName=Root}">
+    <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="150" /><ColumnDefinition /></Grid.ColumnDefinitions>
+    <Border Grid.Column="0" Background="{DynamicResource BlueTintBrush}" CornerRadius="8" Padding="18">
+      <StackPanel>
+        <TextBlock Text="You" FontWeight="SemiBold" FontSize="18" />
+        <TextBlock Text="{Binding YouSummary, ElementName=Root}" Style="{StaticResource SecondaryText}" Margin="0,5,0,0" />
+      </StackPanel>
+    </Border>
+    <Grid Grid.Column="1" VerticalAlignment="Center" Margin="16,0">
+      <Border Height="2" Background="{DynamicResource BorderStrongBrush}" />
+      <Ellipse Width="12" Height="12" Fill="{DynamicResource LinkBlueBrush}" HorizontalAlignment="Left" />
+      <Border Background="{DynamicResource CanvasBrush}" Padding="7,3" HorizontalAlignment="Center" CornerRadius="6">
+        <TextBlock Text="{Binding StatusText, ElementName=Root}" Style="{StaticResource SecondaryText}" TextAlignment="Center" />
+      </Border>
+      <Ellipse Width="12" Height="12" Fill="{DynamicResource PartnerTealBrush}" HorizontalAlignment="Right" />
+    </Grid>
+    <Border Grid.Column="2" Background="{DynamicResource TealTintBrush}" CornerRadius="8" Padding="18">
+      <StackPanel>
+        <TextBlock Text="Partner" FontWeight="SemiBold" FontSize="18" />
+        <TextBlock Text="{Binding PartnerSummary, ElementName=Root}" Style="{StaticResource SecondaryText}" Margin="0,5,0,0" />
+      </StackPanel>
+    </Border>
+  </Grid>
+</UserControl>
