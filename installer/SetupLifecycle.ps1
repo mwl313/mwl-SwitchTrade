@@ -353,12 +353,25 @@ function Assert-SwitchTradeTransactionPackage {
         [Parameter(Mandatory)][string]$PackageRoot,
         [Parameter(Mandatory)][string]$ReleaseId
     )
-    if ([string]$Transaction.release_id -ne $ReleaseId -or
+    $expectedRelease = [string]$Transaction.release_id
+    $expectedRoot = [string]$Transaction.package_root
+    $expectedManifestSha256 = ''
+    if ([string]$Transaction.phase -match '^rollback_') {
+        $rollbackPackage = (Assert-SwitchTradeRollbackJournal -Transaction $Transaction).initiating_package
+        $expectedRelease = [string]$rollbackPackage.release_id
+        $expectedRoot = [string]$rollbackPackage.root
+        $expectedManifestSha256 = [string]$rollbackPackage.manifest_sha256
+    }
+    if ($expectedRelease -ne $ReleaseId -or
             -not [string]::Equals(
-                [IO.Path]::GetFullPath([string]$Transaction.package_root).TrimEnd('\'),
+                [IO.Path]::GetFullPath($expectedRoot).TrimEnd('\'),
                 [IO.Path]::GetFullPath($PackageRoot).TrimEnd('\'),
                 [StringComparison]::OrdinalIgnoreCase)) {
         throw 'SETUP_TRANSACTION_PACKAGE_MISMATCH: rerun Repair from the exact package that started the transaction'
+    }
+    if ($expectedManifestSha256 -and
+            (Get-FileSha256 (Join-Path $PackageRoot 'manifest.json')) -ne $expectedManifestSha256) {
+        throw 'SETUP_TRANSACTION_PACKAGE_MISMATCH: rollback package manifest identity changed'
     }
 }
 
@@ -563,7 +576,11 @@ function Set-SwitchTradeCompletedRollbackState {
 function New-SwitchTradeRollbackJournal {
     param(
         [Parameter(Mandatory)]$Transaction,
-        [Parameter(Mandatory)]$KernelState
+        [Parameter(Mandatory)]$KernelState,
+        [Parameter(Mandatory)][string]$PackageRoot,
+        [Parameter(Mandatory)][string]$PackageReleaseId,
+        [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{64}$')]
+        [string]$PackageManifestSha256
     )
     if ([int]$Transaction.schema -ne 3 -or [string]$Transaction.phase -ne 'completed') {
         throw 'ROLLBACK_TRANSACTION_NOT_COMPLETED'
@@ -573,8 +590,15 @@ function New-SwitchTradeRollbackJournal {
     if (-not $sourceRelease -or -not $targetRelease -or
             [string]$Transaction.wsl_prior_release_id -ne $targetRelease -or
             [string]$KernelState.package_release_id -ne $sourceRelease -or
-            [string]$KernelState.rollback_package_release_id -ne $targetRelease) {
+            [string]$KernelState.rollback_package_release_id -ne $targetRelease -or
+            $PackageReleaseId -ne $sourceRelease) {
         throw 'ROLLBACK_JOURNAL_RELEASE_MISMATCH'
+    }
+    $packagePath = [IO.Path]::GetFullPath($PackageRoot).TrimEnd('\')
+    $packageManifest = Join-Path $packagePath 'manifest.json'
+    if (-not (Test-Path -LiteralPath $packageManifest -PathType Leaf) -or
+            (Get-FileSha256 $packageManifest) -ne $PackageManifestSha256) {
+        throw 'ROLLBACK_JOURNAL_PACKAGE_MISMATCH'
     }
     foreach ($anchor in @([string]$Transaction.windows_integrity_sha256,
             [string]$Transaction.windows_prior_integrity_sha256,
@@ -596,8 +620,13 @@ function New-SwitchTradeRollbackJournal {
         }
     }
     return [ordered]@{
-        schema = 1
+        schema = 2
         source_action = [string]$Transaction.action
+        initiating_package = [ordered]@{
+            root = $packagePath
+            release_id = $PackageReleaseId
+            manifest_sha256 = $PackageManifestSha256
+        }
         source = [ordered]@{
             release_id = $sourceRelease
             windows_integrity_sha256 = [string]$Transaction.windows_integrity_sha256
@@ -629,7 +658,7 @@ function Assert-SwitchTradeRollbackJournal {
     if ([int]$Transaction.schema -ne 3 -or
             [string]$Transaction.phase -notmatch '^rollback_(prepared|wsl_committed|kernel_committed|windows_committed|recovering_source|recovering_target)$' -or
             -not $hasJournal -or -not $Transaction.rollback_journal -or
-            [int]$Transaction.rollback_journal.schema -ne 1) {
+            [int]$Transaction.rollback_journal.schema -ne 2) {
         throw 'ROLLBACK_JOURNAL_INVALID: rollback intent is missing or not recoverable'
     }
     $journal = $Transaction.rollback_journal
@@ -637,6 +666,13 @@ function Assert-SwitchTradeRollbackJournal {
             [string]$journal.target.release_id -ne [string]$Transaction.prior_release_id -or
             [string]$journal.target.release_id -ne [string]$Transaction.wsl_prior_release_id) {
         throw 'ROLLBACK_JOURNAL_RELEASE_MISMATCH'
+    }
+    if ($journal.PSObject.Properties.Name -notcontains 'initiating_package' -or
+            -not $journal.initiating_package -or
+            [string]$journal.initiating_package.release_id -ne [string]$journal.source.release_id -or
+            -not [string]$journal.initiating_package.root -or
+            [string]$journal.initiating_package.manifest_sha256 -notmatch '^[0-9a-f]{64}$') {
+        throw 'ROLLBACK_JOURNAL_PACKAGE_INVALID'
     }
     foreach ($axis in @($journal.source, $journal.target)) {
         if (-not [string]$axis.release_id -or -not [string]$axis.kernel_path) {
@@ -658,9 +694,15 @@ function Start-SwitchTradeRollbackTransaction {
     param(
         [Parameter(Mandatory)][string]$Path,
         [Parameter(Mandatory)]$Transaction,
-        [Parameter(Mandatory)]$KernelState
+        [Parameter(Mandatory)]$KernelState,
+        [Parameter(Mandatory)][string]$PackageRoot,
+        [Parameter(Mandatory)][string]$PackageReleaseId,
+        [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{64}$')]
+        [string]$PackageManifestSha256
     )
-    $journal = New-SwitchTradeRollbackJournal -Transaction $Transaction -KernelState $KernelState
+    $journal = New-SwitchTradeRollbackJournal -Transaction $Transaction -KernelState $KernelState `
+        -PackageRoot $PackageRoot -PackageReleaseId $PackageReleaseId `
+        -PackageManifestSha256 $PackageManifestSha256
     return Set-SwitchTradeTransactionPhase -Path $Path -Phase 'rollback_prepared' -Fields @{
         rollback_journal = $journal
     }

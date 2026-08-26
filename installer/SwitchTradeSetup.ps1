@@ -1030,10 +1030,12 @@ if ($Action -eq 'Audit') {
 }
 
 $ReleaseId = ''
-if ($Action -in @('Install', 'Repair', 'Update')) {
+$PackageManifestSha256 = ''
+if ($Action -in @('Install', 'Repair', 'Update', 'Rollback')) {
     $SetupStage = 'package_integrity'
     Test-SwitchTradePackage -PackageRoot $PackageRoot -AllowUnsignedPackage:$AllowUnsignedPackage | Out-Null
     $ReleaseId = Get-SwitchTradeReleaseId -ManifestPath (Join-Path $PackageRoot 'manifest.json')
+    $PackageManifestSha256 = Get-FileSha256 (Join-Path $PackageRoot 'manifest.json')
 }
 
 $SetupStage = 'mutex'
@@ -1137,7 +1139,9 @@ if ($Action -eq 'Rollback') {
         -FailureCode 'ROLLBACK_RUNTIME_INVALID' -Stage 'rollback_validate' | Out-Null
     $rollbackKernelState = Test-SwitchTradeKernelRollback -StateRoot $StateRoot -ExpectedReleaseId $rollbackRelease
     $installedTransaction = Start-SwitchTradeRollbackTransaction -Path $TransactionPath `
-        -Transaction $installedTransaction -KernelState $rollbackKernelState
+        -Transaction $installedTransaction -KernelState $rollbackKernelState `
+        -PackageRoot $PackageRoot -PackageReleaseId $ReleaseId `
+        -PackageManifestSha256 $PackageManifestSha256
     Clear-SetupResume
     $runtimeRolledBack = $false
     $kernelRolledBack = $false

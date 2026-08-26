@@ -113,6 +113,7 @@ class InstallerLifecycleTests(unittest.TestCase):
 
     def test_destructive_recovery_blockers_fail_closed(self):
         setup = (ROOT / "installer" / "SwitchTradeSetup.ps1").read_text(encoding="utf-8")
+        self.assertIn("@('Install', 'Repair', 'Update', 'Rollback')", setup)
 
         recovery = setup[setup.index("function Repair-SwitchTradeInterruptedTransaction"):
                          setup.index("function Test-StagedControlReadiness")]
@@ -140,6 +141,7 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertLess(journal, windows_swap)
         self.assertLess(windows_swap, persist)
         self.assertLess(persist, compensation)
+        self.assertIn("-PackageManifestSha256 $PackageManifestSha256", rollback)
 
         uninstall = setup[setup.index("if ($Action -eq 'Uninstall')"):
                           setup.index("if ($Action -eq 'Rollback')")]
@@ -196,7 +198,7 @@ class InstallerLifecycleTests(unittest.TestCase):
                 "-TestRoot", temporary,
             ], cwd=ROOT, capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("Rollback process-death recovery simulation PASS", result.stdout)
+        self.assertIn("Rollback package-identity process-death simulation PASS", result.stdout)
 
     @unittest.skipUnless(shutil.which("powershell"), "Windows PowerShell is required")
     def test_schema2_package_manifest_detects_tampering(self):
