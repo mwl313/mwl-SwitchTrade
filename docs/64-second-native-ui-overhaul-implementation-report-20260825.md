@@ -92,3 +92,6 @@ support destination. Backend implementation then follows the ordered gates in `d
   border so they remain distinct from the gray scrolling canvas.
 - Reordered the compact party layout so Partner appears above You; the wide layout remains You-left and
   Partner-right.
+- Replaced the boxed Settings tab buttons with unclipped, underline-selected navigation tabs.
+- Enlarged the default shell to 1240 by 860 DIPs, raised the minimum to 960 by 700 DIPs, expanded the
+  content boundary to 1080 DIPs, and reduced the bottom inset so primary screens need less scrolling.

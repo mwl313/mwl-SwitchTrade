@@ -59,7 +59,8 @@ public partial class MainWindow : Window
         var right = compact ? 32 : 28;
         HeaderContent.Margin = new Thickness(left, 0, right, 0);
         BackButton.Margin = new Thickness(left - 10, 0, 0, 0);
-        ScenePresenter.Margin = new Thickness(left, 8, 32, 24);
+        ScenePresenter.Margin = new Thickness(left, 8, 32, 16);
+        ScenePresenter.Width = Math.Min(ScenePresenter.MaxWidth, Math.Max(0, ActualWidth - left - 32));
     }
 
     private void ViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)

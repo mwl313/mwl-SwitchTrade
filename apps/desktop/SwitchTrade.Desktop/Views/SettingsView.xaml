@@ -10,7 +10,7 @@
                automation:AutomationProperties.HeadingLevel="Level1" Margin="0,0,0,18" />
 
     <TabControl Grid.Row="1" SelectedValuePath="Tag" SelectedValue="{Binding SelectedSection}"
-                Background="Transparent" BorderBrush="{DynamicResource BorderBrush}"
+                Style="{StaticResource SettingsTabControl}"
                 ItemContainerStyle="{StaticResource SettingsTabItem}"
                 automation:AutomationProperties.Name="Settings tabs">
       <TabItem Header="Connection" Tag="{x:Static vm:SettingsSection.Connection}">

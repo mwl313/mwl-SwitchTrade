@@ -4,7 +4,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:automation="clr-namespace:System.Windows.Automation;assembly=PresentationCore"
         xmlns:controls="clr-namespace:SwitchTrade.Desktop.Controls"
-        Title="SwitchTrade" Width="1120" Height="780" MinWidth="760" MinHeight="560"
+        Title="SwitchTrade" Width="1240" Height="860" MinWidth="960" MinHeight="700"
         WindowStartupLocation="CenterScreen" Background="{DynamicResource CanvasBrush}"
         FontFamily="Segoe UI Variable Text, Segoe UI" FontSize="15"
         UseLayoutRounding="True" SnapsToDevicePixels="True">
@@ -96,7 +96,7 @@
     </Border>
 
     <controls:ScenePresenter x:Name="ScenePresenter" Grid.Row="2" Content="{Binding CurrentScreen}"
-                             MaxWidth="1000" Margin="56,8,32,24" HorizontalAlignment="Left"
+                             MaxWidth="1080" Margin="56,8,32,16" HorizontalAlignment="Left"
                              HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
 
     <TextBlock Text="{Binding Announcement}" Width="1" Height="1" Opacity="0.01" IsHitTestVisible="False"
