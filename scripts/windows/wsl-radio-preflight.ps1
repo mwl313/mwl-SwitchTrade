@@ -3,24 +3,34 @@ param(
     [string]$Distro = "Ubuntu",
     [string[]]$UsbId = @(),
     [string]$BusId = "",
+    [string]$InstanceId = "",
     [switch]$Prepare,
     [switch]$AllowVmwareStop,
     [switch]$AutoAttach,
     [switch]$AllowExperimentalHardware,
+    [string]$WatcherScript = "",
+    [string]$WatcherStateRoot = "",
+    [string]$LifecycleScript = "",
     [string]$ProfileFile = (Join-Path $PSScriptRoot "..\..\config\wsl-radio-hardware.tsv")
 )
 
 $ErrorActionPreference = "Stop"
+if (-not $LifecycleScript -or -not (Test-Path -LiteralPath $LifecycleScript -PathType Leaf)) {
+    throw 'WSL radio preflight: bounded process lifecycle helper is missing'
+}
+. $LifecycleScript
 
 function Fail([string]$Message) {
     throw "WSL radio preflight: $Message"
 }
 
 function Invoke-Usbipd([string[]]$Arguments) {
-    & usbipd @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        Fail "usbipd $($Arguments -join ' ') failed with exit code $LASTEXITCODE"
+    $result = Invoke-BoundedNativeProcess -FilePath (Get-Command usbipd.exe).Source `
+        -Arguments $Arguments -TimeoutSeconds 30
+    if ($result.ExitCode -ne 0) {
+        Fail "usbipd $($Arguments -join ' ') failed with exit code $($result.ExitCode): $($result.Error)"
     }
+    return $result.Output
 }
 
 function UsbId-OfDevice($Device) {
@@ -38,6 +48,9 @@ if (-not (Get-Command usbipd -ErrorAction SilentlyContinue)) {
 }
 if ($AutoAttach -and -not $Prepare) {
     Fail "-AutoAttach requires -Prepare"
+}
+if ($AutoAttach -and (-not $InstanceId -or -not $WatcherScript -or -not $WatcherStateRoot)) {
+    Fail "stable InstanceId and owned watcher paths are required for auto-attach"
 }
 $principal = New-Object Security.Principal.WindowsPrincipal(
     [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -83,11 +96,14 @@ if ($vmware -and $vmware.Status -eq 'Running') {
 }
 
 # Starting the distro before attachment avoids attaching to a stale WSL VM address.
-& wsl.exe -d $Distro -- true
-if ($LASTEXITCODE -ne 0) { Fail "WSL distro '$Distro' did not start" }
+$wslStart = Invoke-BoundedNativeProcess -FilePath 'wsl.exe' -Arguments @('-d', $Distro, '--', 'true') `
+    -TimeoutSeconds 30
+if ($wslStart.ExitCode -ne 0) { Fail "WSL distro '$Distro' did not start: $($wslStart.Error)" }
 
-$state = usbipd state | ConvertFrom-Json
-if ($LASTEXITCODE -ne 0) { Fail "usbipd state failed" }
+$stateResult = Invoke-BoundedNativeProcess -FilePath (Get-Command usbipd.exe).Source `
+    -Arguments @('state') -TimeoutSeconds 15
+if ($stateResult.ExitCode -ne 0) { Fail "usbipd state failed: $($stateResult.Error)" }
+$state = $stateResult.Output | ConvertFrom-Json
 $profiledDevices = @()
 foreach ($device in $state.Devices) {
     $id = UsbId-OfDevice $device
@@ -108,6 +124,9 @@ if ($BusId) {
     if ($matched.Count -eq 0) { Fail "BUSID $BusId is not a physically enumerated profiled radio" }
     if ($wanted.Count -gt 0 -and $wanted -notcontains $matched[0].UsbId) {
         Fail "BUSID $BusId is $($matched[0].UsbId), not one of the requested USB IDs"
+    }
+    if ($InstanceId -and [string]$matched[0].Device.InstanceId -cne $InstanceId) {
+        Fail "BUSID $BusId no longer belongs to the selected stable device identity"
     }
 } elseif ($wanted.Count -gt 0) {
     $matched = @($profiledDevices | Where-Object { $wanted -contains $_.UsbId })
@@ -146,30 +165,55 @@ foreach ($entry in $matched) {
     }
     if ($AutoAttach) {
         $busId = [string]$device.BusId
-        $existing = @(Get-CimInstance Win32_Process -Filter "Name = 'usbipd.exe'" |
-            Where-Object { $_.CommandLine -match '--auto-attach' -and
-                           $_.CommandLine -match ("--busid\s+" + [regex]::Escape($busId)) })
-        if ($existing.Count -eq 0) {
-            $proc = Start-Process -FilePath (Get-Command usbipd).Source -WindowStyle Hidden -PassThru `
-                -ArgumentList @('attach', "--wsl=$Distro", '--busid', $busId, '--auto-attach')
-            Start-Sleep -Milliseconds 500
-            if ($proc.HasExited) { Fail "usbipd auto-attach exited early for $id ($busId)" }
-            Write-Host "[windows] auto-attach watcher pid=$($proc.Id) usb=$id busid=$busId"
+        $watcherState = Join-Path $WatcherStateRoot 'usb-watcher.json'
+        $watcherReady = $false
+        if (Test-Path -LiteralPath $watcherState -PathType Leaf) {
+            try {
+                $saved = Get-Content -Raw -LiteralPath $watcherState | ConvertFrom-Json
+                $savedProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $([int]$saved.pid)" `
+                    -ErrorAction SilentlyContinue
+                $watcherReady = $savedProcess -and [string]$saved.instance_id -ceq $InstanceId -and
+                    [string]$savedProcess.CommandLine -match [regex]::Escape([IO.Path]::GetFullPath($WatcherScript)) -and
+                    [string]$savedProcess.CommandLine -match [regex]::Escape([IO.Path]::GetFullPath($watcherState))
+            } catch { }
+            if (-not $watcherReady) { Stop-SwitchTradeUsbWatcher -StateRoot $WatcherStateRoot | Out-Null }
+        }
+        if (-not $watcherReady) {
+            $start = New-Object Diagnostics.ProcessStartInfo
+            $start.FileName = 'powershell.exe'
+            $start.Arguments = ((@('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+                $WatcherScript, '-Distro', $Distro, '-InstanceId', $InstanceId, '-StateFile', $watcherState) |
+                ForEach-Object { ConvertTo-NativeCommandLineArgument ([string]$_) }) -join ' ')
+            $start.UseShellExecute = $false
+            $start.CreateNoWindow = $true
+            $proc = [Diagnostics.Process]::Start($start)
+            for ($attempt = 0; $attempt -lt 20 -and -not (Test-Path -LiteralPath $watcherState); $attempt++) {
+                if ($proc.HasExited) { break }
+                Start-Sleep -Milliseconds 100
+            }
+            if ($proc.HasExited -or -not (Test-Path -LiteralPath $watcherState)) {
+                Fail "stable auto-attach watcher did not start for $id"
+            }
+            Write-Host "[windows] stable auto-attach watcher pid=$($proc.Id) usb=$id instance=$InstanceId busid=$busId"
         } else {
-            Write-Host "[windows] auto-attach watcher already running usb=$id busid=$busId"
+            Write-Host "[windows] stable auto-attach watcher already running usb=$id instance=$InstanceId"
         }
     }
 }
 
-$kernel = (& wsl.exe -d $Distro -- uname -r).Trim()
-if ($LASTEXITCODE -ne 0 -or $kernel -notmatch 'microsoft') {
+$kernelResult = Invoke-BoundedNativeProcess -FilePath 'wsl.exe' `
+    -Arguments @('-d', $Distro, '--', 'uname', '-r') -TimeoutSeconds 30
+$kernel = $kernelResult.Output.Trim()
+if ($kernelResult.ExitCode -ne 0 -or $kernel -notmatch 'microsoft') {
     Fail "'$Distro' is not running a WSL kernel"
 }
 Write-Host "[wsl] kernel=$kernel"
 
 foreach ($id in @($matched | ForEach-Object UsbId | Select-Object -Unique)) {
-    $seen = & wsl.exe -d $Distro -- sh -c "lsusb -d '$id' 2>/dev/null"
-    if ($LASTEXITCODE -ne 0 -or -not $seen) {
+    $seenResult = Invoke-BoundedNativeProcess -FilePath 'wsl.exe' `
+        -Arguments @('-d', $Distro, '--', 'lsusb', '-d', $id) -TimeoutSeconds 30
+    $seen = $seenResult.Output.Trim()
+    if ($seenResult.ExitCode -ne 0 -or -not $seen) {
         Fail "$id is attached in usbipd but absent from lsusb inside '$Distro'"
     }
     Write-Host "[wsl] PASS usb=$id $seen"

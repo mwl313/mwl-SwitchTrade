@@ -79,6 +79,19 @@ try {
     }
     $restored = Get-Content -Raw -LiteralPath (Join-Path $env:USERPROFILE '.wslconfig')
     if ($restored -cne $original) { throw 'original WSL configuration was not restored exactly' }
+
+    Install-SwitchTradeKernel -Kernel $kernelOne -KernelModules $modulesOne `
+        -Manifest $manifestOne -StateRoot $stateRoot -KernelStorageRoot $kernelStorageRoot `
+        -ReleaseId release-c -AcceptGlobalKernelChange | Out-Null
+    $userEdited = (Get-Content -Raw -LiteralPath (Join-Path $env:USERPROFILE '.wslconfig')).Replace(
+        "vmIdleTimeout=-1", "vmIdleTimeout=-1`r`nmemory=4GB")
+    [IO.File]::WriteAllText((Join-Path $env:USERPROFILE '.wslconfig'), $userEdited,
+        [Text.UTF8Encoding]::new($false))
+    Restore-SwitchTradeKernel -StateRoot $stateRoot | Out-Null
+    $conflictRestored = Get-Content -Raw -LiteralPath (Join-Path $env:USERPROFILE '.wslconfig')
+    if ($conflictRestored -notmatch '(?m)^memory=4GB\r?$' -or $conflictRestored -match '(?m)^kernel(?:Modules)?=') {
+        throw 'conflict-aware uninstall did not preserve user settings while removing owned kernel keys'
+    }
     Write-Host 'Kernel lifecycle simulation PASS'
 } finally {
     $env:USERPROFILE = $originalProfile

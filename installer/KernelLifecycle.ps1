@@ -53,7 +53,7 @@ function Set-Wsl2Values {
             $key = [string]$Matches[1]
             if ($Values.ContainsKey($key)) {
                 if (-not $seen.ContainsKey($key)) {
-                    $result.Add("$key=$($Values[$key])")
+                    if ($null -ne $Values[$key]) { $result.Add("$key=$($Values[$key])") }
                     $seen[$key] = $true
                 }
                 continue
@@ -86,6 +86,7 @@ function Install-SwitchTradeKernel {
         [Parameter(Mandatory)][string]$Manifest,
         [Parameter(Mandatory)][string]$StateRoot,
         [Parameter(Mandatory)][string]$KernelStorageRoot,
+        [string]$UserProfileRoot = $env:USERPROFILE,
         [Parameter(Mandatory)][ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')]
         [string]$ReleaseId,
         [switch]$AcceptGlobalKernelChange
@@ -140,7 +141,7 @@ function Install-SwitchTradeKernel {
         } else { 'archive' }
     }
 
-    $config = Join-Path $env:USERPROFILE '.wslconfig'
+    $config = Join-Path $UserProfileRoot '.wslconfig'
     $priorPresent = Test-Path -LiteralPath $config -PathType Leaf
     $priorText = if ($priorPresent) { Get-Content -Raw -LiteralPath $config } else { '' }
     $statePath = Join-Path $StateRoot 'kernel-state.json'
@@ -231,6 +232,20 @@ function Install-SwitchTradeKernel {
     return $state
 }
 
+function Get-Wsl2Values {
+    param([string]$Text, [string[]]$Keys)
+    $values = @{}
+    $section = ''
+    foreach ($line in @($Text -split "`r?`n", 0)) {
+        if ($line -match '^\s*\[([^]]+)\]\s*$') { $section = $Matches[1]; continue }
+        if ($section -ieq 'wsl2' -and $line -match '^\s*([^#;=\s]+)\s*=\s*(.*?)\s*$') {
+            $key = [string]$Matches[1]
+            if ($Keys -icontains $key -and -not $values.ContainsKey($key)) { $values[$key] = [string]$Matches[2] }
+        }
+    }
+    return $values
+}
+
 function Write-KernelStateAtomic([string]$Path, $Value) {
     $temporary = "$Path.tmp.$([guid]::NewGuid().ToString('N'))"
     try {
@@ -309,7 +324,8 @@ function Test-SwitchTradeKernelRollback {
 function Switch-SwitchTradeKernelRollback {
     param(
         [Parameter(Mandatory)][string]$StateRoot,
-        [string]$ExpectedReleaseId = ''
+        [string]$ExpectedReleaseId = '',
+        [string]$UserProfileRoot = $env:USERPROFILE
     )
     $statePath = Join-Path $StateRoot 'kernel-state.json'
     if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) { return $false }
@@ -317,7 +333,7 @@ function Switch-SwitchTradeKernelRollback {
     if (-not $state.rollback_kernel_path) { return $false }
     if (-not $ExpectedReleaseId) { $ExpectedReleaseId = [string]$state.rollback_package_release_id }
     $state = Test-SwitchTradeKernelRollback -StateRoot $StateRoot -ExpectedReleaseId $ExpectedReleaseId
-    $config = Join-Path $env:USERPROFILE '.wslconfig'
+    $config = Join-Path $UserProfileRoot '.wslconfig'
     $text = if (Test-Path -LiteralPath $config) { Get-Content -Raw -LiteralPath $config } else { '' }
     $values = @{ kernel = ([string]$state.rollback_kernel_path).Replace('\', '\\') }
     if ($state.rollback_modules_path) {
@@ -365,20 +381,39 @@ function Switch-SwitchTradeKernelRollback {
 }
 
 function Restore-SwitchTradeKernel {
-    param([Parameter(Mandatory)][string]$StateRoot)
+    param(
+        [Parameter(Mandatory)][string]$StateRoot,
+        [string]$UserProfileRoot = $env:USERPROFILE
+    )
     $statePath = Join-Path $StateRoot 'kernel-state.json'
     if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) { return $false }
     $state = Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json
     if (-not $state.owns_kernel_change) { return $false }
-    $config = Join-Path $env:USERPROFILE '.wslconfig'
+    $config = Join-Path $UserProfileRoot '.wslconfig'
+    $currentChanged = $false
+    $currentText = if (Test-Path -LiteralPath $config -PathType Leaf) {
+        Get-Content -Raw -LiteralPath $config
+    } else { '' }
     if (Test-Path -LiteralPath $config -PathType Leaf) {
         $currentHash = Get-FileSha256 $config
         if ($currentHash -ne [string]$state.installed_config_sha256) {
+            $currentChanged = $true
             $conflict = Join-Path $StateRoot ("wslconfig-user-change-{0}.bak" -f (Get-Date -Format 'yyyyMMddTHHmmssfff'))
             Copy-Item -LiteralPath $config -Destination $conflict
         }
     }
-    if ($state.prior_config_present) {
+    if ($currentChanged) {
+        $priorText = if ($state.prior_config_present) {
+            Get-Content -Raw -LiteralPath $state.prior_config_backup
+        } else { '' }
+        $priorValues = Get-Wsl2Values -Text $priorText -Keys @('kernel', 'kernelModules')
+        $restoreValues = @{
+            kernel = if ($priorValues.ContainsKey('kernel')) { $priorValues['kernel'] } else { $null }
+            kernelModules = if ($priorValues.ContainsKey('kernelModules')) { $priorValues['kernelModules'] } else { $null }
+        }
+        [IO.File]::WriteAllText($config, (Set-Wsl2Values -Text $currentText -Values $restoreValues),
+            [Text.UTF8Encoding]::new($false))
+    } elseif ($state.prior_config_present) {
         Copy-Item -LiteralPath $state.prior_config_backup -Destination $config -Force
     } elseif (Test-Path -LiteralPath $config) {
         Remove-Item -LiteralPath $config -Force

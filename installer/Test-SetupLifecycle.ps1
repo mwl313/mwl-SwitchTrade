@@ -86,4 +86,40 @@ $selection = Write-SwitchTradeHardwareSelection -StateRoot $TestRoot -UsbId '0bd
 $savedSelection = Get-Content -Raw -LiteralPath $selection | ConvertFrom-Json
 if ([string]$savedSelection.instance_id -ne 'USB\VID_0BDA&PID_818B\RADIO-A' -or
     [string]$savedSelection.bus_id -ne '9-4') { throw 'stable USB selection was not persisted' }
+
+Test-SwitchTradeWslCapabilities -VersionText 'WSL version: 2.6.1.0' `
+    -HelpText '--import --distribution --cd --version' | Out-Null
+Test-SwitchTradeUsbipdCapabilities -VersionText '5.3.0' -MinimumVersion ([version]'5.3.0') `
+    -HelpText 'attach bind state --wsl --busid' -State ($usbState) | Out-Null
+
+$argumentScript = Join-Path $TestRoot 'echo-argument.ps1'
+'param([string]$Value); [Console]::Out.Write($Value)' | Set-Content -LiteralPath $argumentScript -Encoding UTF8
+$argumentValue = Join-Path $TestRoot '공백 경로\usbipd-win.msi'
+$argumentResult = Invoke-BoundedNativeProcess -FilePath 'powershell.exe' `
+    -Arguments @('-NoProfile', '-File', $argumentScript, '-Value', $argumentValue) -TimeoutSeconds 10
+if ($argumentResult.ExitCode -ne 0 -or $argumentResult.Output -cne $argumentValue) {
+    throw 'argument-safe process invocation corrupted a path with spaces/non-ASCII characters'
+}
+$timedOut = $false
+try {
+    Invoke-BoundedNativeProcess -FilePath 'powershell.exe' `
+        -Arguments @('-NoProfile', '-Command', 'Start-Sleep -Seconds 3') -TimeoutSeconds 1 | Out-Null
+} catch { $timedOut = [string]$_.Exception.Message -match '^PROCESS_TIMEOUT:' }
+if (-not $timedOut) { throw 'bounded child process did not time out' }
+
+$watcherState = Join-Path $TestRoot 'watcher-state'
+New-Item -ItemType Directory -Force -Path $watcherState | Out-Null
+Write-AtomicJson -Path (Join-Path $watcherState 'usb-watcher.json') -Value `
+    ([ordered]@{ schema = 1; pid = 2147483647; instance_id = 'test'; distro = 'test' })
+Stop-SwitchTradeUsbWatcher -StateRoot $watcherState | Out-Null
+if (Test-Path -LiteralPath (Join-Path $watcherState 'usb-watcher.json')) {
+    throw 'stale watcher state was not cleaned during uninstall simulation'
+}
+$watcherCommand = Get-SwitchTradeUsbWatcherCommand `
+    -ScriptPath (Join-Path $TestRoot '공백 경로\UsbAutoAttachWatcher.ps1') -Distro 'Switch Trade' `
+    -InstanceId 'USB\VID_0BDA&PID_818B\stable' -StateFile (Join-Path $TestRoot '공백 경로\watcher.json')
+if ($watcherCommand -notmatch 'UsbAutoAttachWatcher\.ps1"' -or
+    $watcherCommand -notmatch 'USB\\VID_0BDA&PID_818B\\stable') {
+    throw 'restart watcher command did not preserve stable identity and argument quoting'
+}
 Write-Host 'Setup lifecycle simulation PASS'

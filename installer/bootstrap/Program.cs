@@ -3,7 +3,9 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.Pkcs;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
+using System.Text;
 using System.Windows.Forms;
+using System.Security.Principal;
 
 namespace SwitchTrade.Setup;
 
@@ -18,6 +20,17 @@ internal static class Program
         ApplicationConfiguration.Initialize();
         var requestedAction = args.Select(value => value.ToLowerInvariant()).FirstOrDefault(value =>
             value is "audit" or "install" or "repair" or "update" or "resume" or "rollback" or "uninstall");
+        var isAdministrator = new WindowsPrincipal(WindowsIdentity.GetCurrent())
+            .IsInRole(WindowsBuiltInRole.Administrator);
+        if (requestedAction != "audit" && !isAdministrator)
+        {
+            if (args.Contains("--elevated", StringComparer.OrdinalIgnoreCase))
+            {
+                Console.Error.WriteLine("SETUP_ELEVATION_FAILED");
+                return 740;
+            }
+            return RelaunchElevated(args);
+        }
         var allowUnsigned = args.Contains("--allow-unsigned-package", StringComparer.OrdinalIgnoreCase);
         bool unsignedPrivateBeta;
         try
@@ -68,6 +81,10 @@ internal static class Program
         start.ArgumentList.Add(script);
         start.ArgumentList.Add("-Action");
         start.ArgumentList.Add(char.ToUpperInvariant(action[0]) + action[1..]);
+        AddInvokingUserArgument(args, start, "--invoking-user-profile-b64=", "-UserProfileRoot", true);
+        AddInvokingUserArgument(args, start, "--invoking-local-app-data-b64=", "-LocalAppDataRoot", true);
+        AddInvokingUserArgument(args, start, "--invoking-desktop-b64=", "-DesktopRoot", true);
+        AddInvokingUserArgument(args, start, "--invoking-user-sid-b64=", "-InvokingUserSid", false);
         foreach (var option in args)
         {
             if (option == "--purge-distro") start.ArgumentList.Add("-PurgeDistro");
@@ -152,6 +169,47 @@ internal static class Program
             MessageBox.Show(error.Message, "SwitchTrade Setup", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }
+    }
+
+    private static int RelaunchElevated(string[] args)
+    {
+        var executable = Environment.ProcessPath ?? throw new InvalidOperationException("SETUP_EXECUTABLE_PATH_MISSING");
+        var start = new ProcessStartInfo(executable) { UseShellExecute = true, Verb = "runas" };
+        foreach (var argument in args) start.ArgumentList.Add(argument);
+        start.ArgumentList.Add("--elevated");
+        AddEncoded(start, "--invoking-user-profile-b64=", Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+        AddEncoded(start, "--invoking-local-app-data-b64=", Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+        AddEncoded(start, "--invoking-desktop-b64=", Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory));
+        AddEncoded(start, "--invoking-user-sid-b64=", WindowsIdentity.GetCurrent().User?.Value ?? "");
+        try
+        {
+            using var process = Process.Start(start) ?? throw new InvalidOperationException("SETUP_ELEVATION_FAILED");
+            process.WaitForExit();
+            return process.ExitCode;
+        }
+        catch (System.ComponentModel.Win32Exception error) when (error.NativeErrorCode == 1223)
+        {
+            return 1223;
+        }
+    }
+
+    private static void AddEncoded(ProcessStartInfo start, string prefix, string value) =>
+        start.ArgumentList.Add(prefix + Convert.ToBase64String(Encoding.UTF8.GetBytes(value)));
+
+    private static void AddInvokingUserArgument(
+        string[] args, ProcessStartInfo start, string prefix, string parameter, bool requireRooted)
+    {
+        var encoded = args.LastOrDefault(value => value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+        if (encoded is null) return;
+        string value;
+        try { value = Encoding.UTF8.GetString(Convert.FromBase64String(encoded[prefix.Length..])); }
+        catch (FormatException) { throw new InvalidDataException("INVOKING_USER_CONTEXT_INVALID"); }
+        if (string.IsNullOrWhiteSpace(value) || value.Contains('\0') ||
+            (requireRooted && !Path.IsPathFullyQualified(value)) ||
+            (!requireRooted && !System.Text.RegularExpressions.Regex.IsMatch(value, @"^S-1-5-21-(?:\d+-){3}\d+$")))
+            throw new InvalidDataException("INVOKING_USER_CONTEXT_INVALID");
+        start.ArgumentList.Add(parameter);
+        start.ArgumentList.Add(requireRooted ? Path.GetFullPath(value) : value);
     }
 
     private static string FirstErrorLine(string error)

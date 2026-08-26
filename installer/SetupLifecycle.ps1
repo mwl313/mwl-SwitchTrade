@@ -1,6 +1,100 @@
 Set-StrictMode -Version Latest
 
 $script:SwitchTradeReleaseMarker = '.switchtrade-release.json'
+$script:SwitchTradeMinimumWslVersion = [version]'2.2.4.0'
+
+function ConvertTo-NativeCommandLineArgument {
+    param([AllowEmptyString()][string]$Value)
+    if ($Value -and $Value -notmatch '[\s"]') { return $Value }
+    $builder = New-Object Text.StringBuilder
+    [void]$builder.Append('"')
+    $slashes = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -eq '\') { $slashes++; continue }
+        if ($character -eq '"') {
+            [void]$builder.Append(('\' * ($slashes * 2 + 1)))
+            [void]$builder.Append('"')
+        } else {
+            if ($slashes) { [void]$builder.Append(('\' * $slashes)) }
+            [void]$builder.Append($character)
+        }
+        $slashes = 0
+    }
+    if ($slashes) { [void]$builder.Append(('\' * ($slashes * 2))) }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+function Invoke-BoundedNativeProcess {
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [string[]]$Arguments = @(),
+        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 30
+    )
+    $start = New-Object Diagnostics.ProcessStartInfo
+    $start.FileName = $FilePath
+    $start.Arguments = (($Arguments | ForEach-Object { ConvertTo-NativeCommandLineArgument ([string]$_) }) -join ' ')
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $process = New-Object Diagnostics.Process
+    $process.StartInfo = $start
+    try {
+        if (-not $process.Start()) { throw "PROCESS_START_FAILED: $FilePath" }
+        $outputTask = $process.StandardOutput.ReadToEndAsync()
+        $errorTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            try { $process.Kill() } catch { }
+            throw "PROCESS_TIMEOUT: $FilePath exceeded $TimeoutSeconds seconds"
+        }
+        $outputTask.Wait()
+        $errorTask.Wait()
+        return [pscustomobject]@{
+            ExitCode = $process.ExitCode
+            Output = [string]$outputTask.Result
+            Error = [string]$errorTask.Result
+        }
+    } finally { $process.Dispose() }
+}
+
+function ConvertTo-SwitchTradeVersion {
+    param([Parameter(Mandatory)][string]$Text, [string]$FailureCode = 'VERSION_INVALID')
+    $match = [regex]::Match($Text, '(?<!\d)(\d+\.\d+(?:\.\d+){0,2})(?!\d)')
+    if (-not $match.Success) { throw "${FailureCode}: version output was not recognized" }
+    try { return [version]$match.Groups[1].Value } catch { throw "${FailureCode}: version output was invalid" }
+}
+
+function Test-SwitchTradeWslCapabilities {
+    param([string]$VersionText, [string]$HelpText)
+    $version = ConvertTo-SwitchTradeVersion -Text $VersionText -FailureCode 'WSL_VERSION_INVALID'
+    if ($version -lt $script:SwitchTradeMinimumWslVersion) {
+        throw "WSL_VERSION_UNSUPPORTED: WSL $version is older than $($script:SwitchTradeMinimumWslVersion)"
+    }
+    foreach ($capability in @('--import', '--distribution', '--cd', '--version')) {
+        if ($HelpText -notmatch [regex]::Escape($capability)) {
+            throw "WSL_CAPABILITY_MISSING: $capability"
+        }
+    }
+    return $version
+}
+
+function Test-SwitchTradeUsbipdCapabilities {
+    param([string]$VersionText, [version]$MinimumVersion, [string]$HelpText, $State)
+    $version = ConvertTo-SwitchTradeVersion -Text $VersionText -FailureCode 'USBIPD_VERSION_INVALID'
+    if ($version -lt $MinimumVersion) {
+        throw "USBIPD_VERSION_UNSUPPORTED: usbipd-win $version is older than $MinimumVersion"
+    }
+    foreach ($capability in @('attach', 'bind', 'state', '--wsl', '--busid')) {
+        if ($HelpText -notmatch [regex]::Escape($capability)) {
+            throw "USBIPD_CAPABILITY_MISSING: $capability"
+        }
+    }
+    if (-not $State -or $State.PSObject.Properties.Name -notcontains 'Devices') {
+        throw 'USBIPD_STATE_SCHEMA_UNSUPPORTED: Devices is missing'
+    }
+    return $version
+}
 
 function Get-SwitchTradeReleaseId {
     param([Parameter(Mandatory)][string]$ManifestPath)
@@ -289,4 +383,66 @@ function Write-SwitchTradeHardwareSelection {
         bus_id = $BusId
     })
     return $path
+}
+
+function Stop-SwitchTradeUsbWatcher {
+    param([Parameter(Mandatory)][string]$StateRoot)
+    $stateFile = Join-Path $StateRoot 'usb-watcher.json'
+    if (-not (Test-Path -LiteralPath $stateFile -PathType Leaf)) { return $false }
+    try { $state = Get-Content -Raw -LiteralPath $stateFile | ConvertFrom-Json }
+    catch {
+        Remove-Item -LiteralPath $stateFile -Force
+        return $false
+    }
+    if ([int]$state.schema -ne 1 -or [int]$state.pid -le 0) {
+        Remove-Item -LiteralPath $stateFile -Force
+        return $false
+    }
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $([int]$state.pid)" -ErrorAction SilentlyContinue
+    if ($process) {
+        $expectedScript = [regex]::Escape('UsbAutoAttachWatcher.ps1')
+        $expectedState = [regex]::Escape([IO.Path]::GetFullPath($stateFile))
+        if ([string]$process.CommandLine -notmatch $expectedScript -or
+            [string]$process.CommandLine -notmatch $expectedState) {
+            Remove-Item -LiteralPath $stateFile -Force
+            return $false
+        }
+        Stop-Process -Id ([int]$state.pid) -Force -ErrorAction Stop
+    }
+    Remove-Item -LiteralPath $stateFile -Force
+    return $true
+}
+
+function Get-SwitchTradeUsbWatcherCommand {
+    param(
+        [Parameter(Mandatory)][string]$ScriptPath,
+        [Parameter(Mandatory)][string]$Distro,
+        [Parameter(Mandatory)][string]$InstanceId,
+        [Parameter(Mandatory)][string]$StateFile
+    )
+    $arguments = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+        [IO.Path]::GetFullPath($ScriptPath), '-Distro', $Distro, '-InstanceId', $InstanceId,
+        '-StateFile', [IO.Path]::GetFullPath($StateFile))
+    return 'powershell.exe ' + (($arguments | ForEach-Object {
+        ConvertTo-NativeCommandLineArgument ([string]$_)
+    }) -join ' ')
+}
+
+function Register-SwitchTradeUsbWatcherStartup {
+    param(
+        [Parameter(Mandatory)][string]$RegistryPath,
+        [Parameter(Mandatory)][string]$ScriptPath,
+        [Parameter(Mandatory)][string]$Distro,
+        [Parameter(Mandatory)][string]$InstanceId,
+        [Parameter(Mandatory)][string]$StateFile
+    )
+    $command = Get-SwitchTradeUsbWatcherCommand -ScriptPath $ScriptPath -Distro $Distro `
+        -InstanceId $InstanceId -StateFile $StateFile
+    New-Item -Path $RegistryPath -Force | Out-Null
+    Set-ItemProperty -Path $RegistryPath -Name 'SwitchTradeUsbWatcher' -Value $command
+}
+
+function Unregister-SwitchTradeUsbWatcherStartup {
+    param([Parameter(Mandatory)][string]$RegistryPath)
+    Remove-ItemProperty -Path $RegistryPath -Name 'SwitchTradeUsbWatcher' -ErrorAction SilentlyContinue
 }

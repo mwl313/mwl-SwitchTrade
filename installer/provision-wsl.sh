@@ -126,12 +126,9 @@ esac
 [[ -d $SOURCE && -f $SOURCE/requirements.txt ]] || die "invalid packaged source: $SOURCE"
 [[ ! -e $CANDIDATE ]] || die "RUNTIME_CANDIDATE_EXISTS: repair the interrupted setup transaction"
 
-export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get install -y --no-install-recommends \
-    ca-certificates ethtool iproute2 iw kmod libpcap0.8 python3 python3-pip python3-venv \
-    rfkill sudo tcpdump usbutils
-rm -rf /var/lib/apt/lists/*
+for command in ethtool ip iw modinfo python3 rfkill sudo tcpdump lsusb; do
+    command -v "$command" >/dev/null 2>&1 || die "RUNTIME_OS_DEPENDENCY_MISSING: $command; rebuild the pinned rootfs"
+done
 python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' || \
     die "Python 3.12 or newer is required by the pinned LDN runtime"
 
@@ -139,9 +136,40 @@ stage=$(mktemp -d /opt/switchtrade.new.XXXXXX)
 cleanup() { rm -rf -- "$stage"; }
 trap cleanup EXIT
 cp -a "$SOURCE/." "$stage/"
+[[ -f $stage/bridge/wheelhouse-manifest.json && -d $stage/bridge/wheelhouse ]] || \
+    die "OFFLINE_WHEELHOUSE_MISSING: package must contain verified Python dependency artifacts"
+python3 - "$stage" <<'PY'
+import hashlib, json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+manifest = json.loads((root / "bridge/wheelhouse-manifest.json").read_text(encoding="utf-8-sig"))
+requirements = root / "bridge/requirements.txt"
+digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+if manifest.get("schema") != 1 or digest(requirements) != manifest.get("requirements_sha256"):
+    raise SystemExit("wheelhouse requirements digest mismatch")
+wheelhouse = root / "bridge/wheelhouse"
+actual = {path.name for path in wheelhouse.iterdir() if path.is_file()}
+expected = set(manifest.get("wheels", {}))
+if actual != expected or not expected:
+    raise SystemExit("wheelhouse artifact set mismatch")
+for name, expected_hash in manifest["wheels"].items():
+    if digest(wheelhouse / name) != expected_hash:
+        raise SystemExit(f"wheelhouse hash mismatch: {name}")
+PY
 python3 -m venv "$stage/bridge/.venv"
 "$stage/bridge/.venv/bin/python" -m pip install --disable-pip-version-check \
+    --no-index --find-links "$stage/bridge/wheelhouse" \
     --requirement "$stage/bridge/requirements.txt"
+"$stage/bridge/.venv/bin/python" - "$stage/bridge/requirements.txt" <<'PY'
+from importlib.metadata import version
+import pathlib, sys
+for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    line = line.strip()
+    if not line or line.startswith("#"):
+        continue
+    name, expected = line.split("==", 1)
+    if version(name) != expected:
+        raise SystemExit(f"installed dependency mismatch: {name}")
+PY
 find "$stage/scripts" -type f -name '*.sh' -exec chmod 0755 {} +
 printf '{"schema":1,"release_id":"%s"}\n' "$RELEASE_ID" >"$stage/.switchtrade-release.json"
 chmod 0644 "$stage/.switchtrade-release.json"

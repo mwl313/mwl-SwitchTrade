@@ -8,6 +8,7 @@ param(
     [string]$KernelManifest = '',
     [string]$KernelManifestSignature = '',
     [string]$UsbipdMsi = '',
+    [string]$Wheelhouse = '',
     [string]$UsbipdVersion = '5.3.0',
     [string]$RelayUrl = '',
     [string]$Notices = '',
@@ -46,6 +47,10 @@ if (-not (Test-Path -LiteralPath $RuntimeLdnKeys -PathType Leaf)) {
 }
 $Version = (& git -C $Repo rev-parse --short HEAD).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'cannot determine repository revision' }
+$SourceDateEpoch = (& git -C $Repo show -s --format=%ct HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or $SourceDateEpoch -notmatch '^\d{9,}$') {
+    throw 'cannot determine deterministic source timestamp'
+}
 $dirty = & git -C $Repo status --porcelain
 if ($dirty) { throw 'refusing to package a dirty worktree; commit the beta source first' }
 $packageName = if ($UnsignedPrivateBeta) { "SwitchTrade-unsigned-private-beta-$Version" } else { "SwitchTrade-beta-$Version" }
@@ -60,7 +65,7 @@ if ($Release -or $UnsignedPrivateBeta) {
     foreach ($item in @{
         Rootfs = $Rootfs; DesktopExe = $DesktopExe; Kernel = $Kernel
         KernelModules = $KernelModules; KernelManifest = $KernelManifest; UsbipdMsi = $UsbipdMsi
-        Notices = $Notices
+        Notices = $Notices; Wheelhouse = $Wheelhouse
     }.GetEnumerator()) {
         if (-not $item.Value) { $missing += $item.Key }
     }
@@ -77,20 +82,59 @@ Copy-Item -LiteralPath (Join-Path $Repo 'README.md') -Destination (Join-Path $St
 
 $app = Join-Path $Stage 'payload\app'
 $sourceArchive = Join-Path $Stage 'source.tar'
-$runtimePaths = @('bridge', 'config', 'relay', 'scripts', 'switchtrade', 'tests',
+$runtimePaths = @('bridge', 'config', 'relay', 'switchtrade',
+    'scripts/radio-health-gate.sh', 'scripts/run-beta-endpoint.sh',
+    'scripts/wsl-radio-prepare.sh', 'scripts/windows/wsl-radio-preflight.ps1',
     'tools/payload_decoder.py', 'tools/pk3-tool.py', 'tools/species_map.py',
     'tools/stats.py', 'tools/basestats.py', 'tools/charmap_jp.py',
-    'pytest.ini', 'requirements.txt', 'test-requirements.txt', 'README.md')
+    'requirements.txt')
 & git -C $Repo archive --format=tar --output=$sourceArchive HEAD -- @runtimePaths
 if ($LASTEXITCODE -ne 0) { throw 'could not archive tracked runtime source' }
 & tar -xf $sourceArchive -C $app
 if ($LASTEXITCODE -ne 0) { throw 'could not extract tracked runtime source' }
 Remove-Item -LiteralPath $sourceArchive
+$nonRuntimeContent = @(
+    (Join-Path $app 'bridge\tests'),
+    (Join-Path $app 'bridge\README.md'),
+    (Join-Path $app 'relay\DEPLOYMENT.md')
+)
+foreach ($path in $nonRuntimeContent) {
+    if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
+}
 if (-not (Test-Path -LiteralPath (Join-Path $app 'config\prod.keys') -PathType Leaf)) {
     throw 'runtime source archive omitted config/prod.keys'
 }
+if ($Wheelhouse) {
+    $resolvedWheelhouse = (Resolve-Path -LiteralPath $Wheelhouse).Path
+    $wheelFiles = @(Get-ChildItem -LiteralPath $resolvedWheelhouse -File | Where-Object Extension -eq '.whl')
+    $unexpectedWheelInput = @(Get-ChildItem -LiteralPath $resolvedWheelhouse -Force |
+        Where-Object { $_.PSIsContainer -or $_.Extension -ne '.whl' })
+    if ($wheelFiles.Count -eq 0 -or $unexpectedWheelInput.Count -gt 0) {
+        throw 'OFFLINE_WHEELHOUSE_INVALID: supply one flat directory containing only pinned wheel files'
+    }
+    $packagedWheelhouse = Join-Path $app 'bridge\wheelhouse'
+    New-Item -ItemType Directory -Force -Path $packagedWheelhouse | Out-Null
+    $wheelHashes = [ordered]@{}
+    foreach ($wheel in @($wheelFiles | Sort-Object Name)) {
+        Copy-Item -LiteralPath $wheel.FullName -Destination (Join-Path $packagedWheelhouse $wheel.Name)
+        $wheelHashes[$wheel.Name] = (Get-FileHash -Algorithm SHA256 -LiteralPath $wheel.FullName).Hash.ToLowerInvariant()
+    }
+    [ordered]@{
+        schema = 1
+        requirements_sha256 = (Get-FileHash -Algorithm SHA256 `
+            -LiteralPath (Join-Path $app 'bridge\requirements.txt')).Hash.ToLowerInvariant()
+        wheels = $wheelHashes
+    } | ConvertTo-Json -Depth 4 | Set-Content `
+        -LiteralPath (Join-Path $app 'bridge\wheelhouse-manifest.json') -Encoding UTF8
+}
 $installerArchive = Join-Path $Stage 'installer.tar'
-& git -C $Repo archive --format=tar --output=$installerArchive HEAD -- installer
+$installerRuntimePaths = @(
+    'installer/HostCompatibility.ps1', 'installer/KernelLifecycle.ps1',
+    'installer/Launch-SwitchTrade.ps1', 'installer/PackageIntegrity.ps1',
+    'installer/provision-wsl.sh', 'installer/SetupLifecycle.ps1',
+    'installer/SwitchTradeSetup.ps1', 'installer/UsbAutoAttachWatcher.ps1'
+)
+& git -C $Repo archive --format=tar --output=$installerArchive HEAD -- @installerRuntimePaths
 if ($LASTEXITCODE -ne 0) { throw 'could not archive installer source' }
 & tar -xf $installerArchive -C $Stage
 if ($LASTEXITCODE -ne 0) { throw 'could not extract installer source' }
@@ -176,7 +220,7 @@ if ($UsbipdMsi) {
     $resolvedUsbipd = (Resolve-Path -LiteralPath $UsbipdMsi).Path
     $packagedUsbipd = Join-Path $prerequisiteRoot 'usbipd-win.msi'
     Copy-Item -LiteralPath $resolvedUsbipd -Destination $packagedUsbipd
-    @{
+    [ordered]@{
         version = $UsbipdVersion
         sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $packagedUsbipd).Hash.ToLowerInvariant()
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $prerequisiteRoot 'usbipd-win.json') -Encoding UTF8
@@ -189,16 +233,17 @@ if (-not $relay.IsAbsoluteUri -or $relay.Scheme -notin @('http', 'https')) {
 if (($Release -or $UnsignedPrivateBeta) -and ($relay.Scheme -ne 'https' -or $relay.IsLoopback)) {
     throw 'private beta packages require a reachable non-loopback HTTPS relay URL'
 }
-@{
+[ordered]@{
     schema = 1
     relay_url = $RelayUrl.TrimEnd('/')
     environment = if ($relay.IsLoopback) { 'internal-test' } else { 'private-beta' }
 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Stage 'payload\release-config.json') -Encoding UTF8
 
 $setupProject = Join-Path $Repo 'installer\bootstrap\SwitchTrade.Setup.csproj'
-& dotnet publish $setupProject -c Release -r win-x64 --self-contained true `
+& dotnet publish $setupProject -c Release -r win-x64 --self-contained true --no-restore `
     -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
     -p:EnableCompressionInSingleFile=true -p:DebugType=None -p:DebugSymbols=false `
+    -p:ContinuousIntegrationBuild=true -p:Deterministic=true "-p:PathMap=$Repo=/_/src" `
     -o (Join-Path $Stage 'setup-build')
 if ($LASTEXITCODE -ne 0) { throw 'native setup bootstrapper build failed' }
 Move-Item -LiteralPath (Join-Path $Stage 'setup-build\SwitchTradeSetup.exe') `
@@ -247,7 +292,8 @@ $manifestArgs = @(
     (Join-Path $Repo 'scripts\write-release-manifest.py'), '--output', $manifestPath,
     '--package-root', $Stage, '--release-id', "beta-$Version",
     '--kernel-build', $kernelIdentity, '--driver', $driverIdentity,
-    '--firmware', $firmwareIdentity, '--usb-id', '0bda:818b'
+    '--firmware', $firmwareIdentity, '--usb-id', '0bda:818b',
+    '--source-date-epoch', $SourceDateEpoch
 )
 if ($Release) { $manifestArgs += '--signature-required' }
 if ($UnsignedPrivateBeta) { $manifestArgs += '--unsigned-private-beta' }
@@ -268,7 +314,9 @@ Test-SwitchTradePackage -PackageRoot $Stage -AllowUnsignedPackage:(!$Release) | 
 
 if (-not $NoArchive) {
     $archive = "$Stage.zip"
-    Compress-Archive -LiteralPath $Stage -DestinationPath $archive -Force
+    & python (Join-Path $Repo 'scripts\create-deterministic-zip.py') $Stage $archive `
+        --epoch $SourceDateEpoch
+    if ($LASTEXITCODE -ne 0) { throw 'deterministic package archive generation failed' }
     $archiveHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
     "$archiveHash  $([IO.Path]::GetFileName($archive))" |
         Set-Content -LiteralPath "$archive.sha256" -Encoding Ascii

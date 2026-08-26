@@ -40,7 +40,14 @@ def main() -> None:
     parser.add_argument("--driver", default="unverified")
     parser.add_argument("--firmware", default="unverified")
     parser.add_argument("--usb-id", default="unverified")
+    parser.add_argument("--source-date-epoch", type=int)
     args = parser.parse_args()
+    source_epoch = args.source_date_epoch
+    if source_epoch is None:
+        value = command("git", "show", "-s", "--format=%ct", "HEAD")
+        if not value.isdigit():
+            raise SystemExit("SOURCE_DATE_EPOCH_UNAVAILABLE")
+        source_epoch = int(value)
     tracked = [
         ROOT / "requirements.txt",
         ROOT / "bridge" / "requirements.txt",
@@ -58,9 +65,9 @@ def main() -> None:
     manifest = {
         "schema": 2,
         "release_id": args.release_id,
-        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "created_utc": datetime.fromtimestamp(source_epoch, timezone.utc).isoformat(),
+        "source_date_epoch": source_epoch,
         "application_commit": command("git", "rev-parse", "HEAD"),
-        "branch": command("git", "branch", "--show-current"),
         "kernel_build": args.kernel_build,
         "driver": args.driver,
         "firmware": args.firmware,
