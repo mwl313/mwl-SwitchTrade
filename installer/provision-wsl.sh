@@ -1,40 +1,130 @@
 #!/usr/bin/env bash
-# Provision one isolated SwitchTrade WSL distribution from a packaged app tree.
+# Stage, validate, commit, and compensate one isolated SwitchTrade WSL runtime.
 set -euo pipefail
 
 SOURCE=""
 TARGET=/opt/switchtrade
-MODE=install
+CANDIDATE=/opt/switchtrade.candidate
+MODE=stage
+RELEASE_ID=""
 
 die() { printf 'switchtrade provision: %s\n' "$*" >&2; exit 1; }
+release_of() {
+    local root=$1
+    [[ -f $root/.switchtrade-release.json ]] || return 1
+    python3 - "$root/.switchtrade-release.json" <<'PY'
+import json, re, sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+release = value.get("release_id", "")
+if value.get("schema") != 1 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", release):
+    raise SystemExit(1)
+print(release)
+PY
+}
+require_release() {
+    local root=$1 expected=$2 actual
+    actual=$(release_of "$root") || die "RUNTIME_RELEASE_MARKER_INVALID: $root"
+    [[ $actual == "$expected" ]] || die "RUNTIME_RELEASE_MISMATCH: expected $expected, found $actual"
+}
 
 while (($#)); do
     case $1 in
         --source) [[ $# -ge 2 ]] || die "--source requires a directory"; SOURCE=$2; shift 2 ;;
-        --rollback) MODE=rollback; shift ;;
+        --release-id) [[ $# -ge 2 ]] || die "--release-id requires a value"; RELEASE_ID=$2; shift 2 ;;
+        --stage|--validate|--validate-candidate|--validate-active|--commit|--abort|--rollback|--compensate|--validate-retained)
+            MODE=${1#--}; shift ;;
         *) die "unknown argument: $1" ;;
     esac
 done
 
 ((EUID == 0)) || die "run as root inside the SwitchTrade distribution"
-[[ $TARGET == /opt/switchtrade ]] || die "unsafe target: $TARGET"
+[[ $TARGET == /opt/switchtrade && $CANDIDATE == /opt/switchtrade.candidate ]] || die "unsafe runtime paths"
+[[ $RELEASE_ID =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || die "RUNTIME_RELEASE_ID_INVALID"
 
-if [[ $MODE == rollback ]]; then
-    previous=${TARGET}.previous
-    swap=${TARGET}.rollback-swap
-    [[ -d $TARGET && -d $previous && ! -e $swap ]] || \
-        die "one retained WSL runtime and a clean swap path are required"
-    mv -- "$TARGET" "$swap"
-    if ! mv -- "$previous" "$TARGET"; then
-        mv -- "$swap" "$TARGET"
-        die "could not activate the retained WSL runtime"
-    fi
-    mv -- "$swap" "$previous"
-    printf '[wsl] runtime rollback completed; one prior runtime remains available\n'
-    exit 0
-fi
+case $MODE in
+    validate)
+        require_release "$CANDIDATE" "$RELEASE_ID"
+        [[ -x $CANDIDATE/bridge/.venv/bin/python ]] || die "RUNTIME_CANDIDATE_INCOMPLETE"
+        (cd "$CANDIDATE" && "$CANDIDATE/bridge/.venv/bin/python" -m switchtrade.endpoint \
+            --role host --session-id PROBE1 --relay-url http://127.0.0.1:9 --dry-run)
+        printf '[wsl] candidate validated release=%s\n' "$RELEASE_ID"
+        exit 0 ;;
+    validate-candidate)
+        require_release "$CANDIDATE" "$RELEASE_ID"
+        printf '[wsl] candidate marker validated release=%s\n' "$RELEASE_ID"
+        exit 0 ;;
+    validate-active)
+        require_release "$TARGET" "$RELEASE_ID"
+        printf '[wsl] active runtime validated release=%s\n' "$RELEASE_ID"
+        exit 0 ;;
+    abort)
+        [[ ! -e $CANDIDATE || -d $CANDIDATE ]] || die "RUNTIME_CANDIDATE_UNSAFE"
+        rm -rf -- "$CANDIDATE"
+        printf '[wsl] candidate removed\n'
+        exit 0 ;;
+    validate-retained)
+        require_release "${TARGET}.previous" "$RELEASE_ID"
+        [[ -x ${TARGET}.previous/bridge/.venv/bin/python ]] || die "ROLLBACK_RUNTIME_INCOMPLETE"
+        printf '[wsl] retained runtime validated release=%s\n' "$RELEASE_ID"
+        exit 0 ;;
+    rollback|compensate)
+        previous=${TARGET}.previous
+        swap=${TARGET}.rollback-swap
+        require_release "$previous" "$RELEASE_ID"
+        [[ -d $TARGET && ! -e $swap ]] || die "one active runtime and a clean swap path are required"
+        current_release=$(release_of "$TARGET") || die "RUNTIME_RELEASE_MARKER_INVALID: $TARGET"
+        recover_rollback() {
+            if [[ -d $swap ]]; then
+                if [[ -d $TARGET && ! -e $previous ]]; then mv -- "$TARGET" "$previous" || true; fi
+                if [[ ! -e $TARGET ]]; then mv -- "$swap" "$TARGET" || true; fi
+            fi
+        }
+        trap recover_rollback EXIT
+        mv -- "$TARGET" "$swap"
+        if ! mv -- "$previous" "$TARGET"; then
+            mv -- "$swap" "$TARGET"
+            die "could not activate the retained WSL runtime"
+        fi
+        mv -- "$swap" "$previous"
+        require_release "$TARGET" "$RELEASE_ID"
+        trap - EXIT
+        printf '[wsl] runtime %s completed release=%s previous=%s\n' "$MODE" "$RELEASE_ID" "$current_release"
+        exit 0 ;;
+    commit)
+        require_release "$CANDIDATE" "$RELEASE_ID"
+        previous=${TARGET}.previous
+        swap=${TARGET}.commit-swap
+        [[ ! -e $swap ]] || die "RUNTIME_COMMIT_SWAP_STALE"
+        if [[ -e $TARGET ]]; then
+            current_release=$(release_of "$TARGET") || die "RUNTIME_ACTIVE_UNOWNED"
+            [[ ! -e $previous || -d $previous ]] || die "RUNTIME_PREVIOUS_UNSAFE"
+            rm -rf -- "$previous"
+            recover_commit() {
+                if [[ -d $swap ]]; then
+                    if [[ -d $TARGET && ! -e $CANDIDATE ]]; then mv -- "$TARGET" "$CANDIDATE" || true; fi
+                    if [[ ! -e $TARGET ]]; then mv -- "$swap" "$TARGET" || true; fi
+                fi
+            }
+            trap recover_commit EXIT
+            mv -- "$TARGET" "$swap"
+            if ! mv -- "$CANDIDATE" "$TARGET"; then
+                mv -- "$swap" "$TARGET"
+                die "could not activate the staged runtime"
+            fi
+            mv -- "$swap" "$previous"
+            trap - EXIT
+            printf '[wsl] previous runtime retained release=%s\n' "$current_release"
+        else
+            mv -- "$CANDIDATE" "$TARGET"
+        fi
+        require_release "$TARGET" "$RELEASE_ID"
+        printf '[wsl] runtime committed release=%s\n' "$RELEASE_ID"
+        exit 0 ;;
+esac
 
+[[ $MODE == stage ]] || die "unsupported mode: $MODE"
 [[ -d $SOURCE && -f $SOURCE/requirements.txt ]] || die "invalid packaged source: $SOURCE"
+[[ ! -e $CANDIDATE ]] || die "RUNTIME_CANDIDATE_EXISTS: repair the interrupted setup transaction"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
@@ -53,24 +143,8 @@ python3 -m venv "$stage/bridge/.venv"
 "$stage/bridge/.venv/bin/python" -m pip install --disable-pip-version-check \
     --requirement "$stage/bridge/requirements.txt"
 find "$stage/scripts" -type f -name '*.sh' -exec chmod 0755 {} +
-
-(
-    cd "$stage"
-    "$stage/bridge/.venv/bin/python" -m switchtrade.endpoint \
-        --role host --session-id PROBE1 --relay-url http://127.0.0.1:9 --dry-run
-)
-
-backup=""
-if [[ -e $TARGET ]]; then
-    backup="${TARGET}.previous"
-    rm -rf -- "$backup"
-    mv -- "$TARGET" "$backup"
-    printf '[wsl] previous runtime retained at %s\n' "$backup"
-fi
-if ! mv -- "$stage" "$TARGET"; then
-    [[ -z $backup || ! -d $backup ]] || mv -- "$backup" "$TARGET"
-    die "could not activate the staged runtime; the previous runtime was restored"
-fi
+printf '{"schema":1,"release_id":"%s"}\n' "$RELEASE_ID" >"$stage/.switchtrade-release.json"
+chmod 0644 "$stage/.switchtrade-release.json"
+mv -- "$stage" "$CANDIDATE"
 trap - EXIT
-
-printf '[wsl] SwitchTrade runtime provisioned at %s\n' "$TARGET"
+printf '[wsl] runtime staged release=%s\n' "$RELEASE_ID"

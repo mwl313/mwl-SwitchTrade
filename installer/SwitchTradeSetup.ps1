@@ -7,6 +7,7 @@ param(
     [string]$DistroRoot = (Join-Path $env:LOCALAPPDATA 'SwitchTrade\wsl'),
     [ValidatePattern('^$|^\d+-\d+$')][string]$BusId = '',
     [ValidatePattern('^$|^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$')][string]$UsbId = '',
+    [ValidateLength(0, 512)][string]$UsbInstanceId = '',
     [switch]$AcceptGlobalKernelChange,
     [switch]$AcceptPrerequisiteChanges,
     [switch]$AcceptVmwareRelease,
@@ -17,8 +18,22 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$SetupStage = 'initialize'
+$SetupLog = ''
 trap {
-    [Console]::Error.WriteLine("SWITCHTRADE_SETUP_ERROR: $($_.Exception.Message)")
+    $message = [string]$_.Exception.Message
+    $candidateCode = ($message -split ':', 2)[0]
+    $code = if ($candidateCode -match '^[A-Z][A-Z0-9_.-]+$') { $candidateCode } else { 'SETUP_FAILED' }
+    if ($SetupLog) {
+        try { Write-SwitchTradeSetupLog -Path $SetupLog -Stage $SetupStage -Message ($_ | Out-String) -Level error } catch { }
+    }
+    [Console]::Error.WriteLine("SWITCHTRADE_SETUP_ERROR: $message")
+    $failure = [ordered]@{
+        code = $code; message = Redact-SwitchTradeSetupText $message; stage = $SetupStage
+        recoverable = $true; primary_action = 'Run Setup Repair'; action = $Action
+        correlation_id = [guid]::NewGuid().ToString('N')
+    }
+    [Console]::Error.WriteLine("SWITCHTRADE_SETUP_FAILURE: $($failure | ConvertTo-Json -Compress)")
     exit 1
 }
 $PackageRoot = Split-Path -Parent $PSScriptRoot
@@ -43,17 +58,26 @@ $PreviousInstall = "$InstallRoot.previous"
 . (Join-Path $PSScriptRoot 'KernelLifecycle.ps1')
 . (Join-Path $PSScriptRoot 'PackageIntegrity.ps1')
 . (Join-Path $PSScriptRoot 'HostCompatibility.ps1')
+. (Join-Path $PSScriptRoot 'SetupLifecycle.ps1')
 
 $ResumeStatePath = Join-Path $StateRoot 'setup-resume.json'
+$TransactionPath = Join-Path $StateRoot 'setup-transaction.json'
+$SetupLog = Join-Path $StateRoot 'logs\setup.jsonl'
 $ResumeRunOnce = 'SwitchTradeSetupResume'
 $WasResume = $Action -eq 'Resume'
 
 function Save-SetupResume([string]$ResumeAction) {
+    if ($BusId -and -not $UsbInstanceId) {
+        throw 'USB_STABLE_ID_REQUIRED: reselect the adapter before scheduling setup resume'
+    }
+    if ($UsbInstanceId -and ($UsbInstanceId.ToCharArray() | Where-Object { [char]::IsControl($_) })) {
+        throw 'USB_STABLE_ID_INVALID: the adapter instance identity contains invalid characters'
+    }
     New-Item -ItemType Directory -Force -Path $StateRoot | Out-Null
     @{
-        schema = 1; package_root = $PackageRoot; action = $ResumeAction
+        schema = 2; package_root = $PackageRoot; action = $ResumeAction
         distro = $Distro; install_root = $InstallRoot; distro_root = $DistroRoot
-        bus_id = $BusId; usb_id = $UsbId
+        bus_id = $BusId; usb_id = $UsbId; usb_instance_id = $UsbInstanceId
         accept_global_kernel_change = [bool]$AcceptGlobalKernelChange
         accept_prerequisite_changes = [bool]$AcceptPrerequisiteChanges
         accept_vmware_release = [bool]$AcceptVmwareRelease
@@ -83,7 +107,7 @@ if ($WasResume) {
         throw 'SETUP_RESUME_STATE_MISSING: rerun the signed SwitchTrade setup package'
     }
     $resume = Get-Content -Raw -LiteralPath $ResumeStatePath | ConvertFrom-Json
-    if ([int]$resume.schema -ne 1 -or [string]$resume.package_root -ne $PackageRoot -or
+    if ([int]$resume.schema -ne 2 -or [string]$resume.package_root -ne $PackageRoot -or
         [string]$resume.action -notin @('Install', 'Repair', 'Update')) {
         throw 'SETUP_RESUME_STATE_INVALID: rerun the signed SwitchTrade setup package'
     }
@@ -93,6 +117,7 @@ if ($WasResume) {
     $DistroRoot = [string]$resume.distro_root
     $BusId = [string]$resume.bus_id
     $UsbId = [string]$resume.usb_id
+    $UsbInstanceId = [string]$resume.usb_instance_id
     $AcceptGlobalKernelChange = [bool]$resume.accept_global_kernel_change
     $AcceptPrerequisiteChanges = [bool]$resume.accept_prerequisite_changes
     $AcceptVmwareRelease = [bool]$resume.accept_vmware_release
@@ -112,6 +137,83 @@ function Convert-ToWslPath([string]$Path) {
     $resolved = (Resolve-Path -LiteralPath $Path).Path
     if ($resolved -notmatch '^([A-Za-z]):\\(.*)$') { throw "cannot map path into WSL: $resolved" }
     return "/mnt/$($Matches[1].ToLowerInvariant())/$($Matches[2].Replace('\', '/'))"
+}
+
+function Test-SwitchTradeDistroOwned {
+    param([Parameter(Mandatory)][string]$Name)
+    $raw = ((& wsl.exe -d $Name -u root -- cat /etc/switchtrade-distro.json 2>$null) -join '')
+    if ($LASTEXITCODE -ne 0 -or -not $raw) { return $false }
+    try {
+        $marker = $raw | ConvertFrom-Json
+        return [int]$marker.schema -eq 1 -and [string]$marker.owner -ceq 'switchtrade-installer' -and
+            [string]$marker.product -ceq 'SwitchTrade'
+    } catch { return $false }
+}
+
+function Assert-SwitchTradeDistroOwned {
+    param([Parameter(Mandatory)][string]$Name)
+    if (-not (Test-SwitchTradeDistroOwned -Name $Name)) {
+        throw "DISTRO_NAME_COLLISION: '$Name' exists but is not owned by SwitchTrade Setup; choose another distro name"
+    }
+}
+
+function Invoke-LoggedWsl {
+    param(
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [Parameter(Mandatory)][string]$FailureCode,
+        [Parameter(Mandatory)][string]$Stage
+    )
+    $script:SetupStage = $Stage
+    $output = @(& wsl.exe @Arguments 2>&1)
+    $exitCode = $LASTEXITCODE
+    foreach ($line in $output) {
+        Write-SwitchTradeSetupLog -Path $SetupLog -Stage $Stage -Message ([string]$line)
+    }
+    if ($exitCode -ne 0) {
+        throw "${FailureCode}: $((@($output | ForEach-Object { [string]$_ }) -join "`n").Trim())"
+    }
+    return $output
+}
+
+function Resolve-StableUsbBusId {
+    if (-not $UsbInstanceId) { return $BusId }
+    $script:SetupStage = 'usb_identity'
+    $raw = ((& usbipd.exe state 2>&1) -join "`n")
+    if ($LASTEXITCODE -ne 0) { throw "USBIPD_STATE_FAILED: $raw" }
+    $state = $raw | ConvertFrom-Json
+    $device = Resolve-SwitchTradeUsbDeviceFromState -State $state -InstanceId $UsbInstanceId -UsbId $UsbId
+    return [string]$device.BusId
+}
+
+function Test-StagedControlReadiness {
+    param([Parameter(Mandatory)][string]$ExpectedReleaseId)
+    $script:SetupStage = 'control_readiness'
+    $port = 18787
+    $arguments = @(
+        '-d', $Distro, '-u', 'root', '--cd', '/opt/switchtrade.candidate', '--',
+        'env', "SWITCHTRADE_CONTROL_PORT=$port", 'SWITCHTRADE_CONTROL_INSTANCE=setup-candidate',
+        'SWITCHTRADE_RELEASE_ROOT=/opt/switchtrade.candidate',
+        '/opt/switchtrade.candidate/bridge/.venv/bin/python', '-m', 'switchtrade.control'
+    )
+    $process = Start-Process wsl.exe -ArgumentList $arguments -WindowStyle Hidden -PassThru
+    try {
+        for ($attempt = 0; $attempt -lt 30; $attempt++) {
+            if ($process.HasExited) { break }
+            try {
+                $ready = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/v1/app/readiness" -TimeoutSec 1
+                if ($ready.contract_version -eq 'app-readiness.v1' -and $ready.compatible -and
+                    [string]$ready.release_id -eq $ExpectedReleaseId) { return $true }
+                if ($ready) { throw 'STAGED_CONTROL_RELEASE_MISMATCH' }
+            } catch {
+                if ([string]$_.Exception.Message -eq 'STAGED_CONTROL_RELEASE_MISMATCH') { throw }
+            }
+            Start-Sleep -Milliseconds 500
+        }
+        throw 'STAGED_CONTROL_NOT_READY: staged control did not advertise the package release'
+    } finally {
+        if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+        & wsl.exe --terminate $Distro 2>$null | Out-Null
+    }
 }
 
 function Test-Setup {
@@ -184,6 +286,25 @@ if ($Action -eq 'Audit') {
     exit
 }
 
+$ReleaseId = ''
+if ($Action -in @('Install', 'Repair', 'Update')) {
+    $SetupStage = 'package_integrity'
+    Test-SwitchTradePackage -PackageRoot $PackageRoot -AllowUnsignedPackage:$AllowUnsignedPackage | Out-Null
+    $ReleaseId = Get-SwitchTradeReleaseId -ManifestPath (Join-Path $PackageRoot 'manifest.json')
+}
+
+$SetupStage = 'mutex'
+$SetupMutex = Enter-SwitchTradeSetupMutex
+Write-SwitchTradeSetupLog -Path $SetupLog -Stage $SetupStage -Message "setup action=$Action acquired the mutation mutex"
+$namedDistroExists = (Get-Distros) -contains $Distro
+if ($namedDistroExists) { Assert-SwitchTradeDistroOwned -Name $Distro }
+if (Test-Path -LiteralPath $TransactionPath -PathType Leaf) {
+    $staleTransaction = Get-Content -Raw -LiteralPath $TransactionPath | ConvertFrom-Json
+    if ([string]$staleTransaction.phase -notin @('completed', 'compensated')) {
+        throw "SETUP_TRANSACTION_INCOMPLETE: transaction $($staleTransaction.transaction_id) stopped at $($staleTransaction.phase); run the matching package Repair"
+    }
+}
+
 if ($Action -eq 'Uninstall') {
     Clear-SetupResume
     Restore-SwitchTradeKernel -StateRoot $StateRoot | Out-Null
@@ -216,37 +337,49 @@ if ($Action -eq 'Uninstall') {
 if ($Action -eq 'Rollback') {
     Clear-SetupResume
     if (-not (Test-Path -LiteralPath $PreviousInstall -PathType Container)) {
-        throw 'no retained SwitchTrade application version is available for rollback'
+        throw 'ROLLBACK_WINDOWS_MISSING: no retained SwitchTrade application version is available'
     }
-    $swap = "$InstallRoot.rollback-swap"
-    if (Test-Path -LiteralPath $swap) { throw "stale rollback swap path requires repair: $swap" }
+    if (-not $namedDistroExists) { throw 'ROLLBACK_DISTRO_MISSING: the owned SwitchTrade distro is absent' }
+    $SetupStage = 'rollback_validate'
+    $rollbackRelease = Get-InstalledWindowsReleaseId -Root $PreviousInstall
+    $activeRelease = Get-InstalledWindowsReleaseId -Root $InstallRoot
+    Test-WindowsReleaseTree -Root $PreviousInstall -ExpectedReleaseId $rollbackRelease | Out-Null
+    Test-WindowsReleaseTree -Root $InstallRoot -ExpectedReleaseId $activeRelease | Out-Null
+    $runtimeProvision = Convert-ToWslPath (Join-Path $PSScriptRoot 'provision-wsl.sh')
+    Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'bash', $runtimeProvision,
+        '--validate-retained', '--release-id', $rollbackRelease) `
+        -FailureCode 'ROLLBACK_RUNTIME_INVALID' -Stage 'rollback_validate' | Out-Null
+    Test-SwitchTradeKernelRollback -StateRoot $StateRoot -ExpectedReleaseId $rollbackRelease | Out-Null
     $runtimeRolledBack = $false
     $kernelRolledBack = $false
+    $windowsRolledBack = $false
     try {
-        if ((Get-Distros) -contains $Distro) {
-            & wsl.exe --terminate $Distro 2>$null
-            $runtimeProvision = Convert-ToWslPath (Join-Path $PSScriptRoot 'provision-wsl.sh')
-            & wsl.exe -d $Distro -u root -- bash $runtimeProvision --rollback
-            if ($LASTEXITCODE -ne 0) { throw 'the retained SwitchTrade WSL runtime could not be activated' }
-            $runtimeRolledBack = $true
-        }
-        $kernelRolledBack = Switch-SwitchTradeKernelRollback -StateRoot $StateRoot
-        if (Test-Path -LiteralPath $InstallRoot) {
-            Move-Item -LiteralPath $InstallRoot -Destination $swap
-        }
-        Move-Item -LiteralPath $PreviousInstall -Destination $InstallRoot
-        if (Test-Path -LiteralPath $swap) { Move-Item -LiteralPath $swap -Destination $PreviousInstall }
+        $SetupStage = 'rollback_commit'
+        & wsl.exe --terminate $Distro 2>$null | Out-Null
+        Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'bash', $runtimeProvision,
+            '--rollback', '--release-id', $rollbackRelease) `
+            -FailureCode 'ROLLBACK_RUNTIME_COMMIT_FAILED' -Stage $SetupStage | Out-Null
+        $runtimeRolledBack = $true
+        $kernelRolledBack = Switch-SwitchTradeKernelRollback -StateRoot $StateRoot `
+            -ExpectedReleaseId $rollbackRelease
+        Switch-SwitchTradeWindowsRollback -Active $InstallRoot -Previous $PreviousInstall `
+            -ExpectedReleaseId $rollbackRelease | Out-Null
+        $windowsRolledBack = $true
     } catch {
         $failure = $_
-        if (-not (Test-Path -LiteralPath $InstallRoot) -and (Test-Path -LiteralPath $swap)) {
-            Move-Item -LiteralPath $swap -Destination $InstallRoot
-        }
         try {
-            if ($kernelRolledBack) { Switch-SwitchTradeKernelRollback -StateRoot $StateRoot | Out-Null }
+            if ($windowsRolledBack) {
+                Switch-SwitchTradeWindowsRollback -Active $InstallRoot -Previous $PreviousInstall `
+                    -ExpectedReleaseId $activeRelease | Out-Null
+            }
+            if ($kernelRolledBack) {
+                Switch-SwitchTradeKernelRollback -StateRoot $StateRoot -ExpectedReleaseId $activeRelease | Out-Null
+            }
             if ($runtimeRolledBack) {
                 & wsl.exe --terminate $Distro 2>$null
-                & wsl.exe -d $Distro -u root -- bash $runtimeProvision --rollback
-                if ($LASTEXITCODE -ne 0) { throw 'WSL runtime rollback recovery failed' }
+                Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'bash', $runtimeProvision,
+                    '--compensate', '--release-id', $activeRelease) `
+                    -FailureCode 'ROLLBACK_RUNTIME_RECOVERY_FAILED' -Stage 'rollback_compensate' | Out-Null
             }
         } catch {
             throw "ROLLBACK_PARTIAL_FAILURE: $($failure.Exception.Message); recovery: $($_.Exception.Message)"
@@ -258,7 +391,6 @@ if ($Action -eq 'Rollback') {
 }
 
 $audit = Test-Setup
-Test-SwitchTradePackage -PackageRoot $PackageRoot -AllowUnsignedPackage:$AllowUnsignedPackage | Out-Null
 if (-not $audit.WindowsSupported) {
     throw 'SwitchTrade requires Windows 10 22H2 x64 (build 19045) or Windows 11 x64.'
 }
@@ -336,99 +468,32 @@ if (-not $audit.UsbipdInstalled) {
         exit 3010
     }
 }
-if ($audit.VmwareUsbArbitrator -eq 'Running') {
-    if (-not $AcceptVmwareRelease) {
-        throw 'VMware USB Arbitrator can reclaim the Wi-Fi adapter. Rerun Repair after accepting its temporary stop.'
-    }
-    Stop-Service VMUSBArbService -Force
-}
-if (-not $audit.DistroInstalled) {
-    if (-not $audit.RootfsPresent) {
-        throw "the SwitchTrade distro is absent and this package has no rootfs: $Rootfs"
-    }
-    if (-not (Test-Path -LiteralPath $RootfsHash -PathType Leaf)) {
-        throw "rootfs checksum is missing: $RootfsHash"
-    }
-    $expectedHash = ((Get-Content -LiteralPath $RootfsHash -TotalCount 1) -split '\s+')[0]
-    $actualHash = Get-FileSha256 $Rootfs
-    if ($expectedHash -notmatch '^[0-9a-fA-F]{64}$' -or $expectedHash.ToLowerInvariant() -ne $actualHash) {
-        throw 'SwitchTrade rootfs checksum verification failed.'
-    }
-    New-Item -ItemType Directory -Force -Path $DistroRoot | Out-Null
-    & wsl.exe --import $Distro $DistroRoot $Rootfs --version 2
-    if ($LASTEXITCODE -ne 0) { throw "failed to import the isolated $Distro distribution" }
-}
-
-if ((Test-Path -LiteralPath $Kernel -PathType Leaf) -and
-    (Test-Path -LiteralPath $KernelManifest -PathType Leaf)) {
-    $kernelArguments = @{
-        Kernel = $Kernel; Manifest = $KernelManifest; StateRoot = $StateRoot
-        KernelStorageRoot = $KernelStorageRoot
-        AcceptGlobalKernelChange = $AcceptGlobalKernelChange
-    }
-    if ($KernelModules -and (Test-Path -LiteralPath $KernelModules -PathType Leaf)) {
-        $kernelArguments.KernelModules = $KernelModules
-    }
-    $kernelState = Install-SwitchTradeKernel @kernelArguments
-    $kernelOutput = ((& wsl.exe -d $Distro -- uname -r 2>&1) -join "`n").Trim()
-    $kernelExit = $LASTEXITCODE
-    if ($kernelExit -ne 0 -or $kernelOutput -ne [string]$kernelState.kernel_release) {
-        try { Restore-SwitchTradeKernel -StateRoot $StateRoot | Out-Null } catch { }
-        if ($kernelOutput -match '(?i)policy|blocked|access.+denied|administrator') {
-            throw "CUSTOM_KERNEL_BLOCKED_BY_POLICY: this managed PC is unsupported by the private beta. $kernelOutput"
-        }
-        throw "CUSTOM_KERNEL_START_FAILED: restored the previous WSL configuration; expected $($kernelState.kernel_release), got $kernelOutput"
-    }
-    if ($KernelModules -and $kernelState.modules_format -eq 'archive') {
-        $modulesWsl = Convert-ToWslPath $KernelModules
-        $extractCommand = 'set -eu; if ! command -v depmod >/dev/null 2>&1 || ! command -v modinfo >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y --no-install-recommends kmod; rm -rf /var/lib/apt/lists/*; fi; mkdir -p /lib/modules; tar -xzf "{0}" -C /lib/modules; depmod -a "{1}"' -f `
-            $modulesWsl, [string]$kernelState.kernel_release
-        & wsl.exe -d $Distro -u root -- sh -lc $extractCommand
-        if ($LASTEXITCODE -ne 0) { throw 'KERNEL_MODULE_INSTALL_FAILED: could not install the matching module archive' }
-    }
-    if ($KernelModules) {
-        $moduleVerify = 'set -eu; test "$(uname -r)" = "{0}"; test "$(modinfo -F vermagic rtl8xxxu | awk ''{{print $1}}'')" = "{0}"; modinfo -F firmware rtl8xxxu | while IFS= read -r fw; do test -z "$fw" || test -f "/lib/firmware/$fw"; done' -f `
-            [string]$kernelState.kernel_release
-        & wsl.exe -d $Distro -u root -- sh -lc $moduleVerify
-        if ($LASTEXITCODE -ne 0) {
-            throw 'KERNEL_ABI_OR_FIRMWARE_MISMATCH: running kernel, rtl8xxxu module ABI, and firmware must come from one release'
-        }
-    }
-}
-
-$source = Convert-ToWslPath $Payload
-$provision = Convert-ToWslPath (Join-Path $PackageRoot 'installer\provision-wsl.sh')
-& wsl.exe -d $Distro -u root -- bash $provision --source $source
-if ($LASTEXITCODE -ne 0) { throw 'SwitchTrade WSL provisioning failed.' }
-
-if ($DeferHardwareSetup) {
-    Write-Host 'Wi-Fi adapter setup was deferred. Select an adapter in SwitchTrade Settings, then run Setup Repair once if binding is required.'
-} else {
-    $radioPreflight = Join-Path $Payload 'scripts\windows\wsl-radio-preflight.ps1'
-    $profileFile = Join-Path $Payload 'config\wsl-radio-hardware.tsv'
-    $preflightArguments = @{
-        Distro = $Distro; ProfileFile = $profileFile; Prepare = $true; AutoAttach = $true
-    }
-    if ($BusId) { $preflightArguments.BusId = $BusId }
-    if ($UsbId) { $preflightArguments.UsbId = @($UsbId) }
-    & $radioPreflight @preflightArguments
-    if ($LASTEXITCODE -ne 0) { throw 'SwitchTrade USB/WSL ownership preflight failed.' }
-    $wslHealthArguments = @(
-        '-d', $Distro, '-u', 'root', '--cd', '/opt/switchtrade', '--',
-        './scripts/wsl-radio-prepare.sh', '--role', 'guest',
-        '--health-channels', '1,6,11', '--target-channel', '6'
-    )
-    if ($UsbId) { $wslHealthArguments += @('--usb-id', $UsbId.ToLowerInvariant()) }
-    $wslHealthArguments += @('--', 'true')
-    & wsl.exe @wslHealthArguments
-    if ($LASTEXITCODE -ne 0) { throw 'SwitchTrade driver/RX health gate failed.' }
-}
-
 $installParent = Split-Path -Parent $InstallRoot
 New-Item -ItemType Directory -Force -Path $installParent | Out-Null
 $stage = Join-Path $installParent ("SwitchTrade.stage." + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $stage | Out-Null
+$priorReleaseId = ''
+if (Test-Path -LiteralPath $InstallRoot -PathType Container) {
+    $priorReleaseId = Get-InstalledWindowsReleaseId -Root $InstallRoot
+    if (-not $priorReleaseId) {
+        throw 'INSTALLED_RELEASE_ID_MISSING: existing application files are not a committed SwitchTrade release'
+    }
+    Test-WindowsReleaseTree -Root $InstallRoot -ExpectedReleaseId $priorReleaseId | Out-Null
+}
+$distroImported = $false
+$kernelApplied = $false
+$kernelHadManagedPrior = $false
+$kernelApplyAttempted = $false
+$wslStaged = $false
+$wslStageAttempted = $false
+$wslCommitted = $false
+$wslCommitAttempted = $false
+$windowsCommitted = $false
+$provision = ''
+$transaction = New-SwitchTradeTransaction -Path $TransactionPath -Action $Action -ReleaseId $ReleaseId `
+    -PriorReleaseId $priorReleaseId -WindowsStage $stage
 try {
+    $SetupStage = 'windows_stage'
     Copy-Item -LiteralPath (Join-Path $PackageRoot 'installer') -Destination $stage -Recurse
     Copy-Item -LiteralPath $Payload -Destination $stage -Recurse
     Copy-Item -LiteralPath (Join-Path $PackageRoot 'manifest.json') -Destination $stage
@@ -439,19 +504,197 @@ try {
     if (Test-Path -LiteralPath $DesktopExe -PathType Leaf) {
         Copy-Item -LiteralPath $DesktopExe -Destination (Join-Path $stage 'SwitchTrade.exe')
     }
-    if (Test-Path -LiteralPath $PreviousInstall) {
-        Remove-Item -LiteralPath $PreviousInstall -Recurse -Force
+    Write-WindowsReleaseMarker -Root $stage -ReleaseId $ReleaseId
+    Test-WindowsReleaseTree -Root $stage -ExpectedReleaseId $ReleaseId | Out-Null
+    Set-SwitchTradeTransactionPhase -Path $TransactionPath -Phase 'windows_staged' | Out-Null
+
+    $SetupStage = 'distro_identity'
+    if (-not $namedDistroExists) {
+        if (-not $audit.RootfsPresent) { throw "ROOTFS_MISSING: $Rootfs" }
+        if (-not (Test-Path -LiteralPath $RootfsHash -PathType Leaf)) { throw "ROOTFS_HASH_MISSING: $RootfsHash" }
+        $expectedHash = ((Get-Content -LiteralPath $RootfsHash -TotalCount 1) -split '\s+')[0]
+        if ($expectedHash -notmatch '^[0-9a-fA-F]{64}$' -or
+            $expectedHash.ToLowerInvariant() -ne (Get-FileSha256 $Rootfs)) {
+            throw 'ROOTFS_HASH_MISMATCH: SwitchTrade rootfs checksum verification failed'
+        }
+        New-Item -ItemType Directory -Force -Path $DistroRoot | Out-Null
+        & wsl.exe --import $Distro $DistroRoot $Rootfs --version 2
+        if ($LASTEXITCODE -ne 0) { throw "DISTRO_IMPORT_FAILED: failed to import isolated distro $Distro" }
+        $distroImported = $true
+        Set-SwitchTradeTransactionPhase -Path $TransactionPath -Phase 'distro_imported' `
+            -Fields @{ distro_imported = $true } | Out-Null
+        Assert-SwitchTradeDistroOwned -Name $Distro
     }
-    if (Test-Path -LiteralPath $InstallRoot) {
-        Move-Item -LiteralPath $InstallRoot -Destination $PreviousInstall
+
+    $source = Convert-ToWslPath $Payload
+    $provision = Convert-ToWslPath (Join-Path $PackageRoot 'installer\provision-wsl.sh')
+    $wslStageAttempted = $true
+    Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'bash', $provision,
+        '--stage', '--source', $source, '--release-id', $ReleaseId) `
+        -FailureCode 'WSL_STAGE_FAILED' -Stage 'wsl_stage' | Out-Null
+    $wslStaged = $true
+    Set-SwitchTradeTransactionPhase -Path $TransactionPath -Phase 'wsl_staged' `
+        -Fields @{ wsl_staged = $true } | Out-Null
+    Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'bash', $provision,
+        '--validate', '--release-id', $ReleaseId) `
+        -FailureCode 'WSL_VALIDATE_FAILED' -Stage 'wsl_validate' | Out-Null
+    Test-StagedControlReadiness -ExpectedReleaseId $ReleaseId | Out-Null
+    Set-SwitchTradeTransactionPhase -Path $TransactionPath -Phase 'software_validated' | Out-Null
+
+    if ((Test-Path -LiteralPath $Kernel -PathType Leaf) -and
+        (Test-Path -LiteralPath $KernelManifest -PathType Leaf)) {
+        $SetupStage = 'kernel_apply'
+        if ($priorReleaseId) {
+            $kernelHadManagedPrior = Initialize-SwitchTradeKernelReleaseIdentity -StateRoot $StateRoot `
+                -CurrentReleaseId $priorReleaseId
+        }
+        $kernelArguments = @{
+            Kernel = $Kernel; Manifest = $KernelManifest; StateRoot = $StateRoot
+            KernelStorageRoot = $KernelStorageRoot; ReleaseId = $ReleaseId
+            AcceptGlobalKernelChange = $AcceptGlobalKernelChange
+        }
+        if ($KernelModules -and (Test-Path -LiteralPath $KernelModules -PathType Leaf)) {
+            $kernelArguments.KernelModules = $KernelModules
+        }
+        $kernelApplyAttempted = $true
+        $kernelState = Install-SwitchTradeKernel @kernelArguments
+        $kernelApplied = $true
+        Set-SwitchTradeTransactionPhase -Path $TransactionPath -Phase 'kernel_applied' `
+            -Fields @{ kernel_applied = $true } | Out-Null
+        $kernelOutput = ((& wsl.exe -d $Distro -- uname -r 2>&1) -join "`n").Trim()
+        if ($LASTEXITCODE -ne 0 -or $kernelOutput -ne [string]$kernelState.kernel_release) {
+            if ($kernelOutput -match '(?i)policy|blocked|access.+denied|administrator') {
+                throw "CUSTOM_KERNEL_BLOCKED_BY_POLICY: this managed PC is unsupported by the private beta. $kernelOutput"
+            }
+            throw "CUSTOM_KERNEL_START_FAILED: expected $($kernelState.kernel_release), got $kernelOutput"
+        }
+        if ($KernelModules -and $kernelState.modules_format -eq 'archive') {
+            $modulesWsl = Convert-ToWslPath $KernelModules
+            $extractCommand = 'set -eu; if ! command -v depmod >/dev/null 2>&1 || ! command -v modinfo >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y --no-install-recommends kmod; rm -rf /var/lib/apt/lists/*; fi; mkdir -p /lib/modules; tar -xzf "{0}" -C /lib/modules; depmod -a "{1}"' -f `
+                $modulesWsl, [string]$kernelState.kernel_release
+            Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'sh', '-lc', $extractCommand) `
+                -FailureCode 'KERNEL_MODULE_INSTALL_FAILED' -Stage 'kernel_modules' | Out-Null
+        }
+        if ($KernelModules) {
+            $kernelMetadata = Get-Content -Raw -LiteralPath $KernelManifest | ConvertFrom-Json
+            $firmwareDigest = if ($kernelMetadata.PSObject.Properties.Name -contains 'firmware_sha256') {
+                [string]$kernelMetadata.firmware_sha256
+            } else { '' }
+            $builtInFirmwareVerified = $firmwareDigest -match '^[0-9a-fA-F]{64}$'
+            $moduleVerify = if ($builtInFirmwareVerified) {
+                'set -eu; test "$(uname -r)" = "{0}"; test "$(modinfo -F vermagic rtl8xxxu | awk ''{{print $1}}'')" = "{0}"' -f [string]$kernelState.kernel_release
+            } else {
+                'set -eu; test "$(uname -r)" = "{0}"; test "$(modinfo -F vermagic rtl8xxxu | awk ''{{print $1}}'')" = "{0}"; modinfo -F firmware rtl8xxxu | while IFS= read -r fw; do test -z "$fw" || test -f "/lib/firmware/$fw"; done' -f [string]$kernelState.kernel_release
+            }
+            Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'sh', '-lc', $moduleVerify) `
+                -FailureCode 'KERNEL_ABI_OR_FIRMWARE_MISMATCH' -Stage 'kernel_verify' | Out-Null
+        }
     }
-    Move-Item -LiteralPath $stage -Destination $InstallRoot
+
+    $SetupStage = 'commit'
+    $wslCommitAttempted = $true
+    Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'bash', $provision,
+        '--commit', '--release-id', $ReleaseId) -FailureCode 'WSL_COMMIT_FAILED' -Stage $SetupStage | Out-Null
+    $wslCommitted = $true
+    Set-SwitchTradeTransactionPhase -Path $TransactionPath -Phase 'wsl_committed' `
+        -Fields @{ wsl_committed = $true } | Out-Null
+    $committedPrior = Commit-SwitchTradeWindowsRelease -Candidate $stage -Active $InstallRoot `
+        -Previous $PreviousInstall -ExpectedReleaseId $ReleaseId
+    $windowsCommitted = $true
+    if ($committedPrior -ne $priorReleaseId) { throw 'WINDOWS_PRIOR_RELEASE_CHANGED: setup state changed during commit' }
+    Set-SwitchTradeTransactionPhase -Path $TransactionPath -Phase 'completed' `
+        -Fields @{ windows_committed = $true } | Out-Null
 } catch {
-    if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
-    if (-not (Test-Path -LiteralPath $InstallRoot) -and (Test-Path -LiteralPath $PreviousInstall)) {
-        Move-Item -LiteralPath $PreviousInstall -Destination $InstallRoot
+    $transactionFailure = $_
+    $SetupStage = 'compensate'
+    try {
+        if ($wslStageAttempted -and -not $wslStaged) {
+            & wsl.exe -d $Distro -u root -- bash $provision --validate-candidate `
+                --release-id $ReleaseId 2>$null | Out-Null
+            $wslStaged = $LASTEXITCODE -eq 0
+        }
+        if ($wslCommitAttempted -and -not $wslCommitted) {
+            & wsl.exe -d $Distro -u root -- bash $provision --validate-active `
+                --release-id $ReleaseId 2>$null | Out-Null
+            $wslCommitted = $LASTEXITCODE -eq 0
+        }
+        if ($windowsCommitted) {
+            if ($priorReleaseId) {
+                Switch-SwitchTradeWindowsRollback -Active $InstallRoot -Previous $PreviousInstall `
+                    -ExpectedReleaseId $priorReleaseId | Out-Null
+            } else {
+                Test-WindowsReleaseTree -Root $InstallRoot -ExpectedReleaseId $ReleaseId | Out-Null
+                Remove-Item -LiteralPath $InstallRoot -Recurse -Force
+            }
+        }
+        if ($wslCommitted -and $priorReleaseId) {
+            Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'bash', $provision,
+                '--compensate', '--release-id', $priorReleaseId) `
+                -FailureCode 'WSL_COMPENSATION_FAILED' -Stage $SetupStage | Out-Null
+        } elseif ($wslStaged -and -not $wslCommitted) {
+            Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'bash', $provision,
+                '--abort', '--release-id', $ReleaseId) `
+                -FailureCode 'WSL_ABORT_FAILED' -Stage $SetupStage | Out-Null
+        }
+        if ($kernelApplyAttempted) {
+            $kernelStatePath = Join-Path $StateRoot 'kernel-state.json'
+            $currentKernelRelease = if (Test-Path -LiteralPath $kernelStatePath -PathType Leaf) {
+                [string]((Get-Content -Raw -LiteralPath $kernelStatePath | ConvertFrom-Json).package_release_id)
+            } else { '' }
+            if ($currentKernelRelease -eq $ReleaseId -and $ReleaseId -ne $priorReleaseId) {
+                if ($priorReleaseId -and $kernelHadManagedPrior) {
+                    Switch-SwitchTradeKernelRollback -StateRoot $StateRoot `
+                        -ExpectedReleaseId $priorReleaseId | Out-Null
+                } else {
+                    Restore-SwitchTradeKernel -StateRoot $StateRoot | Out-Null
+                }
+            } elseif ($currentKernelRelease -and $currentKernelRelease -ne $priorReleaseId) {
+                throw "KERNEL_COMPENSATION_RELEASE_MISMATCH: expected $priorReleaseId, found $currentKernelRelease"
+            }
+        }
+        if ($distroImported) {
+            Assert-SwitchTradeDistroOwned -Name $Distro
+            & wsl.exe --unregister $Distro
+            if ($LASTEXITCODE -ne 0) { throw 'DISTRO_IMPORT_COMPENSATION_FAILED' }
+        }
+        if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+        Set-SwitchTradeTransactionPhase -Path $TransactionPath -Phase 'compensated' | Out-Null
+    } catch {
+        throw "SETUP_COMPENSATION_FAILED: $($transactionFailure.Exception.Message); compensation: $($_.Exception.Message)"
     }
-    throw
+    throw $transactionFailure
+}
+
+if ($audit.VmwareUsbArbitrator -eq 'Running') {
+    $SetupStage = 'hardware_ownership'
+    if (-not $AcceptVmwareRelease) {
+        throw 'VMWARE_USB_OWNERSHIP_REQUIRED: run Setup Repair after accepting the temporary VMware USB release'
+    }
+    Stop-Service VMUSBArbService -Force
+}
+if ($DeferHardwareSetup) {
+    Write-Host 'Wi-Fi adapter setup was deferred. Software release committed coherently; use Setup Repair for hardware readiness.'
+} else {
+    $SetupStage = 'hardware_readiness'
+    $BusId = Resolve-StableUsbBusId
+    $radioPreflight = Join-Path $Payload 'scripts\windows\wsl-radio-preflight.ps1'
+    $profileFile = Join-Path $Payload 'config\wsl-radio-hardware.tsv'
+    $preflightArguments = @{
+        Distro = $Distro; ProfileFile = $profileFile; Prepare = $true; AutoAttach = $true
+    }
+    if ($BusId) { $preflightArguments.BusId = $BusId }
+    if ($UsbId) { $preflightArguments.UsbId = @($UsbId) }
+    & $radioPreflight @preflightArguments
+    if ($LASTEXITCODE -ne 0) { throw 'USB_OWNERSHIP_PREFLIGHT_FAILED: reconnect the selected adapter and run Setup Repair' }
+    $wslHealthArguments = @(
+        '-d', $Distro, '-u', 'root', '--cd', '/opt/switchtrade', '--',
+        './scripts/wsl-radio-prepare.sh', '--role', 'guest',
+        '--health-channels', '1,6,11', '--target-channel', '6'
+    )
+    if ($UsbId) { $wslHealthArguments += @('--usb-id', $UsbId.ToLowerInvariant()) }
+    $wslHealthArguments += @('--', 'true')
+    Invoke-LoggedWsl -Arguments $wslHealthArguments -FailureCode 'RADIO_RX_HEALTH_FAILED' `
+        -Stage $SetupStage | Out-Null
 }
 
 if (-not $NoShortcut) {

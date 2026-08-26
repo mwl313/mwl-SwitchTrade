@@ -76,6 +76,8 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertIn(" kmod ", provision)
         self.assertIn("KERNEL_ABI_OR_FIRMWARE_MISMATCH", setup)
         self.assertIn("CUSTOM_KERNEL_BLOCKED_BY_POLICY", setup)
+        self.assertIn("builtInFirmwareVerified", setup)
+        self.assertIn("firmware_sha256", setup)
 
     def test_package_requires_and_archives_runtime_ldn_keys(self):
         builder = (ROOT / "installer" / "Build-Package.ps1").read_text(encoding="utf-8")
@@ -91,11 +93,49 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertIn("--rollback", provision)
         self.assertIn('${TARGET}.previous', provision)
         self.assertNotIn('${TARGET}.previous.$(date', provision)
-        self.assertIn('cd "$stage"', provision)
-        self.assertLess(provision.index("--dry-run"), provision.index('backup=""'))
+        self.assertIn('cd "$CANDIDATE"', provision)
+        self.assertLess(provision.index("--dry-run"), provision.index('commit)'))
+        for mode in ("--stage", "--validate", "--commit", "--abort", "--compensate"):
+            self.assertIn(mode, provision)
         self.assertIn("application, WSL runtime, and retained kernel rollback completed", setup)
         self.assertIn("Test-InstalledConfiguration", launcher)
         self.assertIn("payload/release-config.json", launcher)
+        self.assertIn("release_id", launcher)
+
+    def test_release_transaction_and_owned_identity_gates_are_present(self):
+        setup = (ROOT / "installer" / "SwitchTradeSetup.ps1").read_text(encoding="utf-8")
+        lifecycle = (ROOT / "installer" / "SetupLifecycle.ps1").read_text(encoding="utf-8")
+        rootfs = (ROOT / "installer" / "Build-Rootfs.sh").read_text(encoding="utf-8")
+        control = (ROOT / "switchtrade" / "control.py").read_text(encoding="utf-8")
+        dialog = (ROOT / "installer" / "bootstrap" / "SetupDialog.cs").read_text(encoding="utf-8")
+        for value in ("DISTRO_NAME_COLLISION", "SETUP_TRANSACTION_INCOMPLETE",
+                      "Test-StagedControlReadiness", "UsbInstanceId"):
+            self.assertIn(value, setup)
+        self.assertIn("Global\\SwitchTrade.Setup", lifecycle)
+        self.assertLess(setup.index("Enter-SwitchTradeSetupMutex"),
+                        setup.index("if ($Action -eq 'Uninstall')"))
+        self.assertIn("switchtrade-distro.json", rootfs)
+        self.assertIn('"release_id": runtime_release_id()', control)
+        self.assertIn("InstanceId", dialog)
+        self.assertNotIn("Restore-SwitchTradeKernel -StateRoot $StateRoot | Out-Null } catch", setup)
+        collision_gate = setup.index("Assert-SwitchTradeDistroOwned -Name $Distro")
+        self.assertLess(collision_gate, setup.index("if ($Action -eq 'Uninstall')"))
+        self.assertLess(collision_gate, setup.index("& wsl.exe --import"))
+        rollback = setup.index("if ($Action -eq 'Rollback')")
+        validation = setup.index("Test-SwitchTradeKernelRollback", rollback)
+        first_swap = setup.index("--rollback', '--release-id'", rollback)
+        self.assertLess(validation, first_swap)
+
+    @unittest.skipUnless(shutil.which("powershell"), "Windows PowerShell is required")
+    def test_temp_rooted_setup_transaction_fails_closed_before_swap(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            result = subprocess.run([
+                "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                str(ROOT / "installer" / "Test-SetupLifecycle.ps1"),
+                "-TestRoot", temporary,
+            ], cwd=ROOT, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Setup lifecycle simulation PASS", result.stdout)
 
     @unittest.skipUnless(shutil.which("powershell"), "Windows PowerShell is required")
     def test_schema2_package_manifest_detects_tampering(self):

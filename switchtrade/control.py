@@ -82,6 +82,22 @@ def relay_api_error(error: RelayError) -> ControlApiError:
     )
 
 
+def runtime_release_id() -> str:
+    """Return the immutable packaged-runtime identity used by setup/launcher gates."""
+    root = Path(os.environ.get("SWITCHTRADE_RELEASE_ROOT", Path(__file__).resolve().parents[1]))
+    marker = root / ".switchtrade-release.json"
+    if not marker.is_file():
+        return "development"
+    try:
+        value = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise RuntimeError("RUNTIME_RELEASE_MARKER_INVALID") from error
+    release_id = value.get("release_id", "")
+    if value.get("schema") != 1 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", release_id):
+        raise RuntimeError("RUNTIME_RELEASE_MARKER_INVALID")
+    return release_id
+
+
 class CreateGroup(BaseModel):
     name: str = Field(min_length=1, max_length=22)
     visibility: str = Field(pattern="^(private|public)$")
@@ -582,6 +598,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         return {
             "contract_version": READINESS_CONTRACT,
             "product_version": __version__,
+            "release_id": runtime_release_id(),
             "compatible": True,
             "supported_contracts": [
                 READINESS_CONTRACT, ROOM_CONTRACT, PARTY_CONTRACT, PUBLIC_DIRECTORY_CONTRACT],
@@ -1301,9 +1318,11 @@ app = create_app()
 
 def main() -> None:
     import uvicorn
+    port = int(os.environ.get("SWITCHTRADE_CONTROL_PORT", "8787"))
+    instance = os.environ.get("SWITCHTRADE_CONTROL_INSTANCE", "control")
     try:
-        with SingleInstanceLock("control"):
-            uvicorn.run("switchtrade.control:app", host="127.0.0.1", port=8787, reload=False)
+        with SingleInstanceLock(instance):
+            uvicorn.run("switchtrade.control:app", host="127.0.0.1", port=port, reload=False)
     except AlreadyRunningError as error:
         raise SystemExit(str(error)) from error
 

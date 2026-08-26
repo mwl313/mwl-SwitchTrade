@@ -36,6 +36,7 @@ try {
 
     Install-SwitchTradeKernel -Kernel $kernelOne -KernelModules $modulesOne `
         -Manifest $manifestOne -StateRoot $stateRoot -KernelStorageRoot $kernelStorageRoot `
+        -ReleaseId release-a `
         -AcceptGlobalKernelChange | Out-Null
     $merged = Get-Content -Raw -LiteralPath (Join-Path $env:USERPROFILE '.wslconfig')
     if ($merged -notmatch 'instanceIdleTimeout=-1' -or $merged -notmatch 'vmIdleTimeout=-1') {
@@ -51,6 +52,7 @@ try {
     }
     Install-SwitchTradeKernel -Kernel $kernelOne -KernelModules $modulesOne `
         -Manifest $manifestOne -StateRoot $stateRoot -KernelStorageRoot $kernelStorageRoot `
+        -ReleaseId release-a `
         -AcceptGlobalKernelChange | Out-Null
     $sameRelease = Get-Content -Raw -LiteralPath (Join-Path $stateRoot 'kernel-state.json') | ConvertFrom-Json
     if ($sameRelease.rollback_kernel_path -or $sameRelease.kernel_path -ne $installedState.kernel_path) {
@@ -58,17 +60,20 @@ try {
     }
     Install-SwitchTradeKernel -Kernel $kernelTwo -Manifest $manifestTwo -StateRoot $stateRoot `
         -KernelStorageRoot $kernelStorageRoot `
+        -ReleaseId release-b `
         -AcceptGlobalKernelChange | Out-Null
     $beforeRollback = Get-Content -Raw -LiteralPath (Join-Path $stateRoot 'kernel-state.json') | ConvertFrom-Json
     if ($beforeRollback.kernel_path -eq $beforeRollback.rollback_kernel_path -or
         -not (Test-Path -LiteralPath $beforeRollback.rollback_kernel_path -PathType Leaf)) {
         throw 'versioned kernel update overwrote the retained rollback artifact'
     }
-    if (-not (Switch-SwitchTradeKernelRollback -StateRoot $stateRoot)) {
+    Test-SwitchTradeKernelRollback -StateRoot $stateRoot -ExpectedReleaseId release-a | Out-Null
+    if (-not (Switch-SwitchTradeKernelRollback -StateRoot $stateRoot -ExpectedReleaseId release-a)) {
         throw 'release kernel rollback was not available'
     }
     $state = Get-Content -Raw -LiteralPath (Join-Path $stateRoot 'kernel-state.json') | ConvertFrom-Json
     if ($state.kernel_release -ne 'test-one') { throw 'release kernel rollback selected the wrong version' }
+    if ($state.package_release_id -ne 'release-a') { throw 'package release rollback selected the wrong version' }
     if (-not (Restore-SwitchTradeKernel -StateRoot $stateRoot)) {
         throw 'original WSL configuration rollback was not available'
     }

@@ -7,7 +7,7 @@ using System.Windows.Forms;
 
 namespace SwitchTrade.Setup;
 
-internal sealed record RadioChoice(string BusId, string UsbId, string Name, bool Experimental)
+internal sealed record RadioChoice(string BusId, string UsbId, string InstanceId, string Name, bool Experimental)
 {
     public override string ToString() =>
         $"{Name} · USB {BusId}" + (Experimental ? " · Experimental" : "");
@@ -218,7 +218,7 @@ internal static class SetupDialog
                 var usbId = $"{match.Groups[1].Value}:{match.Groups[2].Value}".ToLowerInvariant();
                 if (!supported.TryGetValue(usbId, out var experimental)) continue;
                 var name = device.GetProperty("Description").GetString() ?? usbId;
-                result.Add(new RadioChoice(busId, usbId, name, experimental));
+                result.Add(new RadioChoice(busId, usbId, instance, name, experimental));
             }
             return result;
         }

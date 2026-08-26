@@ -10,6 +10,7 @@ namespace SwitchTrade.Setup;
 internal static class Program
 {
     private const string SetupFailurePrefix = "SWITCHTRADE_SETUP_ERROR: ";
+    private const string StructuredFailurePrefix = "SWITCHTRADE_SETUP_FAILURE: ";
 
     [STAThread]
     private static int Main(string[] args)
@@ -88,6 +89,12 @@ internal static class Program
                 start.ArgumentList.Add("-UsbId");
                 start.ArgumentList.Add(option[9..]);
             }
+            if (option.StartsWith("--usb-instance-id=", StringComparison.OrdinalIgnoreCase) &&
+                option[18..].Length is > 0 and <= 512 && !option[18..].Any(char.IsControl))
+            {
+                start.ArgumentList.Add("-UsbInstanceId");
+                start.ArgumentList.Add(option[18..]);
+            }
         }
         if (unsignedPrivateBeta && !allowUnsigned) start.ArgumentList.Add("-AllowUnsignedPackage");
         if (choice is not null)
@@ -103,6 +110,8 @@ internal static class Program
                 start.ArgumentList.Add(choice.Radio.BusId);
                 start.ArgumentList.Add("-UsbId");
                 start.ArgumentList.Add(choice.Radio.UsbId);
+                start.ArgumentList.Add("-UsbInstanceId");
+                start.ArgumentList.Add(choice.Radio.InstanceId);
             }
         }
 
@@ -149,6 +158,23 @@ internal static class Program
     {
         var lines = error.Replace("\0", "").Split(['\r', '\n'],
             StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var structured = lines.LastOrDefault(line =>
+            line.StartsWith(StructuredFailurePrefix, StringComparison.Ordinal));
+        if (structured is not null)
+        {
+            try
+            {
+                using var failure = JsonDocument.Parse(structured[StructuredFailurePrefix.Length..]);
+                var root = failure.RootElement;
+                var code = root.GetProperty("code").GetString() ?? "SETUP_FAILED";
+                var message = root.GetProperty("message").GetString() ?? "SwitchTrade setup did not complete.";
+                var stage = root.GetProperty("stage").GetString() ?? "unknown";
+                var action = root.GetProperty("action").GetString() ?? "unknown";
+                var recovery = root.GetProperty("primary_action").GetString() ?? "Run Setup Repair";
+                return $"[{code}] {message}\nStage: {stage}\nAction: {action}\nRecovery: {recovery}";
+            }
+            catch (JsonException) { }
+        }
         var setupFailure = lines.LastOrDefault(line =>
             line.StartsWith(SetupFailurePrefix, StringComparison.Ordinal));
         return setupFailure is null

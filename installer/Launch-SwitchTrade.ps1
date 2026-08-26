@@ -11,6 +11,7 @@ $ConfigFile = Join-Path $InstallRoot "config.json"
 $ManifestFile = Join-Path $InstallRoot "manifest.json"
 $ManifestSignature = Join-Path $InstallRoot "manifest.json.p7s"
 $ExpectedReadinessContract = "app-readiness.v1"
+$ExpectedReleaseId = ""
 $LogRoot = Join-Path $env:LOCALAPPDATA "SwitchTrade\logs\startup"
 . (Join-Path $PSScriptRoot 'PackageIntegrity.ps1')
 
@@ -20,6 +21,16 @@ function Test-InstalledConfiguration {
     }
     $manifest = Get-Content -Raw -LiteralPath $ManifestFile | ConvertFrom-Json
     if ([int]$manifest.schema -ne 2) { throw 'SwitchTrade installation manifest is unsupported. Run Setup Update.' }
+    $script:ExpectedReleaseId = [string]$manifest.release_id
+    if ($script:ExpectedReleaseId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') {
+        throw 'SwitchTrade installation release identity is invalid. Run Setup Repair.'
+    }
+    $releaseMarker = Join-Path $InstallRoot '.switchtrade-release.json'
+    if (-not (Test-Path -LiteralPath $releaseMarker -PathType Leaf) -or
+        [string]((Get-Content -Raw -LiteralPath $releaseMarker | ConvertFrom-Json).release_id) -ne
+            $script:ExpectedReleaseId) {
+        throw 'SwitchTrade installation release identity does not match its manifest. Run Setup Repair.'
+    }
     if ([bool]$manifest.signature_required) {
         if (-not (Test-Path -LiteralPath $ManifestSignature -PathType Leaf)) {
             throw 'SwitchTrade installation signature is missing. Run Setup Repair.'
@@ -46,7 +57,8 @@ function Get-ControlReadiness {
 
 Test-InstalledConfiguration
 $existing = Get-ControlReadiness
-if ($existing -and $existing.contract_version -eq $ExpectedReadinessContract -and $existing.compatible) {
+if ($existing -and $existing.contract_version -eq $ExpectedReadinessContract -and $existing.compatible -and
+    [string]$existing.release_id -eq $ExpectedReleaseId) {
     if (-not $NoBrowser) { Start-Process "http://127.0.0.1:8787/" }
     exit 0
 }
@@ -104,7 +116,8 @@ if (-not $existing) {
 $ready = $false
 for ($attempt = 0; $attempt -lt 40; $attempt++) {
     $response = Get-ControlReadiness
-    if ($response -and $response.contract_version -eq $ExpectedReadinessContract -and $response.compatible) {
+    if ($response -and $response.contract_version -eq $ExpectedReadinessContract -and $response.compatible -and
+        [string]$response.release_id -eq $ExpectedReleaseId) {
         $ready = $true
         break
     }

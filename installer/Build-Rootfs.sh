@@ -33,6 +33,10 @@ enabled=true
 [interop]
 enabled=true
 EOF
+cat >"$stage/etc/switchtrade-distro.json" <<'EOF'
+{"schema":1,"owner":"switchtrade-installer","product":"SwitchTrade"}
+EOF
+chmod 0644 "$stage/etc/switchtrade-distro.json"
 
 chroot "$stage" apt-get clean
 rm -rf -- "$stage/var/lib/apt/lists/"*

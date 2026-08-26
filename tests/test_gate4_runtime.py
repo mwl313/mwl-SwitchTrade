@@ -38,11 +38,22 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 200)
                 body = response.json()
                 self.assertEqual(body["contract_version"], "app-readiness.v1")
+                self.assertEqual(body["release_id"], "development")
                 self.assertTrue(body["compatible"])
                 self.assertEqual(set(body["states"]),
                                  {"control", "relay", "radio", "session", "decoder"})
                 self.assertEqual(body["states"]["control"]["status"], "ready")
                 self.assertNotIn("passcode", str(body).lower())
+
+    def test_packaged_readiness_advertises_exact_immutable_release(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / ".switchtrade-release.json").write_text(
+                json.dumps({"schema": 1, "release_id": "release-b"}), encoding="utf-8")
+            with patch.dict(os.environ, {"SWITCHTRADE_RELEASE_ROOT": temporary}):
+                with TestClient(create_app(runs_root=root / "runs")) as client:
+                    body = client.get("/api/v1/app/readiness").json()
+                    self.assertEqual(body["release_id"], "release-b")
 
     def test_public_directory_capability_is_gated_by_relay_health(self):
         with tempfile.TemporaryDirectory() as temporary:
