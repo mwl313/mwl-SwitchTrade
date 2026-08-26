@@ -2,17 +2,127 @@ from pathlib import Path
 import base64
 import json
 import os
+import shutil
+import signal
+import subprocess
 import tempfile
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
-from switchtrade.control import Group, create_app, endpoint_command
+from switchtrade.control import Group, Runtime, create_app, endpoint_command
 from switchtrade.relay_client import RelayClient, RelayError
 
 
 class Gate4RuntimeContractTests(unittest.TestCase):
+    @unittest.skipUnless(os.name != "nt" and shutil.which("bash"),
+                         "requires a native POSIX bash with flock and timeout")
+    def test_endpoint_shell_holds_launch_lock_until_child_exits(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scripts = root / "scripts"
+            scripts.mkdir()
+            source = Path(__file__).resolve().parents[1] / "scripts" / "run-beta-endpoint.sh"
+            launcher = scripts / "run-beta-endpoint.sh"
+            launcher.write_bytes(source.read_bytes())
+            prep = scripts / "wsl-radio-prepare.sh"
+            prep.write_text(
+                "#!/usr/bin/env bash\n"
+                "while [[ $# -gt 0 && $1 != -- ]]; do shift; done\n"
+                "shift\nexec \"$@\"\n",
+                encoding="utf-8",
+            )
+            child = root / "endpoint-child.sh"
+            child.write_text("#!/usr/bin/env bash\nsleep 30\n", encoding="utf-8")
+            for executable in (launcher, prep, child):
+                executable.chmod(0o755)
+            runtime = root / "runtime"
+            runtime.mkdir()
+            environment = os.environ.copy()
+            environment.update({
+                "SWITCHTRADE_RUNTIME_DIR": runtime.as_posix(),
+                "SWITCHTRADE_PYTHON": child.as_posix(),
+                "SWITCHTRADE_ENDPOINT_TIMEOUT": "30",
+            })
+
+            def command(nonce: str, acknowledgement: Path) -> list[str]:
+                return [
+                    "bash", launcher.as_posix(), "--role", "host",
+                    "--launch-nonce", nonce,
+                    "--launch-ack-file", acknowledgement.as_posix(),
+                ]
+
+            first_ack = runtime / "first.json"
+            first = subprocess.Popen(command("1" * 32, first_ack), env=environment)
+            try:
+                deadline = time.monotonic() + 3
+                while not first_ack.exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(first_ack.exists(), "first launch did not acknowledge")
+                second_ack = runtime / "second.json"
+                second = subprocess.run(
+                    command("2" * 32, second_ack), env=environment,
+                    capture_output=True, text=True, timeout=3,
+                )
+                self.assertNotEqual(second.returncode, 0)
+                self.assertFalse(second_ack.exists())
+                self.assertIn("already running", second.stderr)
+            finally:
+                first.terminate()
+                first.wait(timeout=3)
+
+            third_ack = runtime / "third.json"
+            third = subprocess.Popen(command("3" * 32, third_ack), env=environment)
+            try:
+                deadline = time.monotonic() + 3
+                while not third_ack.exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(third_ack.exists(), "lock was not released after exit")
+            finally:
+                third.terminate()
+                third.wait(timeout=3)
+
+    def test_pidfd_is_pinned_before_endpoint_identity_check(self):
+        endpoint = {"pid": 4321}
+        events = []
+
+        def open_pidfd(pid):
+            events.append(("open", pid))
+            return 99
+
+        def verify(_endpoint):
+            events.append(("verify", _endpoint))
+            return 4321
+
+        def send_pidfd(descriptor, selected_signal):
+            events.append(("signal", descriptor, selected_signal))
+
+        with patch("switchtrade.control.os.name", "posix"), patch.object(
+                os, "pidfd_open", side_effect=open_pidfd, create=True), patch.object(
+                signal, "pidfd_send_signal", side_effect=send_pidfd, create=True), patch.object(
+                os, "close", side_effect=lambda descriptor: events.append(("close", descriptor))), patch.object(
+                Runtime, "_verified_endpoint_pid", side_effect=verify), patch.object(
+                os, "kill") as kill:
+            Runtime._signal_endpoint_pid(4321, "TERM", endpoint)
+
+        self.assertEqual([event[0] for event in events], ["open", "verify", "signal", "close"])
+        self.assertEqual(events[2][1:], (99, signal.SIGTERM))
+        kill.assert_not_called()
+
+        events.clear()
+        with patch("switchtrade.control.os.name", "posix"), patch.object(
+                os, "pidfd_open", side_effect=open_pidfd, create=True), patch.object(
+                signal, "pidfd_send_signal", side_effect=send_pidfd, create=True), patch.object(
+                os, "close", side_effect=lambda descriptor: events.append(("close", descriptor))), patch.object(
+                Runtime, "_verified_endpoint_pid", return_value=None), patch.object(
+                os, "kill") as kill:
+            with self.assertRaisesRegex(RuntimeError, "identity changed"):
+                Runtime._signal_endpoint_pid(4321, "TERM", endpoint)
+        self.assertEqual([event[0] for event in events], ["open", "close"])
+        kill.assert_not_called()
+
     def test_wsl_relay_client_uses_dual_stack_safe_dns_queries(self):
         with patch.dict(os.environ, {"RES_OPTIONS": "rotate"}):
             with patch("switchtrade.relay_client.os.name", "posix"):
