@@ -3,24 +3,24 @@
 ## Candidate identity
 
 - Branch: `production-beta`
-- Application commit: `1e8b4bd7b1d3b794c042d81fc699966262b8cafc`
-- Package: `SwitchTrade-unsigned-private-beta-1e8b4bd.zip`
-- ZIP SHA-256: `c762f426db6a22c2ceac2bc7165573be03a076332e8ee89878088dc38433bc4c`
-- ZIP size: `219373610` bytes
+- Application commit: `b2c9d36c7137a93970dcffaef9880ec89fab6d1b`
+- Package: `SwitchTrade-unsigned-private-beta-b2c9d36.zip`
+- ZIP SHA-256: `acdb5ede37d793ba6e9e4632a3f86c6d8fbf5f757423f6128bb87caa7d368b7d`
+- ZIP size: `219373762` bytes
 - Local build location: `artifacts/release-candidates/`
 - Relay: `https://relay.pangyostonefist.org`
 - Signing state: explicitly labeled unsigned private beta, per owner exception
 
-The package manifest reports schema 2, release ID `beta-1e8b4bd`, branch `production-beta`, and the
+The package manifest reports schema 2, release ID `beta-b2c9d36`, branch `production-beta`, and the
 full application commit above. The packaged Windows client is the native Visual Overhaul 3 WPF build,
 not the retired web frontend or the earlier `91f5a3e` client.
 
-The earlier `77dd538`, `9014e8f`, and `28221e1` local candidates are superseded and must not be
+The earlier `77dd538`, `9014e8f`, `28221e1`, and `1e8b4bd` local candidates are superseded and must not be
 distributed. They were retained only as diagnostic evidence for the fixes recorded in `docs/76`.
 
 ## Reused verified system inputs
 
-The application and installer source were archived fresh from `1e8b4bd`. The hardware/runtime inputs
+The application and installer source were archived fresh from `b2c9d36`. The hardware/runtime inputs
 were reused byte-for-byte from the previously integrity-qualified `91f5a3e` candidate because they are
 versioned independently of the UI:
 
@@ -45,6 +45,8 @@ builder then independently checked the kernel/modules manifest and regenerated e
 - Real non-ASCII-profile kernel boot and same-release Repair: PASS
 - Real module extraction, `depmod`, `rtl8xxxu` vermagic, and firmware-presence gate: PASS
 - Actual isolated WSL provisioning and installed WPF self-test: PASS
+- Explorer-equivalent reinstall from an unrelated working directory: PASS; staged self-check ran
+  before runtime activation and did not reproduce `ModuleNotFoundError`
 - Installed `app-readiness.v1` control API startup, compatibility, and graceful shutdown: PASS
 - Installed release/commit/branch and public relay configuration: PASS
 - Desktop shortcut creation: PASS

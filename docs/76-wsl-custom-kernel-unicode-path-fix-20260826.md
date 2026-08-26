@@ -58,8 +58,8 @@ same-release repair probe with the kernel reused, rollback state preserved, and 
 running.
 
 The earlier `77dd538`, `9014e8f`, and `28221e1` packages are superseded and must not be distributed.
-The replacement `SwitchTrade-unsigned-private-beta-1e8b4bd.zip` passed the complete actual install on
-the affected non-ASCII-profile PC.
+`SwitchTrade-unsigned-private-beta-1e8b4bd.zip` passed its first complete actual install on the affected
+non-ASCII-profile PC, but the reinstall test below superseded it.
 
 ## Reinstall working-directory correction
 
@@ -81,3 +81,8 @@ The provisioner now:
 The original failure was reproduced with WSL's working directory set to `/`. The corrected provisioner
 then completed from the same unrelated directory and activated the staged runtime successfully. The
 lifecycle regression test also requires the self-check to precede backup and activation.
+
+The final replacement is `SwitchTrade-unsigned-private-beta-b2c9d36.zip`. It passed package integrity,
+Setup Audit, installed WPF self-test, exact kernel/module ABI comparison, Python imports, endpoint
+dry-run, control readiness, graceful shutdown, shortcut/config checks, and an actual reinstall launched
+from an unrelated Windows working directory.
