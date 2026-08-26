@@ -111,6 +111,41 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertIn("payload/release-config.json", launcher)
         self.assertIn("release_id", launcher)
 
+    def test_destructive_recovery_blockers_fail_closed(self):
+        setup = (ROOT / "installer" / "SwitchTradeSetup.ps1").read_text(encoding="utf-8")
+
+        recovery = setup[setup.index("function Repair-SwitchTradeInterruptedTransaction"):
+                         setup.index("function Test-StagedControlReadiness")]
+        staging = recovery.index("phase -eq 'staging_wsl'")
+        cleanup = recovery.index("'--cleanup-staging'", staging)
+        discard = recovery.index("'--abort'", cleanup)
+        candidate_probe = recovery.index(
+            "Get-SwitchTradeWslRuntimeState -Name $Distro -Location candidate", discard)
+        self.assertLess(cleanup, discard)
+        self.assertLess(discard, candidate_probe)
+        self.assertNotIn(
+            "wsl_integrity_sha256 = $wslCandidate.IntegritySha256", recovery)
+
+        rollback = setup[setup.index("if ($Action -eq 'Rollback')"):
+                         setup.index("$audit = Test-Setup")]
+        windows_swap = rollback.index(
+            "Switch-SwitchTradeWindowsRollback -Active $InstallRoot")
+        persist = rollback.index("Set-SwitchTradeCompletedRollbackState")
+        compensation = rollback.index("} catch {", persist)
+        self.assertLess(windows_swap, persist)
+        self.assertLess(persist, compensation)
+
+        uninstall = setup[setup.index("if ($Action -eq 'Uninstall')"):
+                          setup.index("if ($Action -eq 'Rollback')")]
+        recheck = uninstall.index(
+            "Assert-SwitchTradeCurrentDistroMutationIdentity")
+        unregister = uninstall.index("@('--unregister', $Distro)")
+        first_other_mutation = uninstall.index("Clear-SetupResume")
+        self.assertLess(recheck, unregister)
+        self.assertLess(unregister, first_other_mutation)
+        self.assertGreaterEqual(
+            setup.count("Assert-SwitchTradeCurrentDistroMutationIdentity"), 2)
+
     def test_release_transaction_and_owned_identity_gates_are_present(self):
         setup = (ROOT / "installer" / "SwitchTradeSetup.ps1").read_text(encoding="utf-8")
         lifecycle = (ROOT / "installer" / "SetupLifecycle.ps1").read_text(encoding="utf-8")

@@ -506,6 +506,115 @@ function Set-SwitchTradeTransactionPhase {
     return $state
 }
 
+function Get-SwitchTradeCompletedRollbackState {
+    param(
+        [Parameter(Mandatory)]$Transaction,
+        [Parameter(Mandatory)]$KernelState
+    )
+    if ([int]$Transaction.schema -ne 3 -or [string]$Transaction.phase -ne 'completed') {
+        throw 'ROLLBACK_TRANSACTION_NOT_COMPLETED: only a completed release transaction can rotate'
+    }
+    $activeRelease = [string]$Transaction.release_id
+    $rollbackRelease = [string]$Transaction.prior_release_id
+    if (-not $activeRelease -or -not $rollbackRelease -or
+            [string]$Transaction.wsl_prior_release_id -ne $rollbackRelease) {
+        throw 'ROLLBACK_TRANSACTION_RELEASE_MISMATCH: active and retained identities are incomplete'
+    }
+    foreach ($anchor in @([string]$Transaction.windows_integrity_sha256,
+            [string]$Transaction.windows_prior_integrity_sha256,
+            [string]$Transaction.wsl_integrity_sha256,
+            [string]$Transaction.wsl_prior_integrity_sha256)) {
+        if ($anchor -notmatch '^[0-9a-f]{64}$') {
+            throw 'ROLLBACK_TRANSACTION_INTEGRITY_ANCHOR_INVALID'
+        }
+    }
+    if ([string]$KernelState.package_release_id -ne $rollbackRelease -or
+            [string]$KernelState.rollback_package_release_id -ne $activeRelease -or
+            -not [string]$KernelState.rollback_kernel_path) {
+        throw 'ROLLBACK_KERNEL_IDENTITY_MISMATCH: rolled-back kernel state is not reversible'
+    }
+    $state = $Transaction | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+    $state.action = 'Rollback'
+    $state.release_id = $rollbackRelease
+    $state.prior_release_id = $activeRelease
+    $state.wsl_prior_release_id = $activeRelease
+    $state.kernel_prior_release_id = $activeRelease
+    $state.kernel_prior_path = [string]$KernelState.rollback_kernel_path
+    $state.kernel_prior_modules_path = [string]$KernelState.rollback_modules_path
+    $state.windows_integrity_sha256 = [string]$Transaction.windows_prior_integrity_sha256
+    $state.windows_prior_integrity_sha256 = [string]$Transaction.windows_integrity_sha256
+    $state.wsl_integrity_sha256 = [string]$Transaction.wsl_prior_integrity_sha256
+    $state.wsl_prior_integrity_sha256 = [string]$Transaction.wsl_integrity_sha256
+    $state.phase = 'completed'
+    return $state
+}
+
+function Set-SwitchTradeCompletedRollbackState {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)]$Transaction,
+        [Parameter(Mandatory)]$KernelState
+    )
+    $state = Get-SwitchTradeCompletedRollbackState -Transaction $Transaction -KernelState $KernelState
+    Write-AtomicJson -Path $Path -Value $state
+    return $state
+}
+
+function Get-SwitchTradeTrustedInstalledAnchors {
+    param(
+        [Parameter(Mandatory)]$Transaction,
+        [Parameter(Mandatory)][string]$ReleaseId
+    )
+    if ([int]$Transaction.schema -ne 3) {
+        throw 'INSTALLED_INTEGRITY_ANCHOR_MISSING: prior release has no trusted schema 3 transaction'
+    }
+    if ([string]$Transaction.phase -eq 'completed' -and
+            [string]$Transaction.release_id -eq $ReleaseId) {
+        $windows = [string]$Transaction.windows_integrity_sha256
+        $wsl = [string]$Transaction.wsl_integrity_sha256
+    } elseif ([string]$Transaction.phase -eq 'compensated' -and
+            [string]$Transaction.prior_release_id -eq $ReleaseId) {
+        $windows = [string]$Transaction.windows_prior_integrity_sha256
+        $wsl = [string]$Transaction.wsl_prior_integrity_sha256
+    } else {
+        throw 'INSTALLED_INTEGRITY_ANCHOR_MISSING: transaction does not anchor the active prior release'
+    }
+    if ($windows -notmatch '^[0-9a-f]{64}$' -or $wsl -notmatch '^[0-9a-f]{64}$') {
+        throw 'INSTALLED_INTEGRITY_ANCHOR_MISSING: trusted release anchors are invalid'
+    }
+    return [pscustomobject]@{ Windows = $windows; Wsl = $wsl }
+}
+
+function Assert-SwitchTradeDistroMutationIdentity {
+    param(
+        [Parameter(Mandatory)]$Transaction,
+        [Parameter(Mandatory)][string]$DistroName,
+        [Parameter(Mandatory)][string]$DistroRoot,
+        [Parameter(Mandatory)]$Actual
+    )
+    if (-not [bool]$Actual.EnumerationKnown) {
+        throw 'WSL_DISTRO_ENUMERATION_UNKNOWN: destructive distribution state is unknown'
+    }
+    if ([int]$Transaction.schema -ne 3 -or [string]$Transaction.phase -ne 'completed' -or
+            [string]$Transaction.distro_name -cne $DistroName -or
+            [string]$Transaction.install_id -notmatch '^[0-9a-f]{32}$') {
+        throw 'INSTALLED_DISTRO_IDENTITY_MISSING: destructive distro actions require a completed identity transaction'
+    }
+    Assert-SwitchTradeRecordedPath -Recorded ([string]$Transaction.distro_base_path) -Expected $DistroRoot -Code 'INSTALLED_DISTRO_PATH_MISMATCH' | Out-Null
+    if (-not [bool]$Actual.DistroExists -or -not [bool]$Actual.RegistrationExists) {
+        throw 'INSTALLED_DISTRO_MISSING: the recorded distribution is not currently registered'
+    }
+    if (-not [string]::Equals(
+            [IO.Path]::GetFullPath([string]$Actual.BasePath).TrimEnd('\'),
+            [IO.Path]::GetFullPath([string]$Transaction.distro_base_path).TrimEnd('\'),
+            [StringComparison]::OrdinalIgnoreCase) -or
+            -not [bool]$Actual.MarkerValid -or
+            [string]$Actual.InstallId -cne [string]$Transaction.install_id) {
+        throw 'INSTALLED_DISTRO_IDENTITY_CHANGED: registered BasePath or install identity changed'
+    }
+    return $true
+}
+
 function Get-InstalledWindowsReleaseId {
     param([Parameter(Mandatory)][string]$Root)
     $marker = Join-Path $Root $script:SwitchTradeReleaseMarker

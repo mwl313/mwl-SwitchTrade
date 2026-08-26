@@ -75,6 +75,81 @@ if ((Get-InstalledWindowsReleaseId $active) -ne 'release-a' -or
     throw 'B to A compensation did not restore the coherent prior pair'
 }
 
+$completedTransaction = [pscustomobject]@{
+    schema = 3; transaction_id = 'completed-transaction'; phase = 'completed'; action = 'Update'
+    release_id = 'release-b'; prior_release_id = 'release-a'
+    distro_name = 'SwitchTrade'; distro_base_path = (Join-Path $TestRoot 'wsl')
+    install_id = ('1' * 32); wsl_prior_release_id = 'release-a'
+    kernel_prior_release_id = 'release-a'; kernel_prior_path = 'kernel-a'
+    kernel_prior_modules_path = 'modules-a'
+    windows_integrity_sha256 = $integrityByRoot[[IO.Path]::GetFullPath($candidate)]
+    windows_prior_integrity_sha256 = $integrityByRoot[[IO.Path]::GetFullPath($active)]
+    wsl_integrity_sha256 = ('b' * 64); wsl_prior_integrity_sha256 = ('a' * 64)
+}
+$rolledBackKernel = [pscustomobject]@{
+    package_release_id = 'release-a'; rollback_package_release_id = 'release-b'
+    rollback_kernel_path = 'kernel-b'; rollback_modules_path = 'modules-b'
+}
+$rotatedPath = Join-Path $TestRoot 'rotated-transaction.json'
+Write-AtomicJson -Path $rotatedPath -Value $completedTransaction
+$rotated = Set-SwitchTradeCompletedRollbackState -Path $rotatedPath -Transaction $completedTransaction -KernelState $rolledBackKernel
+if ($rotated.release_id -ne 'release-a' -or $rotated.prior_release_id -ne 'release-b' -or
+        $rotated.wsl_prior_release_id -ne 'release-b' -or
+        $rotated.kernel_prior_release_id -ne 'release-b' -or
+        $rotated.kernel_prior_path -ne 'kernel-b' -or
+        $rotated.windows_integrity_sha256 -ne $completedTransaction.windows_prior_integrity_sha256 -or
+        $rotated.wsl_integrity_sha256 -ne $completedTransaction.wsl_prior_integrity_sha256) {
+    throw 'successful rollback did not rotate every active/prior identity and integrity anchor'
+}
+Test-SwitchTradeTreeIntegrity -Root $active -ExpectedReleaseId release-a -ExpectedIntegritySha256 ([string]$rotated.windows_integrity_sha256) | Out-Null
+$repairAnchors = Get-SwitchTradeTrustedInstalledAnchors -Transaction $rotated -ReleaseId release-a
+if ($repairAnchors.Windows -ne $rotated.windows_integrity_sha256 -or
+        $repairAnchors.Wsl -ne $rotated.wsl_integrity_sha256) {
+    throw 'Repair did not consume the rotated completed transaction anchors'
+}
+Switch-SwitchTradeWindowsRollback -Active $active -Previous $previous -ExpectedReleaseId release-b -ExpectedActiveReleaseId release-a | Out-Null
+$reverseKernel = [pscustomobject]@{
+    package_release_id = 'release-b'; rollback_package_release_id = 'release-a'
+    rollback_kernel_path = 'kernel-a'; rollback_modules_path = 'modules-a'
+}
+$reverse = Set-SwitchTradeCompletedRollbackState -Path $rotatedPath -Transaction $rotated -KernelState $reverseKernel
+if ($reverse.release_id -ne 'release-b' -or $reverse.prior_release_id -ne 'release-a' -or
+        $reverse.windows_integrity_sha256 -ne $completedTransaction.windows_integrity_sha256 -or
+        $reverse.wsl_integrity_sha256 -ne $completedTransaction.wsl_integrity_sha256) {
+    throw 'Repair validation followed by reverse rollback did not restore trusted active anchors'
+}
+Switch-SwitchTradeWindowsRollback -Active $active -Previous $previous -ExpectedReleaseId release-a -ExpectedActiveReleaseId release-b | Out-Null
+
+$persistFaultRoot = Join-Path $TestRoot 'rollback-persist-fault'
+$persistActive = Join-Path $persistFaultRoot 'active'
+$persistPrevious = Join-Path $persistFaultRoot 'previous'
+$persistTransaction = Join-Path $persistFaultRoot 'transaction.json'
+New-TestRelease -Root $persistActive -ReleaseId release-b
+New-TestRelease -Root $persistPrevious -ReleaseId release-a
+Write-AtomicJson -Path $persistTransaction -Value $completedTransaction
+Switch-SwitchTradeWindowsRollback -Active $persistActive -Previous $persistPrevious -ExpectedReleaseId release-a -ExpectedActiveReleaseId release-b | Out-Null
+$savedAtomicWriter = (Get-Item Function:\Write-AtomicJson).ScriptBlock
+try {
+    Set-Item Function:\Write-AtomicJson -Value { throw 'INJECTED_ROLLBACK_TRANSACTION_PERSIST_FAILURE' }
+    try {
+        Set-SwitchTradeCompletedRollbackState -Path $persistTransaction -Transaction $completedTransaction -KernelState $rolledBackKernel | Out-Null
+        throw 'rollback transaction persistence fault was not injected'
+    } catch {
+        if ([string]$_.Exception.Message -notmatch '^INJECTED_ROLLBACK_TRANSACTION_PERSIST_FAILURE') {
+            throw
+        }
+        Switch-SwitchTradeWindowsRollback -Active $persistActive -Previous $persistPrevious -ExpectedReleaseId release-b -ExpectedActiveReleaseId release-a | Out-Null
+    }
+} finally {
+    Set-Item Function:\Write-AtomicJson -Value $savedAtomicWriter
+}
+$persistedAfterFault = Get-Content -Raw -LiteralPath $persistTransaction | ConvertFrom-Json
+if ((Get-InstalledWindowsReleaseId $persistActive) -ne 'release-b' -or
+        (Get-InstalledWindowsReleaseId $persistPrevious) -ne 'release-a' -or
+        $persistedAfterFault.release_id -ne 'release-b') {
+    throw 'rollback transaction persistence failure did not compensate to the original release'
+}
+
 $recoveryTransaction = [pscustomobject]@{
     schema = 3; transaction_id = 'test-transaction'; phase = 'wsl_staged'
     release_id = 'release-b'; prior_release_id = 'release-a'
@@ -154,6 +229,17 @@ foreach ($case in $phaseMatrix) {
             $plan.RemoveStage -ne $case.RemoveStage) {
         throw "transaction recovery matrix failed: $($case.Name)"
     }
+}
+
+$unanchoredCandidate = $recoveryTransaction | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+$unanchoredCandidate.wsl_integrity_sha256 = ''
+$unanchoredCandidate.phase = 'staging_wsl'
+$coherentlyTamperedCandidate = New-RecoveryActual -Changes @{
+    WslCandidateIntegrity = ('e' * 64); WslCandidateArtifactsMatchManifest = $true
+}
+$unanchoredPlan = Resolve-SwitchTradeTransactionRecovery -Transaction $unanchoredCandidate -Actual $coherentlyTamperedCandidate
+if ($unanchoredPlan.Disposition -ne 'compensate' -or $unanchoredPlan.WslAction -ne 'abort_candidate') {
+    throw 'post-crash unanchored WSL candidate was trusted instead of discarded for exact restaging'
 }
 
 $committed = New-RecoveryActual -Changes @{
@@ -289,6 +375,35 @@ try {
 } catch { $copiedMarkerFailedClosed = [string]$_.Exception.Message -match 'DISTRO_IDENTITY_CHANGED' }
 if (-not $copiedMarkerFailedClosed) {
     throw 'copied generic-marker foreign distro was accepted for unregister or mutation'
+}
+
+$validPurgeIdentity = [pscustomobject]@{
+    EnumerationKnown = $true; DistroExists = $true; RegistrationExists = $true
+    BasePath = (Join-Path $TestRoot 'wsl'); MarkerValid = $true; InstallId = ('1' * 32)
+}
+Assert-SwitchTradeDistroMutationIdentity -Transaction $completedTransaction -DistroName SwitchTrade -DistroRoot (Join-Path $TestRoot 'wsl') -Actual $validPurgeIdentity | Out-Null
+$purgeMutations = 0
+$enumerationUnavailable = $false
+try {
+    $unknownPurgeIdentity = $validPurgeIdentity.PSObject.Copy()
+    $unknownPurgeIdentity.EnumerationKnown = $false
+    Assert-SwitchTradeDistroMutationIdentity -Transaction $completedTransaction -DistroName SwitchTrade -DistroRoot (Join-Path $TestRoot 'wsl') -Actual $unknownPurgeIdentity | Out-Null
+    $purgeMutations++
+} catch { $enumerationUnavailable = [string]$_.Exception.Message -match 'ENUMERATION_UNKNOWN' }
+if (-not $enumerationUnavailable -or $purgeMutations -ne 0) {
+    throw 'unknown purge enumeration performed a host mutation'
+}
+$swapRaceFailedClosed = $false
+try {
+    Assert-SwitchTradeDistroMutationIdentity -Transaction $completedTransaction -DistroName SwitchTrade -DistroRoot (Join-Path $TestRoot 'wsl') -Actual $validPurgeIdentity | Out-Null
+    $swappedPurgeIdentity = $validPurgeIdentity.PSObject.Copy()
+    $swappedPurgeIdentity.BasePath = Join-Path $TestRoot 'foreign-wsl'
+    $swappedPurgeIdentity.InstallId = ('2' * 32)
+    Assert-SwitchTradeDistroMutationIdentity -Transaction $completedTransaction -DistroName SwitchTrade -DistroRoot (Join-Path $TestRoot 'wsl') -Actual $swappedPurgeIdentity | Out-Null
+    $purgeMutations++
+} catch { $swapRaceFailedClosed = [string]$_.Exception.Message -match 'IDENTITY_CHANGED' }
+if (-not $swapRaceFailedClosed -or $purgeMutations -ne 0) {
+    throw 'PurgeDistro swap race performed a host mutation or unregister'
 }
 
 foreach ($fault in @('after_active_swapped', 'after_prior_activated')) {
