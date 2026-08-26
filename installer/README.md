@@ -41,7 +41,9 @@ install intentionally fails with an exact missing-rootfs error.
 
 `Build-Rootfs.sh OUTPUT.tar.gz` creates a minimal x86-64 Ubuntu rootfs with no kernel. The package
 builder records a SHA-256 checksum and setup verifies it before import. The kernel remains a separate
-release input because WSL distributions do not contain the WSL kernel.
+release input because WSL distributions do not contain the WSL kernel. New rootfs builds include the
+small `kmod` bootstrap required to run `depmod` and `modinfo`; Setup installs it on demand when repairing
+an older qualified rootfs that predates that inclusion.
 
 Kernel module `.vhd`/`.vhdx` inputs are the only artifacts written to WSL's `kernelModules` setting.
 The kernel repository currently produces `modules-<release>.tar.gz`; setup installs that archive under

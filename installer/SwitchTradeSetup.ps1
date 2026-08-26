@@ -321,7 +321,7 @@ if ((Test-Path -LiteralPath $Kernel -PathType Leaf) -and
     }
     if ($KernelModules -and $kernelState.modules_format -eq 'archive') {
         $modulesWsl = Convert-ToWslPath $KernelModules
-        $extractCommand = 'set -eu; mkdir -p /lib/modules; tar -xzf "{0}" -C /lib/modules; depmod -a "{1}"' -f `
+        $extractCommand = 'set -eu; if ! command -v depmod >/dev/null 2>&1 || ! command -v modinfo >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y --no-install-recommends kmod; rm -rf /var/lib/apt/lists/*; fi; mkdir -p /lib/modules; tar -xzf "{0}" -C /lib/modules; depmod -a "{1}"' -f `
             $modulesWsl, [string]$kernelState.kernel_release
         & wsl.exe -d $Distro -u root -- sh -lc $extractCommand
         if ($LASTEXITCODE -ne 0) { throw 'KERNEL_MODULE_INSTALL_FAILED: could not install the matching module archive' }

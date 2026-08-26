@@ -21,7 +21,7 @@ cleanup() { rm -rf -- "$stage"; }
 trap cleanup EXIT
 
 debootstrap --arch="$ARCH" --variant=minbase --components=main,universe \
-    --include=ca-certificates "$SUITE" "$stage" "$MIRROR"
+    --include=ca-certificates,kmod "$SUITE" "$stage" "$MIRROR"
 
 cat >"$stage/etc/wsl.conf" <<'EOF'
 [boot]

@@ -39,7 +39,7 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
-    ca-certificates ethtool iproute2 iw libpcap0.8 python3 python3-pip python3-venv \
+    ca-certificates ethtool iproute2 iw kmod libpcap0.8 python3 python3-pip python3-venv \
     rfkill sudo tcpdump usbutils
 rm -rf /var/lib/apt/lists/*
 python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' || \

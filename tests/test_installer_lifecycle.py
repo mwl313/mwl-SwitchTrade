@@ -47,10 +47,15 @@ class InstallerLifecycleTests(unittest.TestCase):
     def test_kernel_archive_is_not_mapped_as_a_wsl_modules_vhd(self):
         lifecycle = (ROOT / "installer" / "KernelLifecycle.ps1").read_text(encoding="utf-8")
         setup = (ROOT / "installer" / "SwitchTradeSetup.ps1").read_text(encoding="utf-8")
+        rootfs = (ROOT / "installer" / "Build-Rootfs.sh").read_text(encoding="utf-8")
+        provision = (ROOT / "installer" / "provision-wsl.sh").read_text(encoding="utf-8")
         self.assertIn("modules_format", lifecycle)
         self.assertIn("'archive'", lifecycle)
         self.assertIn("modules.tar.gz", setup)
         self.assertIn("tar -xzf", setup)
+        self.assertIn("--include=ca-certificates,kmod", rootfs)
+        self.assertIn("command -v depmod", setup)
+        self.assertIn(" kmod ", provision)
         self.assertIn("KERNEL_ABI_OR_FIRMWARE_MISMATCH", setup)
         self.assertIn("CUSTOM_KERNEL_BLOCKED_BY_POLICY", setup)
 

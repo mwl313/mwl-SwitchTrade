@@ -35,6 +35,19 @@ This separates the path failure from the kernel binary, kernel ABI, distro, and 
 - Installer lifecycle tests: 7 passed
 - Product/installer regression suite: 86 passed
 
+## Follow-on minimal-rootfs bootstrap correction
+
+The first repaired install passed kernel startup and then exposed the next independent pre-provision
+gate: the previously built minimal rootfs did not contain `depmod` or `modinfo`. The module archive was
+valid and already contained `modules.dep`, `modules.dep.bin`, and `rtl8xxxu.ko`, but Setup correctly
+refused to claim ABI verification without the `kmod` tools.
+
+- New rootfs builds include `kmod` from debootstrap.
+- WSL provisioning retains `kmod` as a runtime dependency.
+- Setup installs `kmod` on demand before module extraction when repairing an older rootfs.
+- The existing isolated distro passed real module extraction, `depmod`, `rtl8xxxu` vermagic, and
+  firmware-presence verification after the fallback.
+
 The earlier `77dd538` package retains the defective user-profile kernel path and must not be used for
 installation on a Windows account whose physical profile path contains non-ASCII characters. A
 replacement package must be built from the fix commit.
