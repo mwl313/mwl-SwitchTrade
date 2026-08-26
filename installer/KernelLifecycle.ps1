@@ -380,6 +380,51 @@ function Switch-SwitchTradeKernelRollback {
     return $true
 }
 
+function Repair-SwitchTradeKernelConfiguration {
+    param(
+        [Parameter(Mandatory)][string]$StateRoot,
+        [string]$UserProfileRoot = $env:USERPROFILE
+    )
+    $statePath = Join-Path $StateRoot 'kernel-state.json'
+    if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
+        throw 'ROLLBACK_KERNEL_STATE_MISSING'
+    }
+    $state = Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json
+    if (-not [string]$state.kernel_path -or
+            -not (Test-Path -LiteralPath ([string]$state.kernel_path) -PathType Leaf) -or
+            (Get-FileSha256 ([string]$state.kernel_path)) -ne [string]$state.kernel_sha256) {
+        throw 'ROLLBACK_KERNEL_HASH_MISMATCH'
+    }
+    if ([string]$state.modules_path -and
+            (-not (Test-Path -LiteralPath ([string]$state.modules_path) -PathType Leaf) -or
+             (Get-FileSha256 ([string]$state.modules_path)) -ne [string]$state.modules_sha256)) {
+        throw 'ROLLBACK_KERNEL_MODULES_HASH_MISMATCH'
+    }
+    $config = Join-Path $UserProfileRoot '.wslconfig'
+    $text = if (Test-Path -LiteralPath $config -PathType Leaf) {
+        Get-Content -Raw -LiteralPath $config
+    } else { '' }
+    $values = @{ kernel = ([string]$state.kernel_path).Replace('\', '\\') }
+    $values.kernelModules = if ([string]$state.modules_path -and
+            [string]$state.modules_format -eq 'vhd') {
+        ([string]$state.modules_path).Replace('\', '\\')
+    } else { $null }
+    $merged = Set-Wsl2Values -Text $text -Values $values
+    $temporary = "$config.rollback-repair.$([guid]::NewGuid().ToString('N'))"
+    try {
+        [IO.File]::WriteAllText($temporary, $merged, [Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $temporary -Destination $config -Force
+        $state.installed_config_sha256 = Get-FileSha256 $config
+        Write-KernelStateAtomic -Path $statePath -Value $state
+    } finally {
+        if (Test-Path -LiteralPath $temporary -PathType Leaf) {
+            Remove-Item -LiteralPath $temporary -Force
+        }
+    }
+    Invoke-BoundedWslShutdown
+    return $state
+}
+
 function Restore-SwitchTradeKernel {
     param(
         [Parameter(Mandatory)][string]$StateRoot,

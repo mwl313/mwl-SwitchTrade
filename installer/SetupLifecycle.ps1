@@ -560,6 +560,238 @@ function Set-SwitchTradeCompletedRollbackState {
     return $state
 }
 
+function New-SwitchTradeRollbackJournal {
+    param(
+        [Parameter(Mandatory)]$Transaction,
+        [Parameter(Mandatory)]$KernelState
+    )
+    if ([int]$Transaction.schema -ne 3 -or [string]$Transaction.phase -ne 'completed') {
+        throw 'ROLLBACK_TRANSACTION_NOT_COMPLETED'
+    }
+    $sourceRelease = [string]$Transaction.release_id
+    $targetRelease = [string]$Transaction.prior_release_id
+    if (-not $sourceRelease -or -not $targetRelease -or
+            [string]$Transaction.wsl_prior_release_id -ne $targetRelease -or
+            [string]$KernelState.package_release_id -ne $sourceRelease -or
+            [string]$KernelState.rollback_package_release_id -ne $targetRelease) {
+        throw 'ROLLBACK_JOURNAL_RELEASE_MISMATCH'
+    }
+    foreach ($anchor in @([string]$Transaction.windows_integrity_sha256,
+            [string]$Transaction.windows_prior_integrity_sha256,
+            [string]$Transaction.wsl_integrity_sha256,
+            [string]$Transaction.wsl_prior_integrity_sha256,
+            [string]$KernelState.kernel_sha256,
+            [string]$KernelState.rollback_kernel_sha256)) {
+        if ($anchor -notmatch '^[0-9a-f]{64}$') { throw 'ROLLBACK_JOURNAL_ANCHOR_INVALID' }
+    }
+    foreach ($artifact in @(
+            [pscustomobject]@{ Path = [string]$KernelState.kernel_path; Hash = [string]$KernelState.kernel_sha256 },
+            [pscustomobject]@{ Path = [string]$KernelState.rollback_kernel_path; Hash = [string]$KernelState.rollback_kernel_sha256 },
+            [pscustomobject]@{ Path = [string]$KernelState.modules_path; Hash = [string]$KernelState.modules_sha256 },
+            [pscustomobject]@{ Path = [string]$KernelState.rollback_modules_path; Hash = [string]$KernelState.rollback_modules_sha256 })) {
+        if ($artifact.Path -and
+                (-not (Test-Path -LiteralPath $artifact.Path -PathType Leaf) -or
+                 (Get-FileSha256 $artifact.Path) -ne $artifact.Hash)) {
+            throw 'ROLLBACK_JOURNAL_KERNEL_ARTIFACT_MISMATCH'
+        }
+    }
+    return [ordered]@{
+        schema = 1
+        source_action = [string]$Transaction.action
+        source = [ordered]@{
+            release_id = $sourceRelease
+            windows_integrity_sha256 = [string]$Transaction.windows_integrity_sha256
+            wsl_integrity_sha256 = [string]$Transaction.wsl_integrity_sha256
+            kernel_path = [string]$KernelState.kernel_path
+            modules_path = [string]$KernelState.modules_path
+            kernel_release = [string]$KernelState.kernel_release
+            modules_format = [string]$KernelState.modules_format
+            kernel_sha256 = [string]$KernelState.kernel_sha256
+            modules_sha256 = [string]$KernelState.modules_sha256
+        }
+        target = [ordered]@{
+            release_id = $targetRelease
+            windows_integrity_sha256 = [string]$Transaction.windows_prior_integrity_sha256
+            wsl_integrity_sha256 = [string]$Transaction.wsl_prior_integrity_sha256
+            kernel_path = [string]$KernelState.rollback_kernel_path
+            modules_path = [string]$KernelState.rollback_modules_path
+            kernel_release = [string]$KernelState.rollback_kernel_release
+            modules_format = [string]$KernelState.rollback_modules_format
+            kernel_sha256 = [string]$KernelState.rollback_kernel_sha256
+            modules_sha256 = [string]$KernelState.rollback_modules_sha256
+        }
+    }
+}
+
+function Assert-SwitchTradeRollbackJournal {
+    param([Parameter(Mandatory)]$Transaction)
+    $hasJournal = $Transaction.PSObject.Properties.Name -contains 'rollback_journal'
+    if ([int]$Transaction.schema -ne 3 -or
+            [string]$Transaction.phase -notmatch '^rollback_(prepared|wsl_committed|kernel_committed|windows_committed|recovering_source|recovering_target)$' -or
+            -not $hasJournal -or -not $Transaction.rollback_journal -or
+            [int]$Transaction.rollback_journal.schema -ne 1) {
+        throw 'ROLLBACK_JOURNAL_INVALID: rollback intent is missing or not recoverable'
+    }
+    $journal = $Transaction.rollback_journal
+    if ([string]$journal.source.release_id -ne [string]$Transaction.release_id -or
+            [string]$journal.target.release_id -ne [string]$Transaction.prior_release_id -or
+            [string]$journal.target.release_id -ne [string]$Transaction.wsl_prior_release_id) {
+        throw 'ROLLBACK_JOURNAL_RELEASE_MISMATCH'
+    }
+    foreach ($axis in @($journal.source, $journal.target)) {
+        if (-not [string]$axis.release_id -or -not [string]$axis.kernel_path) {
+            throw 'ROLLBACK_JOURNAL_KERNEL_IDENTITY_INVALID'
+        }
+        foreach ($anchor in @([string]$axis.windows_integrity_sha256,
+                [string]$axis.wsl_integrity_sha256, [string]$axis.kernel_sha256)) {
+            if ($anchor -notmatch '^[0-9a-f]{64}$') { throw 'ROLLBACK_JOURNAL_ANCHOR_INVALID' }
+        }
+        if ([string]$axis.modules_path -and
+                [string]$axis.modules_sha256 -notmatch '^[0-9a-f]{64}$') {
+            throw 'ROLLBACK_JOURNAL_MODULE_ANCHOR_INVALID'
+        }
+    }
+    return $journal
+}
+
+function Start-SwitchTradeRollbackTransaction {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)]$Transaction,
+        [Parameter(Mandatory)]$KernelState
+    )
+    $journal = New-SwitchTradeRollbackJournal -Transaction $Transaction -KernelState $KernelState
+    return Set-SwitchTradeTransactionPhase -Path $Path -Phase 'rollback_prepared' -Fields @{
+        rollback_journal = $journal
+    }
+}
+
+function Get-SwitchTradeRollbackPublishedState {
+    param(
+        [Parameter(Mandatory)]$Transaction,
+        [Parameter(Mandatory)][ValidateSet('source', 'target')][string]$Direction
+    )
+    $journal = Assert-SwitchTradeRollbackJournal -Transaction $Transaction
+    $active = $journal.$Direction
+    $prior = if ($Direction -eq 'source') { $journal.target } else { $journal.source }
+    $state = $Transaction | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+    $state.action = if ($Direction -eq 'source') { [string]$journal.source_action } else { 'Rollback' }
+    $state.release_id = [string]$active.release_id
+    $state.prior_release_id = [string]$prior.release_id
+    $state.wsl_prior_release_id = [string]$prior.release_id
+    $state.kernel_prior_release_id = [string]$prior.release_id
+    $state.kernel_prior_path = [string]$prior.kernel_path
+    $state.kernel_prior_modules_path = [string]$prior.modules_path
+    $state.windows_integrity_sha256 = [string]$active.windows_integrity_sha256
+    $state.windows_prior_integrity_sha256 = [string]$prior.windows_integrity_sha256
+    $state.wsl_integrity_sha256 = [string]$active.wsl_integrity_sha256
+    $state.wsl_prior_integrity_sha256 = [string]$prior.wsl_integrity_sha256
+    $state.rollback_journal = $null
+    $state.phase = 'completed'
+    return $state
+}
+
+function Set-SwitchTradeRollbackPublishedState {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)]$Transaction,
+        [Parameter(Mandatory)][ValidateSet('source', 'target')][string]$Direction
+    )
+    $state = Get-SwitchTradeRollbackPublishedState -Transaction $Transaction -Direction $Direction
+    Write-AtomicJson -Path $Path -Value $state
+    return $state
+}
+
+function Get-SwitchTradeRollbackPairPosition {
+    param(
+        [Parameter(Mandatory)]$Source,
+        [Parameter(Mandatory)]$Target,
+        [Parameter(Mandatory)]$Actual,
+        [Parameter(Mandatory)][string]$Axis
+    )
+    $sourceActive = $Actual.ActiveExists -and
+        [string]$Actual.ActiveRelease -eq [string]$Source.release_id -and
+        [string]$Actual.ActiveIntegrity -eq [string]$Source.integrity_sha256
+    $targetActive = $Actual.ActiveExists -and
+        [string]$Actual.ActiveRelease -eq [string]$Target.release_id -and
+        [string]$Actual.ActiveIntegrity -eq [string]$Target.integrity_sha256
+    $sourcePrevious = $Actual.PreviousExists -and
+        [string]$Actual.PreviousRelease -eq [string]$Source.release_id -and
+        [string]$Actual.PreviousIntegrity -eq [string]$Source.integrity_sha256
+    $targetPrevious = $Actual.PreviousExists -and
+        [string]$Actual.PreviousRelease -eq [string]$Target.release_id -and
+        [string]$Actual.PreviousIntegrity -eq [string]$Target.integrity_sha256
+    $sourceSwap = $Actual.SwapExists -and
+        [string]$Actual.SwapRelease -eq [string]$Source.release_id -and
+        [string]$Actual.SwapIntegrity -eq [string]$Source.integrity_sha256
+    $targetSwap = $Actual.SwapExists -and
+        [string]$Actual.SwapRelease -eq [string]$Target.release_id -and
+        [string]$Actual.SwapIntegrity -eq [string]$Target.integrity_sha256
+    if (-not $Actual.SwapExists -and $sourceActive -and $targetPrevious) { return 'source' }
+    if (-not $Actual.SwapExists -and $targetActive -and $sourcePrevious) { return 'target' }
+    if ($sourceSwap -and
+            ((-not $Actual.ActiveExists -and $targetPrevious) -or
+             ($targetActive -and -not $Actual.PreviousExists))) {
+        return 'target_transition'
+    }
+    if ($targetSwap -and
+            ((-not $Actual.ActiveExists -and $sourcePrevious) -or
+             ($sourceActive -and -not $Actual.PreviousExists))) {
+        return 'source_transition'
+    }
+    throw ('ROLLBACK_{0}_STATE_AMBIGUOUS: release pair or integrity anchor changed' -f $Axis)
+}
+
+function Resolve-SwitchTradeRollbackRecovery {
+    param(
+        [Parameter(Mandatory)]$Transaction,
+        [Parameter(Mandatory)]$Actual
+    )
+    $journal = Assert-SwitchTradeRollbackJournal -Transaction $Transaction
+    $windowsSource = [pscustomobject]@{
+        release_id = [string]$journal.source.release_id
+        integrity_sha256 = [string]$journal.source.windows_integrity_sha256
+    }
+    $windowsTarget = [pscustomobject]@{
+        release_id = [string]$journal.target.release_id
+        integrity_sha256 = [string]$journal.target.windows_integrity_sha256
+    }
+    $wslSource = [pscustomobject]@{
+        release_id = [string]$journal.source.release_id
+        integrity_sha256 = [string]$journal.source.wsl_integrity_sha256
+    }
+    $wslTarget = [pscustomobject]@{
+        release_id = [string]$journal.target.release_id
+        integrity_sha256 = [string]$journal.target.wsl_integrity_sha256
+    }
+    $windows = Get-SwitchTradeRollbackPairPosition -Source $windowsSource -Target $windowsTarget -Actual $Actual.Windows -Axis 'WINDOWS'
+    $wsl = Get-SwitchTradeRollbackPairPosition -Source $wslSource -Target $wslTarget -Actual $Actual.Wsl -Axis 'WSL'
+    $kernel = ''
+    foreach ($direction in @('source', 'target')) {
+        $axis = $journal.$direction
+        $pathsMatch = [string]::Equals([string]$Actual.Kernel.kernel_path,
+            [string]$axis.kernel_path, [StringComparison]::OrdinalIgnoreCase) -and
+            [string]::Equals([string]$Actual.Kernel.modules_path,
+                [string]$axis.modules_path, [StringComparison]::OrdinalIgnoreCase)
+        if ([string]$Actual.Kernel.package_release_id -eq [string]$axis.release_id -and
+                $pathsMatch -and [string]$Actual.Kernel.kernel_release -eq [string]$axis.kernel_release -and
+                [string]$Actual.Kernel.modules_format -eq [string]$axis.modules_format -and
+                [string]$Actual.Kernel.kernel_sha256 -eq [string]$axis.kernel_sha256 -and
+                [string]$Actual.Kernel.modules_sha256 -eq [string]$axis.modules_sha256) {
+            $kernel = $direction
+        }
+    }
+    if (-not $kernel) { throw 'ROLLBACK_KERNEL_STATE_AMBIGUOUS: kernel identity or anchor changed' }
+    $desired = if ($windows -notin @('source', 'source_transition') -and
+            $wsl -notin @('source', 'source_transition') -and $kernel -ne 'source') {
+        'target'
+    } else { 'source' }
+    return [pscustomobject]@{
+        Direction = $desired; WindowsPosition = $windows; WslPosition = $wsl
+        KernelPosition = $kernel
+    }
+}
+
 function Get-SwitchTradeTrustedInstalledAnchors {
     param(
         [Parameter(Mandatory)]$Transaction,

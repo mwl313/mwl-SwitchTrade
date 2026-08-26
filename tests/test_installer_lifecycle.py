@@ -130,8 +130,14 @@ class InstallerLifecycleTests(unittest.TestCase):
                          setup.index("$audit = Test-Setup")]
         windows_swap = rollback.index(
             "Switch-SwitchTradeWindowsRollback -Active $InstallRoot")
-        persist = rollback.index("Set-SwitchTradeCompletedRollbackState")
+        journal = rollback.index("Start-SwitchTradeRollbackTransaction")
+        first_wsl_swap = rollback.index("'--rollback', '--release-id'")
+        clear_resume = rollback.index("Clear-SetupResume")
+        persist = rollback.index("Set-SwitchTradeRollbackPublishedState")
         compensation = rollback.index("} catch {", persist)
+        self.assertLess(journal, clear_resume)
+        self.assertLess(journal, first_wsl_swap)
+        self.assertLess(journal, windows_swap)
         self.assertLess(windows_swap, persist)
         self.assertLess(persist, compensation)
 
@@ -180,6 +186,17 @@ class InstallerLifecycleTests(unittest.TestCase):
             ], cwd=ROOT, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Setup lifecycle simulation PASS", result.stdout)
+
+    @unittest.skipUnless(shutil.which("powershell"), "Windows PowerShell is required")
+    def test_rollback_process_death_repair_and_reverse_rollback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            result = subprocess.run([
+                "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                str(ROOT / "installer" / "Test-RollbackRecoveryLifecycle.ps1"),
+                "-TestRoot", temporary,
+            ], cwd=ROOT, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Rollback process-death recovery simulation PASS", result.stdout)
 
     @unittest.skipUnless(shutil.which("powershell"), "Windows PowerShell is required")
     def test_schema2_package_manifest_detects_tampering(self):

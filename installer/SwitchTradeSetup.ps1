@@ -346,6 +346,205 @@ function Get-SwitchTradeWslRuntimeState {
     }
 }
 
+function Get-SwitchTradeWindowsRollbackState {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return [pscustomobject]@{ Exists = $false; ReleaseId = ''; IntegritySha256 = '' }
+    }
+    $release = Get-InstalledWindowsReleaseId -Root $Path
+    $integrityPath = Join-Path $Path '.switchtrade-integrity.json'
+    if (-not $release -or -not (Test-Path -LiteralPath $integrityPath -PathType Leaf)) {
+        throw 'ROLLBACK_WINDOWS_STATE_INVALID: a rollback path is not a proven release tree'
+    }
+    return [pscustomobject]@{
+        Exists = $true; ReleaseId = $release
+        IntegritySha256 = Get-FileSha256 $integrityPath
+    }
+}
+
+function Get-SwitchTradeRollbackActual {
+    param([Parameter(Mandatory)]$Transaction)
+    $journal = Assert-SwitchTradeRollbackJournal -Transaction $Transaction
+    $windowsActive = Get-SwitchTradeWindowsRollbackState -Path $InstallRoot
+    $windowsPrevious = Get-SwitchTradeWindowsRollbackState -Path $PreviousInstall
+    $windowsSwap = Get-SwitchTradeWindowsRollbackState -Path "$InstallRoot.rollback-swap"
+    foreach ($entry in @(
+            [pscustomobject]@{ Path = $InstallRoot; State = $windowsActive },
+            [pscustomobject]@{ Path = $PreviousInstall; State = $windowsPrevious },
+            [pscustomobject]@{ Path = "$InstallRoot.rollback-swap"; State = $windowsSwap }) |
+            Where-Object { $_.State.Exists }) {
+        $state = $entry.State
+        $axis = if ($state.ReleaseId -eq [string]$journal.source.release_id) {
+            $journal.source
+        } elseif ($state.ReleaseId -eq [string]$journal.target.release_id) {
+            $journal.target
+        } else { throw 'ROLLBACK_WINDOWS_STATE_AMBIGUOUS: an unexpected release occupies a rollback path' }
+        if ($state.IntegritySha256 -ne [string]$axis.windows_integrity_sha256) {
+            throw 'ROLLBACK_WINDOWS_INTEGRITY_MISMATCH: rollback manifest anchor changed'
+        }
+        Test-SwitchTradeTreeIntegrity -Root $entry.Path -ExpectedReleaseId $state.ReleaseId `
+            -ExpectedIntegritySha256 $state.IntegritySha256 | Out-Null
+    }
+
+    $wslActive = Get-SwitchTradeWslRuntimeState -Name $Distro -Location active
+    $wslPrevious = Get-SwitchTradeWslRuntimeState -Name $Distro -Location previous
+    $wslSwap = Get-SwitchTradeWslRuntimeState -Name $Distro -Location rollback_swap
+    $wslCandidate = Get-SwitchTradeWslRuntimeState -Name $Distro -Location candidate
+    $wslCommitSwap = Get-SwitchTradeWslRuntimeState -Name $Distro -Location commit_swap
+    if ($wslCandidate.Exists -or $wslCommitSwap.Exists) {
+        throw 'ROLLBACK_WSL_STATE_AMBIGUOUS: update staging paths exist during rollback recovery'
+    }
+    $provision = Convert-ToWslPath (Join-Path $PackageRoot 'installer\provision-wsl.sh')
+    foreach ($entry in @(
+            [pscustomobject]@{ Location = 'active'; State = $wslActive },
+            [pscustomobject]@{ Location = 'previous'; State = $wslPrevious },
+            [pscustomobject]@{ Location = 'rollback_swap'; State = $wslSwap }) |
+            Where-Object { $_.State.Exists }) {
+        $state = $entry.State
+        if (-not $state.Valid) { throw 'ROLLBACK_WSL_STATE_INVALID: a runtime rollback path is invalid' }
+        $axis = if ($state.ReleaseId -eq [string]$journal.source.release_id) {
+            $journal.source
+        } elseif ($state.ReleaseId -eq [string]$journal.target.release_id) {
+            $journal.target
+        } else { throw 'ROLLBACK_WSL_STATE_AMBIGUOUS: an unexpected runtime release exists' }
+        if ($state.IntegritySha256 -ne [string]$axis.wsl_integrity_sha256) {
+            throw 'ROLLBACK_WSL_INTEGRITY_MISMATCH: runtime manifest anchor changed'
+        }
+        Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'bash', $provision,
+            '--validate-location', '--location', $entry.Location, '--release-id', $state.ReleaseId,
+            '--integrity-sha256', $state.IntegritySha256) -FailureCode 'ROLLBACK_WSL_INTEGRITY_MISMATCH' -Stage 'rollback_recovery' | Out-Null
+    }
+
+    $kernelPath = Join-Path $StateRoot 'kernel-state.json'
+    if (-not (Test-Path -LiteralPath $kernelPath -PathType Leaf)) {
+        throw 'ROLLBACK_KERNEL_STATE_MISSING'
+    }
+    $kernel = Get-Content -Raw -LiteralPath $kernelPath | ConvertFrom-Json
+    if (-not (Test-Path -LiteralPath ([string]$kernel.kernel_path) -PathType Leaf) -or
+            (Get-FileSha256 ([string]$kernel.kernel_path)) -ne [string]$kernel.kernel_sha256 -or
+            ([string]$kernel.modules_path -and
+             (-not (Test-Path -LiteralPath ([string]$kernel.modules_path) -PathType Leaf) -or
+              (Get-FileSha256 ([string]$kernel.modules_path)) -ne [string]$kernel.modules_sha256))) {
+        throw 'ROLLBACK_KERNEL_STATE_AMBIGUOUS: current kernel artifacts are not proven'
+    }
+    $kernelPairProven = $false
+    foreach ($direction in @('source', 'target')) {
+        $current = $journal.$direction
+        $prior = if ($direction -eq 'source') { $journal.target } else { $journal.source }
+        $currentMatches = [string]$kernel.package_release_id -eq [string]$current.release_id -and
+            [string]::Equals([string]$kernel.kernel_path, [string]$current.kernel_path,
+                [StringComparison]::OrdinalIgnoreCase) -and
+            [string]::Equals([string]$kernel.modules_path, [string]$current.modules_path,
+                [StringComparison]::OrdinalIgnoreCase) -and
+            [string]$kernel.kernel_release -eq [string]$current.kernel_release -and
+            [string]$kernel.modules_format -eq [string]$current.modules_format -and
+            [string]$kernel.kernel_sha256 -eq [string]$current.kernel_sha256 -and
+            [string]$kernel.modules_sha256 -eq [string]$current.modules_sha256
+        $priorMatches = [string]$kernel.rollback_package_release_id -eq [string]$prior.release_id -and
+            [string]::Equals([string]$kernel.rollback_kernel_path, [string]$prior.kernel_path,
+                [StringComparison]::OrdinalIgnoreCase) -and
+            [string]::Equals([string]$kernel.rollback_modules_path, [string]$prior.modules_path,
+                [StringComparison]::OrdinalIgnoreCase) -and
+            [string]$kernel.rollback_kernel_release -eq [string]$prior.kernel_release -and
+            [string]$kernel.rollback_modules_format -eq [string]$prior.modules_format -and
+            [string]$kernel.rollback_kernel_sha256 -eq [string]$prior.kernel_sha256 -and
+            [string]$kernel.rollback_modules_sha256 -eq [string]$prior.modules_sha256
+        if ($currentMatches -and $priorMatches) { $kernelPairProven = $true }
+    }
+    if (-not $kernelPairProven -or
+            -not (Test-Path -LiteralPath ([string]$kernel.rollback_kernel_path) -PathType Leaf) -or
+            (Get-FileSha256 ([string]$kernel.rollback_kernel_path)) -ne [string]$kernel.rollback_kernel_sha256 -or
+            ([string]$kernel.rollback_modules_path -and
+             (-not (Test-Path -LiteralPath ([string]$kernel.rollback_modules_path) -PathType Leaf) -or
+              (Get-FileSha256 ([string]$kernel.rollback_modules_path)) -ne [string]$kernel.rollback_modules_sha256))) {
+        throw 'ROLLBACK_KERNEL_STATE_AMBIGUOUS: reversible kernel anchor pair changed'
+    }
+    $kernelConfig = Join-Path $UserProfileRoot '.wslconfig'
+    $kernelConfigValid = $kernel.PSObject.Properties.Name -contains 'installed_config_sha256' -and
+        [string]$kernel.installed_config_sha256 -match '^[0-9a-f]{64}$' -and
+        (Test-Path -LiteralPath $kernelConfig -PathType Leaf) -and
+        (Get-FileSha256 $kernelConfig) -eq [string]$kernel.installed_config_sha256
+    $kernel | Add-Member -NotePropertyName ConfigurationValid -NotePropertyValue $kernelConfigValid -Force
+    return [pscustomobject]@{
+        Windows = [pscustomobject]@{
+            ActiveExists = $windowsActive.Exists; ActiveRelease = $windowsActive.ReleaseId
+            ActiveIntegrity = $windowsActive.IntegritySha256
+            PreviousExists = $windowsPrevious.Exists; PreviousRelease = $windowsPrevious.ReleaseId
+            PreviousIntegrity = $windowsPrevious.IntegritySha256
+            SwapExists = $windowsSwap.Exists; SwapRelease = $windowsSwap.ReleaseId
+            SwapIntegrity = $windowsSwap.IntegritySha256
+        }
+        Wsl = [pscustomobject]@{
+            ActiveExists = $wslActive.Exists; ActiveRelease = $wslActive.ReleaseId
+            ActiveIntegrity = $wslActive.IntegritySha256
+            PreviousExists = $wslPrevious.Exists; PreviousRelease = $wslPrevious.ReleaseId
+            PreviousIntegrity = $wslPrevious.IntegritySha256
+            SwapExists = $wslSwap.Exists; SwapRelease = $wslSwap.ReleaseId
+            SwapIntegrity = $wslSwap.IntegritySha256
+        }
+        Kernel = $kernel
+    }
+}
+
+function Repair-SwitchTradeInterruptedRollback {
+    param([Parameter(Mandatory)]$Transaction)
+    $journal = Assert-SwitchTradeRollbackJournal -Transaction $Transaction
+    $actual = Get-SwitchTradeRollbackActual -Transaction $Transaction
+    $plan = Resolve-SwitchTradeRollbackRecovery -Transaction $Transaction -Actual $actual
+    $direction = [string]$plan.Direction
+    $Transaction = Set-SwitchTradeTransactionPhase -Path $TransactionPath -Phase "rollback_recovering_$direction"
+    $provision = Convert-ToWslPath (Join-Path $PackageRoot 'installer\provision-wsl.sh')
+    if ($direction -eq 'source') {
+        if ($plan.WindowsPosition -eq 'target_transition') {
+            Switch-SwitchTradeWindowsRollback -Active $InstallRoot -Previous $PreviousInstall -ExpectedReleaseId $journal.target.release_id -ExpectedActiveReleaseId $journal.source.release_id | Out-Null
+        }
+        if ($plan.WindowsPosition -ne 'source') {
+            Switch-SwitchTradeWindowsRollback -Active $InstallRoot -Previous $PreviousInstall -ExpectedReleaseId $journal.source.release_id -ExpectedActiveReleaseId $journal.target.release_id | Out-Null
+        }
+        if ($plan.KernelPosition -ne 'source') {
+            Switch-SwitchTradeKernelRollback -StateRoot $StateRoot -ExpectedReleaseId $journal.source.release_id -UserProfileRoot $UserProfileRoot | Out-Null
+        } elseif (-not [bool]$actual.Kernel.ConfigurationValid) {
+            Repair-SwitchTradeKernelConfiguration -StateRoot $StateRoot -UserProfileRoot $UserProfileRoot | Out-Null
+        }
+        if ($plan.WslPosition -eq 'target_transition') {
+            Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'bash', $provision,
+                '--rollback', '--release-id', $journal.target.release_id, '--integrity-sha256',
+                $journal.target.wsl_integrity_sha256, '--prior-release-id', $journal.source.release_id,
+                '--prior-integrity-sha256', $journal.source.wsl_integrity_sha256) -FailureCode 'ROLLBACK_WSL_RECOVERY_FAILED' -Stage 'rollback_recovery' | Out-Null
+        }
+        if ($plan.WslPosition -ne 'source') {
+            Invoke-BoundedNativeProcess -FilePath 'wsl.exe' -Arguments @('--terminate', $Distro) -TimeoutSeconds 30 | Out-Null
+            Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'bash', $provision,
+                '--compensate', '--release-id', $journal.source.release_id, '--integrity-sha256',
+                $journal.source.wsl_integrity_sha256, '--prior-release-id', $journal.target.release_id,
+                '--prior-integrity-sha256', $journal.target.wsl_integrity_sha256) -FailureCode 'ROLLBACK_WSL_RECOVERY_FAILED' -Stage 'rollback_recovery' | Out-Null
+        }
+    } else {
+        if (-not [bool]$actual.Kernel.ConfigurationValid) {
+            Repair-SwitchTradeKernelConfiguration -StateRoot $StateRoot -UserProfileRoot $UserProfileRoot | Out-Null
+        }
+        if ($plan.WslPosition -eq 'target_transition') {
+            Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'bash', $provision,
+                '--rollback', '--release-id', $journal.target.release_id, '--integrity-sha256',
+                $journal.target.wsl_integrity_sha256, '--prior-release-id', $journal.source.release_id,
+                '--prior-integrity-sha256', $journal.source.wsl_integrity_sha256) -FailureCode 'ROLLBACK_WSL_RECOVERY_FAILED' -Stage 'rollback_recovery' | Out-Null
+        }
+        if ($plan.WindowsPosition -eq 'target_transition') {
+            Switch-SwitchTradeWindowsRollback -Active $InstallRoot -Previous $PreviousInstall -ExpectedReleaseId $journal.target.release_id -ExpectedActiveReleaseId $journal.source.release_id | Out-Null
+        }
+    }
+    $verified = Get-SwitchTradeRollbackActual -Transaction $Transaction
+    $verifiedPlan = Resolve-SwitchTradeRollbackRecovery -Transaction $Transaction -Actual $verified
+    if ($verifiedPlan.WindowsPosition -ne $direction -or $verifiedPlan.WslPosition -ne $direction -or
+            $verifiedPlan.KernelPosition -ne $direction -or
+            -not [bool]$verified.Kernel.ConfigurationValid) {
+        throw 'ROLLBACK_RECOVERY_NOT_CONVERGED: release axes did not reach one journaled side'
+    }
+    Set-SwitchTradeRollbackPublishedState -Path $TransactionPath -Transaction $Transaction -Direction $direction | Out-Null
+    Write-SwitchTradeSetupLog -Path $SetupLog -Stage 'rollback_recovery' -Message "recovered interrupted rollback to $direction"
+    return 'finalize'
+}
+
 function Repair-SwitchTradeInterruptedTransaction {
     param([Parameter(Mandatory)]$Transaction)
     $script:SetupStage = 'transaction_recovery'
@@ -407,6 +606,15 @@ function Repair-SwitchTradeInterruptedTransaction {
     }
     $distroOwned = $distroExists -and $marker.Valid -and
         $marker.InstallId -ceq [string]$Transaction.install_id
+    if ([string]$Transaction.phase -match '^rollback_') {
+        if (-not $distroOwned -or
+                -not [string]::Equals($registration.BasePath,
+                    [IO.Path]::GetFullPath([string]$Transaction.distro_base_path).TrimEnd('\'),
+                    [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'ROLLBACK_DISTRO_IDENTITY_CHANGED: rollback recovery requires the exact owned distribution'
+        }
+        return Repair-SwitchTradeInterruptedRollback -Transaction $Transaction
+    }
     if ([string]$Transaction.phase -eq 'compensating_windows_remove_new' -and
             (Test-Path -LiteralPath $InstallRoot)) {
         Remove-SwitchTradeRecoveryTree -Path $InstallRoot `
@@ -905,7 +1113,6 @@ if ($Action -eq 'Uninstall') {
 }
 
 if ($Action -eq 'Rollback') {
-    Clear-SetupResume
     if (-not (Test-Path -LiteralPath $PreviousInstall -PathType Container)) {
         throw 'ROLLBACK_WINDOWS_MISSING: no retained SwitchTrade application version is available'
     }
@@ -928,7 +1135,10 @@ if ($Action -eq 'Rollback') {
         '--validate-retained', '--release-id', $rollbackRelease, '--integrity-sha256',
         [string]$installedTransaction.wsl_prior_integrity_sha256) `
         -FailureCode 'ROLLBACK_RUNTIME_INVALID' -Stage 'rollback_validate' | Out-Null
-    Test-SwitchTradeKernelRollback -StateRoot $StateRoot -ExpectedReleaseId $rollbackRelease | Out-Null
+    $rollbackKernelState = Test-SwitchTradeKernelRollback -StateRoot $StateRoot -ExpectedReleaseId $rollbackRelease
+    $installedTransaction = Start-SwitchTradeRollbackTransaction -Path $TransactionPath `
+        -Transaction $installedTransaction -KernelState $rollbackKernelState
+    Clear-SetupResume
     $runtimeRolledBack = $false
     $kernelRolledBack = $false
     $windowsRolledBack = $false
@@ -943,15 +1153,19 @@ if ($Action -eq 'Rollback') {
             [string]$installedTransaction.wsl_integrity_sha256) `
             -FailureCode 'ROLLBACK_RUNTIME_COMMIT_FAILED' -Stage $SetupStage | Out-Null
         $runtimeRolledBack = $true
+        $installedTransaction = Set-SwitchTradeTransactionPhase -Path $TransactionPath `
+            -Phase 'rollback_wsl_committed'
         $kernelRolledBack = Switch-SwitchTradeKernelRollback -StateRoot $StateRoot `
             -ExpectedReleaseId $rollbackRelease -UserProfileRoot $UserProfileRoot
+        $installedTransaction = Set-SwitchTradeTransactionPhase -Path $TransactionPath `
+            -Phase 'rollback_kernel_committed'
         Switch-SwitchTradeWindowsRollback -Active $InstallRoot -Previous $PreviousInstall `
             -ExpectedReleaseId $rollbackRelease -ExpectedActiveReleaseId $activeRelease | Out-Null
         $windowsRolledBack = $true
-        $rolledBackKernelState = Get-Content -Raw -LiteralPath (Join-Path $StateRoot 'kernel-state.json') |
-            ConvertFrom-Json
-        Set-SwitchTradeCompletedRollbackState -Path $TransactionPath `
-            -Transaction $installedTransaction -KernelState $rolledBackKernelState | Out-Null
+        $installedTransaction = Set-SwitchTradeTransactionPhase -Path $TransactionPath `
+            -Phase 'rollback_windows_committed'
+        Set-SwitchTradeRollbackPublishedState -Path $TransactionPath `
+            -Transaction $installedTransaction -Direction target | Out-Null
     } catch {
         $failure = $_
         try {
