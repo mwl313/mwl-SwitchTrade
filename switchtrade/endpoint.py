@@ -90,6 +90,15 @@ class StateReporter:
         temporary.replace(self.path)
 
 
+def process_start_ticks() -> int | None:
+    """Return Linux's stable process incarnation field when /proc is available."""
+    try:
+        raw = Path("/proc/self/stat").read_text(encoding="ascii")
+        return int(raw[raw.rfind(")") + 2:].split()[19])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
 class EndpointLog:
     def __init__(self, logger: RunLogger):
         self.logger = logger
@@ -198,6 +207,8 @@ def run_endpoint(args) -> int:
         "session_id": args.session_id,
         "attempt_id": args.attempt_id or args.session_id,
         "wsl_distro": os.environ.get("WSL_DISTRO_NAME"),
+        "launch_nonce": args.launch_nonce,
+        "process_start_ticks": process_start_ticks(),
     })
     state.write("initializing", radio_checked=False, tunnel_connected=False,
                 failure_stage=None, recovery_action=None, **plan)
@@ -366,6 +377,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--party-state-file")
     parser.add_argument("--attempt-id")
     parser.add_argument("--member-token-file")
+    parser.add_argument("--launch-nonce", required=True)
     parser.add_argument("--connect-timeout", type=float, default=20)
     parser.add_argument("--radio-timeout", type=float, default=60)
     parser.add_argument("--room-timeout", type=float, default=300)

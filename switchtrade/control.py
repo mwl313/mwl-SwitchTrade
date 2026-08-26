@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
+import base64
 import os
 import json
 import re
@@ -389,29 +390,76 @@ class Runtime:
         pid = endpoint.get("pid")
         if not isinstance(pid, int) or pid <= 1 or endpoint.get("process_kind") != "rfu-endpoint":
             return None
+        nonce = endpoint.get("launch_nonce")
+        session_id = endpoint.get("session_id")
+        start_ticks = endpoint.get("process_start_ticks")
+        if (not isinstance(nonce, str) or not re.fullmatch(r"[0-9a-f]{32}", nonce) or
+                not isinstance(session_id, str) or not session_id or
+                not isinstance(start_ticks, int) or start_ticks <= 0):
+            return None
         if os.name == "nt":
             distro = os.environ.get("SWITCHTRADE_WSL_DISTRO", "SwitchTrade")
             if endpoint.get("wsl_distro") != distro:
                 return None
+            probe = (
+                "import base64,json,pathlib,sys;"
+                "p=pathlib.Path('/proc')/sys.argv[1];"
+                "a=(p/'stat').read_text();c=(p/'cmdline').read_bytes();b=(p/'stat').read_text();"
+                "print(json.dumps({'stat':a,'cmdline':base64.b64encode(c).decode()})) if a==b else sys.exit(2)"
+            )
             try:
                 result = subprocess.run(
-                    ["wsl.exe", "-d", distro, "--", "cat", f"/proc/{pid}/cmdline"],
-                    capture_output=True, timeout=5, check=False,
+                    ["wsl.exe", "-d", distro, "--", "python3", "-c", probe, str(pid)],
+                    capture_output=True, text=True, timeout=5, check=False,
                 )
-            except (OSError, subprocess.TimeoutExpired):
+                identity = json.loads(result.stdout) if result.returncode == 0 else {}
+                stat_value = str(identity.get("stat", ""))
+                command = base64.b64decode(str(identity.get("cmdline", "")), validate=True)
+            except (OSError, subprocess.TimeoutExpired, ValueError, json.JSONDecodeError):
                 return None
-            command = result.stdout if isinstance(result.stdout, bytes) else str(result.stdout).encode()
-            return pid if result.returncode == 0 and b"switchtrade.endpoint" in command else None
+        else:
+            try:
+                process = Path(f"/proc/{pid}")
+                before = (process / "stat").read_text(encoding="ascii")
+                command = (process / "cmdline").read_bytes()
+                stat_value = (process / "stat").read_text(encoding="ascii")
+                if before != stat_value:
+                    return None
+            except OSError:
+                return None
         try:
-            command = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ")
-        except OSError:
+            observed_start = int(stat_value[stat_value.rfind(")") + 2:].split()[19])
+        except (ValueError, IndexError):
             return None
-        return pid if b"switchtrade.endpoint" in command else None
+        arguments = command.rstrip(b"\0").split(b"\0")
+        exact_module = any(
+            arguments[index:index + 2] == [b"-m", b"switchtrade.endpoint"]
+            for index in range(max(0, len(arguments) - 1))
+        )
+        exact_nonce = any(
+            arguments[index:index + 2] == [b"--launch-nonce", nonce.encode("ascii")]
+            for index in range(max(0, len(arguments) - 1))
+        )
+        exact_session = any(
+            arguments[index:index + 2] == [b"--session-id", session_id.encode("utf-8")]
+            for index in range(max(0, len(arguments) - 1))
+        )
+        return pid if observed_start == start_ticks and exact_module and exact_nonce and exact_session else None
 
     @staticmethod
     def _signal_endpoint_pid(pid: int, signal_name: str, endpoint: dict) -> None:
+        if Runtime._verified_endpoint_pid(endpoint) != pid:
+            raise RuntimeError("endpoint process identity changed before shutdown")
         if os.name != "nt":
-            os.kill(pid, signal.SIGTERM if signal_name == "TERM" else signal.SIGKILL)
+            selected_signal = signal.SIGTERM if signal_name == "TERM" else signal.SIGKILL
+            if hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"):
+                descriptor = os.pidfd_open(pid)
+                try:
+                    signal.pidfd_send_signal(descriptor, selected_signal)
+                finally:
+                    os.close(descriptor)
+            else:
+                os.kill(pid, selected_signal)
             return
         distro = os.environ.get("SWITCHTRADE_WSL_DISTRO", "SwitchTrade")
         if endpoint.get("wsl_distro") != distro:
@@ -455,12 +503,14 @@ def endpoint_command(identity: str, passcode: str, relay_url: str,
                      party_state_file: Path | None = None,
                      attempt_id: str | None = None,
                      member_token_file: Path | None = None,
-                     allow_experimental_hardware: bool = False) -> list[str]:
+                     allow_experimental_hardware: bool = False,
+                     launch_nonce: str | None = None) -> list[str]:
     if identity in {"host", "guest"} and switch_room_role is None:
         args = ["--role", identity]
     else:
         args = ["--tunnel-seat", identity, "--switch-room-role", switch_room_role or ""]
-    args += ["--session-id", passcode, "--relay-url", relay_url]
+    args += ["--session-id", passcode, "--relay-url", relay_url,
+             "--launch-nonce", launch_nonce or secrets.token_hex(16)]
     if usb_id:
         args += ["--usb-id", usb_id.lower()]
     if allow_experimental_hardware:
@@ -786,36 +836,28 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 raise HTTPException(status_code=409, detail="a session is already running")
             state.endpoint_state.unlink(missing_ok=True)
             state.party_state.unlink(missing_ok=True)
+            launch_nonce = secrets.token_hex(16)
             command = endpoint_command(
                 plan["tunnel_seat"], code, state.relay_url, plan["usb_id"],
                 state.endpoint_state, switch_room_role=plan["switch_room_role"],
                 party_state_file=state.party_state, attempt_id=attempt_id or code,
                 member_token_file=member_token_file,
                 allow_experimental_hardware=allow_experimental_hardware,
+                launch_nonce=launch_nonce,
             )
             try:
                 state.endpoint = subprocess.Popen(command, cwd=Path(__file__).resolve().parents[1])
             except OSError as error:
                 raise HTTPException(status_code=503, detail=f"endpoint launch failed: {error}") from error
-            if os.name == "nt":
-                deadline = time.monotonic() + 5
-                while time.monotonic() < deadline:
-                    if state.endpoint.poll() is not None:
-                        state.endpoint = None
-                        raise ControlApiError(
-                            503, "endpoint_start_failed", "the Switch endpoint stopped during startup",
-                            stage="endpoint", recoverable=True, primary_action="retry",
-                        )
-                    if state._verified_endpoint_pid(state.read_endpoint()) is not None:
-                        break
-                    time.sleep(0.05)
-                else:
-                    state.endpoint.terminate()
-                    state.endpoint = None
-                    raise ControlApiError(
-                        503, "endpoint_start_timeout", "the Switch endpoint did not finish starting",
-                        stage="endpoint", recoverable=True, primary_action="restart_backend",
-                    )
+            deadline = time.monotonic() + 0.25
+            while time.monotonic() < deadline and state.endpoint.poll() is None:
+                time.sleep(0.025)
+            if state.endpoint.poll() is not None:
+                state.endpoint = None
+                raise ControlApiError(
+                    503, "endpoint_start_failed", "the Switch endpoint stopped during startup",
+                    stage="endpoint", recoverable=True, primary_action="retry",
+                )
             state.endpoint_session = code
         state.log.event(
             "session_started", passcode=code, tunnel_seat=plan["tunnel_seat"],

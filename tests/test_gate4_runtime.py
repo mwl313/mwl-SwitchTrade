@@ -1,4 +1,5 @@
 from pathlib import Path
+import base64
 import json
 import os
 import tempfile
@@ -407,20 +408,27 @@ class Gate4RuntimeContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             state_path = Path(temporary) / "runtime" / "endpoint-state.json"
             state_path.parent.mkdir(parents=True)
+            nonce = "a" * 32
             state_path.write_text(json.dumps({
                 "state": "trading_room", "pid": 4321, "process_kind": "rfu-endpoint",
                 "wsl_distro": "SwitchTrade", "session_id": "ABC123",
+                "launch_nonce": nonce, "process_start_ticks": 9876,
             }), encoding="utf-8")
-            cat_calls = 0
+            probe_calls = 0
             real_run = __import__("subprocess").run
+            stat_value = "4321 (python) " + " ".join(["S", *(["0"] * 18), "9876"])
+            command_line = b"python\0-m\0switchtrade.endpoint\0--session-id\0ABC123\0--launch-nonce\0" + nonce.encode() + b"\0"
 
             def wsl_process(command, **kwargs):
-                nonlocal cat_calls
-                if command and command[0] == "wsl.exe" and "cat" in command:
-                    cat_calls += 1
-                    if cat_calls <= 3:
-                        return MagicMock(returncode=0, stdout=b"python -m switchtrade.endpoint\0")
-                    return MagicMock(returncode=1, stdout=b"")
+                nonlocal probe_calls
+                if command and command[0] == "wsl.exe" and "python3" in command:
+                    probe_calls += 1
+                    if probe_calls <= 4:
+                        return MagicMock(returncode=0, stdout=json.dumps({
+                            "stat": stat_value,
+                            "cmdline": base64.b64encode(command_line).decode("ascii"),
+                        }))
+                    return MagicMock(returncode=1, stdout="")
                 if command and command[0] == "wsl.exe" and "kill" in command:
                     return MagicMock(returncode=0, stdout=b"")
                 return real_run(command, **kwargs)
@@ -443,6 +451,7 @@ class Gate4RuntimeContractTests(unittest.TestCase):
             state_path.write_text(json.dumps({
                 "state": "trading_room", "pid": 4321, "process_kind": "rfu-endpoint",
                 "wsl_distro": "ForeignDistro", "session_id": "ABC123",
+                "launch_nonce": "b" * 32, "process_start_ticks": 9876,
             }), encoding="utf-8")
             real_run = __import__("subprocess").run
 
@@ -456,6 +465,29 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 with TestClient(create_app(runs_root=temporary)) as client:
                     self.assertFalse(client.app.state.runtime.endpoint_running())
             self.assertFalse(any(call.args[0][0] == "wsl.exe" for call in run.call_args_list))
+
+    def test_windows_control_rejects_cmdline_substring_impostor(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state_path = Path(temporary) / "runtime" / "endpoint-state.json"
+            state_path.parent.mkdir(parents=True)
+            nonce = "c" * 32
+            state_path.write_text(json.dumps({
+                "state": "trading_room", "pid": 4321, "process_kind": "rfu-endpoint",
+                "wsl_distro": "SwitchTrade", "session_id": "ABC123",
+                "launch_nonce": nonce, "process_start_ticks": 9876,
+            }), encoding="utf-8")
+            stat_value = "4321 (python) " + " ".join(["S", *(["0"] * 18), "9876"])
+            impostor = base64.b64encode(b"python\0-c\0print('switchtrade.endpoint')\0").decode("ascii")
+            result = MagicMock(returncode=0, stdout=json.dumps({
+                "stat": stat_value, "cmdline": impostor,
+            }))
+            with patch.dict(os.environ, {"SWITCHTRADE_WSL_DISTRO": "SwitchTrade"}), patch(
+                    "switchtrade.control.subprocess.run", return_value=result) as run:
+                with TestClient(create_app(runs_root=temporary)) as client:
+                    runtime = client.app.state.runtime
+                    self.assertFalse(runtime.endpoint_running())
+                    runtime.stop_endpoint()
+            self.assertFalse(any("kill" in call.args[0] for call in run.call_args_list))
 
     def test_windows_endpoint_early_exit_is_reported_before_starting(self):
         with tempfile.TemporaryDirectory() as temporary:
