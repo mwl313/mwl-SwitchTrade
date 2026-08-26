@@ -58,7 +58,15 @@ and communicates with the modular runtime through the localhost JSON control API
 Double-clicking `SwitchTradeSetup.exe` opens a native guided setup window. It exposes only the safe
 Install/Update/Repair/Rollback/Uninstall actions available for the current state, requires explicit
 prerequisite/global-kernel consent, lists profiled USB radios by bus ID, labels experimental choices,
-and permits adapter setup to be deferred. Command-line actions remain available for automated QA.
+and permits adapter setup to be deferred. Mutating actions show a native indeterminate progress window
+instead of freezing or displaying command output, and successful completion uses a short summary.
+Command-line actions remain available for automated QA.
+
+`SwitchTradeSetup.exe` is the launcher for a versioned payload, not the entire 200+ MB package by
+itself. Keep the extracted package together only while Setup is running. After a successful install,
+the Windows app and WSL runtime are self-contained in their installed locations, so the downloaded ZIP
+and extracted package may be deleted. A complete current package must be re-downloaded or retained only
+for Update, Repair, Rollback, or Uninstall; daily SwitchTrade use does not read it.
 
 The retired web/demo frontend is not bundled into the WSL runtime or required by the native beta.
 

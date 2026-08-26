@@ -106,27 +106,30 @@ internal static class Program
 
         try
         {
-            using var process = Process.Start(start) ?? throw new InvalidOperationException("Setup did not start.");
-            var outputTask = process.StandardOutput.ReadToEndAsync();
-            var errorTask = process.StandardError.ReadToEndAsync();
-            process.WaitForExit();
-            Task.WaitAll(outputTask, errorTask);
-            var restartRequired = process.ExitCode == 3010;
-            var success = process.ExitCode == 0 || restartRequired;
-            var message = success ? outputTask.Result.Trim() : errorTask.Result.Trim();
+            var result = requestedAction is null
+                ? SetupProgressDialog.Run(start, action)
+                : RunHeadless(start);
+            var restartRequired = result.ExitCode == 3010;
+            var success = result.ExitCode == 0 || restartRequired;
+            var message = success ? result.Output.Trim() : result.Error.Trim();
             if (requestedAction is not null)
             {
                 if (success) Console.Out.WriteLine(message);
                 else Console.Error.WriteLine(message);
-                return process.ExitCode;
+                return result.ExitCode;
             }
-            if (string.IsNullOrWhiteSpace(message))
-                message = restartRequired
-                    ? "Restart Windows to let SwitchTrade Setup continue automatically after sign-in."
-                    : success ? "SwitchTrade setup completed." : "SwitchTrade setup did not complete.";
+            message = restartRequired
+                ? "Restart Windows to let SwitchTrade Setup continue automatically after sign-in."
+                : success
+                    ? "SwitchTrade setup completed successfully.\n\n" +
+                      "You can now delete the extracted setup folder and ZIP. " +
+                      "Keep or re-download a setup package only for Update, Repair, Rollback, or Uninstall."
+                    : string.IsNullOrWhiteSpace(message)
+                        ? "SwitchTrade setup did not complete."
+                        : message;
             MessageBox.Show(message, "SwitchTrade Setup", MessageBoxButtons.OK,
                 success ? MessageBoxIcon.Information : MessageBoxIcon.Error);
-            return process.ExitCode;
+            return result.ExitCode;
         }
         catch (Exception error)
         {
@@ -138,6 +141,16 @@ internal static class Program
             MessageBox.Show(error.Message, "SwitchTrade Setup", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }
+    }
+
+    private static SetupProcessResult RunHeadless(ProcessStartInfo start)
+    {
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("Setup did not start.");
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        process.WaitForExit();
+        Task.WaitAll(outputTask, errorTask);
+        return new SetupProcessResult(process.ExitCode, outputTask.Result, errorTask.Result);
     }
 
     private static bool VerifyPackage(string packageRoot, bool allowUnsigned)

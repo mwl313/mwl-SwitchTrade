@@ -65,7 +65,8 @@ internal static class SetupDialog
         };
         var intro = Label(
             "SwitchTrade installs one isolated WSL distribution and connects a supported USB Wi-Fi adapter. " +
-            "It does not reset or remove your other WSL distributions.");
+            "It does not reset or remove your other WSL distributions. Keep all extracted setup files " +
+            "together until Setup finishes.");
         intro.Margin = new Padding(0, 0, 0, 20);
 
         var actionLabel = Heading("Setup action");
