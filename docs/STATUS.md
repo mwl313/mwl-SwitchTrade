@@ -1,12 +1,25 @@
 # STATUS — 진행 상태 (2026-08-26)
 
-> 마지막 갱신: 2026-08-26 — **Repository-controlled preflight 완료 · 외부 배포/서명/실기 qualification 대기**
+> 마지막 갱신: 2026-08-26 — **공개 relay live smoke PASS · unsigned private-beta 통합/실기 qualification 진행**
 >
 > 현재 실행 순서와 future backlog의 authoritative 문서:
 > `docs/50-current-product-demo-todo-20260825.md`.
 > 기술적 근거와 상세 beta gate는 `docs/49-production-beta-priorities-20260825.md`에 보존한다.
 
 ## 🏆 핵심 성과
+
+**2026-08-26**: 공개 relay/client 통합 및 owner unsigned-beta 예외 반영
+- `https://relay.pangyostonefist.org`에서 health, legacy 404, authenticated two-seat room lifecycle,
+  creator lock, 양방향 opaque RFU WebSocket, close까지 live smoke PASS했다.
+- Cloudflare가 Python 기본 User-Agent를 403으로 차단하는 문제를 발견해 모든 relay HTTP 요청을
+  `SwitchTrade/<version>`으로 통일했고, 공식 smoke 명령을 수정 없이 다시 통과시켰다.
+- `payload/release-config.json`을 기본 relay URL SSOT로 연결했다.
+- owner 결정에 따라 Windows code signing은 private beta에서 생략한다. signing 구현은 보존하고,
+  현재 패키지는 unsigned를 이름·문서·Setup 경고에 명시하며 double-click 설치를 지원한다.
+- 서버/로컬 force-push 히스토리와 기존 icon 작업을 각각 보존 후 통합했다. 상세: `docs/71`.
+- 커널 SSOT에 기존 `gptsolreview`의 확장형 빌드 입력, 실험용 pinned RTL8188EU patch, LDN 필수
+  TUN/TAP·CCM·CMAC 설정을 복원하고, 실기 검증 기준 6.18.35.2와 산출물 SHA-256 manifest를 고정했다.
+  별도 커널 repo에는 이 소스를 그대로 미러하고 새 Actions 산출물을 검증한다.
 
 **2026-08-26**: `0.2.0-beta.1` repository preflight 및 relay hosting handoff 완료
 - Production relay를 authenticated two-seat authority + attempt-bound opaque RFU WebSocket으로
@@ -18,7 +31,7 @@
 - Native Setup UI가 install/update/repair/rollback/uninstall, global kernel/prerequisite/VMware 동의,
   bus-ID별 radio 선택, experimental 경고, hardware defer를 제공한다. 선택한 USB ID는 Windows attach와
   WSL driver/RX gate 모두에 전달된다.
-- Signed install config, complete manifest, atomic Windows+WSL+kernel rollback, local-control origin/host
+- Manifest-hashed install config, complete manifest, atomic Windows+WSL+kernel rollback, local-control origin/host
   protection, 정확히 6자리 private room code를 고정했다.
 - Pinned WSL suite **212 pass / 3 skip**, focused authority/tunnel/installer **35 pass**, production relay
   smoke, WPF single-file self-test, WPF/Setup zero-warning Release build, PowerShell/Bash/Python parse가

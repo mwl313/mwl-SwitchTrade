@@ -3,6 +3,12 @@
 > 작성: 아리아 | 상태 태그: [확정] = 결정됨 / [방향] = 검토 필요 / [미결] = 결정 필요
 > 상위: `docs/06-distribution.md` §8(배포 전략) · `docs/12-framerelay-구조와-로드맵.md`(STEP 14 2c 인터넷 배포)
 >       · `docs/13-userside-app-plan.md` §δ(릴레이 운영 준비)
+>
+> **2026-08-26 통합 정정:** 이 문서는 서버 운영 아이디어와 Mac mini 임시 오리진 기록을
+> 보존하는 설계 메모다. 제품 서버 코드의 SSOT는 이 리포의 `relay/`이고 배포 계약은
+> `relay/DEPLOYMENT.md`와 `docs/69`, live 검증은 `docs/71`이 우선한다. 아래 공개방/트레이드
+> 통계/SQLite 확장안은 beta 구현이 아니라 backlog이며, owner 지시에 따라 현재 client/relay는
+> Pokémon·trainer·IP·location analytics를 수집하거나 업로드하지 않는다.
 
 ---
 
@@ -119,7 +125,8 @@ CREATE TABLE trade_stats (
 | O2 | 이식 완료 후 Mac mini 임시 종료 + 그랩 워치 정리 | ⬜ |
 | O3 | Budget $10 + 100% 알림 — ✅ 완료 (2026-08-26): `mwl-relay-safety` Budget + Alert(minwlim72@gmail.com), A1 한도 2/12 할당 확인 | ✅ |
 
-> 리포 분리 (2026-08-26): 서버 인프라 전체는 **`MWL-SwitchTradeServer`** 단독 리포로 이동 (relay/·deploy/·tools/oraclegrab/·docs/01). 클라이언트(MWL-SwitchTrade production-beta)는 이 설계의 URL만 바라봄.
+> 리포 분리안 철회 (2026-08-26): 제품 relay/authority 코드는 **MWL-SwitchTrade `relay/`**에
+> 통합 유지한다. 별도 운영 자동화가 존재하더라도 제품 프로토콜·배포 계약의 SSOT가 아니다.
 
 ### 이식 원칙
 - 이동 물품: **코드(git) + relay.db 1파일 + 서비스 유닛(5줄)** — 데이터 마이그레이션=파일 복사

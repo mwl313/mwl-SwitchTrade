@@ -35,6 +35,7 @@ def main() -> None:
     parser.add_argument("--package-root", type=Path, required=True)
     parser.add_argument("--release-id", required=True)
     parser.add_argument("--signature-required", action="store_true")
+    parser.add_argument("--unsigned-private-beta", action="store_true")
     parser.add_argument("--kernel-build", default="unverified")
     parser.add_argument("--driver", default="unverified")
     parser.add_argument("--firmware", default="unverified")
@@ -65,6 +66,7 @@ def main() -> None:
         "firmware": args.firmware,
         "usb_id": args.usb_id.lower(),
         "signature_required": args.signature_required,
+        "unsigned_private_beta": args.unsigned_private_beta,
         "inputs": {str(path.relative_to(ROOT)).replace("\\", "/"): sha256(path) for path in tracked},
         "artifact_hashes": artifacts,
     }

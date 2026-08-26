@@ -1,8 +1,8 @@
 # Repository preflight completion and relay handoff — 2026-08-26
 
-Status: all preflight work that can be completed inside this repository without release credentials,
-an external host, a clean qualification PC, or two physical Switch endpoints is implemented. This is
-an internal `0.2.0-beta.1` release candidate, not release approval.
+Status: the public relay is live and repository-controlled client integration is complete. Clean-machine,
+kernel/hardware, relay-operations, and two-Switch qualification remain. The owner explicitly selected an
+unsigned private beta, so this is not publisher-verified release approval.
 
 ## Completed product path
 
@@ -25,9 +25,14 @@ The private room code is exactly six characters. Knowing that code is insufficie
 mutate room state, reconnect a member, or open a production RFU tunnel. The legacy unauthenticated
 relay endpoints are disabled in production mode.
 
-## Relay hosting handoff
+## Relay hosting status
 
-The hosting operator should deploy the exact committed revision using:
+`https://relay.pangyostonefist.org` returned the expected health contract, rejected the legacy
+unauthenticated endpoint, and passed authenticated two-seat room lifecycle plus opaque bidirectional RFU
+WebSocket smoke on 2026-08-26. The Python client now sends a versioned SwitchTrade User-Agent because the
+Cloudflare ingress rejects Python's default User-Agent. Full evidence is in `docs/71`.
+
+Future origins should deploy the exact committed revision using:
 
 ```bash
 docker compose -f relay/compose.yaml build --pull
@@ -45,10 +50,10 @@ alerts, and the final public HTTPS base URL. They must keep one worker/replica f
 upgrades, restrict `/metrics`, and leave `SWITCHTRADE_ENABLE_LEGACY_RELAY=0`. No deployment credential,
 certificate, or secret belongs in Git.
 
-After staged restart and two-NAT tests pass, the operator gives the packaging owner only the public
-HTTPS base URL. `installer/Build-Package.ps1 -Release` rejects HTTP and loopback URLs, writes the URL to
-`payload/release-config.json`, hashes it in the complete package manifest, and signs that manifest.
-Daily launch verifies the installed manifest signature and configuration hash before using the URL.
+Backup/restore, staged restart/reconnect, restricted metrics, and two-NAT tests still require operator
+evidence. The repository default URL is stored in `payload/release-config.json`; packaging copies the
+selected URL into the package and hashes it in the complete manifest. A signed public release would also
+sign that manifest, while the owner-approved private beta visibly identifies the unsigned limitation.
 
 ## Distribution completion
 
@@ -58,11 +63,11 @@ with consent, enumerates profiled USB devices by Windows bus ID, labels experime
 defer adapter setup. The selected USB identity is preserved through both Windows USB/IP preparation and
 the WSL driver/RX gate.
 
-Package verification is fail-closed: a release requires a trusted code-signing certificate, detached
-manifest signature, Authenticode-signed native executables, complete artifact hashes, approved notices,
-a pinned USB/IP package, minimal rootfs, and signed kernel/modules metadata. Update/rollback swaps the
-Windows app, WSL runtime, and retained kernel state together. Uninstall removes only SwitchTrade-owned
-files and unregisters only the named SwitchTrade distro when the user explicitly requests purge.
+Package verification remains fail-closed for signed releases. The owner-approved unsigned private-beta
+mode instead requires complete inputs, a public HTTPS relay, explicit artifact naming and warning, and a
+complete SHA-256 manifest, while truthfully providing no publisher-authenticity claim. Update/rollback
+swaps the Windows app, WSL runtime, and retained kernel state together. Uninstall removes only
+SwitchTrade-owned files and unregisters only the named SwitchTrade distro when explicitly requested.
 
 ## Internal evidence
 
@@ -80,15 +85,17 @@ No Switch hardware was needed or used for this pass. The relay payload replay us
 checksum-valid Salamence fixture and proves byte-exact opaque transport in both directions; it is not a
 substitute for real WAN/radio qualification.
 
-## External release blockers only
+## Remaining private-beta gates
 
-1. Owner/GPT final visual approval, public icons/logo, legal notices, and real support destination.
-2. Signed kernel/modules/firmware artifacts from the separate kernel repository.
-3. Trusted Windows code-signing certificate, signed rootfs/package inputs, and reproducible release
-   archive/checksum retention.
-4. Relay deployment behind public TLS plus backup restore, restart, and two-NAT qualification by the
-   hosting operator.
-5. Clean Windows 11 24H2 install/reboot/coexistence/Defender/SmartScreen/lifecycle qualification.
+1. Owner-deferred final visual approval plus approved legal notices and a real support destination; icon
+   wiring is complete.
+2. Final versioned kernel/modules/firmware/checksum artifacts from the kernel build mirror and a minimal
+   rootfs/package input set.
+3. Reproducible unsigned private-beta archive/checksum retention. Windows code signing is waived by the
+   owner for this beta and remains a future public-release feature.
+4. Relay backup/restore, staged restart/reconnect, restricted metrics, and two-NAT qualification.
+5. Clean Windows 11 24H2 install/reboot/coexistence/Defender/SmartScreen/lifecycle qualification,
+   including the expected unknown-publisher behavior.
 6. Both RTL8192EU adapters and two-PC/two-WSL/two-Switch discovery, full trade, teardown, immediate reuse,
    decoder comparison, and WAN impairment qualification.
 7. Written Gate 8 approval after the accepted Gate 0 exception and every remaining external result are

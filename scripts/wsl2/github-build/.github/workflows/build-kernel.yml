@@ -6,18 +6,34 @@ on:
       kernel_ref:
         description: "WSL2-Linux-Kernel ref (tag/branch)"
         required: false
-        default: "linux-msft-wsl-6.6.87.2"
+        default: "linux-msft-wsl-6.18.35.2"
       include_8192eu:
         description: "Include rtl8192eu firmware too"
         type: boolean
         required: false
         default: true
+      include_vendor_8188eu:
+        description: "Build the SimplyCEO rtl8188eus vendor module"
+        type: boolean
+        required: false
+        default: false
+      extra_kernel_config:
+        description: "Optional space-separated CONFIG_FOO=y|m|n entries"
+        required: false
+        default: ""
+      extra_firmware:
+        description: "Optional space-separated relative/path=url entries"
+        required: false
+        default: ""
 
 jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
+      - name: Check out build recipes and patches
+        uses: actions/checkout@v4
+
       - name: Install build deps
         run: |
           sudo apt-get update -y
@@ -25,21 +41,44 @@ jobs:
 
       - name: Fetch WSL2 kernel source
         run: |
-          REF="${{ inputs.kernel_ref || 'linux-msft-wsl-6.6.87.2' }}"
+          REF="${{ inputs.kernel_ref || 'linux-msft-wsl-6.18.35.2' }}"
           git clone --depth 1 --branch "$REF" https://github.com/microsoft/WSL2-Linux-Kernel.git src
 
       - name: Configure (USB stack ON + WiFi modules + built-in firmware + usbip client)
         working-directory: src
+        env:
+          EXTRA_KERNEL_CONFIG: ${{ inputs.extra_kernel_config }}
+          EXTRA_FIRMWARE_SPECS: ${{ inputs.extra_firmware }}
         run: |
           cp Microsoft/config-wsl .config
           mkdir -p firmware/rtlwifi
           BASE="https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/rtlwifi"
+          REGDB_ROOT="https://git.kernel.org/pub/scm/linux/kernel/git/wens/wireless-regdb.git/plain"
           wget -q "$BASE/rtl8188eufw.bin" -O firmware/rtlwifi/rtl8188eufw.bin
           FW_LIST="rtlwifi/rtl8188eufw.bin"
           if [[ "${{ inputs.include_8192eu }}" == "true" ]]; then
             wget -q "$BASE/rtl8192eu_nic.bin" -O firmware/rtlwifi/rtl8192eu_nic.bin
             FW_LIST="rtlwifi/rtl8188eufw.bin rtlwifi/rtl8192eu_nic.bin"
           fi
+          wget -q "$REGDB_ROOT/regulatory.db" -O firmware/regulatory.db
+          wget -q "$REGDB_ROOT/regulatory.db.p7s" -O firmware/regulatory.db.p7s
+          FW_LIST="$FW_LIST regulatory.db regulatory.db.p7s"
+          for SPEC in $EXTRA_FIRMWARE_SPECS; do
+            PATH_PART="${SPEC%%=*}"
+            URL_PART="${SPEC#*=}"
+            [[ "$SPEC" == *=* && -n "$PATH_PART" && -n "$URL_PART" ]] || {
+              echo "::error::invalid extra firmware spec: $SPEC"
+              exit 1
+            }
+            [[ "$PATH_PART" != /* && "$PATH_PART" != *..* ]] || {
+              echo "::error::unsafe extra firmware path: $PATH_PART"
+              exit 1
+            }
+            mkdir -p "firmware/$(dirname "$PATH_PART")"
+            wget -q "$URL_PART" -O "firmware/$PATH_PART"
+            test -s "firmware/$PATH_PART"
+            FW_LIST="$FW_LIST $PATH_PART"
+          done
           # CRITICAL: config-wsl ships WITHOUT the USB stack. Every USB driver
           # (rtl8xxxu, usbip vhci_hcd) silently disappears at olddefconfig unless
           # the USB core is enabled first. Enable the whole chain explicitly.
@@ -54,21 +93,48 @@ jobs:
             --module CONFIG_MAC80211 \
             --module CONFIG_RTL8XXXU \
             --enable CONFIG_RTL8XXXU_UNTESTED \
+            --module CONFIG_TUN \
+            --module CONFIG_TAP \
+            --module CONFIG_CRYPTO_CCM \
+            --module CONFIG_CRYPTO_CMAC \
             --module CONFIG_USBIP_CORE \
             --module CONFIG_USBIP_VHCI_HCD
+          for SPEC in $EXTRA_KERNEL_CONFIG; do
+            KEY="${SPEC%%=*}"
+            VALUE="${SPEC#*=}"
+            [[ "$KEY" =~ ^CONFIG_[A-Z0-9_]+$ ]] || {
+              echo "::error::invalid config symbol: $KEY"
+              exit 1
+            }
+            case "$VALUE" in
+              y) scripts/config --enable "$KEY" ;;
+              m) scripts/config --module "$KEY" ;;
+              n) scripts/config --disable "$KEY" ;;
+              *) echo "::error::invalid config value: $SPEC"; exit 1 ;;
+            esac
+          done
           make olddefconfig
+          for SPEC in $EXTRA_KERNEL_CONFIG; do
+            KEY="${SPEC%%=*}"
+            VALUE="${SPEC#*=}"
+            if [[ "$VALUE" == n ]]; then
+              grep -q "^# ${KEY} is not set" .config
+            else
+              grep -q "^${KEY}=${VALUE}" .config
+            fi || { echo "::error::olddefconfig changed $SPEC"; exit 1; }
+          done
 
       - name: Verify required options survived olddefconfig
         working-directory: src
         run: |
           MISSING=0
-          for OPT in CONFIG_USB CONFIG_USB_COMMON CONFIG_CFG80211 CONFIG_MAC80211 CONFIG_RTL8XXXU CONFIG_USBIP_CORE CONFIG_USBIP_VHCI_HCD; do
+          for OPT in CONFIG_USB CONFIG_USB_COMMON CONFIG_CFG80211 CONFIG_MAC80211 CONFIG_RTL8XXXU CONFIG_TUN CONFIG_TAP CONFIG_CRYPTO_CCM CONFIG_CRYPTO_CMAC CONFIG_USBIP_CORE CONFIG_USBIP_VHCI_HCD; do
             if ! grep -qE "^${OPT}=(y|m)" .config; then
               echo "::error::${OPT} was dropped by olddefconfig!"
               MISSING=1
             fi
           done
-          grep -E "^CONFIG_(USB|USB_COMMON|CFG80211|MAC80211|RTL8XXXU|USBIP_CORE|USBIP_VHCI_HCD)=" .config
+          grep -E "^CONFIG_(USB|USB_COMMON|CFG80211|MAC80211|RTL8XXXU|TUN|TAP|CRYPTO_CCM|CRYPTO_CMAC|USBIP_CORE|USBIP_VHCI_HCD)=" .config
           exit $MISSING
 
       - name: Build kernel and modules
@@ -78,7 +144,20 @@ jobs:
           echo "KVER=$KVER" >> "$GITHUB_ENV"
           make -j"$(nproc)" > build.log 2>&1 || { tail -40 build.log; exit 1; }
           rm -rf modout
-          make modules_install INSTALL_MOD_PATH="$PWD/modout"
+          make modules_install INSTALL_MOD_PATH="$PWD/modout" INSTALL_MOD_STRIP=1
+
+      - name: Build pinned RTL8188EU vendor module
+        if: ${{ inputs.include_vendor_8188eu == true }}
+        run: |
+          git clone https://github.com/SimplyCEO/rtl8188eus.git vendor-rtl8188eus
+          git -C vendor-rtl8188eus checkout b5f02e742fad6ae27d893ffae62d05e27374c0ed
+          git -C vendor-rtl8188eus apply ../patches/rtl8188eus-linux-6.18-netdev.patch
+          make -C vendor-rtl8188eus \
+            KVER="$KVER" \
+            KSRC="$GITHUB_WORKSPACE/src" \
+            -j"$(nproc)"
+          test -s vendor-rtl8188eus/8188eu.ko
+          modinfo vendor-rtl8188eus/8188eu.ko
 
       - name: Verify built artifacts exist
         working-directory: src
@@ -100,6 +179,26 @@ jobs:
           mkdir -p out
           cp arch/x86/boot/bzImage out/bzImage-wsl-st
           tar -C modout/lib/modules -czf "out/modules-${KVER}.tar.gz" .
+          if [[ -s ../vendor-rtl8188eus/8188eu.ko ]]; then
+            cp ../vendor-rtl8188eus/8188eu.ko out/8188eu-vendor.ko
+            sha256sum out/8188eu-vendor.ko > out/8188eu-vendor.ko.sha256
+          fi
+          find firmware -type f -print0 | sort -z | xargs -0 sha256sum > out/firmware-manifest.sha256
+          KERNEL_SHA=$(sha256sum out/bzImage-wsl-st | awk '{print $1}')
+          MODULES_SHA=$(sha256sum "out/modules-${KVER}.tar.gz" | awk '{print $1}')
+          FIRMWARE_SHA=$(sha256sum out/firmware-manifest.sha256 | awk '{print $1}')
+          cat > out/manifest.json <<EOF
+          {
+            "schema": 1,
+            "kernel_release": "${KVER}",
+            "kernel_sha256": "${KERNEL_SHA}",
+            "modules_sha256": "${MODULES_SHA}",
+            "firmware_sha256": "${FIRMWARE_SHA}",
+            "primary_driver": "rtl8xxxu",
+            "features": ["usbip-vhci", "tun-tap", "ccm", "cmac"],
+            "experimental_vendor_8188eu": ${{ inputs.include_vendor_8188eu == true }}
+          }
+          EOF
           {
             echo "MWL-SwitchTrade WSL2 kernel (${KVER}, WiFi rtl8xxxu + USB stack + built-in firmware)"
             echo "Built by GitHub Actions."
@@ -108,12 +207,20 @@ jobs:
             echo "1. Copy bzImage-wsl-st to C:\\wsl-kernel\\"
             echo "2. Copy modules-${KVER}.tar.gz to C:\\wsl-kernel\\"
             echo "3. In WSL2 terminal:"
-            echo "   sudo rm -rf /lib/modules/*"
-            echo "   sudo tar -xzf /mnt/c/wsl-kernel/modules-${KVER}.tar.gz -C /"
-            echo "   sudo depmod -a \$(uname -r)"
+            echo "   sudo mkdir -p /lib/modules"
+            echo "   sudo tar -xzf /mnt/c/wsl-kernel/modules-${KVER}.tar.gz -C /lib/modules"
+            echo "   sudo depmod -a ${KVER}"
+            echo "   sudo apt-get install -y iw tcpdump usbutils wireless-regdb hostapd"
             echo "   sudo modprobe vhci_hcd"
             echo "4. Windows PowerShell: usbipd attach --wsl --busid <BUSID>"
             echo "5. Check uname -a matches this build date (gate G1)"
+            if [[ -s out/8188eu-vendor.ko ]]; then
+              echo ""
+              echo "Optional RTL8188EU vendor-driver experiment:"
+              echo "- 8188eu-vendor.ko was built from SimplyCEO/rtl8188eus"
+              echo "  commit b5f02e742fad6ae27d893ffae62d05e27374c0ed."
+              echo "- Do not install it over a working radio without preserving rollback."
+            fi
           } > out/README-install.txt
 
       - name: Upload artifacts

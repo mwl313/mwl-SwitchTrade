@@ -8,7 +8,7 @@ import time
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from switchtrade.relay_client import RelayClient
+from switchtrade.relay_client import RelayClient, USER_AGENT
 from switchtrade.rfu_tunnel import Kind
 from switchtrade.tunnel_client import TunnelClient
 
@@ -26,12 +26,13 @@ def smoke(base_url: str, allow_http: bool = False) -> None:
     base_url = base_url.rstrip("/")
     if not allow_http and not base_url.startswith("https://"):
         raise ValueError("public smoke tests require HTTPS; use --allow-http only for local staging")
-    with urlopen(f"{base_url}/health", timeout=5) as response:
+    headers = {"User-Agent": USER_AGENT}
+    with urlopen(Request(f"{base_url}/health", headers=headers), timeout=5) as response:
         health = json.load(response)
     if health.get("status") != "ready" or health.get("payload_mode") != "opaque":
         raise RuntimeError("relay health contract is not ready")
     try:
-        urlopen(Request(f"{base_url}/session/create", method="POST"), timeout=5)
+        urlopen(Request(f"{base_url}/session/create", method="POST", headers=headers), timeout=5)
     except HTTPError as error:
         if error.code != 404:
             raise RuntimeError(f"legacy relay endpoint returned {error.code}, expected 404") from error

@@ -103,6 +103,9 @@
      readiness, reconnect tokens, room-creator assignment, and session lifecycle.
    - Keep client privacy/consent and committed-trade analytics outside this client/relay per owner
      direction. No Pokémon, trainer, raw-IP, or location analytics are uploaded by the beta code.
+   - Public TLS deployment and credentialed opaque bidirectional smoke passed at
+     `https://relay.pangyostonefist.org`; backup/restore, staged restart, restricted metrics, and two-NAT
+     qualification remain.
 
 13. **Run the first production Switch-to-Switch test.**
    - Use two RTL8192EU endpoints.
@@ -117,8 +120,10 @@
      attempts.
 
 15. **Package the private demo/beta.**
-    - Ship a signed Windows bootstrap installer that detects/installs WSL, the isolated SwitchTrade
+    - Ship an explicitly labeled unsigned Windows bootstrap installer that detects/installs WSL, the isolated SwitchTrade
       distro/runtime, the versioned custom kernel artifact, USB/IP, the desktop app, and frontend.
+    - Windows code signing is waived by explicit owner decision for this private beta. Preserve the
+      signed-release path for later and clearly warn that Windows cannot verify the publisher.
     - Resume safely after the one Windows reboot that may be required for initial WSL enablement;
       otherwise use bounded `wsl --shutdown`, not a WSL reset or deletion.
     - Provide clean-machine installation, first-run hardware setup, repair, uninstall, rollback, user
@@ -191,12 +196,14 @@ As of the `0.2.0-beta.1` repository candidate:
   two-player activity.
 - Task 8 passed recorded byte-exact replay, duplicate/stale/reorder guards, relay restart/reconnect,
   bounded queue, and teardown tests without Switch hardware.
-- Task 12 is hosting-ready in `relay/`; the separate hosting operator still must deploy public TLS,
-  prove backup/restart and two-NAT operation, and return the HTTPS URL.
-- Task 15's native setup and signed-package mechanism implement install, resume, repair, update, atomic
-  Windows/WSL/kernel rollback, uninstall, optional named-distro purge, and signed relay configuration.
+- Task 12 is live at `https://relay.pangyostonefist.org`; health, legacy rejection, authoritative room
+  lifecycle, and opaque bidirectional WebSocket smoke pass. The hosting operator still must prove
+  backup/restore, staged restart, restricted metrics, and two-NAT operation.
+- Task 15's native setup implements install, resume, repair, update, atomic Windows/WSL/kernel rollback,
+  uninstall, optional named-distro purge, and hashed relay configuration. The current owner-approved
+  distribution is explicitly unsigned; the signed mechanism remains for a future public release.
 - Task 6 and Tasks 13-14 still require the second RTL8192EU and real two-endpoint qualification. Final
-  release also requires owner assets/notices/support, signed external artifacts, clean-machine and
+  release also requires owner notices/support, final kernel/rootfs artifacts, clean-machine and
   Defender/SmartScreen testing, and written approval.
 
 Current evidence and exact external blockers are recorded in `docs/69`; safe recovery is in `docs/70`.

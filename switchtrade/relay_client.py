@@ -10,6 +10,11 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
+from switchtrade import __version__
+
+
+USER_AGENT = f"SwitchTrade/{__version__}"
+
 
 class RelayError(RuntimeError):
     pass
@@ -26,7 +31,7 @@ class RelayClient:
 
     def _request(self, method: str, path: str, payload: dict | None = None,
                  headers: dict[str, str] | None = None) -> dict:
-        request_headers = dict(headers or {})
+        request_headers = {**(headers or {}), "User-Agent": USER_AGENT}
         data = None
         if payload is not None:
             data = json.dumps(payload).encode("utf-8")

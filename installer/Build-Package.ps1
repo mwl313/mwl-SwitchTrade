@@ -9,38 +9,58 @@ param(
     [string]$KernelManifestSignature = '',
     [string]$UsbipdMsi = '',
     [string]$UsbipdVersion = '5.3.0',
-    [string]$RelayUrl = 'http://127.0.0.1:8788',
+    [string]$RelayUrl = '',
     [string]$Notices = '',
     [string]$SigningCertificateThumbprint = '',
     [string]$TimestampUrl = 'http://timestamp.digicert.com',
     [switch]$Release,
+    [switch]$UnsignedPrivateBeta,
     [switch]$NoArchive
 )
 
 $ErrorActionPreference = 'Stop'
 $Repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if (-not $OutputRoot) { $OutputRoot = Join-Path $Repo 'artifacts' }
+$ReleaseConfigSource = Join-Path $Repo 'payload\release-config.json'
+if (-not $RelayUrl) {
+    if (Test-Path -LiteralPath $ReleaseConfigSource -PathType Leaf) {
+        $sourceConfiguration = Get-Content -Raw -LiteralPath $ReleaseConfigSource | ConvertFrom-Json
+        if ([int]$sourceConfiguration.schema -ne 1 -or -not [string]$sourceConfiguration.relay_url) {
+            throw 'repository release configuration is invalid'
+        }
+        $RelayUrl = [string]$sourceConfiguration.relay_url
+    } else {
+        $RelayUrl = 'http://127.0.0.1:8788'
+    }
+}
+if ($Release -and $UnsignedPrivateBeta) {
+    throw '-Release and -UnsignedPrivateBeta are mutually exclusive'
+}
 $Version = (& git -C $Repo rev-parse --short HEAD).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'cannot determine repository revision' }
 $dirty = & git -C $Repo status --porcelain
 if ($dirty) { throw 'refusing to package a dirty worktree; commit the beta source first' }
-$Stage = Join-Path $OutputRoot "SwitchTrade-beta-$Version"
+$packageName = if ($UnsignedPrivateBeta) { "SwitchTrade-unsigned-private-beta-$Version" } else { "SwitchTrade-beta-$Version" }
+$Stage = Join-Path $OutputRoot $packageName
 . (Join-Path $PSScriptRoot 'PackageIntegrity.ps1')
 $kernelIdentity = 'not-bundled'
 $driverIdentity = 'rtl8xxxu'
 $firmwareIdentity = 'kernel-bundle'
 
-if ($Release) {
+if ($Release -or $UnsignedPrivateBeta) {
     $missing = @()
     foreach ($item in @{
         Rootfs = $Rootfs; DesktopExe = $DesktopExe; Kernel = $Kernel
-        KernelModules = $KernelModules; KernelManifest = $KernelManifest
-        KernelManifestSignature = $KernelManifestSignature; UsbipdMsi = $UsbipdMsi
-        Notices = $Notices; SigningCertificateThumbprint = $SigningCertificateThumbprint
+        KernelModules = $KernelModules; KernelManifest = $KernelManifest; UsbipdMsi = $UsbipdMsi
+        Notices = $Notices
     }.GetEnumerator()) {
         if (-not $item.Value) { $missing += $item.Key }
     }
-    if ($missing) { throw "release package inputs are missing: $($missing -join ', ')" }
+    if ($Release) {
+        if (-not $KernelManifestSignature) { $missing += 'KernelManifestSignature' }
+        if (-not $SigningCertificateThumbprint) { $missing += 'SigningCertificateThumbprint' }
+    }
+    if ($missing) { throw "distribution package inputs are missing: $($missing -join ', ')" }
 }
 
 if (Test-Path -LiteralPath $Stage) { throw "package stage already exists: $Stage" }
@@ -154,8 +174,8 @@ $relay = [Uri]$RelayUrl
 if (-not $relay.IsAbsoluteUri -or $relay.Scheme -notin @('http', 'https')) {
     throw 'relay URL must be an absolute HTTP(S) URL'
 }
-if ($Release -and ($relay.Scheme -ne 'https' -or $relay.IsLoopback)) {
-    throw 'release packages require a reachable non-loopback HTTPS relay URL'
+if (($Release -or $UnsignedPrivateBeta) -and ($relay.Scheme -ne 'https' -or $relay.IsLoopback)) {
+    throw 'private beta packages require a reachable non-loopback HTTPS relay URL'
 }
 @{
     schema = 1
@@ -200,6 +220,16 @@ if (Test-Path -LiteralPath (Join-Path $Stage 'windows\SwitchTrade.exe')) {
         Set-Content -LiteralPath (Join-Path $Stage 'windows\SwitchTrade.exe.sha256') -Encoding Ascii
 }
 
+if ($UnsignedPrivateBeta) {
+    @'
+UNSIGNED SWITCHTRADE PRIVATE BETA
+
+Windows cannot verify the publisher of this package. Install it only when obtained directly from the
+SwitchTrade project owner. SHA-256 checks detect corruption after download but do not prove who created
+the package. Managed Windows systems may block installation.
+'@ | Set-Content -LiteralPath (Join-Path $Stage 'UNSIGNED-PRIVATE-BETA.txt') -Encoding UTF8
+}
+
 $manifestPath = Join-Path $Stage 'manifest.json'
 $manifestArgs = @(
     (Join-Path $Repo 'scripts\write-release-manifest.py'), '--output', $manifestPath,
@@ -208,6 +238,7 @@ $manifestArgs = @(
     '--firmware', $firmwareIdentity, '--usb-id', '0bda:818b'
 )
 if ($Release) { $manifestArgs += '--signature-required' }
+if ($UnsignedPrivateBeta) { $manifestArgs += '--unsigned-private-beta' }
 & python @manifestArgs
 if ($LASTEXITCODE -ne 0) { throw 'release manifest generation failed' }
 if ($certificate) {

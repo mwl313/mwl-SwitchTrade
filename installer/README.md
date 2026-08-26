@@ -17,6 +17,14 @@ kernel settings into the user's global `.wslconfig` and retains the complete pri
    manifest, pinned `usbipd-win` MSI, approved notice file, non-loopback HTTPS relay, code-signing
    certificate thumbprint, and timestamp URL. Missing inputs fail the build before publication.
 
+The builder reads the default relay URL from the tracked `payload/release-config.json`. Pass
+`-RelayUrl` only to override it for an explicit local or staged test.
+
+The owner-approved unsigned private beta uses `-UnsignedPrivateBeta` instead of `-Release`. It still
+requires the complete rootfs, desktop, kernel/modules, USB/IP, notice, and public HTTPS relay inputs,
+but produces an explicitly named package that can be opened normally after an unavoidable publisher
+warning. The signed `-Release` path remains available for a future public release.
+
 The schema-2 package manifest hashes every shipped file. A release manifest has a detached CMS
 signature chained to a trusted code-signing certificate; the bootstrap verifies that signature, every
 SHA-256 digest, missing files, and unexpected files before PowerShell can run. The desktop and setup

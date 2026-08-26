@@ -16,9 +16,10 @@ internal static class Program
         var requestedAction = args.Select(value => value.ToLowerInvariant()).FirstOrDefault(value =>
             value is "audit" or "install" or "repair" or "update" or "resume" or "rollback" or "uninstall");
         var allowUnsigned = args.Contains("--allow-unsigned-package", StringComparer.OrdinalIgnoreCase);
+        bool unsignedPrivateBeta;
         try
         {
-            VerifyPackage(AppContext.BaseDirectory, allowUnsigned);
+            unsignedPrivateBeta = VerifyPackage(AppContext.BaseDirectory, allowUnsigned);
         }
         catch (Exception error)
         {
@@ -31,6 +32,13 @@ internal static class Program
                 "SwitchTrade Setup", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 3;
         }
+        if (unsignedPrivateBeta && requestedAction is null && MessageBox.Show(
+                "This is an unsigned SwitchTrade private beta. Windows cannot verify its publisher, " +
+                "and its checksums do not prove who created it. Continue only if you received this " +
+                "package directly from the SwitchTrade project owner.",
+                "Unsigned SwitchTrade Private Beta", MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning) != DialogResult.Yes)
+            return 0;
         var choice = requestedAction is null ? SetupDialog.Show(AppContext.BaseDirectory) : null;
         if (requestedAction is null && choice is null) return 0;
         var action = requestedAction ?? choice!.Action.ToLowerInvariant();
@@ -79,6 +87,7 @@ internal static class Program
                 start.ArgumentList.Add(option[9..]);
             }
         }
+        if (unsignedPrivateBeta && !allowUnsigned) start.ArgumentList.Add("-AllowUnsignedPackage");
         if (choice is not null)
         {
             if (choice.AcceptGlobalKernelChange) start.ArgumentList.Add("-AcceptGlobalKernelChange");
@@ -131,7 +140,7 @@ internal static class Program
         }
     }
 
-    private static void VerifyPackage(string packageRoot, bool allowUnsigned)
+    private static bool VerifyPackage(string packageRoot, bool allowUnsigned)
     {
         var root = Path.GetFullPath(packageRoot).TrimEnd(Path.DirectorySeparatorChar);
         var manifestPath = Path.Combine(root, "manifest.json");
@@ -144,8 +153,10 @@ internal static class Program
             throw new InvalidDataException("PACKAGE_MANIFEST_UNSUPPORTED");
         var signatureRequired = document.TryGetProperty("signature_required", out var required) &&
                                 required.ValueKind == JsonValueKind.True;
+        var unsignedPrivateBeta = document.TryGetProperty("unsigned_private_beta", out var beta) &&
+                                  beta.ValueKind == JsonValueKind.True;
         if (File.Exists(signaturePath)) VerifySignature(manifestPath, signaturePath);
-        else if (signatureRequired || !allowUnsigned)
+        else if (signatureRequired || (!allowUnsigned && !unsignedPrivateBeta))
             throw new InvalidDataException(
                 "PACKAGE_SIGNATURE_MISSING: obtain a signed release package. Unsigned builds require the explicit internal-test flag.");
 
@@ -175,6 +186,7 @@ internal static class Program
         var unexpected = actual.FirstOrDefault(path => !expected.ContainsKey(path));
         if (unexpected is not null) throw new InvalidDataException($"PACKAGE_UNEXPECTED_ARTIFACT: {unexpected}");
         if (actual.Length != expected.Count) throw new InvalidDataException("PACKAGE_ARTIFACT_SET_MISMATCH");
+        return unsignedPrivateBeta;
     }
 
     private static void VerifySignature(string contentPath, string signaturePath)

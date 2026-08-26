@@ -2,10 +2,11 @@
 
 > Status: Repository-controlled preflight implementation is complete as of 2026-08-26, excluding all
 > client privacy/consent work by explicit owner direction. This is not release approval: final owner/GPT
-> visual and asset decisions, legal notices, support destination, externally signed artifacts, public-TLS
-> relay deployment, clean-machine qualification, and two-PC/two-Switch hardware qualification remain
-> blocking. The relay is hosting-ready in this repository; deployment belongs to the separate hosting
-> operator. The current package is explicitly internal-only until those external gates pass.
+> visual approval, legal notices, support destination, final kernel/rootfs inputs, relay operational
+> qualification, clean-machine qualification, and two-PC/two-Switch hardware qualification remain.
+> The relay is live at `https://relay.pangyostonefist.org` and its credentialed opaque smoke passes;
+> backup/restore, staged restart, and two-NAT tests remain. The owner explicitly waived Windows code
+> signing for this private beta, so the package must remain visibly labeled unsigned.
 > UI baseline: `docs/56-native-ui-ux-redesign-handoff-20260825.md` and the owner overrides in
 > `docs/57-native-ui-overhaul-implementation-report-20260825.md` are the preliminary redesign source.
 > Latest UI evidence: `docs/64-second-native-ui-overhaul-implementation-report-20260825.md`.
@@ -33,23 +34,23 @@
 | Order | Gate | Current state | Release-blocking result still needed |
 |---:|---|---|---|
 | 1 | Gate 4 local integration | Internally implemented | Hardware-qualify authoritative role transition, retry, and recovery in Gate 7 |
-| 2 | Gate 0 | Owner-deferred, not approved | Approve the native build plus public icons/assets, legal notices, and real support destination before packaging/release |
+| 2 | Gate 0 | Visual overhaul owner-deferred; icon wiring complete | Supply approved legal notices and a real support destination; record final visual acceptance later |
 | 3 | Gates 4–5 contracts | Implemented and internally tested | Qualify the ordered room path across two production endpoints |
-| 4 | Gate 5 remote services | Hosting-ready authority/opaque relay; deployment delegated | Hosting operator deploys behind public TLS and passes two-NAT qualification; analytics remain owner-external |
-| 5 | Gates 1–3 | Native/bootstrap/lifecycle code complete internally | Supply signed rootfs, kernel/modules, usbipd, notices, and signing certificates |
-| 6 | Gate 6 | Automated subset passed; physical lifecycle not qualified | Pass clean-machine, reboot, coexistence, Defender, signing, and destructive lifecycle matrix |
+| 4 | Gate 5 remote services | Public TLS deployment and credentialed smoke passed | Pass backup/restore, staged restart/reconnect, restricted metrics, and two-NAT qualification |
+| 5 | Gates 1–3 | Native/bootstrap/lifecycle and unsigned-beta path complete internally | Supply final rootfs, kernel/modules, usbipd, and approved notices |
+| 6 | Gate 6 | Automated subset passed; physical lifecycle not qualified | Pass clean-machine, reboot, coexistence, unsigned-publisher warning, and destructive lifecycle matrix |
 | 7 | Gate 7 | Waiting for production stack and second RTL8192EU | Pass two-PC/two-Switch hardware, trade, decoder, teardown, reuse, and network-fault qualification |
-| 8 | Gate 8 | Not started | Sign, publish, archive, review, and approve the private beta |
+| 8 | Gate 8 | Windows signing waived by owner | Build the labeled unsigned package, publish privately, archive, review, and approve |
 
-The owner exception authorized implementation and internal packaging through Gate 6, but does not
-authorize calling an unsigned/internal artifact a beta release.
+The owner explicitly authorized an unsigned private beta. It must never be described as signed or
+publisher-verified, and the signed release path remains preserved for a future public release.
 
 ## Next implementation tranche — do this before packaging
 
 1. [x] Give GPT the final handoff/audit and implement its contract-grounded WPF overhaul without
    reintroducing the removed Privacy tab. Evidence is in `docs/64`.
-2. [ ] Owner-deferred: obtain final owner/GPT visual approval and approve the remaining public
-   icon/logo, legal-notice, and real support-destination decisions before packaging. This closes Gate 0.
+2. [ ] Owner-deferred: obtain final visual approval and supply approved legal notices and a real support
+   destination. Icon wiring/build validation is complete; visual redesign remains backlog.
 3. [x] Implement and internally test the authenticated server-authoritative two-member room state
    machine, reconnect tokens, atomic room-creator claims, ordered events, expiration, and recovery.
 4. [x] Connect the endpoint/control split to authoritative immutable seats and atomic per-attempt
@@ -68,7 +69,7 @@ This preflight checklist is the release-blocking superset of the immediate tasks
 `docs/50-current-product-demo-todo-20260825.md`. The backlog remains outside beta preflight.
 
 - [x] Freeze and version the application/relay production-beta repository and pinned dependencies.
-  The separately produced signed kernel/modules/firmware release remains an external Gate 3/8 input.
+  The separately produced versioned kernel/modules/firmware checksum bundle remains a Gate 3/8 input.
 - [x] Lock the RTL8192EU beta policy while preserving profile-driven driver/hardware expansion.
   Covered by Gates 0, 2, 3, and 7.
 - [x] Finish the fail-closed Windows/WSL hardware launcher. Physical qualification remains in Gate 7.
@@ -91,13 +92,15 @@ This preflight checklist is the release-blocking superset of the immediate tasks
   authoritative lobby, decoder observer, and clean shutdown. Covered by Gates 1, 2, 4, and 5.
 - [x] Finish the production-hosting package for the opaque relay and authoritative lobby, including
   a hardened container, persistent authority store, deployment runbook, and credentialed smoke test.
-- [ ] Hosting operator: deploy that relay behind public TLS and return the qualified HTTPS base URL.
-  Consented trade-statistics services remain owner-external and are not part of this client/relay.
+- [x] Hosting operator deployed the relay at `https://relay.pangyostonefist.org`; health, legacy-endpoint
+  rejection, authenticated room lifecycle, and opaque bidirectional WebSocket smoke passed. Backup,
+  restart, restricted-metrics, and two-NAT qualification remain in Gate 5. Evidence: `docs/71`.
 - [ ] Run the first real two-endpoint, two-Switch production test. Covered by Gate 7.
 - [ ] Run LAN/WAN reliability, fault, recovery, and immediate-reuse testing. Covered by Gate 7.
 - [x] Implement and internally test build, install, repair, update, atomic app/WSL/kernel rollback,
   uninstall, manifest/signature verification, and guided native setup.
-- [ ] Sign and externally qualify the resulting private-beta package. Covered by Gates 1-8.
+- [ ] Build and externally qualify the explicitly labeled unsigned private-beta package. Windows code
+  signing is an accepted owner exception; covered by Gates 1-8 and `docs/71`.
 
 ## Gate 0 — freeze the beta experience
 
@@ -137,18 +140,18 @@ This preflight checklist is the release-blocking superset of the immediate tasks
   retention, deletion/export, access control, and an option that does not upload party or trade
   analytics. Per owner direction, this workflow is administered outside the client.
 - [x] Freeze the first beta version, supported Windows versions, and RTL8192EU hardware policy.
-- [ ] Approve the final public icon/logo assets, license/legal notices, and real support destination.
-  The SwitchTrade name and Linkline direction are frozen; no Privacy tab or client analytics control
-  is part of this approval.
+- [ ] Supply approved license/legal notices and a real support destination. App/setup/favicon wiring is
+  complete; final visual approval is owner-deferred. No Privacy tab or client analytics control is part
+  of this approval.
 
 Gate 0 normally precedes installer work. The owner's written exception allowed repository-side
 installer implementation to proceed, but final public packaging and release approval remain blocked.
 
 ## Gate 1 — build the one-piece Windows distribution
 
-- [ ] Produce one signed `SwitchTradeSetup.exe` bootstrapper.
-  The fail-closed Authenticode/CMS signing path is implemented; the real certificate and signed release
-  artifact remain external Gate 8 inputs.
+- [x] Implement one ordinary double-click `SwitchTradeSetup.exe` path for an explicitly labeled unsigned
+  private beta. The setup warns that Windows cannot verify the publisher. The signed Authenticode/CMS
+  path remains available for a future public release.
 - [ ] Embed or checksummably bundle `SwitchTrade.exe`, the minimal rootfs, application runtime,
   hardware profiles, license notices, and release manifest.
   The schema-2 bundle and complete-file checksum path are implemented; final rootfs and approved notice
@@ -163,8 +166,9 @@ installer implementation to proceed, but final public packaging and release appr
 - [x] Support detect, install, repair, update, rollback, and uninstall modes.
 - [x] Persist non-secret installer state and resume safely through per-user RunOnce after a required
   Windows reboot; reverify the original package before resumed mutation.
-- [x] Refuse missing, unexpected, or mismatched artifacts using a complete SHA-256 manifest; require a
-  trusted detached code-signing signature for release packages and an explicit flag for internal QA.
+- [x] Refuse missing, unexpected, or mismatched artifacts using a complete SHA-256 manifest. Signed
+  releases require a trusted detached signature; the owner-approved unsigned beta requires an explicit
+  manifest marker, visible warning, and complete input set.
 
 ## Gate 2 — prerequisites and first-run setup
 
@@ -191,9 +195,13 @@ installer implementation to proceed, but final public packaging and release appr
 
 Decision: the beta uses the project-maintained custom WSL kernel because it is the qualified runtime.
 
-- [ ] Consume a signed, versioned kernel and modules artifact from the separate kernel repository.
-  The app-side detached-signature and checksum consumer is implemented, but the separate repository has
-  not yet published the final signed release pair.
+- [x] Reconcile the application-repository SSOT with the later expandable kernel work: default to the
+  qualified 6.18.35.2 ref, retain validated extra driver/firmware inputs, require the LDN runtime modules,
+  preserve the opt-in pinned RTL8188EU experiment, and emit a checksum manifest. The execution mirror and
+  fresh artifact are handled by the next item.
+- [ ] Consume a versioned kernel/modules/firmware artifact and checksum manifest from the separate kernel
+  build mirror. Detached signing is waived only for the unsigned private beta; the final artifact pair
+  has not yet been produced and hardware-qualified.
 - [x] Warn before installation that WSL custom-kernel selection is global to all WSL 2 distributions.
 - [x] Back up the user's complete existing `.wslconfig` before making any change.
 - [x] Merge only the required `kernel` and `kernelModules` values; preserve unrelated settings.
@@ -202,7 +210,7 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
   distributions.
 - [ ] Verify the running kernel, module ABI, firmware, RTL8192EU driver binding, and actual packet RX.
   Setup now performs all five checks and correctly installs tar modules under `/lib/modules` instead of
-  treating them as a `kernelModules` VHD; final signed-artifact/hardware qualification remains Gate 7.
+  treating them as a `kernelModules` VHD; final artifact/hardware qualification remains Gate 7.
 - [x] Restore the prior configuration during rollback/uninstall when SwitchTrade owns the change.
 - [x] Treat corporate policy that blocks custom WSL kernels as an explicit unsupported condition,
   restore the previous WSL configuration, and report `CUSTOM_KERNEL_BLOCKED_BY_POLICY`.
@@ -220,8 +228,8 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
 - [x] Add version mismatch handling, retained failure stage, and allowlisted recovery-action metadata.
 - [x] Implement retained-session `/api/v1/app/retry`, an allowlisted adapter health-gate repair, and
   bind radio-stage failures to the native repair action without accepting free-form commands.
-- [ ] Publish and qualify the first signed update package. The fail-closed Update mechanism is
-  implemented, but no production signing certificate/artifact has been supplied.
+- [ ] Publish and qualify the first labeled unsigned private-beta update package. The signed update path
+  remains implemented for a future public release.
 - [x] Finish stage-specific native routing for control, version, relay, session, decoder, and radio
   failures with exact recovery guidance and no unsafe free-form repair command.
 - [x] Prevent duplicate control, endpoint, or development-relay processes.
@@ -258,9 +266,11 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
 
 ## Gate 5 — production relay and authoritative groups; analytics owner-deferred
 
-- [ ] Deploy a reachable TLS-protected relay; the localhost relay remains internal-test-only.
-- [x] Configure the relay URL through signed installation configuration rather than hardcoded UI state;
-  release builds reject loopback/non-HTTPS URLs and daily launch revalidates the signed config hash.
+- [x] Deploy a reachable TLS-protected relay at `https://relay.pangyostonefist.org`; credentialed room
+  and opaque bidirectional WebSocket smoke passed on 2026-08-26.
+- [x] Configure the relay URL through manifest-hashed installation configuration rather than hardcoded
+  UI state; private-beta builds reject loopback/non-HTTPS URLs and daily launch revalidates the config
+  hash. A future signed release also authenticates that manifest.
 - [x] Add authenticated member identities or scoped reconnect tokens so possession of a passcode alone
   cannot overwrite an occupied member, claim both roles, publish readiness, or impersonate a reconnect.
 - [x] Make the service authoritative for group metadata, exactly two member seats, membership version,
@@ -310,7 +320,8 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
   server-data deletion path. The client contains no optional analytics/privacy setting.
 - [ ] Owner-external/deferred: verify any future server-side committed-trade ingestion idempotency across retries and records none
   for cancel, rollback, save failure, communication error, or pre-commit disconnect.
-- [ ] Verify Windows Defender/SmartScreen behavior and signed artifact trust.
+- [ ] Verify Windows Defender/SmartScreen behavior and the expected unsigned/unknown-publisher warning;
+  document any managed-system block as an unsupported private-beta condition.
 
 ## Gate 7 — hardware and product qualification
 
@@ -334,7 +345,8 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
 
 ## Gate 8 — release approval
 
-- [ ] Sign the bootstrapper, native EXE, kernel, modules, rootfs, manifest, and update metadata.
+- [x] Owner exception: Windows Authenticode/CMS signing is skipped for this private beta. Preserve the
+  signed path for a future public release and label every current package as unsigned.
 - [x] Publish the current hardware/Windows/WSL limitations and recovery guide in `docs/70`.
   Final public URL/support contact and release-version values remain Gate 0/8 owner inputs.
 - [ ] Complete security/privacy review of trainer, Pokémon, source-IP, coarse-location, consent,

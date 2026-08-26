@@ -34,8 +34,11 @@ class InstallerLifecycleTests(unittest.TestCase):
         builder = (ROOT / "installer" / "Build-Package.ps1").read_text(encoding="utf-8")
         for value in ("Rootfs", "DesktopExe", "Kernel", "KernelModules", "KernelManifest",
                       "KernelManifestSignature", "UsbipdMsi", "RelayUrl", "Notices",
-                      "SigningCertificateThumbprint", "signature-required"):
+                      "SigningCertificateThumbprint", "signature-required", "UnsignedPrivateBeta"):
             self.assertIn(value, builder)
+        self.assertIn("payload\\release-config.json", builder)
+        release_config = json.loads((ROOT / "payload" / "release-config.json").read_text())
+        self.assertEqual(release_config["relay_url"], "https://relay.pangyostonefist.org")
 
     def test_kernel_archive_is_not_mapped_as_a_wsl_modules_vhd(self):
         lifecycle = (ROOT / "installer" / "KernelLifecycle.ps1").read_text(encoding="utf-8")
@@ -70,11 +73,13 @@ class InstallerLifecycleTests(unittest.TestCase):
                 "python", str(ROOT / "scripts" / "write-release-manifest.py"),
                 "--output", str(manifest), "--package-root", str(package),
                 "--release-id", "test-release",
+                "--unsigned-private-beta",
             ], cwd=ROOT, capture_output=True, text=True, timeout=30)
             self.assertEqual(generated.returncode, 0, generated.stderr)
             body = json.loads(manifest.read_text(encoding="utf-8"))
             self.assertEqual(body["schema"], 2)
             self.assertIn("payload/artifact.txt", body["artifact_hashes"])
+            self.assertTrue(body["unsigned_private_beta"])
             integrity = ROOT / "installer" / "PackageIntegrity.ps1"
             command = (
                 f". '{integrity}'; Test-SwitchTradePackage -PackageRoot '{package}' "
