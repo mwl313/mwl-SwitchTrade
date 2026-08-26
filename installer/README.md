@@ -19,6 +19,8 @@ kernel settings into the user's global `.wslconfig` and retains the complete pri
 
 The builder reads the default relay URL from the tracked `payload/release-config.json`. Pass
 `-RelayUrl` only to override it for an explicit local or staged test.
+The tracked `legal/THIRD-PARTY-NOTICES.txt` is the default notice inventory; pass `-Notices` only when
+building against a separately reviewed replacement.
 
 The owner-approved unsigned private beta uses `-UnsignedPrivateBeta` instead of `-Release`. It still
 requires the complete rootfs, desktop, kernel/modules, USB/IP, notice, and public HTTPS relay inputs,

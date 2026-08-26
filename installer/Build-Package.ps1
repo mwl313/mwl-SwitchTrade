@@ -22,6 +22,10 @@ $ErrorActionPreference = 'Stop'
 $Repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if (-not $OutputRoot) { $OutputRoot = Join-Path $Repo 'artifacts' }
 $ReleaseConfigSource = Join-Path $Repo 'payload\release-config.json'
+$RepositoryNotices = Join-Path $Repo 'legal\THIRD-PARTY-NOTICES.txt'
+if (-not $Notices -and (Test-Path -LiteralPath $RepositoryNotices -PathType Leaf)) {
+    $Notices = $RepositoryNotices
+}
 if (-not $RelayUrl) {
     if (Test-Path -LiteralPath $ReleaseConfigSource -PathType Leaf) {
         $sourceConfiguration = Get-Content -Raw -LiteralPath $ReleaseConfigSource | ConvertFrom-Json

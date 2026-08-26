@@ -116,6 +116,12 @@ artifact signing remain release gates. The lifecycle manages only the named Swit
 backs up/restores the user's complete `.wslconfig`; when a verified custom-kernel bundle is supplied,
 its kernel selection is global to WSL 2 and requires explicit consent.
 
+## Support
+
+Create a redacted support bundle from **Settings → Support**, then report reproducible problems at
+https://github.com/mwl313/mwl-SwitchTrade/issues. Do not upload room credentials, packet captures, or
+other private data outside the generated redacted bundle.
+
 ## 핵심 원칙
 
 1. Switch는 **절대 건드리지 않는다** — 모든 마법은 PC 브리지에서

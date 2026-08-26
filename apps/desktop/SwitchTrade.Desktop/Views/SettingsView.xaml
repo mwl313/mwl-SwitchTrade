@@ -75,6 +75,11 @@
                         HorizontalAlignment="Left" Margin="-10,6,0,-6" />
               </StackPanel>
             </Border>
+            <TextBlock Margin="0,18,0,0" TextWrapping="Wrap">
+              Report a problem and attach the support file at
+              <Hyperlink NavigateUri="https://github.com/mwl313/mwl-SwitchTrade/issues"
+                         RequestNavigate="OpenSupportPage">SwitchTrade GitHub Issues</Hyperlink>.
+            </TextBlock>
             <Border Height="1" Background="{DynamicResource BorderBrush}" Margin="0,28" />
             <TextBlock Text="About SwitchTrade" Style="{StaticResource SectionTitle}" />
             <TextBlock Text="SwitchTrade 0.2.0 beta.1" />

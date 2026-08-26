@@ -34,9 +34,9 @@
 | Order | Gate | Current state | Release-blocking result still needed |
 |---:|---|---|---|
 | 1 | Gate 4 local integration | Internally implemented | Hardware-qualify authoritative role transition, retry, and recovery in Gate 7 |
-| 2 | Gate 0 | Visual overhaul owner-deferred; icon wiring complete | Supply approved legal notices and a real support destination; record final visual acceptance later |
+| 2 | Gate 0 | Visual overhaul owner-deferred; icon wiring, real GitHub Issues support link, and factual third-party notice inventory complete | Approve the notice inventory and record final visual acceptance later |
 | 3 | Gates 4–5 contracts | Implemented and internally tested | Qualify the ordered room path across two production endpoints |
-| 4 | Gate 5 remote services | Public TLS deployment and credentialed smoke passed | Pass backup/restore, staged restart/reconnect, restricted metrics, and two-NAT qualification |
+| 4 | Gate 5 remote services | Public TLS deployment, credentialed smoke, and public metrics denial passed | Pass backup/restore, staged restart/reconnect, and two-NAT qualification |
 | 5 | Gates 1–3 | Native/bootstrap/lifecycle and unsigned-beta path complete internally | Supply final rootfs, kernel/modules, usbipd, and approved notices |
 | 6 | Gate 6 | Automated subset passed; physical lifecycle not qualified | Pass clean-machine, reboot, coexistence, unsigned-publisher warning, and destructive lifecycle matrix |
 | 7 | Gate 7 | Waiting for production stack and second RTL8192EU | Pass two-PC/two-Switch hardware, trade, decoder, teardown, reuse, and network-fault qualification |
@@ -93,8 +93,8 @@ This preflight checklist is the release-blocking superset of the immediate tasks
 - [x] Finish the production-hosting package for the opaque relay and authoritative lobby, including
   a hardened container, persistent authority store, deployment runbook, and credentialed smoke test.
 - [x] Hosting operator deployed the relay at `https://relay.pangyostonefist.org`; health, legacy-endpoint
-  rejection, authenticated room lifecycle, and opaque bidirectional WebSocket smoke passed. Backup,
-  restart, restricted-metrics, and two-NAT qualification remain in Gate 5. Evidence: `docs/71`.
+  rejection, authenticated room lifecycle, opaque bidirectional WebSocket smoke, and public `/metrics`
+  denial passed. Backup, restart, and two-NAT qualification remain in Gate 5. Evidence: `docs/71`.
 - [ ] Run the first real two-endpoint, two-Switch production test. Covered by Gate 7.
 - [ ] Run LAN/WAN reliability, fault, recovery, and immediate-reuse testing. Covered by Gate 7.
 - [x] Implement and internally test build, install, repair, update, atomic app/WSL/kernel rollback,

@@ -37,6 +37,7 @@ class InstallerLifecycleTests(unittest.TestCase):
                       "SigningCertificateThumbprint", "signature-required", "UnsignedPrivateBeta"):
             self.assertIn(value, builder)
         self.assertIn("payload\\release-config.json", builder)
+        self.assertIn("legal\\THIRD-PARTY-NOTICES.txt", builder)
         release_config = json.loads((ROOT / "payload" / "release-config.json").read_text())
         self.assertEqual(release_config["relay_url"], "https://relay.pangyostonefist.org")
 

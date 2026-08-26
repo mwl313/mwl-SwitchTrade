@@ -20,9 +20,11 @@ Public endpoint: `https://relay.pangyostonefist.org`
 - Cloudflare rejected Python's default `Python-urllib` User-Agent with HTTP 403. The product client and
   smoke now send `SwitchTrade/<version>` on every HTTP request; the unmodified smoke command then passes.
 - WebSocket transport passed through the public Cloudflare ingress in both directions.
+- public `GET /metrics` returned HTTP 403, confirming the metrics endpoint is not exposed through the
+  public ingress.
 
 The deployment is live and suitable for client integration. Operational acceptance still requires a
-documented backup/restore exercise, staged restart/reconnect, restricted `/metrics`, and two endpoints
+documented backup/restore exercise, staged restart/reconnect, and two endpoints
 behind different NATs.
 
 ## Release configuration
@@ -59,11 +61,21 @@ both lines of progress:
 The source and execution mirror must be byte-identical before dispatch. A fresh Actions artifact and
 external hardware qualification are still required; restoring the workflow is not itself qualification.
 
+## Reproducibility and notices
+
+All direct and transitive Python runtime distributions are now exactly pinned to the clean WSL set that
+passes the full suite. The repository notice inventory covers the AGPL/GPL bridge components, installed
+Python distribution licenses, self-contained .NET runtime, WSL kernel source offer, Realtek firmware,
+wireless regulatory database, Ubuntu rootfs license locations, and the unmodified usbipd-win prerequisite.
+It is the package builder's default notice input. Technical inventory is complete; final legal approval
+remains an owner/reviewer release decision.
+
 ## Remaining release gates
 
 1. Run the reconciled kernel workflow, download and inspect its checksummed artifact, then provide the
    minimal rootfs input.
-2. Supply approved third-party notices and a real support destination.
+2. Supply approved third-party notices. The real support destination is the repository's enabled GitHub
+   Issues page and is linked from the native Support tab.
 3. Complete the relay operational tests listed above.
 4. Complete clean-Windows install, reboot/resume, coexistence, repair, update, rollback, uninstall, and
    reinstall qualification for the unsigned package.
