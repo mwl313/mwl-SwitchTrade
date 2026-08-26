@@ -11,8 +11,9 @@ SwitchTrade now has one canonical, WSL-USB-only hardware policy:
 - `hostapd` and direct `nl80211` remain visible as **In Development** and fail closed if
   selected. Their prototypes do not yet own the complete Nintendo LDN lifecycle.
 - `production-verified` and `beta-candidate` profiles may run normally.
-- `upstream-candidate` and `driver-candidate` profiles need explicit consent for each
-  attempt (`--allow-experimental-hardware`). They never auto-select.
+- `upstream-candidate` and `driver-candidate` profiles may be selected without repeated
+  confirmation. They remain clearly labeled experimental, are not guaranteed to work, and never
+  auto-select.
 - `quarantined` profiles cannot run a trading attempt, even with the experimental flag.
 
 This is an expansion of known settings and candidates, not a claim that every listed
@@ -82,12 +83,11 @@ Policy is checked independently in all paths so no UI or direct CLI can bypass i
 4. WSL driver/RX preparation.
 5. `HostTransport` itself rejects every engine except `ldn`.
 
-An experimental attempt is explicit and non-persistent:
+An experimental profile is selected explicitly by USB ID:
 
 ```bash
 sudo scripts/run-beta-endpoint.sh \
   --usb-id 0e8d:7610 \
-  --allow-experimental-hardware \
   --tunnel-seat member_a --switch-room-role finder \
   --session-id EXAMPLE --relay-url http://127.0.0.1:8788
 ```
@@ -107,14 +107,17 @@ sudo bridge/.venv/bin/python -m switchtrade.hardware_diagnostics \
 
 # Adds the existing multi-channel actual-RX gate.
 sudo bridge/.venv/bin/python -m switchtrade.hardware_diagnostics \
-  --usb-id 0e8d:7610 --mode certify --allow-experimental-hardware
+  --usb-id 0e8d:7610 --mode certify
 
 # Also opens and tears down HostTransport + ldn.create_network() locally.
 sudo bridge/.venv/bin/python -m switchtrade.hardware_diagnostics \
-  --usb-id 0e8d:7610 --mode full --allow-experimental-hardware
+  --usb-id 0e8d:7610 --mode full
 ```
 
-The Windows Settings screen can run `quick` diagnostics for a selected matrix profile.
+The Windows Settings screen lists physically enumerated profiled radios from `usbipd`, lets the user
+choose the adapter for the next connection, and can run `quick` diagnostics for any matrix profile.
+Experimental devices carry an explicit untested/may-not-work disclaimer but require no repeated
+confirmation. Quarantined devices remain visible as evidence and cannot be selected for trading.
 The control API exposes `POST /api/v1/hardware/diagnostics`. Diagnostic JSON/text files are
 included in the existing redacted support bundle and deliberately exclude captures, RFU
 payloads, keys, room codes, tokens, and MAC addresses.

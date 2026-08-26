@@ -140,12 +140,6 @@ def diagnose_hardware(usb_id: str, *, mode: str = "quick", role: str = "host",
             "code": "HARDWARE_QUARANTINED",
             "action": "Keep this card diagnostic-only unless new physical evidence changes its status.",
         })
-    elif profile.status in EXPERIMENTAL_STATUSES and not allow_experimental:
-        stages.append(_stage(
-            "profile_policy", "warning", "HARDWARE_EXPERIMENTAL_OPT_IN_REQUIRED",
-            "The candidate needs explicit consent for any mutating certification step.",
-            profile_status=profile.status,
-        ))
     else:
         stages.append(_stage(
             "profile_policy", "passed", "HARDWARE_POLICY_ACCEPTED",
@@ -278,12 +272,9 @@ def diagnose_hardware(usb_id: str, *, mode: str = "quick", role: str = "host",
         additional_codes=[item["code"] for item in known[1:]],
     ))
 
-    can_mutate = profile is not None and profile.status not in BLOCKED_STATUSES and (
-        profile.status not in EXPERIMENTAL_STATUSES or allow_experimental)
+    can_mutate = profile is not None and profile.status not in BLOCKED_STATUSES
     if mode in {"certify", "full"} and can_mutate:
         command = [str(PREPARE), "--usb-id", usb_id, "--role", role]
-        if profile.status in EXPERIMENTAL_STATUSES:
-            command.append("--allow-experimental-hardware")
         command += ["--", "true"]
         rx_rc, rx = _capture(logger, "actual-rx", command, runner, timeout=50)
         stages.append(_stage(
@@ -298,7 +289,7 @@ def diagnose_hardware(usb_id: str, *, mode: str = "quick", role: str = "host",
     else:
         stages.append(_stage(
             "actual_rx", "not_tested", "ACTUAL_RX_NOT_TESTED",
-            "Run certify/full mode with any required candidate opt-in to exercise RX.",
+            "Run certify/full mode to exercise RX.",
         ))
 
     if mode == "full" and can_mutate:

@@ -25,6 +25,8 @@ public interface IControlGateway : IDisposable
     Task StopConnectionAsync(CancellationToken cancellationToken = default);
     Task ReleaseTradeRoomAsync(string roomCode, RoomMembershipRole role, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<AdapterProfileViewData>> GetAdapterProfilesAsync(CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<HardwareDeviceViewData>> GetHardwareDevicesAsync(CancellationToken cancellationToken = default);
+    Task SelectHardwareDeviceAsync(string usbId, string busId, CancellationToken cancellationToken = default);
     Task<HardwareDiagnosticViewData> RunHardwareDiagnosticsAsync(
         string usbId, CancellationToken cancellationToken = default);
     Task<LivePartyProjection?> TryGetPartiesAsync(CancellationToken cancellationToken = default);
@@ -189,6 +191,7 @@ public sealed class ControlApiClient : IControlGateway
             {
                 var friendly = profile.Model ?? "USB Wi-Fi adapter";
                 var supported = profile.Status is "production-verified" or "beta-candidate";
+                var experimental = profile.Experimental;
                 var label = profile.Status switch
                 {
                     "production-verified" => "Production verified",
@@ -202,12 +205,12 @@ public sealed class ControlApiClient : IControlGateway
                     profile.UsbId ?? "unknown",
                     friendly, label,
                     supported ? "Available for the current beta workflow; two-adapter certification is pending."
-                              : profile.RequiresOptIn
-                                  ? "Not certified. Run diagnostics first; every attempt requires explicit opt-in."
+                              : experimental
+                                  ? "Experimental and untested with SwitchTrade; it may not connect or trade reliably. Diagnostics are available."
                                   : "Blocked from trading; retained for diagnostic evidence only.",
                     $"USB {profile.UsbId?.ToUpperInvariant()} · {profile.Chipset ?? "Unknown chipset"} · " +
                     $"{string.Join(", ", profile.Roles ?? [])} · engine {profile.HostEngine ?? "ldn"}",
-                    supported, profile.RequiresOptIn, profile.HostEngine ?? "ldn");
+                    supported || experimental, experimental, profile.HostEngine ?? "ldn");
             }).ToArray();
         }
         catch (HttpRequestException)
@@ -244,6 +247,37 @@ public sealed class ControlApiClient : IControlGateway
             report.RunId ?? "unknown", report.OverallStatus ?? "unknown", summary,
             result.ReportPath ?? "Diagnostic report created");
     }
+
+    public async Task<IReadOnlyList<HardwareDeviceViewData>> GetHardwareDevicesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            using var response = await _http.GetAsync("/api/v1/hardware/devices", cancellationToken);
+            await EnsureSuccess(response, cancellationToken);
+            var result = await response.Content.ReadFromJsonAsync<HardwareDevicesResponse>(JsonOptions, cancellationToken);
+            return (result?.Devices ?? []).Select(device => new HardwareDeviceViewData(
+                device.BusId ?? "unknown", device.UsbId ?? "unknown",
+                device.Description ?? device.Model ?? "USB Wi-Fi adapter",
+                device.Status switch
+                {
+                    "production-verified" => "Production verified",
+                    "beta-candidate" => "Beta candidate",
+                    "upstream-candidate" or "driver-candidate" => "Experimental",
+                    _ => "Blocked",
+                },
+                device.Selectable, device.Experimental, device.Attached, device.Selected)).ToArray();
+        }
+        catch (HttpRequestException)
+        {
+            throw new UserFacingException("Windows USB inventory is unavailable.", "usb_inventory_unavailable");
+        }
+    }
+
+    public async Task SelectHardwareDeviceAsync(
+        string usbId, string busId, CancellationToken cancellationToken = default) =>
+        _ = await PostAsync<JsonElement>("/api/v1/hardware/selection",
+            new { usb_id = usbId, bus_id = busId }, cancellationToken);
 
     public async Task<string> CreateSupportBundleAsync(CancellationToken cancellationToken = default)
     {
@@ -438,14 +472,22 @@ public sealed class ControlApiClient : IControlGateway
         catch (JsonException) { }
         catch (NotSupportedException) { }
 
-        var message = response.StatusCode switch
+        var message = detail switch
+        {
+            "The selected adapter is no longer connected" => detail,
+            "This adapter is quarantined and cannot trade" => detail,
+            "End the current connection before changing adapters" => detail,
+            "Select an available Wi-Fi adapter in Settings" => detail,
+            "Detach the other identical Wi-Fi adapter from WSL, then try again." => detail,
+            "The selected adapter could not be attached. Run SwitchTrade Setup Repair once if it is not shared." => detail,
+            _ => response.StatusCode switch
         {
             HttpStatusCode.NotFound => "We couldn’t find that Trade Room. Check the code and try again.",
             HttpStatusCode.Conflict => "This Trade Room already has two players or is already in use.",
             HttpStatusCode.ServiceUnavailable => "Online rooms are temporarily unavailable.",
             HttpStatusCode.BadRequest => "SwitchTrade can’t start this connection yet. Check the room and adapter.",
             _ => "SwitchTrade couldn’t complete that action. Try again.",
-        };
+        }};
         throw new UserFacingException(message, detail);
     }
 
@@ -544,7 +586,7 @@ public sealed class ControlApiClient : IControlGateway
         string? Model,
         string? Chipset,
         [property: JsonPropertyName("host_engine")] string? HostEngine,
-        [property: JsonPropertyName("requires_opt_in")] bool RequiresOptIn);
+        bool Experimental);
     private sealed record HardwareDiagnosticResponse(
         HardwareDiagnosticReportDto? Report,
         [property: JsonPropertyName("report_path")] string? ReportPath);
@@ -553,6 +595,17 @@ public sealed class ControlApiClient : IControlGateway
         [property: JsonPropertyName("overall_status")] string? OverallStatus,
         IReadOnlyList<HardwareIncompatibilityDto>? Incompatibilities);
     private sealed record HardwareIncompatibilityDto(string? Code, string? Action);
+    private sealed record HardwareDevicesResponse(IReadOnlyList<HardwareDeviceDto>? Devices);
+    private sealed record HardwareDeviceDto(
+        [property: JsonPropertyName("bus_id")] string? BusId,
+        [property: JsonPropertyName("usb_id")] string? UsbId,
+        string? Description,
+        string? Model,
+        string? Status,
+        bool Selectable,
+        bool Experimental,
+        bool Attached,
+        bool Selected);
     private sealed record SupportBundleResponse(string? Path);
     private sealed record ProblemDto(string? Detail);
 }

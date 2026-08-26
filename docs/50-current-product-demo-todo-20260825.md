@@ -15,7 +15,7 @@
 
 2. **Lock the beta hardware policy without hardcoding the product to one chipset.**
    - RTL8192EU (`0bda:818b`) is the certified default candidate.
-   - RTL8188EU (`0bda:8179`) remains experimental and must not be selected automatically.
+   - RTL8188EU (`0bda:8179`) remains quarantined and cannot be selected for trading.
    - Use one modular hardware-profile registry for the CLI, launcher, health gate, and GUI.
    - A new USB ID or driver must be addable through a profile plus capability qualification, without
      modifying the RFU tunnel or frontend.

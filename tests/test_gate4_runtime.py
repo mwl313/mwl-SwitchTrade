@@ -86,7 +86,8 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 )
                 candidate = next(
                     profile for profile in body["profiles"] if profile["usb_id"] == "0e8d:7610")
-                self.assertTrue(candidate["requires_opt_in"])
+                self.assertTrue(candidate["experimental"])
+                self.assertTrue(candidate["selectable"])
                 self.assertEqual(candidate["host_engine"], "ldn")
 
     def test_hardware_diagnostic_api_returns_machine_readable_report(self):
@@ -110,6 +111,37 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 200, response.text)
                 self.assertEqual(response.json()["report"]["overall_status"], "partial")
                 self.assertIn("switchtrade.hardware_diagnostics", run.call_args.args[0])
+
+    def test_detected_experimental_adapter_can_be_selected_without_confirmation(self):
+        usbipd_state = {
+            "Devices": [
+                {
+                    "BusId": "4-20", "ClientIPAddress": None,
+                    "Description": "ALFA AWUS036ACHM",
+                    "InstanceId": r"USB\VID_0E8D&PID_7610\TEST",
+                },
+                {
+                    "BusId": "4-21", "ClientIPAddress": None,
+                    "Description": "Realtek RTL8188EU",
+                    "InstanceId": r"USB\VID_0BDA&PID_8179\TEST",
+                },
+            ]
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                with patch("switchtrade.control.subprocess.run") as run:
+                    run.return_value.returncode = 0
+                    run.return_value.stdout = json.dumps(usbipd_state)
+                    devices = client.get("/api/v1/hardware/devices")
+                    self.assertEqual(devices.status_code, 200, devices.text)
+                    by_id = {item["usb_id"]: item for item in devices.json()["devices"]}
+                    self.assertTrue(by_id["0e8d:7610"]["selectable"])
+                    self.assertTrue(by_id["0e8d:7610"]["experimental"])
+                    self.assertFalse(by_id["0bda:8179"]["selectable"])
+                    selected = client.post("/api/v1/hardware/selection", json={
+                        "usb_id": "0e8d:7610", "bus_id": "4-20",
+                    })
+                    self.assertEqual(selected.status_code, 200, selected.text)
 
 
 if __name__ == "__main__":

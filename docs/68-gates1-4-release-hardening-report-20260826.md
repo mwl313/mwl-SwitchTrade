@@ -30,7 +30,8 @@ release inputs.
 
 - PowerShell parser: PASS for all changed installer scripts.
 - `python -m pytest tests/test_installer_lifecycle.py tests/test_gate4_runtime.py -q`: 14 passed.
-- Full suite in a clean WSL virtual environment with pinned dependencies: 204 passed, 3 skipped.
+- Full suite in a clean WSL virtual environment with pinned dependencies: 205 passed, 3 skipped after
+  the connected-device selector and experimental hardware policy correction.
 - Native setup bootstrap Release build: PASS, zero warnings/errors.
 - Native WPF desktop Release build: PASS, zero warnings/errors.
 - Internal full package assembly: PASS.

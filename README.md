@@ -55,7 +55,7 @@ WSL 무선 실행은 Windows에서 `scripts/windows/wsl-radio-preflight.ps1 -Pre
 Linux에서는 `scripts/wsl-radio-prepare.sh --usb-id VID:PID --role ROLE -- COMMAND...`를 사용한다.
 지원 카드와 driver/role 정책은 `config/wsl-radio-hardware.tsv`에 있다.
 새 카드의 read-only 진단은 `python -m switchtrade.hardware_diagnostics --usb-id VID:PID`로 실행한다.
-research/driver candidate의 실제 실행은 각 attempt마다 `--allow-experimental-hardware`가 필요하며,
+research/driver candidate는 명시적으로 선택할 수 있지만 실험용이며 작동이 보장되지 않는다.
 quarantined 카드는 실행할 수 없다. 모든 카드의 기본 host engine은 `ldn.create_network()`이다.
 | [docs/research/04-youtube-videos.md](docs/research/04-youtube-videos.md) | YouTube 영상 2건 정리 |
 

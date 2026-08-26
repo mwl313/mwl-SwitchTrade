@@ -25,7 +25,7 @@
   `.ek3` Pokémon records in fixtures and captured endpoint traffic.
 - [x] Source package includes SHA-256 verification for the rootfs and native EXE.
 - [x] Throwaway-distro install, repair, retained rollback runtime, uninstall, and explicit purge passed.
-- [x] Pinned WSL runtime suite passed 204 tests (3 skipped) without Switch hardware on 2026-08-26.
+- [x] Pinned WSL runtime suite passed 205 tests (3 skipped) without Switch hardware on 2026-08-26.
 
 ## Current gate summary and execution order
 
@@ -166,6 +166,10 @@ Do not begin installer implementation until Gate 0 is approved.
 - [x] Detect and install a checksummed pinned `usbipd-win` MSI when absent.
 - [x] Detect VMware USB ownership and require explicit consent before changing it.
 - [x] Detect the profiled adapter and distinguish duplicate USB IDs by bus ID.
+- [x] Enumerate physically connected profiled radios from Windows `usbipd`, allow an explicit device
+  choice, retain that bus/USB selection for the next session, and keep quarantined devices blocked.
+  Experimental devices are selectable without repeated confirmation and carry an untested/may-not-work
+  disclaimer plus diagnostics.
 - [x] Perform administrator-only USB binding during setup; avoid a daily UAC prompt when normal attach
   can be performed without elevation.
 - [x] Run the same fail-closed USB, driver, module, RX, channel, and role health gate used by sessions.

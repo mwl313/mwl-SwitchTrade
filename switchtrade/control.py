@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 import os
 import json
+import re
 import subprocess
 import threading
 import time
@@ -73,6 +74,11 @@ class HardwareDiagnosticRequest(BaseModel):
     allow_experimental_hardware: bool = False
 
 
+class HardwareSelectionRequest(BaseModel):
+    usb_id: str = Field(pattern="^[0-9A-Fa-f]{4}:[0-9A-Fa-f]{4}$")
+    bus_id: str = Field(pattern=r"^\d+-\d+$")
+
+
 @dataclass
 class Group:
     name: str
@@ -112,6 +118,7 @@ class Runtime:
         self.authority_state = runtime_root / "room-authority.json"
         self.member_token_file = runtime_root / "member-token"
         self.client_id_file = runtime_root / "client-id"
+        self.hardware_selection_file = runtime_root / "hardware-selection.json"
         try:
             self.client_id = self.client_id_file.read_text(encoding="utf-8").strip()
         except OSError:
@@ -126,6 +133,17 @@ class Runtime:
             self.endpoint_session = previous.get("session_id")
             self.log.event("orphan_endpoint_recovered", pid=previous.get("pid"),
                            stage=previous.get("state"))
+
+    def read_hardware_selection(self) -> dict:
+        try:
+            value = json.loads(self.hardware_selection_file.read_text(encoding="utf-8"))
+            return value if isinstance(value, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def write_hardware_selection(self, usb_id: str, bus_id: str) -> None:
+        self.hardware_selection_file.write_text(
+            json.dumps({"usb_id": usb_id.lower(), "bus_id": bus_id}) + "\n", encoding="utf-8")
 
     def read_endpoint(self) -> dict:
         try:
@@ -405,6 +423,74 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             },
         }
 
+    def usbipd_inventory(state: Runtime) -> list[dict]:
+        try:
+            result = subprocess.run(
+                ["usbipd.exe", "state"], capture_output=True, text=True, timeout=5, check=False)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise HTTPException(status_code=503, detail="Windows USB inventory is unavailable") from error
+        if result.returncode != 0:
+            raise HTTPException(status_code=503, detail="Windows USB inventory is unavailable")
+        try:
+            devices = json.loads(result.stdout).get("Devices", [])
+        except (AttributeError, ValueError) as error:
+            raise HTTPException(status_code=503, detail="Windows USB inventory is invalid") from error
+        profiles = {profile.usb_id: profile for profile in state.profiles}
+        selected = state.read_hardware_selection()
+        inventory = []
+        for device in devices:
+            match = re.search(r"VID_([0-9A-F]{4})&PID_([0-9A-F]{4})", device.get("InstanceId", ""), re.I)
+            if not match or not device.get("BusId"):
+                continue
+            usb_id = f"{match.group(1)}:{match.group(2)}".lower()
+            profile = profiles.get(usb_id)
+            if profile is None:
+                continue
+            public = profile.public()
+            inventory.append({
+                "bus_id": device["BusId"], "usb_id": usb_id,
+                "description": device.get("Description") or profile.model,
+                "model": profile.model, "status": profile.status,
+                "selectable": public["selectable"], "experimental": public["experimental"],
+                "attached": bool(device.get("ClientIPAddress")),
+                "selected": selected.get("bus_id") == device["BusId"] and
+                            selected.get("usb_id") == usb_id,
+            })
+        if not any(device["selected"] for device in inventory):
+            automatic = [device for device in inventory if profiles[device["usb_id"]].auto_select]
+            if len(automatic) == 1:
+                automatic[0]["selected"] = True
+        return inventory
+
+    def attach_selected_hardware(state: Runtime) -> str | None:
+        selected = state.read_hardware_selection()
+        if not selected:
+            return None
+        inventory = usbipd_inventory(state)
+        device = next((item for item in inventory
+                       if item["bus_id"] == selected.get("bus_id") and
+                       item["usb_id"] == selected.get("usb_id")), None)
+        if device is None or not device["selectable"]:
+            raise HTTPException(status_code=409, detail="Select an available Wi-Fi adapter in Settings")
+        if any(item["attached"] and item["usb_id"] == device["usb_id"] and
+               item["bus_id"] != device["bus_id"] for item in inventory):
+            raise HTTPException(
+                status_code=409,
+                detail="Detach the other identical Wi-Fi adapter from WSL, then try again.",
+            )
+        if not device["attached"]:
+            distro = os.environ.get("SWITCHTRADE_WSL_DISTRO", "SwitchTrade")
+            result = subprocess.run(
+                ["usbipd.exe", "attach", f"--wsl={distro}", "--busid", device["bus_id"]],
+                capture_output=True, text=True, timeout=15, check=False,
+            )
+            if result.returncode != 0:
+                raise HTTPException(
+                    status_code=409,
+                    detail="The selected adapter could not be attached. Run SwitchTrade Setup Repair once if it is not shared.",
+                )
+        return device["usb_id"]
+
     def launch_session(state: Runtime, *, code: str, tunnel_seat: str,
                        switch_room_role: str, usb_id: str | None,
                        attempt_id: str | None = None,
@@ -439,7 +525,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             "session_started", passcode=code, tunnel_seat=plan["tunnel_seat"],
             switch_room_role=plan["switch_room_role"], usb_id=plan["usb_id"],
             host_engine=plan["host_engine"],
-            experimental_hardware=allow_experimental_hardware,
+            experimental_hardware=plan["experimental_hardware"],
             pid=state.endpoint.pid,
         )
         return {"status": "starting", "session_id": code, "hardware": plan,
@@ -624,9 +710,10 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                     f"/attempts/{attempt['attempt_id']}:lock-role",
                 )
             local = next(member for member in room["members"] if member["is_local"])
+            selected_usb_id = attach_selected_hardware(state)
             result = launch_session(
                 state, code=room["room_code"], tunnel_seat=local["seat"],
-                switch_room_role=switch_role, usb_id=None,
+                switch_room_role=switch_role, usb_id=selected_usb_id,
                 attempt_id=attempt["attempt_id"], member_token_file=state.member_token_file,
             )
             result["room"] = room
@@ -657,6 +744,28 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             "profiles": [profile.public() for profile in state.profiles],
             "host_engines": host_engines_public(),
         }
+
+    @app.get("/api/v1/hardware/devices")
+    def hardware_devices(request: Request) -> dict:
+        state = runtime(request)
+        return {"devices": usbipd_inventory(state), "run_id": state.log.run_id}
+
+    @app.post("/api/v1/hardware/selection")
+    def select_hardware(payload: HardwareSelectionRequest, request: Request) -> dict:
+        state = runtime(request)
+        if state.endpoint_running():
+            raise HTTPException(status_code=409, detail="End the current connection before changing adapters")
+        usb_id = payload.usb_id.lower()
+        device = next((item for item in usbipd_inventory(state)
+                       if item["bus_id"] == payload.bus_id and item["usb_id"] == usb_id), None)
+        if device is None:
+            raise HTTPException(status_code=404, detail="The selected adapter is no longer connected")
+        if not device["selectable"]:
+            raise HTTPException(status_code=409, detail="This adapter is quarantined and cannot trade")
+        state.write_hardware_selection(usb_id, payload.bus_id)
+        state.log.event("hardware_selected", usb_id=usb_id, bus_id=payload.bus_id,
+                        experimental=device["experimental"])
+        return {"device": {**device, "selected": True}, "run_id": state.log.run_id}
 
     @app.post("/api/v1/hardware/diagnostics")
     def hardware_diagnostics(payload: HardwareDiagnosticRequest, request: Request) -> dict:
