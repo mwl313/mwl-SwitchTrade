@@ -34,6 +34,7 @@ UI_ROOT = Path(__file__).resolve().parents[1] / "apps" / "web" / "dist-desktop"
 READINESS_CONTRACT = "app-readiness.v1"
 ROOM_CONTRACT = "room-control.v1"
 PARTY_CONTRACT = "party-commit.v1"
+PUBLIC_DIRECTORY_CONTRACT = "public-directory.v1"
 
 
 class CreateGroup(BaseModel):
@@ -51,6 +52,10 @@ class CreateGroup(BaseModel):
 class JoinGroup(BaseModel):
     passcode: str = Field(min_length=4, max_length=8, pattern="^[A-Za-z0-9]+$")
     trainer_display_name: str = Field(default="Trainer", min_length=1, max_length=40)
+
+
+class JoinPublicRoom(BaseModel):
+    trainer_display_name: str = Field(min_length=1, max_length=20)
 
 
 class StartSession(BaseModel):
@@ -97,8 +102,7 @@ class Group:
 
     def public(self) -> dict:
         data = asdict(self)
-        if self.visibility != "public":
-            data.pop("passcode")
+        data.pop("passcode", None)
         return data
 
 
@@ -110,6 +114,8 @@ class Runtime:
         self.log = RunLogger("control-api", runs_root, {"profile_path": str(profile_path)})
         self.relay_url = relay_url
         self.relay = RelayClient(relay_url)
+        self.relay_capabilities: set[str] = set()
+        self.next_capability_probe = 0.0
         self.endpoint: subprocess.Popen | None = None
         self.endpoint_session: str | None = None
         runtime_root = (Path(runs_root) / "runtime" if runs_root else
@@ -135,6 +141,22 @@ class Runtime:
             self.endpoint_session = previous.get("session_id")
             self.log.event("orphan_endpoint_recovered", pid=previous.get("pid"),
                            stage=previous.get("state"))
+
+    def public_capabilities(self) -> list[str]:
+        now = time.monotonic()
+        if now < self.next_capability_probe:
+            return sorted(self.relay_capabilities)
+        try:
+            health = RelayClient(self.relay_url, timeout=0.5).health()
+            advertised = health.get("capabilities", [])
+            self.relay_capabilities = {
+                str(capability) for capability in advertised if isinstance(capability, str)
+            }
+            self.next_capability_probe = now + 30
+        except RelayError:
+            self.relay_capabilities = set()
+            self.next_capability_probe = now + 5
+        return sorted(self.relay_capabilities)
 
     def read_hardware_selection(self) -> dict:
         try:
@@ -413,7 +435,9 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             "contract_version": READINESS_CONTRACT,
             "product_version": __version__,
             "compatible": True,
-            "supported_contracts": [READINESS_CONTRACT, ROOM_CONTRACT, PARTY_CONTRACT],
+            "supported_contracts": [
+                READINESS_CONTRACT, ROOM_CONTRACT, PARTY_CONTRACT, PUBLIC_DIRECTORY_CONTRACT],
+            "capabilities": state.public_capabilities(),
             "run_id": state.log.run_id,
             "endpoint_process_running": running,
             "session_id": state.endpoint_session,
@@ -571,7 +595,9 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             "trainer_display_name": profile.get("owner_display_name", ""),
             "game": profile.get("game", "None"),
             "language": profile.get("language", "None"),
-            "offering": "", "wanted": "", "note": "",
+            "offering": (room.get("directory") or {}).get("offering", ""),
+            "wanted": (room.get("directory") or {}).get("wanted", ""),
+            "note": (room.get("directory") or {}).get("note", ""),
             "room_id": room.get("room_id"),
             "room_version": room.get("room_version"),
             "local_member_id": room.get("local_member_id"),
@@ -624,10 +650,13 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         try:
             response = state.relay.create_trade_room({
                 "name": payload.name.strip(),
-                "visibility": "private",
+                "visibility": payload.visibility,
                 "trainer_display_name": payload.trainer_display_name.strip(),
                 "game": payload.game,
                 "language": payload.language,
+                "offering": payload.offering.strip(),
+                "wanted": payload.wanted.strip(),
+                "note": payload.note.strip(),
             }, state.client_id)
         except RelayError as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
@@ -646,6 +675,51 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             raise HTTPException(status_code=status, detail=str(error)) from error
         room = state.save_authority(response)
         state.log.event("authoritative_room_joined", room_id=room.get("room_id"))
+        return {"contract_version": ROOM_CONTRACT, "room": room, "run_id": state.log.run_id}
+
+    @app.get("/api/v1/public-trade-rooms")
+    def list_public_trade_rooms(
+            request: Request, query: str = "", game: str = "", language: str = "",
+            availability: str = "open", sort: str = "recent", cursor: int = 0,
+            limit: int = 25) -> dict:
+        state = runtime(request)
+        if availability not in {"open", "all"} or sort not in {"recent", "oldest", "name"}:
+            raise HTTPException(status_code=400, detail="public room filter is invalid")
+        if game not in {"", "FireRed", "LeafGreen"}:
+            raise HTTPException(status_code=400, detail="public room game filter is invalid")
+        if language not in {"", "English", "Japanese", "French", "German", "Italian", "Spanish"}:
+            raise HTTPException(status_code=400, detail="public room language filter is invalid")
+        try:
+            return state.relay.public_trade_rooms(
+                query=query[:80], game=game, language=language,
+                availability=availability, sort=sort, cursor=max(0, cursor),
+                limit=max(1, min(limit, 50)))
+        except RelayError as error:
+            status = 404 if "404" in str(error) else 503
+            raise HTTPException(status_code=status, detail=str(error)) from error
+
+    @app.get("/api/v1/public-trade-rooms/{listing_id}")
+    def get_public_trade_room(listing_id: str, request: Request) -> dict:
+        state = runtime(request)
+        try:
+            return state.relay.public_trade_room(listing_id)
+        except RelayError as error:
+            status = 404 if "404" in str(error) else 410 if "410" in str(error) else 503
+            raise HTTPException(status_code=status, detail=str(error)) from error
+
+    @app.post("/api/v1/public-trade-rooms/{listing_id}/join")
+    def join_public_trade_room(
+            listing_id: str, payload: JoinPublicRoom, request: Request) -> dict:
+        state = runtime(request)
+        try:
+            response = state.relay.join_public_trade_room(
+                listing_id, payload.trainer_display_name.strip(), state.client_id)
+        except RelayError as error:
+            status = (404 if "404" in str(error) else 410 if "410" in str(error)
+                      else 409 if "409" in str(error) else 503)
+            raise HTTPException(status_code=status, detail=str(error)) from error
+        room = state.save_authority(response)
+        state.log.event("authoritative_public_room_joined", room_id=room.get("room_id"))
         return {"contract_version": ROOM_CONTRACT, "room": room, "run_id": state.log.run_id}
 
     @app.get("/api/v1/trade-room")
@@ -855,7 +929,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         state = runtime(request)
         with state.lock:
             groups = [group.public() for group in state.groups.values() if group.visibility == "public"]
-        return {"scope": "local_demo", "groups": groups}
+        return {"scope": "local", "groups": groups}
 
     @app.post("/api/groups")
     def create_group(payload: CreateGroup, request: Request) -> dict:
@@ -872,7 +946,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         )
         with state.lock:
             state.groups[code] = group
-        return {"scope": "local_demo", "group": asdict(group), "run_id": state.log.run_id}
+        return {"scope": "local", "group": asdict(group), "run_id": state.log.run_id}
 
     @app.post("/api/groups/join")
     def join_group(payload: JoinGroup, request: Request) -> dict:
@@ -890,7 +964,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             if group.participants >= 2:
                 raise HTTPException(status_code=409, detail="group is full")
             group.participants += 1
-        return {"scope": "local_demo", "group": asdict(group), "run_id": state.log.run_id}
+        return {"scope": "local", "group": asdict(group), "run_id": state.log.run_id}
 
     @app.delete("/api/groups/{passcode}")
     def close_group(passcode: str, request: Request) -> dict:

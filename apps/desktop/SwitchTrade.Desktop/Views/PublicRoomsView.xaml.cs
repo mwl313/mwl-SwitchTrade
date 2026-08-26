@@ -17,7 +17,7 @@ public partial class PublicRoomsView : UserControl
 
     private void UpdateLayoutState()
     {
-        _compact = ActualWidth < 960;
+        _compact = ActualWidth < 900;
         DetailsColumn.Width = _compact ? new GridLength(0) : new GridLength(360);
         DetailsGutter.Width = _compact ? new GridLength(0) : new GridLength(20);
         WideDetails.Visibility = _compact ? Visibility.Collapsed : Visibility.Visible;

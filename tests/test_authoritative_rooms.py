@@ -50,6 +50,15 @@ class AuthoritativeRoomTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
+    def _create_public(self, client_id="public-owner") -> dict:
+        response = self.client.post("/v1/trade-rooms", json={
+            "name": "Version exclusives", "visibility": "public",
+            "trainer_display_name": "Leaf", "game": "LeafGreen", "language": "English",
+            "offering": "Vulpix", "wanted": "Growlithe", "note": "One quick trade",
+        }, headers={"Idempotency-Key": _command(), "X-SwitchTrade-Client": client_id})
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
+
     def _mutate(self, room_id: str, token: str, path: str, payload=None):
         snapshot = self.client.get(f"/v1/trade-rooms/{room_id}", headers={
             "Authorization": f"Bearer {token}"})
@@ -71,6 +80,52 @@ class AuthoritativeRoomTests(unittest.TestCase):
             "room_code": room["room_code"], "trainer_display_name": "Blue",
         }, headers={"Idempotency-Key": _command(), "X-SwitchTrade-Client": "client-c"})
         self.assertEqual(third.status_code, 409)
+
+    def test_public_directory_is_authoritative_sanitized_and_atomically_joinable(self):
+        private = self._create()
+        public = self._create_public()
+        health = self.client.get("/health")
+        self.assertIn("public-directory.v1", health.json()["capabilities"])
+
+        listed = self.client.get(
+            "/v1/public-trade-rooms?query=vulpix&game=LeafGreen&language=English")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        body = listed.json()
+        self.assertEqual(body["contract_version"], "public-directory.v1")
+        self.assertEqual(len(body["rooms"]), 1)
+        listing = body["rooms"][0]
+        self.assertEqual(listing["room_name"], "Version exclusives")
+        self.assertEqual(listing["offering"], "Vulpix")
+        self.assertEqual(listing["availability"], "open")
+        serialized = str(body).lower()
+        self.assertNotIn("room_code", serialized)
+        self.assertNotIn(public["room"]["room_code"].lower(), serialized)
+        self.assertNotIn(private["room"]["room_code"].lower(), serialized)
+        self.assertNotIn("member_token", serialized)
+        self.assertNotIn("reconnect_token", serialized)
+
+        listing_id = listing["listing_id"]
+        joined = self.client.post(
+            f"/v1/public-trade-rooms/{listing_id}:join",
+            json={"trainer_display_name": "Red"},
+            headers={"Idempotency-Key": _command(), "X-SwitchTrade-Client": "public-guest"},
+        )
+        self.assertEqual(joined.status_code, 200, joined.text)
+        self.assertEqual(joined.json()["room"]["room_code"], public["room"]["room_code"])
+        self.assertEqual(len(joined.json()["room"]["members"]), 2)
+
+        open_rooms = self.client.get("/v1/public-trade-rooms?availability=open").json()["rooms"]
+        self.assertFalse(any(room["listing_id"] == listing_id for room in open_rooms))
+        all_rooms = self.client.get("/v1/public-trade-rooms?availability=all").json()["rooms"]
+        full = next(room for room in all_rooms if room["listing_id"] == listing_id)
+        self.assertEqual(full["availability"], "full")
+
+        losing_join = self.client.post(
+            f"/v1/public-trade-rooms/{listing_id}:join",
+            json={"trainer_display_name": "Blue"},
+            headers={"Idempotency-Key": _command(), "X-SwitchTrade-Client": "public-third"},
+        )
+        self.assertEqual(losing_join.status_code, 409)
 
     def test_production_mode_rejects_legacy_sessions_and_invalid_room_fields(self):
         with patch.dict(os.environ, {"SWITCHTRADE_ENABLE_LEGACY_RELAY": "0"}):
@@ -169,6 +224,17 @@ class AuthoritativeRoomTests(unittest.TestCase):
         snapshot = relay_server.authority.snapshot(room_id, first["member_token"])
         self.assertEqual(snapshot["room_id"], room_id)
         self.assertEqual(snapshot["local_member_id"], first["room"]["local_member_id"])
+
+    def test_public_listing_survives_service_restart_without_exposing_credentials(self):
+        created = self._create_public()
+        listing_id = created["room"]["directory"]["listing_id"]
+        relay_server.authority.close()
+        relay_server.authority = AuthorityStore(self.database)
+        directory = relay_server.authority.list_public(query="Vulpix")
+        self.assertEqual([room["listing_id"] for room in directory["rooms"]], [listing_id])
+        serialized = str(directory).lower()
+        self.assertNotIn("room_code", serialized)
+        self.assertNotIn("member_token", serialized)
 
     def test_reconnect_rotates_both_credentials(self):
         first = self._create()

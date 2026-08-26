@@ -6,10 +6,14 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from switchtrade.control import create_app, endpoint_command
+from switchtrade.control import Group, create_app, endpoint_command
 
 
 class Gate4RuntimeContractTests(unittest.TestCase):
+    def test_legacy_group_listing_never_exposes_room_code(self):
+        listing = Group("Compatibility room", "ABC123", "public").public()
+        self.assertNotIn("passcode", listing)
+
     def test_package_includes_live_decoder_runtime(self):
         package_script = (Path(__file__).resolve().parents[1] /
                           "installer" / "Build-Package.ps1").read_text(encoding="utf-8")
@@ -32,6 +36,23 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 self.assertEqual(body["states"]["control"]["status"], "ready")
                 self.assertNotIn("passcode", str(body).lower())
 
+    def test_public_directory_capability_is_gated_by_relay_health(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch("switchtrade.control.RelayClient.health", return_value={
+                    "status": "ready", "capabilities": ["public-directory.v1"]}):
+                with TestClient(create_app(
+                        runs_root=temporary, relay_url="https://relay.example")) as client:
+                    body = client.get("/api/v1/app/readiness").json()
+                    self.assertEqual(body["capabilities"], ["public-directory.v1"])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch("switchtrade.control.RelayClient.health", return_value={
+                    "status": "ready", "capabilities": []}):
+                with TestClient(create_app(
+                        runs_root=temporary, relay_url="https://relay.example")) as client:
+                    body = client.get("/api/v1/app/readiness").json()
+                    self.assertEqual(body["capabilities"], [])
+
     def test_local_control_rejects_cross_origin_browser_mutations(self):
         with tempfile.TemporaryDirectory() as temporary:
             with TestClient(create_app(runs_root=temporary)) as client:
@@ -47,6 +68,40 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 self.assertFalse(body["trading_room_confirmed"])
                 self.assertTrue(all(value["status"] == "unavailable"
                                     for value in body["parties"].values()))
+
+    def test_public_directory_is_proxied_without_room_credentials(self):
+        listing = {
+            "contract_version": "public-directory.v1", "listing_id": "listing-1",
+            "room_name": "Kanto", "trainer_display_name": "Leaf",
+            "game": "LeafGreen", "language": "English", "offering": "Vulpix",
+            "wanted": "Growlithe", "note": "", "availability": "open",
+            "occupancy": 1, "capacity": 2, "created_at": "2026-08-26T00:00:00Z",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                runtime = client.app.state.runtime
+                with patch.object(runtime.relay, "public_trade_rooms", return_value={
+                        "contract_version": "public-directory.v1", "rooms": [listing],
+                        "next_cursor": None}) as public_rooms:
+                    response = client.get(
+                        "/api/v1/public-trade-rooms?query=Vulpix&game=LeafGreen")
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["rooms"], [listing])
+                self.assertNotIn("room_code", response.text)
+                public_rooms.assert_called_once()
+
+                room = {
+                    "room_id": "room-1", "room_code": "ABC123",
+                    "members": [], "visibility": "public",
+                }
+                with patch.object(runtime.relay, "join_public_trade_room", return_value={
+                        "room": room, "member_token": "secret", "reconnect_token": "reconnect"}):
+                    joined = client.post(
+                        "/api/v1/public-trade-rooms/listing-1/join",
+                        json={"trainer_display_name": "Red"})
+                self.assertEqual(joined.status_code, 200, joined.text)
+                self.assertEqual(joined.json()["room"]["room_code"], "ABC123")
+                self.assertNotIn("member_token", joined.text)
 
     def test_retry_without_retained_session_fails_safely(self):
         with tempfile.TemporaryDirectory() as temporary:

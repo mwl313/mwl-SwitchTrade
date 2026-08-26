@@ -73,7 +73,8 @@ public sealed class WindowsDialogService : IDialogService
             ResizeMode = ResizeMode.NoResize,
             ShowInTaskbar = false,
             Background = Application.Current?.TryFindResource("SurfaceBrush") as Brush ?? Brushes.White,
-            FontFamily = new FontFamily("Segoe UI Variable Text, Segoe UI"),
+            FontFamily = Application.Current?.TryFindResource("BodyFontFamily") as FontFamily ??
+                         throw new InvalidOperationException("SwitchTrade body font resource is missing."),
             FontSize = 15,
         };
 
@@ -101,7 +102,8 @@ public sealed class WindowsDialogService : IDialogService
         var title = new TextBlock
         {
             Text = request.Title,
-            FontFamily = new FontFamily("Segoe UI Variable Display, Segoe UI"),
+            FontFamily = Application.Current?.TryFindResource("HeadingFontFamily") as FontFamily ??
+                         throw new InvalidOperationException("SwitchTrade heading font resource is missing."),
             FontSize = 22,
             FontWeight = FontWeights.SemiBold,
             TextWrapping = TextWrapping.Wrap,

@@ -24,8 +24,6 @@ public partial class App : Application
         {
             var apiIsLocal = new Uri(ControlApiClient.ApiBase).IsLoopback;
             var codeNormalizes = JoinPrivateRoomScreenViewModel.NormalizeCode("ab-12 cd") == "AB12CD";
-            var previewsAreExplicit = new PublicRoomPreviewProvider().GetRooms() is { Count: >= 3 } rooms &&
-                                      rooms.All(room => room.PreviewId.StartsWith("demo-", StringComparison.Ordinal));
             var requiredRoomFieldsWork =
                 !CreateTradeRoomScreenViewModel.RequiredFieldsComplete(
                     "Room", "Trainer", GameVersionChoice.None, GameLanguage.English) &&
@@ -39,6 +37,9 @@ public partial class App : Application
             };
             var highContrastResourcesLoad = highContrast.Contains("PrimaryTextBrush") &&
                                             highContrast.Contains("FocusBrush");
+            var capabilityGateWorks = new ControlStatus(
+                "idle", "0.2.0", "self-test", false, false, false, null, null,
+                Capabilities: ["public-directory.v1"]).HasCapability("public-directory.v1");
             var fakeGateway = new SelfTestGateway();
             var coordinator = new ActiveTradeRoomCoordinator(fakeGateway);
             coordinator.Open(
@@ -57,9 +58,18 @@ public partial class App : Application
                 RoomMembershipRole.Member, SwitchRoomRole.Finder);
             var memberReleaseWorks = memberCoordinator.ReleaseRoomAsync().GetAwaiter().GetResult() &&
                                      memberGateway.LastMembershipRole == RoomMembershipRole.Member;
-            Shutdown(apiIsLocal && codeNormalizes && previewsAreExplicit && requiredRoomFieldsWork &&
-                     highContrastResourcesLoad &&
-                     coordinatorWorks && memberReleaseWorks ? 0 : 1);
+            memberCoordinator.Open(
+                new TradeRoomInfo("Room", "ABC123", "private", 2, "self_test"),
+                RoomMembershipRole.Member, SwitchRoomRole.Unassigned);
+            memberCoordinator.ApplyRoom(new AuthoritativeRoomProjection(
+                4, 2, "connection_attempt", RoomMembershipRole.Member,
+                SwitchRoomRole.Finder, true, true, "connecting_switches", true));
+            var authoritativeProjectionWorks = memberCoordinator.RoleLocked &&
+                                               memberCoordinator.BothReady &&
+                                               memberCoordinator.AttemptPhase == "connecting_switches";
+            Shutdown(apiIsLocal && codeNormalizes && requiredRoomFieldsWork &&
+                     highContrastResourcesLoad && capabilityGateWorks &&
+                     coordinatorWorks && memberReleaseWorks && authoritativeProjectionWorks ? 0 : 1);
             return;
         }
         _singleInstance = new Mutex(true, "Local\\SwitchTrade.Desktop", out var createdNew);
@@ -80,6 +90,12 @@ public partial class App : Application
         public Task<TradeRoomInfo> CreateTradeRoomAsync(TradeRoomCreateRequest request, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
         public Task<TradeRoomInfo> JoinTradeRoomAsync(string roomCode, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+        public Task<IReadOnlyList<PublicRoomListing>> GetPublicRoomsAsync(
+            PublicRoomQuery query, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<PublicRoomListing>>([]);
+        public Task<TradeRoomInfo> JoinPublicRoomAsync(
+            string listingId, string trainerDisplayName, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
         public Task<AuthoritativeRoomProjection?> TryGetTradeRoomAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<AuthoritativeRoomProjection?>(null);

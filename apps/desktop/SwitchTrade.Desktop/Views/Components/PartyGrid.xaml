@@ -17,7 +17,7 @@
           <ItemsPanelTemplate><UniformGrid Columns="2" Rows="3" /></ItemsPanelTemplate>
         </ItemsControl.ItemsPanel>
         <ItemsControl.ItemTemplate>
-          <DataTemplate DataType="{x:Type model:PokemonPreviewViewData}">
+          <DataTemplate DataType="{x:Type model:PokemonPartySlotViewData}">
             <Button Command="{Binding SelectCommand, ElementName=Root}" CommandParameter="{Binding}"
                     Style="{StaticResource SecondaryButton}" Margin="4" MinHeight="106"
                     HorizontalContentAlignment="Left" automation:AutomationProperties.Name="{Binding AccessibleName}">
@@ -25,7 +25,11 @@
                 <StackPanel MaxWidth="280">
                   <TextBlock Text="{Binding Nickname}" FontWeight="SemiBold" />
                   <TextBlock Text="{Binding Species}" />
-                  <TextBlock Text="{Binding ValidityLabel}" Style="{StaticResource SecondaryText}" Margin="0,4,0,0" />
+                  <TextBlock Text="{Binding ValidityLabel}" Style="{StaticResource SecondaryText}" Margin="0,4,0,6" />
+                  <TextBlock Text="{Binding Nature, StringFormat=Nature: {0}}" FontSize="12" />
+                  <TextBlock Text="{Binding StatsText, StringFormat=Stats: {0}}" FontSize="12" />
+                  <TextBlock Text="{Binding IvsText, StringFormat=IVs: {0}}" FontSize="12" />
+                  <TextBlock Text="{Binding EvsText, StringFormat=EVs: {0}}" FontSize="12" />
                 </StackPanel>
               </Button.ToolTip>
               <Grid>

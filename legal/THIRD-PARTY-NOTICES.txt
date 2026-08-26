@@ -78,6 +78,22 @@ NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES
 WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+Bundled desktop fonts
+---------------------
+
+The native Windows application embeds these unmodified fonts from the Google Fonts repository:
+
+  Space Grotesk — Copyright 2020 The Space Grotesk Project Authors
+  Inter — Copyright 2020 The Inter Project Authors
+  Space Mono — Copyright 2016 The Space Mono Project Authors
+
+Each font is licensed under the SIL Open Font License, Version 1.1. The complete corresponding
+OFL.txt files are embedded in SwitchTrade.exe and retained beside the source fonts under
+apps/desktop/SwitchTrade.Desktop/Assets/Fonts/. Upstream sources:
+https://github.com/google/fonts/tree/main/ofl/spacegrotesk
+https://github.com/google/fonts/tree/main/ofl/inter
+https://github.com/google/fonts/tree/main/ofl/spacemono
+
 Custom WSL kernel
 -----------------
 

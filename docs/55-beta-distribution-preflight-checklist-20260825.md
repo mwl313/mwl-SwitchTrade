@@ -9,7 +9,8 @@
 > signing for this private beta, so the package must remain visibly labeled unsigned.
 > UI baseline: `docs/56-native-ui-ux-redesign-handoff-20260825.md` and the owner overrides in
 > `docs/57-native-ui-overhaul-implementation-report-20260825.md` are the preliminary redesign source.
-> Latest UI evidence: `docs/64-second-native-ui-overhaul-implementation-report-20260825.md`.
+> Latest UI evidence: `docs/74-stitch-dark-ui-overhaul-3-implementation-report-20260826.md` and
+> `docs/assets/ui-overhaul-3/`.
 > Second-overhaul audit: `docs/63-second-native-ui-overhaul-codex-handoff-20260825.md`.
 > Final-overhaul handoff: `docs/62-final-ui-overhaul-gpt-handoff-20260825.md`.
 > Frozen contracts: `room-control.v1` (`docs/58`), `party-commit.v1` (`docs/59`), and
@@ -34,7 +35,7 @@
 | Order | Gate | Current state | Release-blocking result still needed |
 |---:|---|---|---|
 | 1 | Gate 4 local integration | Internally implemented | Hardware-qualify authoritative role transition, retry, and recovery in Gate 7 |
-| 2 | Gate 0 | Visual overhaul owner-deferred; icon wiring, real GitHub Issues support link, and factual third-party notice inventory complete | Approve the notice inventory and record final visual acceptance later |
+| 2 | Gate 0 | Visual Overhaul 3 implemented as native dark WPF; icon, real GitHub Issues link, embedded fonts, and factual third-party notices complete | Owner visual acceptance and legal-notice approval |
 | 3 | Gates 4–5 contracts | Implemented and internally tested | Qualify the ordered room path across two production endpoints |
 | 4 | Gate 5 remote services | Public TLS deployment, credentialed smoke, and public metrics denial passed | Pass backup/restore, staged restart/reconnect, and two-NAT qualification |
 | 5 | Gates 1–3 | Complete candidate built from final rootfs, kernel/modules, usbipd, notices, and public-relay config | Approve notices and qualify install/runtime on clean hardware |
@@ -48,10 +49,11 @@ publisher-verified, and the signed release path remains preserved for a future p
 ## Remaining qualification tranche — candidate packaging is complete
 
 1. [x] Give GPT the final handoff/audit and implement its contract-grounded WPF overhaul without
-   reintroducing the removed Privacy tab. Evidence is in `docs/64`.
+   reintroducing the removed Privacy tab. Visual Overhaul 3 evidence is in `docs/73`, `docs/74`, and
+   `docs/assets/ui-overhaul-3/`.
 2. [ ] Owner-deferred: obtain final visual approval and approve the tracked factual legal-notice inventory.
-   Icon wiring/build validation and the real GitHub Issues support destination are complete; visual
-   redesign remains backlog.
+   Icon wiring/build validation, the real GitHub Issues support destination, and the dark redesign
+   implementation are complete; only owner acceptance remains.
 3. [x] Implement and internally test the authenticated server-authoritative two-member room state
    machine, reconnect tokens, atomic room-creator claims, ordered events, expiration, and recovery.
 4. [x] Connect the endpoint/control split to authoritative immutable seats and atomic per-attempt
@@ -86,9 +88,9 @@ This preflight checklist is the release-blocking superset of the immediate tasks
   Real WAN impairment qualification remains in Gate 7.
 - [x] Complete the local JSON control API for readiness, hardware, authoritative groups, sessions,
   diagnostics, recovery, and shutdown. Covered by Gates 4 and 5.
-- [x] Complete and freeze the first-demo native presentation baseline and honest UI-only previews.
-  Private-room state and passive party projections are connected to the live local/remote contracts;
-  only the explicitly labeled public-room directory remains demo data.
+- [x] Complete and freeze the native presentation baseline without synthetic previews. Private and
+  public rooms use the live authoritative contracts, the public directory is capability-gated by
+  relay health, and passive party projections publish only checksum-valid observations.
 - [x] Integrate the EXE with the installed WSL control service, launcher, health gate, endpoint, logs,
   authoritative lobby, decoder observer, and clean shutdown. Covered by Gates 1, 2, 4, and 5.
 - [x] Finish the production-hosting package for the opaque relay and authoritative lobby, including
@@ -113,6 +115,9 @@ This preflight checklist is the release-blocking superset of the immediate tasks
   handling, and coordinator-owned active-room state.
 - [x] Apply the 2026-08-26 owner correction pass: persistent Connection/Support/Advanced tabs,
   normalized ComboBox geometry, distinct fixed Back/action bars, and Partner-first compact party order.
+- [x] Apply Visual Overhaul 3: native dark Stitch-derived tokens, embedded Space Grotesk/Inter/Space
+  Mono, left-aligned stable shell, real capability-gated public directory, persistent Trade Room
+  state, and explicit high-contrast closed/popup ComboBox templates.
 - [x] Update `docs/54-native-ui-flow-and-runtime-structure-20260825.md` with the implemented screen flow.
 - [x] Mark functional, demonstration-only, experimental, and unavailable UI actions explicitly.
 - [x] Freeze a two-member private-group model with server-authoritative membership, connection,
@@ -287,23 +292,23 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
   idempotency keys, and bounded reconnect behavior.
 - [x] Keep the real-time relay an opaque RFU-envelope forwarder. Lobby authority remains a separate
   module, and the relay data path does not decode or persist game payloads.
-- [ ] Owner-external/deferred: add a separately authorized committed-trade ingestion API, if later
+- Owner-excluded from this beta: add a separately authorized committed-trade ingestion API, if later
   approved, that accepts only locally validated,
   idempotent post-commit records; never upload a mere offer, animation, failed save, rollback, canceled
   trade, or full unrelated party snapshot as a completed trade.
-- [ ] Owner-external/deferred: define and version any committed-trade record and its approved fields.
+- Owner-excluded from this beta: define and version any committed-trade record and its approved fields.
   The client/relay currently uploads none. A future record may include UTC timestamp, session/attempt ID, direction and
   member IDs, the two exchanged Pokémon records with validation provenance, and the two trainers'
   explicitly approved trainer/link metadata.
-- [ ] Owner-external/deferred: if IP and location collection is separately enabled, treat it as sensitive.
+- Owner-excluded from this beta: if IP and location collection is separately enabled, treat it as sensitive.
   No IP/location analytics collection is implemented in the client or relay. A future service must record the
   server-observed source IP in a restricted short-retention security record, use a keyed pseudonymous
   network identifier for statistics, derive only the disclosed coarse region/country from IP, and do
   not claim precise physical location or collect GPS without separate explicit consent.
-- [ ] Owner-external/deferred: encrypt any future committed-trade records in transit and at rest; separate operational, identity, and
+- Owner-excluded from this beta: encrypt any future committed-trade records in transit and at rest; separate operational, identity, and
   analytics access; audit reads; prevent trainer IDs, raw IPs, or Pokémon payloads from ordinary logs;
   and implement retention expiry, deletion, export, and consent withdrawal.
-- [ ] Owner-external/deferred: build any aggregate statistics from a minimized approved record rather than exposing raw trainer,
+- Owner-excluded from this beta: build any aggregate statistics from a minimized approved record rather than exposing raw trainer,
   IP, location, or Pokémon records to dashboards.
 - [x] Add operational health checks, structured server logs, metrics, retention, and incident procedures.
 - [ ] Verify two endpoints behind different NATs and ordinary consumer firewalls.
@@ -319,10 +324,10 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
 - [x] Confirm in a non-destructive simulation that kernel rollback restores the exact prior WSL configuration.
 - [x] Confirm application logs and support bundles contain no keys, captures, passcodes, or private data
   outside the documented privacy manifest.
-- [ ] Owner-external/deferred: verify the externally administered consent is explicit and versioned, declining analytics does
+- Owner-excluded from this beta: verify the externally administered consent is explicit and versioned, declining analytics does
   not block trading or local party display, and uninstall/account deletion can exercise the documented
   server-data deletion path. The client contains no optional analytics/privacy setting.
-- [ ] Owner-external/deferred: verify any future server-side committed-trade ingestion idempotency across retries and records none
+- Owner-excluded from this beta: verify any future server-side committed-trade ingestion idempotency across retries and records none
   for cancel, rollback, save failure, communication error, or pre-commit disconnect.
 - [ ] Verify Windows Defender/SmartScreen behavior and the expected unsigned/unknown-publisher warning;
   document any managed-system block as an unsupported private-beta condition.
@@ -339,7 +344,7 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
 - [ ] On confirmed trading-room entry, compare both 2-by-3 UI party grids and stat popovers against known
   parties on both Switches, including empty slots and an intentionally incomplete/corrupt negative
   fixture that must not be shown as valid.
-- [ ] Owner-external/deferred: if committed-trade analytics are later authorized, verify that the
+- Owner-excluded from this beta: if committed-trade analytics are later authorized, verify that the
   stored record matches the actual exchange and that failures/rollbacks create no completed record.
   The present client and relay collect or upload no trainer, Pokémon, IP, or location analytics.
 - [ ] Run LAN and WAN loss, delay, duplicate, reordering, endpoint restart, relay restart, and recovery
@@ -353,7 +358,7 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
   signed path for a future public release and label every current package as unsigned.
 - [x] Publish the current hardware/Windows/WSL limitations and recovery guide in `docs/70`; the native
   Support tab links to the enabled repository Issues page.
-- [ ] Complete security/privacy review of trainer, Pokémon, source-IP, coarse-location, consent,
+- Owner-excluded from this beta: complete security/privacy review of trainer, Pokémon, source-IP, coarse-location, consent,
   retention, deletion, and aggregate-statistics behavior before enabling server-side collection.
 - [ ] Preserve one tested previous release for atomic rollback.
 - [ ] Archive reproducible build inputs and checksums outside the user package.

@@ -4,24 +4,49 @@
              xmlns:automation="clr-namespace:System.Windows.Automation;assembly=PresentationCore"
              xmlns:components="clr-namespace:SwitchTrade.Desktop.Views.Components">
   <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-    <StackPanel MaxWidth="640" HorizontalAlignment="Left" Margin="0,26,0,32">
-      <TextBlock Text="Trade Pokémon with another trainer" Style="{StaticResource HeroTitle}"
+    <StackPanel MaxWidth="760" HorizontalAlignment="Left" Margin="0,34,0,28">
+      <TextBlock Text="LINK TWO TRAINERS" Style="{StaticResource KickerText}" Margin="0,0,0,12" />
+      <TextBlock Text="Trade Pokémon online,&#x0a;from your Switch." Style="{StaticResource HeroTitle}"
                  automation:AutomationProperties.HeadingLevel="Level1" />
-      <TextBlock Text="Create a Trade Room, share a code, and connect both Switches."
-                 FontSize="16" Foreground="{DynamicResource SecondaryTextBrush}" Margin="0,0,0,28" />
+      <TextBlock Text="Create a room, share it with another trainer, and let SwitchTrade handle the connection."
+                 FontSize="16" LineHeight="24" Foreground="{DynamicResource SecondaryTextBrush}"
+                 MaxWidth="620" HorizontalAlignment="Left" Margin="0,6,0,28" />
+
       <Border Style="{StaticResource WarningNotice}"
               Visibility="{Binding ShowAttention, Converter={StaticResource BooleanToVisibility}}">
         <TextBlock Text="{Binding AttentionText}" />
       </Border>
-      <components:NavigationActionButton Title="Create a Trade Room"
-                  Description="Start a room and share its code." Icon="{StaticResource Icon.Create}"
-                  Command="{Binding CreateCommand}" Margin="0,0,0,12" />
-      <components:NavigationActionButton Title="Browse Public Rooms"
-                  Description="Explore sample public listings in this build." Badge="Demo Preview"
-                  Icon="{StaticResource Icon.Search}" Command="{Binding PublicCommand}" Margin="0,0,0,12" />
-      <components:NavigationActionButton Title="Join a Private Room"
+
+      <Button Command="{Binding CreateCommand}" Style="{StaticResource PrimaryButton}"
+              Height="96" HorizontalContentAlignment="Stretch" Margin="0,0,0,14"
+              automation:AutomationProperties.Name="Create a Trade Room">
+        <Grid Margin="8,0">
+          <Grid.ColumnDefinitions><ColumnDefinition Width="48" /><ColumnDefinition Width="*" /><ColumnDefinition Width="24" /></Grid.ColumnDefinitions>
+          <Border Width="40" Height="40" CornerRadius="8" Background="#1A000000">
+            <Path Data="{StaticResource Icon.Create}" Width="20" Height="20" Stretch="Uniform"
+                  Stroke="{DynamicResource OnActionGreenBrush}" StrokeThickness="2"
+                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                  HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <StackPanel Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center">
+            <TextBlock Text="Create a Trade Room" FontFamily="{StaticResource HeadingFontFamily}"
+                       FontSize="18" FontWeight="SemiBold" />
+            <TextBlock Text="Start a room and share its six-character code." FontWeight="Normal" Margin="0,4,0,0" />
+          </StackPanel>
+          <Path Grid.Column="2" Data="{StaticResource Icon.Chevron}" Width="16" Height="16" Stretch="Uniform"
+                Stroke="{DynamicResource OnActionGreenBrush}" StrokeThickness="2" VerticalAlignment="Center" />
+        </Grid>
+      </Button>
+
+      <Grid>
+        <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="14" /><ColumnDefinition /></Grid.ColumnDefinitions>
+        <components:NavigationActionButton Grid.Column="0" Title="Browse Public Rooms"
+                  Description="{Binding PublicAvailabilityText}" Icon="{StaticResource Icon.Search}"
+                  Command="{Binding PublicCommand}" />
+        <components:NavigationActionButton Grid.Column="2" Title="Join a Private Room"
                   Description="Enter a code shared by another trainer." Icon="{StaticResource Icon.Join}"
                   Command="{Binding JoinCommand}" />
+      </Grid>
     </StackPanel>
   </ScrollViewer>
 </UserControl>

@@ -11,8 +11,6 @@
         <ColumnDefinition Width="44" />
         <ColumnDefinition Width="16" />
         <ColumnDefinition Width="*" />
-        <ColumnDefinition Width="Auto" />
-        <ColumnDefinition Width="12" />
         <ColumnDefinition Width="20" />
       </Grid.ColumnDefinitions>
       <Border Width="40" Height="40" CornerRadius="8" Background="{DynamicResource BlueTintBrush}">
@@ -25,19 +23,7 @@
         <TextBlock Text="{Binding Title, ElementName=Root}" Style="{StaticResource RowTitle}" />
         <TextBlock Text="{Binding Description, ElementName=Root}" Style="{StaticResource SecondaryText}" Margin="0,3,0,0" />
       </StackPanel>
-      <Border Grid.Column="3" VerticalAlignment="Center">
-        <Border.Style>
-          <Style TargetType="Border" BasedOn="{StaticResource DemoBadge}">
-            <Setter Property="Visibility" Value="Visible" />
-            <Style.Triggers>
-              <DataTrigger Binding="{Binding Badge, ElementName=Root}" Value=""><Setter Property="Visibility" Value="Collapsed" /></DataTrigger>
-              <DataTrigger Binding="{Binding Badge, ElementName=Root}" Value="{x:Null}"><Setter Property="Visibility" Value="Collapsed" /></DataTrigger>
-            </Style.Triggers>
-          </Style>
-        </Border.Style>
-        <TextBlock Text="{Binding Badge, ElementName=Root}" Foreground="{DynamicResource LinkBlueBrush}" FontSize="12" FontWeight="SemiBold" />
-      </Border>
-      <Path Grid.Column="5" Data="{StaticResource Icon.Chevron}" Width="16" Height="16" Stretch="Uniform"
+      <Path Grid.Column="3" Data="{StaticResource Icon.Chevron}" Width="16" Height="16" Stretch="Uniform"
             Stroke="{DynamicResource SecondaryTextBrush}" StrokeThickness="1.8"
             StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
             VerticalAlignment="Center" />

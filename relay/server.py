@@ -11,7 +11,7 @@ import time
 import uuid
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import JSONResponse
 
@@ -42,16 +42,23 @@ class StrictPayload(BaseModel):
 
 
 class CreateRoomPayload(StrictPayload):
-    name: str = Field(min_length=1, max_length=80)
-    visibility: Literal["private"] = "private"
-    trainer_display_name: str = Field(min_length=1, max_length=40)
+    name: str = Field(min_length=1, max_length=22)
+    visibility: Literal["private", "public"] = "private"
+    trainer_display_name: str = Field(min_length=1, max_length=20)
     game: Literal["FireRed", "LeafGreen"]
     language: Literal["English", "Japanese", "French", "German", "Italian", "Spanish"]
+    offering: str = Field(default="", max_length=80)
+    wanted: str = Field(default="", max_length=80)
+    note: str = Field(default="", max_length=120)
 
 
 class JoinRoomPayload(StrictPayload):
     room_code: str = Field(pattern=r"^[A-Za-z0-9]{6}$")
     trainer_display_name: str = Field(min_length=1, max_length=40)
+
+
+class JoinPublicRoomPayload(StrictPayload):
+    trainer_display_name: str = Field(min_length=1, max_length=20)
 
 
 class ReconnectPayload(StrictPayload):
@@ -182,6 +189,7 @@ async def health() -> dict:
         "status": "ready",
         "service": "switchtrade-relay",
         "room_contract": "room-control.v1",
+        "capabilities": ["public-directory.v1"],
         "payload_mode": "opaque",
     }
 
@@ -236,6 +244,40 @@ async def join_trade_room(payload: JoinRoomPayload, request: Request) -> dict:
     rate_limiter.check(f"join:{_client_id(request)}")
     return _translate_authority(
         lambda: authority.join(payload.model_dump(), _command_id(request), _client_id(request)))
+
+
+@app.get("/v1/public-trade-rooms")
+async def list_public_trade_rooms(
+        request: Request,
+        query: str = Query(default="", max_length=80),
+        game: str = Query(default="", pattern=r"^(|FireRed|LeafGreen)$"),
+        language: str = Query(
+            default="", pattern=r"^(|English|Japanese|French|German|Italian|Spanish)$"),
+        availability: Literal["open", "all"] = "open",
+        sort: Literal["recent", "oldest", "name"] = "recent",
+        cursor: int = Query(default=0, ge=0),
+        limit: int = Query(default=25, ge=1, le=50),
+) -> dict:
+    identity = request.client.host if request.client else "unknown"
+    rate_limiter.check(f"public-list:{identity}")
+    return _translate_authority(lambda: authority.list_public(
+        query=query, game=game, language=language, availability=availability,
+        sort=sort, cursor=cursor, limit=limit))
+
+
+@app.get("/v1/public-trade-rooms/{listing_id}")
+async def get_public_trade_room(listing_id: str, request: Request) -> dict:
+    identity = request.client.host if request.client else "unknown"
+    rate_limiter.check(f"public-details:{identity}")
+    return _translate_authority(lambda: authority.public_details(listing_id))
+
+
+@app.post("/v1/public-trade-rooms/{listing_id}:join")
+async def join_public_trade_room(
+        listing_id: str, payload: JoinPublicRoomPayload, request: Request) -> dict:
+    rate_limiter.check(f"public-join:{_client_id(request)}")
+    return _translate_authority(lambda: authority.join_public(
+        listing_id, payload.trainer_display_name, _command_id(request), _client_id(request)))
 
 
 @app.post("/v1/trade-rooms/{room_id}:reconnect")

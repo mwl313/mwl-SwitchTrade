@@ -10,7 +10,7 @@ public sealed class CreateTradeRoomScreenViewModel : ScreenViewModel
 {
     private CancellationTokenSource _requestCancellation = new();
     private string _roomName = "";
-    private bool _isPublicPreview;
+    private TradeRoomVisibility _visibility = TradeRoomVisibility.Private;
     private string _trainerName = "";
     private GameVersionChoice _gameVersion;
     private GameLanguage _language;
@@ -45,15 +45,22 @@ public sealed class CreateTradeRoomScreenViewModel : ScreenViewModel
     }
     public bool IsPrivateRoom
     {
-        get => !IsPublicPreview;
-        set { if (value) SetPublicPreview(false); }
+        get => Visibility == TradeRoomVisibility.Private;
+        set { if (value) SetVisibility(TradeRoomVisibility.Private); }
     }
-    public bool IsPublicPreview
+    public bool IsPublicRoom
     {
-        get => _isPublicPreview;
-        set { if (value) SetPublicPreview(true); }
+        get => Visibility == TradeRoomVisibility.Public;
+        set { if (value) SetVisibility(TradeRoomVisibility.Public); }
     }
-    public string SubmitText => IsPublicPreview ? "Preview Trade Room" : "Create Trade Room";
+    public TradeRoomVisibility Visibility => _visibility;
+    public string MetadataHelpText => Visibility == TradeRoomVisibility.Public
+        ? "These optional details are published in the public directory. The room code remains private."
+        : "These optional details are included only when you copy the invitation.";
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Performance", "CA1822:Mark members as static",
+        Justification = "The label is a bindable property of this screen projection.")]
+    public string SubmitText => "Create Trade Room";
     public string TrainerName
     {
         get => _trainerName;
@@ -97,15 +104,16 @@ public sealed class CreateTradeRoomScreenViewModel : ScreenViewModel
 
     private bool CanCreate() => !IsBusy &&
                                 RequiredFieldsComplete(RoomName, TrainerName, GameVersion, Language) &&
-                                (IsPublicPreview || IsServiceReady);
+                                IsServiceReady;
 
-    private void SetPublicPreview(bool value)
+    private void SetVisibility(TradeRoomVisibility value)
     {
-        if (_isPublicPreview == value) return;
-        _isPublicPreview = value;
-        OnPropertyChanged(nameof(IsPublicPreview));
+        if (_visibility == value) return;
+        _visibility = value;
+        OnPropertyChanged(nameof(Visibility));
+        OnPropertyChanged(nameof(IsPublicRoom));
         OnPropertyChanged(nameof(IsPrivateRoom));
-        OnPropertyChanged(nameof(SubmitText));
+        OnPropertyChanged(nameof(MetadataHelpText));
         CreateCommand.RaiseCanExecuteChanged();
     }
 
@@ -114,16 +122,8 @@ public sealed class CreateTradeRoomScreenViewModel : ScreenViewModel
         ErrorMessage = "";
         var request = new TradeRoomCreateRequest(
             RoomName.Trim(), TrainerName.Trim(), GameVersion, Language,
+            Visibility,
             Offering.Trim(), Wanted.Trim(), Note.Trim());
-        if (IsPublicPreview)
-        {
-            Shell.OpenDemoRoom(new PublicRoomPreview(
-                "custom-preview", request.RoomName, request.TrainerDisplayName, request.Game,
-                request.Language, string.IsNullOrWhiteSpace(request.Offering) ? "Not specified" : request.Offering,
-                string.IsNullOrWhiteSpace(request.Wanted) ? "Anything" : request.Wanted,
-                "Not shared", PreviewAvailability.Open, 64, DateTimeOffset.UtcNow, request.Note));
-            return;
-        }
 
         try
         {

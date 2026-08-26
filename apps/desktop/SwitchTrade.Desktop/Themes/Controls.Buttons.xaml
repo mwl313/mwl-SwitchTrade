@@ -3,8 +3,8 @@
   <Style x:Key="BaseButton" TargetType="Button">
     <Setter Property="MinHeight" Value="44" />
     <Setter Property="Padding" Value="{StaticResource ControlPadding}" />
-    <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
-    <Setter Property="FontSize" Value="15" />
+    <Setter Property="FontFamily" Value="{StaticResource BodyFontFamily}" />
+    <Setter Property="FontSize" Value="14" />
     <Setter Property="FontWeight" Value="SemiBold" />
     <Setter Property="HorizontalContentAlignment" Value="Center" />
     <Setter Property="VerticalContentAlignment" Value="Center" />
@@ -24,18 +24,18 @@
                 <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                                   VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
                                   RecognizesAccessKey="True" />
-                <Border x:Name="InteractionOverlay" Background="Black" Opacity="0"
+                <Border x:Name="InteractionOverlay" Background="White" Opacity="0"
                         CornerRadius="5" IsHitTestVisible="False" />
               </Grid>
             </Border>
           </Grid>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="InteractionOverlay" Property="Opacity" Value="0.06" />
+              <Setter TargetName="InteractionOverlay" Property="Opacity" Value="0.08" />
               <Setter TargetName="ButtonBorder" Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
             </Trigger>
             <Trigger Property="IsPressed" Value="True">
-              <Setter TargetName="InteractionOverlay" Property="Opacity" Value="0.12" />
+              <Setter TargetName="InteractionOverlay" Property="Opacity" Value="0.16" />
               <Setter TargetName="ContentRoot" Property="RenderTransform">
                 <Setter.Value><TranslateTransform Y="1" /></Setter.Value>
               </Setter>
@@ -56,9 +56,9 @@
   </Style>
 
   <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource BaseButton}">
-    <Setter Property="Foreground" Value="White" />
-    <Setter Property="Background" Value="{DynamicResource LinkBlueBrush}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource LinkBlueBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource OnActionGreenBrush}" />
+    <Setter Property="Background" Value="{DynamicResource ActionGreenBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ActionGreenBrush}" />
     <Setter Property="BorderThickness" Value="1" />
   </Style>
   <Style x:Key="SecondaryButton" TargetType="Button" BasedOn="{StaticResource BaseButton}">
@@ -68,7 +68,7 @@
     <Setter Property="BorderThickness" Value="1" />
   </Style>
   <Style x:Key="NavigationActionButton" TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
-    <Setter Property="MinHeight" Value="84" />
+    <Setter Property="MinHeight" Value="88" />
     <Setter Property="Padding" Value="20,14" />
     <Setter Property="HorizontalContentAlignment" Value="Stretch" />
   </Style>
@@ -80,8 +80,8 @@
     <Setter Property="Padding" Value="10,8" />
   </Style>
   <Style x:Key="DangerButton" TargetType="Button" BasedOn="{StaticResource BaseButton}">
-    <Setter Property="Foreground" Value="White" />
-    <Setter Property="Background" Value="{DynamicResource DangerBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
+    <Setter Property="Background" Value="{DynamicResource DangerContainerBrush}" />
     <Setter Property="BorderBrush" Value="{DynamicResource DangerBrush}" />
     <Setter Property="BorderThickness" Value="1" />
   </Style>

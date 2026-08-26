@@ -13,11 +13,14 @@ public sealed record ControlStatus(
     bool Compatible = false,
     IReadOnlyDictionary<string, ReadinessAxis>? States = null,
     string? FailureStage = null,
-    string? RecoveryAction = null)
+    string? RecoveryAction = null,
+    IReadOnlyList<string>? Capabilities = null)
 {
     public ReadinessAxis Axis(string name) => States is not null && States.TryGetValue(name, out var axis)
         ? axis
         : new ReadinessAxis("unknown", "Not checked", $"{name}.unknown", null);
+    public bool HasCapability(string capability) =>
+        Capabilities?.Contains(capability, StringComparer.Ordinal) == true;
 }
 
 public sealed record ReadinessAxis(
@@ -42,6 +45,7 @@ public enum SwitchRoomRole { Unassigned, Creator, Finder }
 public enum RoomMembershipRole { Owner, Member }
 public enum GameVersionChoice { None, FireRed, LeafGreen }
 public enum GameLanguage { None, English, Japanese, French, German, Italian, Spanish }
+public enum TradeRoomVisibility { Private, Public }
 
 public sealed record SelectionOption<T>(T Value, string Label)
 {
@@ -53,6 +57,7 @@ public sealed record TradeRoomCreateRequest(
     string TrainerDisplayName,
     GameVersionChoice Game,
     GameLanguage Language,
+    TradeRoomVisibility Visibility,
     string Offering,
     string Wanted,
     string Note);
@@ -77,7 +82,9 @@ public sealed record AuthoritativeRoomProjection(
     RoomMembershipRole MembershipRole,
     SwitchRoomRole SwitchRole,
     bool PartnerOnline,
-    bool BothReady);
+    bool BothReady,
+    string AttemptPhase,
+    bool RoleLocked);
 
 public sealed record AdapterProfileViewData(
     string UsbId,
@@ -105,7 +112,7 @@ public sealed record HardwareDeviceViewData(
     bool IsAttached,
     bool IsSelected)
 {
-    public string DisplayLabel => $"{FriendlyName} · {SupportLabel} · USB {BusId}";
+    public string DisplayLabel => $"USB {BusId} · {FriendlyName} · {SupportLabel}";
     public string Disclaimer => !IsSelectable
         ? "Quarantined — available for diagnostics only and blocked from trading."
         : IsExperimental
@@ -113,39 +120,41 @@ public sealed record HardwareDeviceViewData(
             : "Supported hardware profile.";
 }
 
-public enum PreviewAvailability { Open, Full }
+public enum PublicRoomAvailability { Open, Full }
 public enum PublicSearchBy { AnyField, RoomName, Trainer, OfferedPokemon, WantedPokemon }
 public enum PublicAvailabilityFilter { OpenOnly, AllRooms }
 public enum PublicGameFilter { AnyGame, FireRed, LeafGreen }
-public enum PublicLanguageFilter { AnyLanguage, English, Japanese, French }
-public enum PublicSortOrder { BestMatch, LowestLatency, RecentlyOpened }
+public enum PublicLanguageFilter { AnyLanguage, English, Japanese, French, German, Italian, Spanish }
+public enum PublicSortOrder { RecentlyOpened, Oldest, RoomName }
 
-public sealed record PublicRoomPreview(
-    string PreviewId,
+public sealed record PublicRoomQuery(
+    string SearchText,
+    PublicAvailabilityFilter Availability,
+    PublicGameFilter Game,
+    PublicLanguageFilter Language,
+    PublicSortOrder Sort);
+
+public sealed record PublicRoomListing(
+    string ListingId,
     string RoomName,
     string TrainerDisplayName,
     GameVersionChoice Game,
     GameLanguage Language,
     string Offering,
     string Wanted,
-    string Region,
-    PreviewAvailability Availability,
-    int LatencyMs,
+    PublicRoomAvailability Availability,
+    int OccupancyCount,
+    int Capacity,
     DateTimeOffset CreatedAt,
     string Note)
 {
     public string GameLabel => Game.ToString();
     public string LanguageLabel => Language.ToString();
     public string AvailabilityLabel => Availability.ToString();
-    public string ConnectionQuality => LatencyMs switch
-    {
-        < 65 => $"Excellent · {LatencyMs} ms",
-        < 125 => $"Good · {LatencyMs} ms",
-        _ => $"Fair · {LatencyMs} ms",
-    };
-    public string Occupancy => Availability == PreviewAvailability.Open ? "1 of 2" : "2 of 2";
+    public string Occupancy => $"{OccupancyCount} of {Capacity}";
+    public bool IsOpen => Availability == PublicRoomAvailability.Open && OccupancyCount < Capacity;
     public string AccessibleName =>
-        $"{RoomName}, trainer {TrainerDisplayName}, {GameLabel}, {AvailabilityLabel}, {ConnectionQuality}";
+        $"{RoomName}, trainer {TrainerDisplayName}, {GameLabel}, {AvailabilityLabel}, {Occupancy}";
 }
 
 public sealed record BattleStats(int Hp, int Attack, int Defense, int SpecialAttack, int SpecialDefense, int Speed)
@@ -159,17 +168,17 @@ public sealed record SixValues(int Hp, int Attack, int Defense, int SpecialAttac
     public string Display => $"{Hp} / {Attack} / {Defense} / {SpecialAttack} / {SpecialDefense} / {Speed}";
 }
 
-public sealed record MovePreview(string Name, int? CurrentPp = null, int? MaxPp = null)
+public sealed record MoveViewData(string Name, int? CurrentPp = null, int? MaxPp = null)
 {
     public string Display => CurrentPp is null ? Name : $"{Name} · {CurrentPp}/{MaxPp} PP";
 }
 
-public sealed record TrainerPreview(string Name, int? TrainerId = null, GameLanguage Language = GameLanguage.None)
+public sealed record TrainerViewData(string Name, int? TrainerId = null, GameLanguage Language = GameLanguage.None)
 {
     public string Display => TrainerId is null ? Name : $"{Name} · ID {TrainerId:00000}";
 }
 
-public sealed record PokemonPreviewViewData(
+public sealed record PokemonPartySlotViewData(
     string Nickname,
     string Species,
     int Level,
@@ -178,8 +187,8 @@ public sealed record PokemonPreviewViewData(
     BattleStats? Stats,
     SixValues? Ivs,
     SixValues? Evs,
-    IReadOnlyList<MovePreview> Moves,
-    TrainerPreview? Trainer,
+    IReadOnlyList<MoveViewData> Moves,
+    TrainerViewData? Trainer,
     bool IsEmpty = false,
     bool IsLive = false)
 {
@@ -191,20 +200,20 @@ public sealed record PokemonPreviewViewData(
     public string EvsText => Evs?.Display ?? "Unavailable";
     public string MovesText => Moves.Count == 0 ? "Unavailable" : string.Join(" · ", Moves.Select(move => move.Name));
     public string TrainerText => Trainer?.Display ?? "Unavailable";
-    public string ValidityLabel => IsEmpty ? "No Pokémon" : IsLive ? "Verified live data" : "Sample preview";
+    public string ValidityLabel => IsEmpty ? "No Pokémon" : IsLive ? "Checksum-verified data" : "Unavailable";
     public string AccessibleName => IsEmpty
         ? "Empty party slot"
-        : $"View sample details for {Nickname}, {Species}, level {Level}";
+        : $"View details for {Nickname}, {Species}, level {Level}";
 }
 
-public sealed record PartyPreviewViewData(
+public sealed record PartyViewData(
     string Heading,
     string Accent,
-    IReadOnlyList<PokemonPreviewViewData> Slots);
+    IReadOnlyList<PokemonPartySlotViewData> Slots);
 
 public sealed record LivePartyProjection(
-    PartyPreviewViewData? MemberA,
-    PartyPreviewViewData? MemberB,
+    PartyViewData? MemberA,
+    PartyViewData? MemberB,
     string ObserverStatus,
     bool TradingRoomConfirmed,
     IReadOnlyList<TradeCommitProjection> Commits);

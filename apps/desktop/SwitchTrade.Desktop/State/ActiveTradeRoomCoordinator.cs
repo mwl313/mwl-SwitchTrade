@@ -29,6 +29,11 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
     public LegacyConnectionState ConnectionState { get; private set; } = LegacyConnectionState.Idle;
     public string StatusText { get; private set; } = "Connection not started";
     public string? RecoveryMessage { get; private set; }
+    public string RoomState { get; private set; } = "waiting_for_partner";
+    public string AttemptPhase { get; private set; } = "none";
+    public bool PartnerOnline { get; private set; }
+    public bool BothReady { get; private set; }
+    public bool RoleLocked { get; private set; }
     public bool HasRoom => Context is not null;
     public bool HasConnectionOrUncertainTeardown =>
         ConnectionState is not LegacyConnectionState.Idle;
@@ -45,6 +50,11 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
         ConnectionState = LegacyConnectionState.Idle;
         StatusText = "Connection not started";
         RecoveryMessage = null;
+        RoomState = room.Participants >= 2 ? "ready_check" : "waiting_for_partner";
+        AttemptPhase = "none";
+        PartnerOnline = room.Participants >= 2;
+        BothReady = false;
+        RoleLocked = false;
         RaiseChanged();
     }
 
@@ -187,8 +197,25 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
             SwitchRole = room.SwitchRole,
             Room = Context.Room with { Participants = room.Participants },
         };
+        RoomState = room.State;
+        AttemptPhase = room.AttemptPhase;
+        PartnerOnline = room.PartnerOnline;
+        BothReady = room.BothReady;
+        RoleLocked = room.RoleLocked;
         if (ConnectionState == LegacyConnectionState.Idle)
-            StatusText = room.PartnerOnline ? "Both trainers are in this Trade Room" : "Waiting for your partner";
+        {
+            StatusText = room.State switch
+            {
+                "waiting_for_partner" => "Waiting for your partner",
+                "ready_check" when !room.BothReady => "Both trainers are here. Press Connect this Switch when ready.",
+                "ready_check" => "Both trainers are ready",
+                "connection_attempt" when !room.RoleLocked => "Assigning the Switch room creator",
+                "connection_attempt" => "Preparing both Switch connections",
+                "trading" => "Both Switches are in the trading room",
+                "closed" => "This Trade Room is closed",
+                _ => room.PartnerOnline ? "Both trainers are in this Trade Room" : "Waiting for your partner",
+            };
+        }
         RaiseChanged();
     }
 
@@ -198,6 +225,11 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
         ConnectionState = LegacyConnectionState.Idle;
         StatusText = "Connection not started";
         RecoveryMessage = null;
+        RoomState = "waiting_for_partner";
+        AttemptPhase = "none";
+        PartnerOnline = false;
+        BothReady = false;
+        RoleLocked = false;
         RaiseChanged();
     }
 

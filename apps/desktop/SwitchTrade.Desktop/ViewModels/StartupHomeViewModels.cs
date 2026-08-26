@@ -10,7 +10,6 @@ public sealed class RecoveryScreenViewModel : ScreenViewModel
     public RecoveryScreenViewModel(MainViewModel shell) : base(shell)
     {
         RetryCommand = new AsyncCommand(shell.InitializeAsync);
-        PreviewCommand = new RelayCommand(shell.OpenPreviewHome);
         SettingsCommand = new RelayCommand(shell.OpenSettings);
     }
 
@@ -20,7 +19,6 @@ public sealed class RecoveryScreenViewModel : ScreenViewModel
     public string RecoveryTechnicalDetails => Shell.RecoveryTechnicalDetails;
     public bool ShowConnectionSettings => Shell.RecoveryStage == "radio";
     public AsyncCommand RetryCommand { get; }
-    public RelayCommand PreviewCommand { get; }
     public RelayCommand SettingsCommand { get; }
 
     public void NotifyRecoveryChanged()
@@ -34,20 +32,23 @@ public sealed class RecoveryScreenViewModel : ScreenViewModel
 
 public sealed class HomeScreenViewModel : ScreenViewModel
 {
-    public HomeScreenViewModel(MainViewModel shell, bool interfacePreview = false) : base(shell)
+    public HomeScreenViewModel(MainViewModel shell) : base(shell)
     {
-        IsInterfacePreview = interfacePreview;
         CreateCommand = new RelayCommand(shell.OpenCreate, () => shell.IsServiceReady);
-        PublicCommand = new RelayCommand(shell.OpenPublicRooms);
+        PublicCommand = new RelayCommand(
+            shell.OpenPublicRooms, () => shell.IsPublicDirectoryAvailable);
         JoinCommand = new RelayCommand(shell.OpenPrivateJoin, () => shell.IsServiceReady);
     }
 
     public override string Title => "Home";
-    public bool IsInterfacePreview { get; }
-    public bool ShowAttention => !IsServiceReady || IsInterfacePreview;
-    public string AttentionText => IsInterfacePreview
-        ? "Interface Preview — online actions remain unavailable until the installed SwitchTrade runtime is running."
-        : "SwitchTrade needs attention before a private connection can start.";
+    public bool ShowAttention => !IsServiceReady;
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Performance", "CA1822:Mark members as static",
+        Justification = "The message is a bindable property of this screen projection.")]
+    public string AttentionText => "SwitchTrade needs attention before a connection can start.";
+    public string PublicAvailabilityText => Shell.IsPublicDirectoryAvailable
+        ? "Find a room in the live directory."
+        : "Public rooms are unavailable with this runtime.";
     public RelayCommand CreateCommand { get; }
     public RelayCommand PublicCommand { get; }
     public RelayCommand JoinCommand { get; }
@@ -56,8 +57,10 @@ public sealed class HomeScreenViewModel : ScreenViewModel
     {
         base.NotifyShellState();
         CreateCommand.RaiseCanExecuteChanged();
+        PublicCommand.RaiseCanExecuteChanged();
         JoinCommand.RaiseCanExecuteChanged();
         OnPropertyChanged(nameof(ShowAttention));
         OnPropertyChanged(nameof(AttentionText));
+        OnPropertyChanged(nameof(PublicAvailabilityText));
     }
 }

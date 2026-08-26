@@ -13,4 +13,8 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AnalysisLevel>latest-recommended</AnalysisLevel>
   </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="Assets\Fonts\**\*.ttf" />
+    <EmbeddedResource Include="Assets\Fonts\**\OFL.txt" />
+  </ItemGroup>
 </Project>

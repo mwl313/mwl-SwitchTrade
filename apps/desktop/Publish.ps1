@@ -16,6 +16,7 @@ $files = @(Get-ChildItem -LiteralPath $Output -File)
 if ($files.Count -ne 1 -or $files[0].Name -ne 'SwitchTrade.exe') {
     throw "expected one self-contained SwitchTrade.exe in $Output"
 }
-& $files[0].FullName --self-test
-if ($LASTEXITCODE -ne 0) { throw 'native desktop self-test failed' }
+$selfTest = Start-Process -FilePath $files[0].FullName -ArgumentList '--self-test' `
+    -WindowStyle Hidden -Wait -PassThru
+if ($selfTest.ExitCode -ne 0) { throw "native desktop self-test failed ($($selfTest.ExitCode))" }
 Write-Host $files[0].FullName

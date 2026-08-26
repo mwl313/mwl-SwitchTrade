@@ -20,7 +20,6 @@
         <Button Content="Try again" Command="{Binding RetryCommand}" Style="{StaticResource PrimaryButton}" Margin="0,0,8,8" />
         <Button Content="Connection settings" Command="{Binding SettingsCommand}" Style="{StaticResource SecondaryButton}"
                 Visibility="{Binding ShowConnectionSettings, Converter={StaticResource BooleanToVisibility}}" Margin="0,0,8,8" />
-        <Button Content="View interface preview" Command="{Binding PreviewCommand}" Style="{StaticResource TextButton}" Margin="0,0,0,8" />
       </WrapPanel>
       <Expander Header="Technical details" Margin="0,20,0,0">
         <TextBlock Text="{Binding RecoveryTechnicalDetails}"

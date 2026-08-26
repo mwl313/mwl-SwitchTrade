@@ -1,11 +1,11 @@
 <Application x:Class="SwitchTrade.Desktop.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             ThemeMode="Light">
+             ThemeMode="Dark">
   <Application.Resources>
     <ResourceDictionary>
       <ResourceDictionary.MergedDictionaries>
-        <ResourceDictionary Source="Themes/Colors.Light.xaml" />
+        <ResourceDictionary Source="Themes/Colors.Dark.xaml" />
         <ResourceDictionary Source="Themes/Tokens.xaml" />
         <ResourceDictionary Source="Themes/Typography.xaml" />
         <ResourceDictionary Source="Themes/Icons.xaml" />

@@ -1,204 +1,157 @@
-# Native UI flow and runtime structure — 2026-08-25
+# Native UI flow and runtime structure — updated 2026-08-26
 
 > Status: source of truth for the currently implemented native Windows UI.
-> Maintenance rule: any change to user-visible screens, navigation, controls, status text, API calls,
-> automatic startup, or shutdown behavior must update this document in the same change.
+> Maintenance rule: any change to a screen, navigation, user-visible state, local API call, startup,
+> or shutdown behavior must update this document in the same change.
 
-This document describes implemented behavior, not planned behavior. The approved first-pass redesign
-is in `docs/56`; the second-pass audit and result are in `docs/63` and `docs/64`.
-Release-blocking work that is not implemented remains in `docs/55`. The frozen backend contracts are
-`docs/58`–`docs/61`.
+Visual Overhaul 3 implements the dark Stitch-derived direction from `docs/73` as native WPF. The
+reference HTML is visual evidence only: the application contains no browser, WebView, Electron,
+Tailwind, CDN, or hot-linked asset. The implementation report and captures are in `docs/74` and
+`docs/assets/ui-overhaul-3/`.
 
-## Current UI flow
+The client intentionally contains no Privacy tab, analytics switch, consent prompt, or analytics
+upload. Those concerns are outside the client by owner direction.
+
+## Current user flow
 
 ```mermaid
 flowchart TD
-    launch([Launch SwitchTrade]) --> startup[Starting SwitchTrade]
-    startup --> check{Local service responds?}
-    check -->|Yes| home[Home]
-    check -->|No| launcher[Try installed WSL launcher]
-    launcher --> retry{Service responds before timeout?}
-    retry -->|Yes| home
-    retry -->|No| recovery[Startup Recovery]
-
+    launch([Launch SwitchTrade.exe]) --> startup[Starting SwitchTrade]
+    startup --> probe{Local control service ready?}
+    probe -->|No| launcher[Start isolated SwitchTrade WSL runtime]
+    launcher --> retry{Bounded readiness retry}
+    retry -->|No| recovery[Recovery]
     recovery -->|Try again| startup
     recovery --> settings[Settings]
-    recovery -->|View interface preview| previewHome[Home · Interface Preview]
+    probe -->|Yes| home[Home]
+    retry -->|Yes| home
 
     home --> create[Create a Trade Room]
-    home --> privateJoin[Join a private Trade Room]
-    home --> publicRooms[Browse Public Rooms · Demo Preview]
+    home --> privateJoin[Join a Private Room]
+    home --> publicGate{Relay advertises public-directory.v1?}
+    publicGate -->|Yes| publicRooms[Browse Public Rooms]
+    publicGate -->|No| unavailable[Public action disabled with factual copy]
     home --> settings
-    previewHome --> create
-    previewHome --> privateJoin
-    previewHome --> publicRooms
-    previewHome --> settings
 
-    create -->|Private · real local API| realRoom[Trade Room · Compatibility Mode]
-    create -->|Listed publicly · preview| demoRoom[Trade Room · Demo Preview]
-    privateJoin -->|One atomic Join call| realRoom
-    publicRooms -->|Search/filter/sort samples| publicPreview[Public room details · Demo Preview]
-    publicPreview --> demoRoom
+    create -->|Private or Public| authority[Authoritative two-seat room]
+    privateJoin -->|Atomic six-character join| authority
+    publicRooms -->|Atomic opaque listing join| authority
+    authority --> tradeRoom[Persistent Trade Room]
+    tradeRoom --> ready[Both trainers ready]
+    ready --> assign[Atomic creator/finder assignment]
+    assign --> connect[WSL radio and opaque RFU connection]
+    connect --> active[Trading room]
+    active --> parties[Checksum-valid You and Partner parties]
+    active --> commit[Trade verified only after commit evidence]
+    tradeRoom -->|Confirmed close or leave| teardown[Safe endpoint and room teardown]
+    teardown --> home
 
-    realRoom -->|Connect this Switch| active[Current endpoint session]
-    active -->|End connection| realRoom
-    demoRoom --> party[Two sample parties · 2 × 3 each]
-    party --> details[Keyboard/click pinned Pokémon details]
-
-    settings --> connection[Connection profiles]
-    settings --> support[Support file]
-    settings --> advanced[Advanced technical boundary]
-
-    realRoom -->|Confirmed Back/close| stop[Stop active session if needed]
-    stop --> home
-
-    style publicRooms fill:#EAF0FF,stroke:#375BD2
-    style demoRoom fill:#EAF0FF,stroke:#375BD2
-    style realRoom fill:#E7F5F2,stroke:#0F766E
-    style recovery fill:#FFF4DF,stroke:#A45F0B
+    settings --> connection[Connection]
+    settings --> support[Support]
+    settings --> advanced[Advanced]
 ```
 
-## Features by screen
+## Features and truth boundaries by screen
 
 | UI area | Implemented behavior | Truth boundary |
 |---|---|---|
-| Global shell | Native WPF Fluent Light primitives with Linkline tokens, a 1240-by-860 default viewport and 960-by-700 minimum, fixed wordmark header, a white bordered Back action bar, readiness popover, Settings, per-screen scrolling, adaptive margins, keyboard navigation, restrained scene transitions, and live-region announcements | Back appearing never moves the wordmark; the action bar stays visually separate from scrolling canvas content; readiness is local setup status, not a claim that a partner or Switch is connected |
-| Startup | Checks `127.0.0.1:8787`, attempts the installed hidden launcher, retries for a bounded period, and routes to Home or Recovery | The progress copy is presentation state, not invented per-stage telemetry |
-| Startup Recovery | Try again, Settings, explicitly labeled interface preview, and expandable technical context | Preview does not start online, radio, or Switch behavior |
-| Home | Three fixed-width rectangular actions for Create, Browse Public Rooms, and private code entry, plus Settings and an attention notice when in preview/recovery state | Public browsing is labeled as preview |
-| Create a Trade Room | Always-visible room/trainer/game/language/offer/wanted/note fields, Private/Public radio selection, required-field validation, and real private-room creation through the existing local API | Room name, trainer name, game, and language are required; Game and Language default to `None`; Public creates a local Demo Preview only |
-| Join a private Trade Room | Normalizes or pastes a shared code, locks editing while one atomic Join request is active, and enters the Trade Room on success | The compatibility API cannot yet provide authoritative presence/reconnect state |
-| Browse Public Rooms | Interactive local search, field selector, availability/game/language filters, sorting, selection, empty state, and sample detail panel | Every public-room surface says `Public Rooms Preview` or `Demo Preview`; no network directory is queried |
-| Settings tabs | Connection, Support, and Advanced remain visible as flat navigation tabs with a selected underline at every supported width; there is no compact dropdown or button-card replacement | Changing tabs does not alter room/session state |
-| Settings · Connection | Lists physically detected profiled USB Wi-Fi adapters with bus ID and support state, lets the user select the next-session adapter, shows an explicit experimental disclaimer, lists the complete compatibility matrix, and runs read-only diagnostics | Experimental hardware is untested and may fail; quarantined hardware remains blocked |
-| Settings · Support | Requests the real local support-bundle endpoint and reports a friendly result | Requires the installed local service |
-| Trade Room · real | Coordinator-owned room identity that survives Settings/navigation, code/invitation copy, role-specific Switch instructions, current endpoint start/stop, truthful recovery, owner-close/member-leave semantics, and safe app shutdown | Shared Ready, authoritative membership, role election, reconnect, and live parties remain unavailable in the compatibility API |
-| Trade Room · demo | Two side-by-side parties at wide widths; compact layouts stack Partner above You. Each has six explicit slots, neutral initial placeholders, pointer tooltips, click/Enter selection, detailed stats, and Escape dismissal | All trainers, Pokémon, network quality, and party fields are sample data |
+| Persistent shell | Native dark WPF shell, fixed wordmark, readiness, Settings, a permanently reserved Back row, 1080-DIP content boundary, 1240×860 default and 960×700 minimum | Back never moves the wordmark; Ready means the local control service is compatible, not that a partner or Switch is connected |
+| Startup | Probes `127.0.0.1:8787`, starts the installed hidden launcher if needed, retries for a bounded interval | Does not invent per-stage progress not returned by the runtime |
+| Recovery | Try again, Connection Settings when relevant, and actionable technical context | No interface-preview or synthetic success path |
+| Home | One full-width Create action plus equal Browse Public Rooms and Join Private Room actions | Public browsing is enabled only when relay health advertises `public-directory.v1` |
+| Create a Trade Room | Always-visible required room/trainer/game/language fields, Private/Public radio selection, optional offering/wanted/note fields, 7/5 wide layout, sticky create action | `None` is not a valid required game/language; both visibility choices call the real authoritative service |
+| Join a Private Room | One accessible logical code control, paste support, uppercase normalization, removal of spaces/hyphens, exactly six ASCII alphanumeric characters | One atomic join call; no token or authority credential enters WPF |
+| Browse Public Rooms | Real server directory, search, availability/game/language filters, sorting, master/detail layout, required local trainer name, refresh, empty/busy/error/full/stale states | Listings expose only sanitized metadata and opaque listing IDs; room code, credentials, IP, relay internals, and precise location are absent |
+| Trade Room | Persistent room name/code/membership, partner presence, shared readiness, server-assigned creator/finder instructions, start/end, owner-close/member-leave, reconnect/recovery status, You/Partner party panels | Roles come from the authoritative attempt; UI never infers them from host/guest ownership |
+| Party panels | You left and Partner right at wide sizes; Partner above You in compact mode; six explicit slots, keyboard/click selection, hover details, IV/EV/stats/moves/trainer provenance | Only complete checksum-valid observer snapshots are factual; unavailable data stays unavailable |
+| Trade success | Announces a verified trade from an idempotent commit event | An offer, animation, save attempt, disconnect, error, or rollback never becomes “Trade verified” |
+| Settings tabs | Connection, Support, and Advanced are stable navigation tabs | Tabs do not change room or endpoint state |
+| Settings · Connection | Detected profiled USB devices, readable device/support labels, free supported/experimental selection, explicit experimental warning, quarantined blocking, profile matrix, read-only diagnostics | Experimental means unqualified; selection is not certification |
+| Settings · Support | Creates a redacted support bundle and links to the real GitHub Issues page | Support data excludes room credentials, captures, passcodes, and raw Pokémon data |
+| Settings · Advanced | Technical runtime boundary and compatibility details | Ordinary users are not required to understand WSL, RFU, AP/monitor, or tunnel roles |
 
-## Navigation and keyboard behavior
+## Visual and interaction foundation
 
-- Back is hidden when there is no safe history entry.
-- The Back row remains reserved when Back is hidden, so the wordmark and content do not shift.
-- Narrow scenes use a fixed 640-DIP column anchored to the left content edge under the wordmark and
-  Back control. Wide Public/Trade Room scenes use the same left edge and expand rightward within the
-  shared 1080-DIP content boundary.
-- Combo boxes use the same fixed 44-DIP control height as adjacent fields. Create and real Trade Room
-  action footers use a white bordered sticky action bar distinct from the scrolling canvas.
-- `Alt+Left` and `Escape` go back; in Demo party details, `Escape` closes details first.
-- `Ctrl+,` opens Settings and `F5` refreshes local service status.
-- Leaving or closing a real Trade Room asks for confirmation and stops an active endpoint session.
-- The UI never silently treats a local click as proof of remote readiness or membership.
-- Buttons and party slots are keyboard focusable. Pokémon details are available through selection as
-  well as hover, so required information is not hover-only.
-
-## Implemented presentation foundation
-
-- `Themes/Colors.Light.xaml`, `Tokens.xaml`, `Typography.xaml`, `Icons.xaml`, and the split
-  `Controls.*.xaml` dictionaries own Fluent Light plus the restrained Linkline identity.
-- `Themes/HighContrast.xaml` is loaded when Windows High Contrast is active; motion follows the
-  Windows client-area animation preference and is suppressed in High Contrast.
-- `Models/AppModels.cs` contains typed room, filter, party, move, stat, IV, EV, and trainer records.
-- `Services/ControlApiClient.cs` is the typed local JSON API boundary and converts technical failures
-  into user-facing messages.
-- `Services/PublicRoomPreviewProvider.cs` is the sole source of labeled sample rooms and parties.
-- `ViewModels/MainViewModel.cs` owns only shell navigation. Split screen view models own local state,
-  while `State/ActiveTradeRoomCoordinator.cs` owns the real room/session independently of the route.
-- `Views/Screens.xaml` is a template registry. Each screen and reusable component has its own XAML and
-  code-behind file; `MainWindow.xaml` remains the persistent shell.
-
-## Known product gaps (not represented as working UI)
-
-- The frozen `room-control.v1` server-authoritative two-member Trade Room, shared online/ready state,
-  ordered membership events,
-  reconnect tokens, expiration, and conflict handling.
-- Either-member room-creator claims independent of stable member identity and group ownership.
-- A production public directory and real public room publication.
-- Automatic adapter repair and full per-stage control/relay/radio/session telemetry.
-- The frozen `party-commit.v1` passive decoder party snapshots, checksum-valid live party presentation,
-  and fail-closed committed-trade events.
-- The frozen externally administered `privacy-statistics.v1` consent decision and server-side
-  statistics implementation.
-- Per owner direction, optional privacy/analytics settings are not presented in the client. Analytics
-  remain disabled until the separately administered external consent workflow exists.
-- Production relay deployment, authentication, and two-endpoint internet qualification.
-
-The client intentionally contains no Privacy tab, analytics switch, or consent prompt. That workflow
-is administered outside this client and remains disabled until separately implemented and approved.
+- Dark tokens are centralized in `Themes/Colors.Dark.xaml`: deepest/base canvases, layered surfaces,
+  high-contrast text, neon action green, blue information, You blue, Partner teal, and explicit error
+  containers.
+- Space Grotesk headings, Inter body text, and Space Mono labels/codes are embedded application
+  resources. Their SIL OFL files are embedded and attributed in `legal/THIRD-PARTY-NOTICES.txt`.
+- Layout uses a 4-DIP baseline, 24-DIP outer gutters, 16-DIP common gaps, one-DIP borders, 44-DIP
+  minimum controls, modest radii, stable sticky action bars, and left-aligned content.
+- Combo boxes have a native dark template for both the closed value and popup items. Normal, hover,
+  focus, selected, and disabled states keep explicit foreground/background contrast. Long adapter
+  names put the USB bus first and ellipsize instead of leaking record text outside the control.
+- Windows High Contrast swaps to `Themes/HighContrast.xaml`. Keyboard focus is visible, required
+  information is not hover-only, and scene transitions are disabled when Windows client-area
+  animation is disabled or High Contrast is active.
+- `Alt+Left` and `Escape` navigate back; temporary Pokémon details dismiss before navigation.
+  `Ctrl+,` opens Settings and `F5` refreshes factual service state.
 
 ## Runtime structure
 
 ```mermaid
 flowchart LR
     user[/Windows user/]
-    desktop[SwitchTrade.exe · Native WPF]
+    desktop[SwitchTrade.exe<br/>native WPF]
     launcher[Windows launcher]
 
-    subgraph localRuntime [Isolated SwitchTrade WSL]
-        control[Python control service]
-        endpoint[RFU endpoint runtime]
-        radio[USB radio and driver]
+    subgraph wsl [Isolated SwitchTrade WSL distribution]
+        control[Python control API<br/>127.0.0.1:8787]
+        endpoint[RFU endpoint]
+        radio[USB Wi-Fi radio and driver]
+        observer[Passive party/commit observer]
     end
 
-    lobby[Future authoritative room service]
-    relay[Relay service]
+    subgraph remote [Hosted production service]
+        authority[Two-seat room authority<br/>public directory]
+        relay[Opaque RFU relay]
+    end
+
     switchDevice[/Nintendo Switch/]
-    remotePeer[Remote SwitchTrade endpoint]
+    peer[Remote SwitchTrade endpoint]
 
     user --> desktop
-    desktop -->|Local typed JSON API| control
-    desktop -.->|Starts when absent| launcher
-    launcher -->|USB and WSL preflight| radio
+    desktop -->|typed loopback JSON| control
+    desktop -. start/repair .-> launcher
     launcher --> control
+    control -->|scoped credentials held outside WPF| authority
     control --> endpoint
-    control -.->|Future room state| lobby
     endpoint <--> radio
     radio <--> switchDevice
-    endpoint <-->|Opaque RFU envelopes| relay
-    relay <--> remotePeer
-
-    style localRuntime fill:#EAF0FF,stroke:#375BD2
-    style desktop fill:#FFFFFF,stroke:#D9DDE5
-    style lobby fill:#FFF4DF,stroke:#A45F0B,stroke-dasharray: 5 5
+    endpoint --> observer
+    observer -->|checksum-valid projection only| control
+    endpoint <-->|opaque envelopes| relay
+    relay <--> peer
 ```
 
 ## Layer terminology
 
 | Term | Exact meaning |
 |---|---|
-| Native desktop client | `SwitchTrade.exe`, the WPF presentation and local-control client |
-| Windows launcher | PowerShell bootstrap that performs Windows/USB/WSL startup work |
-| Local control service | Python service bound to loopback at `127.0.0.1:8787` inside the isolated distro |
-| RFU endpoint runtime | Health-gated Linux process that owns LDN, Pia, Reliable, radio, and tunnel behavior for one side |
-| Relay service | Broker and opaque WebSocket forwarder between endpoint runtimes |
-| Authoritative room service | Contracted server state for two members, readiness, role claims, reconnect, and room lifecycle; it does not yet exist in the current client/backend |
-| Demo Preview | Local, labeled sample content that never claims a remote user or live service exists |
+| Native desktop client | `SwitchTrade.exe`; presentation and typed loopback client only |
+| Windows launcher | Bounded PowerShell bootstrap for installed WSL, USB ownership, and recovery |
+| Local control service | Python API bound to loopback; owns credentials, process lifecycle, hardware and observer state |
+| RFU endpoint | Linux runtime that owns LDN/Pia/Reliable/radio/tunnel behavior for one player |
+| Room authority | Hosted two-member membership, readiness, roles, reconnect, public listing, close/expiry state |
+| Relay | Hosted authenticated opaque RFU-envelope forwarder; it does not decode game payloads |
+| Observer | Passive, fail-neutral party and committed-trade projection; trading never depends on it |
 
-Technical terms such as endpoint, radio, tunnel, host, and guest may remain in source code or an
-explicitly expanded Advanced/Technical details area. Ordinary product copy uses Home, Trade Room,
-room code, Settings, you, partner, create the room, and find the room.
+## Implementation boundaries
 
-## Is the EXE the whole application?
+- `MainWindow.xaml` is the persistent shell; `Views/*` are native screens and reusable controls.
+- `MainViewModel` owns navigation and factual readiness; `ActiveTradeRoomCoordinator` owns room and
+  connection state independently of the visible route.
+- `ControlApiClient` is the only WPF network boundary and talks only to the loopback control API.
+- `switchtrade/control.py` owns relay credentials, capability discovery, hardware selection, process
+  launch/teardown, readiness, and redacted projections.
+- `relay/authority.py` owns durable room/public-directory state; `relay/server.py` exposes its
+  authenticated HTTP/WebSocket boundary.
+- Hardware and future game features remain profile- and contract-driven outside WPF, preserving
+  driver and feature expansion without rebuilding the shell around chipset logic.
 
-No. The installed product is intended to feel like one app, but its responsibilities stay separated:
+## Required documentation check
 
-1. `SwitchTrade.exe` presents state and invokes the loopback API.
-2. The Windows launcher handles elevation, USB ownership, and isolated WSL startup.
-3. The Python control service validates requests and manages endpoint processes.
-4. The WSL endpoint owns the adapter and transports local Switch communication.
-5. A production remote service will provide authoritative rooms and opaque relay transport.
-
-This boundary preserves driver and feature expandability: new qualified adapters stay profile-driven,
-and future Switch-to-Switch activities can reuse the feature-neutral RFU transport without embedding
-driver or protocol logic in WPF.
-
-## Files that require this documentation check
-
-- `apps/desktop/SwitchTrade.Desktop/App.xaml`
-- `apps/desktop/SwitchTrade.Desktop/MainWindow.xaml`
-- `apps/desktop/SwitchTrade.Desktop/MainWindow.xaml.cs`
-- `apps/desktop/SwitchTrade.Desktop/Themes/*`
-- `apps/desktop/SwitchTrade.Desktop/ViewModels/*`
-- `apps/desktop/SwitchTrade.Desktop/Views/*`
-- `apps/desktop/SwitchTrade.Desktop/Services/*`
-- `switchtrade/control.py`
-- `installer/Launch-SwitchTrade.ps1`
+Review this file whenever changing `apps/desktop/SwitchTrade.Desktop/{MainWindow,Themes,Views,
+ViewModels,Services,State}`, `switchtrade/control.py`, the room/public/party contracts, or installed
+startup/shutdown behavior.

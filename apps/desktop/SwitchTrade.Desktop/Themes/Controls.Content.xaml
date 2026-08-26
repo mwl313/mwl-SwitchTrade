@@ -9,8 +9,8 @@
     <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
     <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" />
     <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="10" />
-    <Setter Property="Padding" Value="24" />
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="Padding" Value="20" />
   </Style>
   <Style x:Key="OpenSection" TargetType="Border">
     <Setter Property="Background" Value="Transparent" />
@@ -18,8 +18,8 @@
     <Setter Property="Padding" Value="0" />
   </Style>
   <Style x:Key="StickyActionBar" TargetType="Border">
-    <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
+    <Setter Property="Background" Value="{DynamicResource SurfaceLowBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" />
     <Setter Property="BorderThickness" Value="0,1,0,0" />
     <Setter Property="Padding" Value="16,16,16,20" />
   </Style>
@@ -43,9 +43,9 @@
     <Setter Property="Background" Value="{DynamicResource SuccessTintBrush}" />
     <Setter Property="BorderBrush" Value="{DynamicResource SuccessBrush}" />
   </Style>
-  <Style x:Key="DemoBadge" TargetType="Border">
-    <Setter Property="Background" Value="{DynamicResource BlueTintBrush}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource LinkBlueBrush}" />
+  <Style x:Key="StatusBadge" TargetType="Border">
+    <Setter Property="Background" Value="{DynamicResource SurfaceSubtleBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="6" />
     <Setter Property="Padding" Value="8,4" />
@@ -131,8 +131,8 @@
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Root" Property="Background" Value="{DynamicResource SurfaceSubtleBrush}" /></Trigger>
             <Trigger Property="IsSelected" Value="True">
-              <Setter TargetName="Root" Property="Background" Value="{DynamicResource BlueTintBrush}" />
-              <Setter TargetName="Root" Property="BorderBrush" Value="{DynamicResource LinkBlueBrush}" />
+              <Setter TargetName="Root" Property="Background" Value="{DynamicResource SuccessTintBrush}" />
+              <Setter TargetName="Root" Property="BorderBrush" Value="{DynamicResource ActionGreenBrush}" />
             </Trigger>
             <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Root" Property="BorderBrush" Value="{DynamicResource FocusBrush}" /></Trigger>
           </ControlTemplate.Triggers>

@@ -15,6 +15,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private ScreenViewModel _currentScreen;
     private TradeRoomScreenViewModel? _activeTradeRoom;
     private bool _isServiceReady;
+    private bool _isPublicDirectoryAvailable;
     private string _readinessText = "Starting SwitchTrade";
     private string _announcement = "";
     private string _controlStateText = "Checking";
@@ -27,21 +28,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private string _recoveryTechnicalDetails = "Local setup · The desktop app could not reach 127.0.0.1:8787.";
 
     internal IControlGateway Gateway { get; }
-    internal PublicRoomPreviewProvider PreviewProvider { get; }
     internal ActiveTradeRoomCoordinator RoomCoordinator { get; }
 
     public MainViewModel(
         IControlGateway gateway,
         BackendLauncher launcher,
         IDialogService dialogs,
-        IClipboardService clipboard,
-        PublicRoomPreviewProvider previewProvider)
+        IClipboardService clipboard)
     {
         Gateway = gateway;
         _launcher = launcher;
         _dialogs = dialogs;
         _clipboard = clipboard;
-        PreviewProvider = previewProvider;
         RoomCoordinator = new ActiveTradeRoomCoordinator(gateway);
         _currentScreen = new StartupScreenViewModel(this);
         BackCommand = new AsyncCommand(GoBackAsync, () => CanGoBack);
@@ -71,6 +69,16 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             if (!Set(ref _isServiceReady, value)) return;
             CurrentScreen.NotifyShellState();
             _activeTradeRoom?.NotifyShellState();
+        }
+    }
+
+    public bool IsPublicDirectoryAvailable
+    {
+        get => _isPublicDirectoryAvailable;
+        private set
+        {
+            if (!Set(ref _isPublicDirectoryAvailable, value)) return;
+            CurrentScreen.NotifyShellState();
         }
     }
 
@@ -148,6 +156,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
 
         IsServiceReady = false;
+        IsPublicDirectoryAvailable = false;
         ReadinessText = "Setup needs attention";
         ControlStateText = "Unavailable";
         RecoverySummary = "The installed local service did not respond.";
@@ -167,6 +176,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             if (status is null)
             {
                 IsServiceReady = false;
+                IsPublicDirectoryAvailable = false;
                 ReadinessText = "Setup needs attention";
                 RecoveryStage = "control";
                 RecoverySummary = "The installed local service did not respond.";
@@ -193,6 +203,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         RadioStateText = status.Axis("radio").Display;
         SessionStateText = status.Axis("session").Display;
         IsServiceReady = status.Compatible && control.Status == "ready";
+        IsPublicDirectoryAvailable = IsServiceReady && status.HasCapability("public-directory.v1");
         ReadinessText = !status.Compatible ? "Update or repair required" : status.Status switch
         {
             "initializing" or "starting" => "Preparing connection",
@@ -210,7 +221,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         RecoveryStage = !status.Compatible ? "version" : status.FailureStage ?? "control";
         RecoveryInstructions = RecoveryStage switch
         {
-            "version" => "Close SwitchTrade and run a newer signed SwitchTradeSetup.exe with Update. Preview mode is not safe for trading.",
+            "version" => "Close SwitchTrade and run a newer SwitchTrade Setup package with Update.",
             "relay" => "Check this PC’s internet connection, then try again. If the relay still fails, export a support bundle before changing WSL.",
             "radio" => "Open Settings → Connection, select the adapter, and run the adapter check. Reattach USB only when the diagnostic asks.",
             "session" => "End the failed connection and try once more. If it repeats, export a support bundle before creating another room.",
@@ -232,12 +243,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         _history.Clear();
         CurrentScreen = new HomeScreenViewModel(this);
-    }
-
-    public void OpenPreviewHome()
-    {
-        _history.Clear();
-        CurrentScreen = new HomeScreenViewModel(this, true);
     }
 
     public void OpenCreate() => Navigate(new CreateTradeRoomScreenViewModel(this));
@@ -262,8 +267,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         Navigate(_activeTradeRoom);
     }
 
-    public void OpenDemoRoom(PublicRoomPreview room) => Navigate(new TradeRoomScreenViewModel(this, room));
-
     private void Navigate(ScreenViewModel screen)
     {
         _history.Push(CurrentScreen);
@@ -273,7 +276,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public async Task GoBackAsync()
     {
         if (!CanGoBack) return;
-        if (CurrentScreen is TradeRoomScreenViewModel room && !room.IsDemoPreview)
+        if (CurrentScreen is TradeRoomScreenViewModel)
         {
             if (!await ConfirmAndReleaseRoomAsync()) return;
             _history.Clear();

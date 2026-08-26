@@ -6,18 +6,19 @@
         xmlns:controls="clr-namespace:SwitchTrade.Desktop.Controls"
         Title="SwitchTrade" Width="1240" Height="860" MinWidth="960" MinHeight="700"
         WindowStartupLocation="CenterScreen" Background="{DynamicResource CanvasBrush}"
-        FontFamily="Segoe UI Variable Text, Segoe UI" FontSize="15"
-        UseLayoutRounding="True" SnapsToDevicePixels="True">
+        FontFamily="{StaticResource BodyFontFamily}" FontSize="14"
+        UseLayoutRounding="True" SnapsToDevicePixels="True"
+        TextOptions.TextFormattingMode="Display">
   <Grid>
     <Grid.RowDefinitions>
-      <RowDefinition Height="72" />
-      <RowDefinition Height="48" />
+      <RowDefinition Height="64" />
+      <RowDefinition Height="44" />
       <RowDefinition Height="*" />
     </Grid.RowDefinitions>
 
-    <Border Grid.Row="0" Background="{DynamicResource SurfaceBrush}"
+    <Border Grid.Row="0" Background="{DynamicResource CanvasDeepestBrush}"
             BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
-      <Grid x:Name="HeaderContent" Margin="56,0,28,0" HorizontalAlignment="Stretch">
+      <Grid x:Name="HeaderContent" Margin="24,0" HorizontalAlignment="Stretch">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="*" />
           <ColumnDefinition Width="Auto" />
@@ -25,43 +26,62 @@
           <ColumnDefinition Width="Auto" />
         </Grid.ColumnDefinitions>
 
-        <TextBlock Grid.Column="0" Text="SwitchTrade" VerticalAlignment="Center"
-                   FontFamily="Segoe UI Variable Display, Segoe UI" FontWeight="SemiBold"
-                   FontSize="22" Foreground="{DynamicResource PrimaryTextBrush}" />
+        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+          <Grid Width="28" Height="28" Margin="0,0,10,0">
+            <Ellipse Width="8" Height="8" Fill="{DynamicResource ActionGreenBrush}"
+                     HorizontalAlignment="Left" VerticalAlignment="Top" Margin="2,3,0,0" />
+            <Ellipse Width="8" Height="8" Fill="{DynamicResource ActionGreenBrush}"
+                     HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,2,3" />
+            <Border Height="2" Width="22" Background="{DynamicResource ActionGreenBrush}"
+                    RenderTransformOrigin="0.5,0.5">
+              <Border.RenderTransform><RotateTransform Angle="45" /></Border.RenderTransform>
+            </Border>
+          </Grid>
+          <TextBlock Text="SwitchTrade" VerticalAlignment="Center"
+                     FontFamily="{StaticResource HeadingFontFamily}" FontWeight="SemiBold"
+                     FontSize="21" Foreground="{DynamicResource PrimaryTextBrush}" />
+        </StackPanel>
 
         <ToggleButton x:Name="ReadinessButton" Grid.Column="1" VerticalAlignment="Center"
-                      MinHeight="44" Padding="10,8" Background="Transparent" BorderBrush="Transparent"
-                      Foreground="{DynamicResource LinkBlueBrush}"
+                      MinHeight="40" Padding="12,7" Background="{DynamicResource SurfaceLowBrush}"
+                      BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                      Foreground="{DynamicResource SecondaryTextBrush}"
                       automation:AutomationProperties.Name="Open local setup status">
           <StackPanel Orientation="Horizontal">
             <Ellipse Width="8" Height="8" Margin="0,0,8,0" VerticalAlignment="Center">
               <Ellipse.Style>
                 <Style TargetType="Ellipse">
                   <Setter Property="Fill" Value="{DynamicResource WarningBrush}" />
-                  <Style.Triggers><DataTrigger Binding="{Binding IsServiceReady}" Value="True"><Setter Property="Fill" Value="{DynamicResource SuccessBrush}" /></DataTrigger></Style.Triggers>
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsServiceReady}" Value="True">
+                      <Setter Property="Fill" Value="{DynamicResource ActionGreenBrush}" />
+                    </DataTrigger>
+                  </Style.Triggers>
                 </Style>
               </Ellipse.Style>
             </Ellipse>
-            <TextBlock Text="{Binding ReadinessText}" VerticalAlignment="Center" FontSize="13" />
+            <TextBlock Text="{Binding ReadinessText}" VerticalAlignment="Center" FontSize="12" />
           </StackPanel>
         </ToggleButton>
-        <Popup IsOpen="{Binding IsChecked, ElementName=ReadinessButton}" PlacementTarget="{Binding ElementName=ReadinessButton}"
+        <Popup IsOpen="{Binding IsChecked, ElementName=ReadinessButton}"
+               PlacementTarget="{Binding ElementName=ReadinessButton}"
                Placement="Bottom" StaysOpen="False" AllowsTransparency="True">
-          <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource ControlBorderBrush}"
-                  BorderThickness="1" CornerRadius="10" Padding="18" Width="300" Margin="0,8,0,0">
+          <Border Background="{DynamicResource SurfaceHighestBrush}"
+                  BorderBrush="{DynamicResource BorderStrongBrush}"
+                  BorderThickness="1" CornerRadius="12" Padding="18" Width="312" Margin="0,8,0,0">
             <StackPanel>
-              <TextBlock Text="Local setup" FontWeight="SemiBold" Margin="0,0,0,8" />
+              <TextBlock Text="System readiness" Style="{StaticResource SectionTitle}" />
               <Grid>
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                 <Grid.RowDefinitions><RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition /></Grid.RowDefinitions>
-                <TextBlock Text="Control service" />
+                <TextBlock Text="Local control" />
                 <TextBlock Grid.Column="1" Text="{Binding ControlStateText}" Foreground="{DynamicResource SecondaryTextBrush}" />
-                <TextBlock Grid.Row="1" Text="Online relay" Margin="0,6,0,0" />
-                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding RelayStateText}" Margin="0,6,0,0" Foreground="{DynamicResource SecondaryTextBrush}" />
-                <TextBlock Grid.Row="2" Text="Switch radio" Margin="0,6,0,0" />
-                <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding RadioStateText}" Margin="0,6,0,0" Foreground="{DynamicResource SecondaryTextBrush}" />
-                <TextBlock Grid.Row="3" Text="Trade session" Margin="0,6,0,0" />
-                <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding SessionStateText}" Margin="0,6,0,0" Foreground="{DynamicResource SecondaryTextBrush}" />
+                <TextBlock Grid.Row="1" Text="Online relay" Margin="0,8,0,0" />
+                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding RelayStateText}" Margin="0,8,0,0" Foreground="{DynamicResource SecondaryTextBrush}" />
+                <TextBlock Grid.Row="2" Text="Switch radio" Margin="0,8,0,0" />
+                <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding RadioStateText}" Margin="0,8,0,0" Foreground="{DynamicResource SecondaryTextBrush}" />
+                <TextBlock Grid.Row="3" Text="Trade session" Margin="0,8,0,0" />
+                <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding SessionStateText}" Margin="0,8,0,0" Foreground="{DynamicResource SecondaryTextBrush}" />
               </Grid>
             </StackPanel>
           </Border>
@@ -71,32 +91,30 @@
                 automation:AutomationProperties.Name="Open settings">
           <StackPanel Orientation="Horizontal">
             <Path Data="{StaticResource Icon.Settings}" Width="17" Height="17" Stretch="Uniform"
-                  Stroke="{DynamicResource LinkBlueBrush}" StrokeThickness="1.6" Margin="0,0,7,0" />
+                  Stroke="{DynamicResource SecondaryTextBrush}" StrokeThickness="1.6" Margin="0,0,7,0" />
             <TextBlock Text="Settings" />
           </StackPanel>
         </Button>
       </Grid>
     </Border>
 
-    <Border Grid.Row="1" Background="{DynamicResource SurfaceBrush}"
+    <Border Grid.Row="1" Background="{DynamicResource SurfaceLowBrush}"
             BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
-      <Grid>
       <Button x:Name="BackButton" Command="{Binding BackCommand}" Style="{StaticResource TextButton}"
-              HorizontalAlignment="Left" VerticalAlignment="Center" Margin="46,0,0,0"
+              HorizontalAlignment="Left" VerticalAlignment="Center" Margin="14,0,0,0"
               Visibility="{Binding CanGoBack, Converter={StaticResource BooleanToVisibility}}"
               automation:AutomationProperties.Name="Go back">
         <StackPanel Orientation="Horizontal">
-          <Path Data="{StaticResource Icon.Back}" Width="17" Height="17" Stretch="Uniform"
-                Stroke="{DynamicResource LinkBlueBrush}" StrokeThickness="1.8" Margin="0,0,7,0"
+          <Path Data="{StaticResource Icon.Back}" Width="16" Height="16" Stretch="Uniform"
+                Stroke="{DynamicResource SecondaryTextBrush}" StrokeThickness="1.8" Margin="0,0,7,0"
                 StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
           <TextBlock Text="Back" />
         </StackPanel>
       </Button>
-      </Grid>
     </Border>
 
     <controls:ScenePresenter x:Name="ScenePresenter" Grid.Row="2" Content="{Binding CurrentScreen}"
-                             MaxWidth="1080" Margin="56,8,32,16" HorizontalAlignment="Left"
+                             MaxWidth="1080" Margin="24,12,24,16" HorizontalAlignment="Left"
                              HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
 
     <TextBlock Text="{Binding Announcement}" Width="1" Height="1" Opacity="0.01" IsHitTestVisible="False"

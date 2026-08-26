@@ -3,33 +3,46 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:automation="clr-namespace:System.Windows.Automation;assembly=PresentationCore">
   <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-    <StackPanel MaxWidth="640" HorizontalAlignment="Left" Margin="0,28,0,32">
+    <StackPanel MaxWidth="620" HorizontalAlignment="Left" Margin="0,34,0,28">
+      <TextBlock Text="PRIVATE INVITATION" Style="{StaticResource KickerText}" Margin="0,0,0,8" />
       <TextBlock Text="Join a Private Room" Style="{StaticResource ScreenTitle}"
                  automation:AutomationProperties.HeadingLevel="Level1" />
-      <TextBlock Text="Enter the room code shared by another trainer. Spaces and hyphens are removed automatically."
-                 Foreground="{DynamicResource SecondaryTextBrush}" Margin="0,0,0,28" />
-      <TextBlock Text="Room code" Style="{StaticResource FieldLabel}" />
-      <Grid>
-        <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="12" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-        <TextBox x:Name="RoomCodeField" Text="{Binding RoomCode, UpdateSourceTrigger=PropertyChanged}" MaxLength="10"
-                 IsEnabled="{Binding CanEditCode}" CharacterCasing="Upper" FontFamily="Cascadia Mono, Consolas"
-                 FontSize="20" automation:AutomationProperties.Name="Private Trade Room code" />
-        <Button Grid.Column="2" Content="Paste" Command="{Binding PasteCommand}" Style="{StaticResource SecondaryButton}" />
-      </Grid>
-      <TextBlock Text="Room codes contain exactly six letters or numbers."
-                 Style="{StaticResource SecondaryText}" Margin="0,8,0,0" />
-      <Border Style="{StaticResource ErrorNotice}" Margin="0,18,0,0"
-              Visibility="{Binding HasError, Converter={StaticResource BooleanToVisibility}}"
-              automation:AutomationProperties.LiveSetting="Assertive">
-        <TextBlock Text="{Binding ErrorMessage}" />
-      </Border>
-      <Button Command="{Binding JoinCommand}" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" MinWidth="180" Margin="0,24,0,0">
-        <StackPanel Orientation="Horizontal">
-          <ProgressBar IsIndeterminate="True" Width="16" Height="16" Margin="0,0,10,0"
-                       Visibility="{Binding IsBusy, Converter={StaticResource BooleanToVisibility}}" />
-          <TextBlock Text="Join Trade Room" />
+      <TextBlock Text="Enter the six-character room code shared by the other trainer."
+                 Foreground="{DynamicResource SecondaryTextBrush}" Margin="0,0,0,24" />
+
+      <Border Style="{StaticResource SurfaceCard}">
+        <StackPanel>
+          <TextBlock Text="Room code" Style="{StaticResource FieldLabel}" />
+          <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="10" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+            <TextBox x:Name="RoomCodeField" Text="{Binding RoomCode, UpdateSourceTrigger=PropertyChanged}"
+                     MaxLength="10" IsEnabled="{Binding CanEditCode}" CharacterCasing="Upper"
+                     FontFamily="{StaticResource MonoFontFamily}" FontWeight="Bold" FontSize="24"
+                     Padding="14,8" Height="52"
+                     automation:AutomationProperties.Name="Private Trade Room code"
+                     automation:AutomationProperties.HelpText="Six letters or numbers" />
+            <Button Grid.Column="2" Content="Paste" Command="{Binding PasteCommand}"
+                    Style="{StaticResource SecondaryButton}" />
+          </Grid>
+          <TextBlock Text="Spaces and hyphens are removed automatically."
+                     Style="{StaticResource SecondaryText}" Margin="0,8,0,0" />
+
+          <Border Style="{StaticResource ErrorNotice}" Margin="0,18,0,0"
+                  Visibility="{Binding HasError, Converter={StaticResource BooleanToVisibility}}"
+                  automation:AutomationProperties.LiveSetting="Assertive">
+            <TextBlock Text="{Binding ErrorMessage}" />
+          </Border>
+
+          <Button Command="{Binding JoinCommand}" Style="{StaticResource PrimaryButton}"
+                  HorizontalAlignment="Left" MinWidth="190" Margin="0,22,0,0">
+            <StackPanel Orientation="Horizontal">
+              <ProgressBar IsIndeterminate="True" Width="16" Height="16" Margin="0,0,10,0"
+                           Visibility="{Binding IsBusy, Converter={StaticResource BooleanToVisibility}}" />
+              <TextBlock Text="Join Trade Room" />
+            </StackPanel>
+          </Button>
         </StackPanel>
-      </Button>
+      </Border>
     </StackPanel>
   </ScrollViewer>
 </UserControl>

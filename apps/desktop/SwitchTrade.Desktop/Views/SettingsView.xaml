@@ -6,8 +6,11 @@
              xmlns:vm="clr-namespace:SwitchTrade.Desktop.ViewModels">
   <Grid>
     <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
-    <TextBlock Text="Settings" Style="{StaticResource ScreenTitle}"
-               automation:AutomationProperties.HeadingLevel="Level1" Margin="0,0,0,18" />
+    <StackPanel>
+      <TextBlock Text="SYSTEM" Style="{StaticResource KickerText}" Margin="0,0,0,8" />
+      <TextBlock Text="Settings" Style="{StaticResource ScreenTitle}"
+                 automation:AutomationProperties.HeadingLevel="Level1" Margin="0,0,0,18" />
+    </StackPanel>
 
     <TabControl Grid.Row="1" SelectedValuePath="Tag" SelectedValue="{Binding SelectedSection}"
                 Style="{StaticResource SettingsTabControl}"
@@ -52,7 +55,7 @@
                       automation:AutomationProperties.Name="Diagnostic adapter profile" />
             <Button Content="Run read-only diagnostics" Command="{Binding DiagnosticCommand}"
                     Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left" Margin="0,10,0,0" />
-            <TextBlock Text="{Binding DiagnosticFilePath}" FontFamily="Cascadia Mono, Consolas"
+            <TextBlock Text="{Binding DiagnosticFilePath}" FontFamily="{StaticResource MonoFontFamily}"
                        FontSize="12" TextWrapping="Wrap" Margin="0,8,0,0" />
             <Button Content="Check again" Command="{Binding RecheckCommand}" Style="{StaticResource SecondaryButton}"
                     HorizontalAlignment="Left" Margin="0,20,0,0" />
@@ -70,7 +73,7 @@
                     Visibility="{Binding HasSupportFile, Converter={StaticResource BooleanToVisibility}}">
               <StackPanel>
                 <TextBlock Text="Support file created" FontWeight="SemiBold" Margin="0,0,0,4" />
-                <TextBlock Text="{Binding SupportFilePath}" FontFamily="Cascadia Mono, Consolas" FontSize="13" />
+                <TextBlock Text="{Binding SupportFilePath}" FontFamily="{StaticResource MonoFontFamily}" FontSize="13" />
                 <Button Content="Copy location" Command="{Binding CopySupportPathCommand}" Style="{StaticResource TextButton}"
                         HorizontalAlignment="Left" Margin="-10,6,0,-6" />
               </StackPanel>
@@ -83,7 +86,7 @@
             <Border Height="1" Background="{DynamicResource BorderBrush}" Margin="0,28" />
             <TextBlock Text="About SwitchTrade" Style="{StaticResource SectionTitle}" />
             <TextBlock Text="SwitchTrade 0.2.0 beta.1" />
-            <TextBlock Text="Room control v1 · Party commit v1" Style="{StaticResource SecondaryText}" Margin="0,4,0,0" />
+            <TextBlock Text="Room control v1 · Public directory v1 · Party commit v1" Style="{StaticResource SecondaryText}" Margin="0,4,0,0" />
           </StackPanel>
         </ScrollViewer>
       </TabItem>

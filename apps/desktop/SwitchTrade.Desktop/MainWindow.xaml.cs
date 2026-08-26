@@ -27,8 +27,7 @@ public partial class MainWindow : Window
             new ControlApiClient(),
             new BackendLauncher(),
             new WindowsDialogService(),
-            new WindowsClipboardService(),
-            new PublicRoomPreviewProvider());
+            new WindowsClipboardService());
         DataContext = _viewModel;
 
         Loaded += WindowLoaded;
@@ -54,13 +53,12 @@ public partial class MainWindow : Window
 
     private void UpdateShellMargins()
     {
-        var compact = ActualWidth < 840;
-        var left = compact ? 32 : 56;
-        var right = compact ? 32 : 28;
+        const double left = 24;
+        const double right = 24;
         HeaderContent.Margin = new Thickness(left, 0, right, 0);
         BackButton.Margin = new Thickness(left - 10, 0, 0, 0);
-        ScenePresenter.Margin = new Thickness(left, 8, 32, 16);
-        ScenePresenter.Width = Math.Min(ScenePresenter.MaxWidth, Math.Max(0, ActualWidth - left - 32));
+        ScenePresenter.Margin = new Thickness(left, 12, right, 16);
+        ScenePresenter.Width = Math.Min(ScenePresenter.MaxWidth, Math.Max(0, ActualWidth - left - right));
     }
 
     private void ViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)

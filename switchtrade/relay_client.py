@@ -7,7 +7,7 @@ import secrets
 import time
 import uuid
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from switchtrade import __version__
@@ -59,6 +59,9 @@ class RelayClient:
     def shutdown(self) -> dict:
         return self._request("POST", "/shutdown")
 
+    def health(self) -> dict:
+        return self._request("GET", "/health")
+
     @staticmethod
     def command_id() -> str:
         millis = int(time.time() * 1000) & ((1 << 48) - 1)
@@ -87,6 +90,28 @@ class RelayClient:
             "Idempotency-Key": command_id or self.command_id(),
             "X-SwitchTrade-Client": client_id,
         })
+
+    def public_trade_rooms(self, *, query: str = "", game: str = "", language: str = "",
+                           availability: str = "open", sort: str = "recent",
+                           cursor: int = 0, limit: int = 25) -> dict:
+        parameters = urlencode({
+            "query": query, "game": game, "language": language,
+            "availability": availability, "sort": sort,
+            "cursor": max(0, cursor), "limit": max(1, min(limit, 50)),
+        })
+        return self._request("GET", f"/v1/public-trade-rooms?{parameters}")
+
+    def public_trade_room(self, listing_id: str) -> dict:
+        return self._request("GET", f"/v1/public-trade-rooms/{quote(listing_id, safe='')}")
+
+    def join_public_trade_room(self, listing_id: str, display_name: str, client_id: str,
+                               command_id: str | None = None) -> dict:
+        return self._request(
+            "POST", f"/v1/public-trade-rooms/{quote(listing_id, safe='')}:join",
+            {"trainer_display_name": display_name}, {
+                "Idempotency-Key": command_id or self.command_id(),
+                "X-SwitchTrade-Client": client_id,
+            })
 
     def room(self, room_id: str, token: str) -> dict:
         return self._request("GET", f"/v1/trade-rooms/{room_id}", headers=self._auth(token))

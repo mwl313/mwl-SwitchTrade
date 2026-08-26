@@ -20,6 +20,7 @@ import uuid
 
 
 CONTRACT = "room-control.v1"
+PUBLIC_DIRECTORY_CONTRACT = "public-directory.v1"
 ROOM_CODE_CHARS = string.ascii_uppercase + string.digits
 ROOM_TTL_SECONDS = 6 * 60 * 60
 WAITING_TTL_SECONDS = 30 * 60
@@ -74,6 +75,7 @@ class AuthorityStore:
             CREATE TABLE IF NOT EXISTS rooms (
                 room_id TEXT PRIMARY KEY,
                 room_code TEXT NOT NULL UNIQUE,
+                directory_id TEXT UNIQUE,
                 document TEXT NOT NULL,
                 expires_at REAL NOT NULL
             );
@@ -118,6 +120,12 @@ class AuthorityStore:
             self._db.execute("ALTER TABLE credentials ADD COLUMN previous_reconnect_hash TEXT")
         if "previous_reconnect_until" not in credential_columns:
             self._db.execute("ALTER TABLE credentials ADD COLUMN previous_reconnect_until REAL")
+        room_columns = {row[1] for row in self._db.execute("PRAGMA table_info(rooms)")}
+        if "directory_id" not in room_columns:
+            self._db.execute("ALTER TABLE rooms ADD COLUMN directory_id TEXT")
+        self._db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS rooms_directory_id ON rooms(directory_id)"
+        )
 
     @contextmanager
     def _transaction(self):
@@ -210,6 +218,30 @@ class AuthorityStore:
             value["attempt"] = attempt
         return value
 
+    @staticmethod
+    def _directory_listing(room: dict) -> dict:
+        metadata = room.get("directory") or {}
+        active_members = [
+            member for member in room.get("members", [])
+            if member.get("online_state") != "left"
+        ]
+        return {
+            "contract_version": PUBLIC_DIRECTORY_CONTRACT,
+            "listing_id": metadata.get("listing_id"),
+            "room_name": room.get("name", "Trade Room"),
+            "trainer_display_name": (room.get("profile") or {}).get(
+                "owner_display_name", "Trainer"),
+            "game": (room.get("profile") or {}).get("game", "None"),
+            "language": (room.get("profile") or {}).get("language", "None"),
+            "offering": metadata.get("offering", ""),
+            "wanted": metadata.get("wanted", ""),
+            "note": metadata.get("note", ""),
+            "availability": "open" if len(active_members) < 2 else "full",
+            "occupancy": len(active_members),
+            "capacity": 2,
+            "created_at": room.get("created_at"),
+        }
+
     def _command_response(self, scope: str, command_id: str) -> dict | None:
         if not command_id:
             raise AuthorityError(400, "Idempotency-Key is required")
@@ -260,20 +292,31 @@ class AuthorityStore:
             display = str(payload.get("trainer_display_name", "")).strip()
             game = str(payload.get("game", "None"))
             language = str(payload.get("language", "None"))
+            visibility = str(payload.get("visibility", "private"))
             if not name or not display or game == "None" or language == "None":
                 raise AuthorityError(400, "room name, trainer name, game, and language are required")
+            if len(name) > 22 or len(display) > 20:
+                raise AuthorityError(400, "room name or trainer name is too long")
+            if visibility not in {"private", "public"}:
+                raise AuthorityError(400, "room visibility is invalid")
+            offering = str(payload.get("offering", "")).strip()
+            wanted = str(payload.get("wanted", "")).strip()
+            note = str(payload.get("note", "")).strip()
+            if len(offering) > 80 or len(wanted) > 80 or len(note) > 120:
+                raise AuthorityError(400, "public room metadata is too long")
             now = time.time()
             room_id, member_id, code = uuid7(), uuid7(), self._new_code()
+            directory_id = uuid7() if visibility == "public" else None
             token, reconnect = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
             room = {
                 "contract_version": CONTRACT,
                 "room_id": room_id,
                 "room_version": 1,
-                "name": name[:80],
-                "visibility": "private",
+                "name": name,
+                "visibility": visibility,
                 "room_code": code,
                 "profile": {
-                    "owner_display_name": display[:40], "game": game[:20], "language": language[:20]
+                    "owner_display_name": display, "game": game[:20], "language": language[:20]
                 },
                 "owner_member_id": member_id,
                 "state": "waiting_for_partner",
@@ -295,9 +338,17 @@ class AuthorityStore:
                 },
                 "last_event_sequence": 0,
             }
+            if directory_id:
+                room["directory"] = {
+                    "listing_id": directory_id,
+                    "offering": offering[:80],
+                    "wanted": wanted[:80],
+                    "note": note[:120],
+                }
             self._db.execute(
-                "INSERT INTO rooms(room_id,room_code,document,expires_at) VALUES(?,?,?,?)",
-                (room_id, code, "{}", room["expires_at_epoch"]),
+                "INSERT INTO rooms(room_id,room_code,directory_id,document,expires_at) "
+                "VALUES(?,?,?,?,?)",
+                (room_id, code, directory_id, "{}", room["expires_at_epoch"]),
             )
             self._db.execute(
                 "INSERT INTO credentials(token_hash,reconnect_hash,room_id,member_id) VALUES(?,?,?,?)",
@@ -309,6 +360,102 @@ class AuthorityStore:
                         "reconnect_token": reconnect}
             self._remember_secret(scope, command_id, response)
             return response
+
+    def list_public(self, query: str = "", game: str = "", language: str = "",
+                    availability: str = "open", sort: str = "recent",
+                    cursor: int = 0, limit: int = 25) -> dict:
+        query = query.strip().casefold()[:80]
+        cursor = max(0, cursor)
+        limit = max(1, min(limit, 50))
+        with self._lock:
+            rooms: list[dict] = []
+            rows = self._db.execute(
+                "SELECT room_id FROM rooms WHERE directory_id IS NOT NULL"
+            ).fetchall()
+            for row in rows:
+                room = self._load(row["room_id"])
+                if room.get("state") in {"closed", "expired"}:
+                    continue
+                listing = self._directory_listing(room)
+                if availability == "open" and listing["availability"] != "open":
+                    continue
+                if game and listing["game"] != game:
+                    continue
+                if language and listing["language"] != language:
+                    continue
+                if query and not any(query in str(listing[field]).casefold() for field in (
+                        "room_name", "trainer_display_name", "offering", "wanted")):
+                    continue
+                rooms.append(listing)
+
+            if sort == "name":
+                rooms.sort(key=lambda item: (item["room_name"].casefold(), item["created_at"] or ""))
+            elif sort == "oldest":
+                rooms.sort(key=lambda item: item["created_at"] or "")
+            else:
+                rooms.sort(key=lambda item: item["created_at"] or "", reverse=True)
+            page = rooms[cursor:cursor + limit]
+            next_cursor = cursor + len(page) if cursor + len(page) < len(rooms) else None
+            return {
+                "contract_version": PUBLIC_DIRECTORY_CONTRACT,
+                "rooms": page,
+                "next_cursor": str(next_cursor) if next_cursor is not None else None,
+            }
+
+    def public_details(self, listing_id: str) -> dict:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT room_id FROM rooms WHERE directory_id=?", (listing_id,)
+            ).fetchone()
+            if row is None:
+                raise AuthorityError(404, "public room not found")
+            room = self._load(row["room_id"])
+            if room.get("state") in {"closed", "expired"}:
+                raise AuthorityError(410, "public room is stale")
+            return self._directory_listing(room)
+
+    def join_public(self, listing_id: str, display_name: str,
+                    command_id: str, client_id: str) -> dict:
+        display_name = display_name.strip() or "Trainer"
+        scope = f"public-join:{client_id or 'anonymous'}:{listing_id}"
+        with self._transaction():
+            if cached := self._secret_command_response(scope, command_id):
+                return cached
+            row = self._db.execute(
+                "SELECT room_id FROM rooms WHERE directory_id=?", (listing_id,)
+            ).fetchone()
+            if row is None:
+                raise AuthorityError(404, "public room not found")
+            room = self._load(row["room_id"])
+            if room.get("state") in {"closed", "expired"}:
+                raise AuthorityError(410, "public room is stale")
+            return self._join_room(room, display_name, scope, command_id)
+
+    def _join_room(self, room: dict, display: str, scope: str, command_id: str) -> dict:
+        if len([m for m in room["members"] if m["online_state"] != "left"]) >= 2:
+            raise AuthorityError(409, "trade room is full")
+        member_id, token, reconnect = uuid7(), secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+        room["members"] = [member for member in room["members"]
+                           if member["online_state"] != "left"]
+        room["members"].append({
+            "member_id": member_id, "seat": "member_b", "display_name": display[:40],
+            "online_state": "online", "ready_state": "not_ready",
+            "compatibility": "compatible", "joined_at": _utc(), "reconnect_deadline": None,
+            "last_seen_epoch": time.time(),
+        })
+        room["state"] = "ready_check"
+        room["waiting_expires_at_epoch"] = None
+        room["room_version"] += 1
+        self._db.execute(
+            "INSERT INTO credentials(token_hash,reconnect_hash,room_id,member_id) VALUES(?,?,?,?)",
+            (_hash(token), _hash(reconnect), room["room_id"], member_id),
+        )
+        self._event(room, "member.joined", member_id, {"seat": "member_b"})
+        self._save(room)
+        response = {"room": self._public(room, member_id), "member_token": token,
+                    "reconnect_token": reconnect}
+        self._remember_secret(scope, command_id, response)
+        return response
 
     def join(self, payload: dict, command_id: str, client_id: str) -> dict:
         code = str(payload.get("room_code", "")).strip().upper()
@@ -323,30 +470,7 @@ class AuthorityStore:
             room = self._load(row["room_id"])
             if room["state"] in {"closed", "expired"}:
                 raise AuthorityError(410, "trade room is no longer available")
-            if len([m for m in room["members"] if m["online_state"] != "left"]) >= 2:
-                raise AuthorityError(409, "trade room is full")
-            member_id, token, reconnect = uuid7(), secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-            room["members"] = [member for member in room["members"]
-                               if member["online_state"] != "left"]
-            room["members"].append({
-                "member_id": member_id, "seat": "member_b", "display_name": display[:40],
-                "online_state": "online", "ready_state": "not_ready",
-                "compatibility": "compatible", "joined_at": _utc(), "reconnect_deadline": None,
-                "last_seen_epoch": time.time(),
-            })
-            room["state"] = "ready_check"
-            room["waiting_expires_at_epoch"] = None
-            room["room_version"] += 1
-            self._db.execute(
-                "INSERT INTO credentials(token_hash,reconnect_hash,room_id,member_id) VALUES(?,?,?,?)",
-                (_hash(token), _hash(reconnect), room["room_id"], member_id),
-            )
-            self._event(room, "member.joined", member_id, {"seat": "member_b"})
-            self._save(room)
-            response = {"room": self._public(room, member_id), "member_token": token,
-                        "reconnect_token": reconnect}
-            self._remember_secret(scope, command_id, response)
-            return response
+            return self._join_room(room, display, scope, command_id)
 
     def snapshot(self, room_id: str, bearer: str) -> dict:
         with self._lock:
