@@ -32,6 +32,20 @@ RECONNECT_SECONDS = 90
 SECRET_RESPONSE_SECONDS = 10 * 60
 COMMAND_RETENTION_SECONDS = 24 * 60 * 60
 AUTHORITY_RETENTION_SECONDS = 14 * 24 * 60 * 60
+TERMINAL_ATTEMPT_PHASES = {"completed", "canceled", "failed"}
+ATTEMPT_PHASE_ORDER = {
+    "creator_guidance": 0,
+    "connecting_switches": 1,
+    "discovering_real_room": 2,
+    "advertising_mirror_room": 2,
+    "trading_room": 3,
+    "reconnecting": 4,
+    "recovering": 5,
+    "closing": 6,
+    "completed": 7,
+    "canceled": 7,
+    "failed": 7,
+}
 
 
 class AuthorityError(RuntimeError):
@@ -729,11 +743,16 @@ class AuthorityStore:
                 event = "attempt.role_locked"
             elif action == "phase":
                 phase = str(payload.get("phase", ""))
-                allowed = {"discovering_real_room", "advertising_mirror_room", "connecting_switches",
-                           "trading_room", "reconnecting", "recovering", "closing", "completed",
-                           "canceled", "failed"}
-                if phase not in allowed or not room.get("attempt"):
+                if phase not in ATTEMPT_PHASE_ORDER or not room.get("attempt"):
                     raise AuthorityError(400, "invalid attempt phase")
+                current_phase = str(room["attempt"].get("phase", ""))
+                if current_phase == phase:
+                    response = self._public(room, member_id)
+                    self._remember(scope, command_id, response)
+                    return response
+                if (current_phase in TERMINAL_ATTEMPT_PHASES or
+                        ATTEMPT_PHASE_ORDER.get(current_phase, -1) > ATTEMPT_PHASE_ORDER[phase]):
+                    raise AuthorityError(409, "attempt phase cannot move backward")
                 room["attempt"]["phase"] = phase
                 room["attempt"]["updated_at"] = _utc()
                 if phase == "trading_room":

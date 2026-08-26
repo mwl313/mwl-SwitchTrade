@@ -340,7 +340,7 @@ class Runtime:
                 response = self.relay.reconnect_trade_room(
                     credentials["room_id"], credentials["reconnect_token"])
             except RelayError as reconnect_error:
-                if reconnect_error.status not in {401, 404, 410}:
+                if reconnect_error.status not in {404, 410}:
                     raise
                 self.clear_authority()
                 raise RelayError(
@@ -362,9 +362,9 @@ class Runtime:
         )
         if phase is None or phase == self.last_published_phase:
             return
-        credentials = self.read_authority()
         try:
             room = self.authoritative_room()
+            credentials = self.read_authority()
             attempt = room.get("attempt")
             if not attempt or attempt.get("phase") == phase:
                 self.last_published_phase = phase
@@ -905,6 +905,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             )
         try:
             room = state.authoritative_room()
+            credentials = state.read_authority()
             return state.relay.room_command(
                 credentials["room_id"], credentials["member_token"], path,
                 payload, method=method, expected_version=room["room_version"],
@@ -918,8 +919,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         except HTTPException as error:
             already_released = (
                 isinstance(error, ControlApiError) and error.code in {
-                    "room_not_active", "room_not_found", "member_credential_invalid",
-                    "reconnect_credential_invalid",
+                    "room_not_active", "room_not_found",
                 }
             )
             if not already_released:
@@ -1116,7 +1116,6 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     @app.post("/api/v1/trade-room/connect")
     def connect_trade_room(payload: ConnectTradeRoom, request: Request) -> dict:
         state = runtime(request)
-        credentials = state.read_authority()
         state.require_relay_contract()
         if "manual-switch-role.v1" not in state.relay_capabilities:
             raise ControlApiError(
@@ -1126,6 +1125,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             )
         try:
             room = state.authoritative_room()
+            credentials = state.read_authority()
             room = state.relay.room_command(
                 room["room_id"], credentials["member_token"], "/ready", {
                     "ready": True, "switch_room_role": payload.switch_room_role,
@@ -1310,9 +1310,9 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         state.log.event("session_stop_requested")
         with state.lock:
             state.stop_endpoint()
-        credentials = state.read_authority()
         try:
             room = state.authoritative_room()
+            credentials = state.read_authority()
             attempt = room.get("attempt")
             if attempt and attempt.get("phase") not in {"completed", "canceled", "failed"}:
                 state.relay.room_command(
@@ -1321,6 +1321,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                     expected_version=room["room_version"],
                 )
                 room = state.authoritative_room()
+                credentials = state.read_authority()
             state.relay.room_command(
                 room["room_id"], credentials["member_token"], "/ready", {"ready": False},
                 expected_version=room["room_version"])

@@ -168,7 +168,7 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 self.assertEqual(joined.json()["room"]["room_code"], "ABC123")
                 self.assertNotIn("member_token", joined.text)
 
-    def test_release_is_idempotent_after_remote_membership_already_ended(self):
+    def test_invalid_credentials_do_not_clear_unconfirmed_remote_authority(self):
         with tempfile.TemporaryDirectory() as temporary:
             with TestClient(create_app(runs_root=temporary)) as client:
                 runtime = client.app.state.runtime
@@ -188,8 +188,39 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                     for path in ("/api/v1/trade-room/members/me", "/api/v1/trade-room"):
                         runtime.save_authority(expired)
                         response = client.delete(path)
-                        self.assertEqual(response.status_code, 200, response.text)
-                        self.assertFalse(runtime.authority_state.exists())
+                        self.assertEqual(response.status_code, 401, response.text)
+                        self.assertEqual(response.json()["code"], "reconnect_credential_invalid")
+                        self.assertTrue(runtime.authority_state.exists())
+
+    def test_release_reloads_rotated_member_credential_before_remote_close(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                runtime = client.app.state.runtime
+                runtime.save_authority({
+                    "room": {"contract_version": "room-control.v1",
+                             "room_id": "room-1", "room_code": "ABC123"},
+                    "member_token": "stale-member", "reconnect_token": "stale-reconnect",
+                })
+                authoritative_room = {
+                    "contract_version": "room-control.v1", "room_id": "room-1",
+                    "room_code": "ABC123", "room_version": 7, "members": [],
+                }
+                with patch.object(runtime.relay, "room", side_effect=RelayError(
+                        "member credential is invalid", status=401,
+                        code="member_credential_invalid", stage="authentication",
+                        primary_action="reconnect")), patch.object(
+                        runtime.relay, "reconnect_trade_room", return_value={
+                            "room": authoritative_room, "member_token": "rotated-member",
+                            "reconnect_token": "rotated-reconnect",
+                        }), patch.object(runtime.relay, "room_command", return_value={
+                            **authoritative_room, "room_version": 8, "state": "closed",
+                        }) as room_command:
+                    response = client.delete("/api/v1/trade-room")
+                self.assertEqual(response.status_code, 200, response.text)
+                room_command.assert_called_once_with(
+                    "room-1", "rotated-member", "", None, method="DELETE",
+                    expected_version=7)
+                self.assertFalse(runtime.authority_state.exists())
 
     def test_active_authority_cannot_be_overwritten_by_another_room(self):
         room = {

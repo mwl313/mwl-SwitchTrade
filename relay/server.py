@@ -63,6 +63,8 @@ ERROR_CODES = {
         "complementary_role_required", "coordination", True, "choose_role"),
     "a connection attempt is already active": ("attempt_active", "coordination", True, "refresh_room"),
     "connection attempt is stale": ("attempt_stale", "coordination", True, "retry"),
+    "attempt phase cannot move backward": (
+        "attempt_phase_conflict", "coordination", True, "refresh_room"),
     "member credential is required": ("member_credential_required", "authentication", False, "rejoin_room"),
     "member credential is invalid": ("member_credential_invalid", "authentication", True, "reconnect"),
     "reconnect credential is invalid": ("reconnect_credential_invalid", "authentication", False, "rejoin_room"),

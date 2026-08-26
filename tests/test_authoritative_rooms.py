@@ -3,6 +3,7 @@ import asyncio
 from pathlib import Path
 import sqlite3
 import tempfile
+from threading import Event
 import time
 import unittest
 import uuid
@@ -13,7 +14,7 @@ from fastapi.testclient import TestClient
 import httpx
 
 import relay.server as relay_server
-from relay.authority import AuthorityStore, copy_database, uuid7
+from relay.authority import AuthorityError, AuthorityStore, copy_database, uuid7
 from switchtrade.process_guard import AlreadyRunningError
 
 
@@ -303,6 +304,72 @@ class AuthoritativeRoomTests(unittest.TestCase):
         restarted = relay_server.authority.snapshot(room_id, first["member_token"])
         self.assertEqual(restarted["attempt"]["phase"], "failed")
         self.assertEqual(restarted["attempt"]["recoverable_error"], "relay.restart")
+
+    def test_attempt_phases_only_move_forward_and_terminal_failure_is_immutable(self):
+        first = self._create()
+        second = self._join(first["room"]["room_code"])
+        room_id = first["room"]["room_id"]
+        for credential, role in ((first, "creator"), (second, "finder")):
+            room = self._mutate(room_id, credential["member_token"], "/ready", {
+                "ready": True, "switch_room_role": role,
+            }).json()
+        attempt_id = room["attempt"]["attempt_id"]
+
+        trading = self._mutate(
+            room_id, first["member_token"], f"/attempts/{attempt_id}:phase",
+            {"phase": "trading_room"})
+        self.assertEqual(trading.status_code, 200, trading.text)
+        backward = self._mutate(
+            room_id, first["member_token"], f"/attempts/{attempt_id}:phase",
+            {"phase": "connecting_switches"})
+        self.assertEqual(backward.status_code, 409, backward.text)
+        self.assertEqual(backward.json()["code"], "attempt_phase_conflict")
+
+        self.assertTrue(relay_server.authority.fail_transport_attempt(
+            room_id, attempt_id, "relay.peer_lost"))
+        stale_phase = self._mutate(
+            room_id, first["member_token"], f"/attempts/{attempt_id}:phase",
+            {"phase": "trading_room"})
+        self.assertEqual(stale_phase.status_code, 409, stale_phase.text)
+        self.assertEqual(stale_phase.json()["code"], "attempt_phase_conflict")
+        failed = relay_server.authority.snapshot(room_id, first["member_token"])
+        self.assertEqual(failed["attempt"]["phase"], "failed")
+        self.assertEqual(failed["attempt"]["recoverable_error"], "relay.peer_lost")
+
+    def test_concurrent_peer_loss_and_stale_phase_cannot_reactivate_attempt(self):
+        first = self._create()
+        second = self._join(first["room"]["room_code"])
+        room_id = first["room"]["room_id"]
+        for credential, role in ((first, "creator"), (second, "finder")):
+            room = self._mutate(room_id, credential["member_token"], "/ready", {
+                "ready": True, "switch_room_role": role,
+            }).json()
+        attempt_id = room["attempt"]["attempt_id"]
+        failure_committed = Event()
+
+        def lose_peer():
+            try:
+                return relay_server.authority.fail_transport_attempt(
+                    room_id, attempt_id, "relay.peer_lost")
+            finally:
+                failure_committed.set()
+
+        def publish_stale_phase():
+            self.assertTrue(failure_committed.wait(timeout=2))
+            return relay_server.authority.mutate(
+                room_id, first["member_token"], _command(), "phase", {
+                    "attempt_id": attempt_id, "phase": "trading_room",
+                })
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            lost = executor.submit(lose_peer)
+            stale = executor.submit(publish_stale_phase)
+            self.assertTrue(lost.result(timeout=2))
+            with self.assertRaises(AuthorityError) as raised:
+                stale.result(timeout=2)
+        self.assertEqual(raised.exception.status, 409)
+        final = relay_server.authority.snapshot(room_id, first["member_token"])
+        self.assertEqual(final["attempt"]["phase"], "failed")
 
     def test_owner_close_cancels_attempt_and_peer_cleanup_cannot_reopen_room(self):
         owner = self._create()
