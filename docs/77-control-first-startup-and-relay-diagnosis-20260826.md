@@ -47,8 +47,8 @@ relay, and the selected radio/Switch session.
 
 ## Why Browse Public Rooms is unavailable
 
-The installed client's local readiness endpoint is healthy. However, its relay capability list is
-empty because `relay.pangyostonefist.org` currently returns NXDOMAIN. Direct relay health and OpenAPI
+The installed client's local readiness endpoint was healthy. However, its relay capability list was
+empty because `relay.pangyostonefist.org` returned NXDOMAIN during this diagnosis. Direct relay health and OpenAPI
 requests therefore cannot reach a host. The apex domain returns only its authoritative DNS metadata;
 there is no usable relay hostname record.
 
@@ -79,6 +79,9 @@ incompatible local runtime or a failed WSL startup.
 - SHA-256: `3ac85518f63e118c5f5d44ae6797ad30d72de1d302fe13984c4761b0c6f0cb23`
 - Signing: explicitly unsigned private beta
 
-Repository-controlled startup behavior is corrected and exercised on the development PC. Release
-approval still requires relay DNS/TLS restoration and the external clean-machine, reboot/resume,
-two-PC/two-Switch, and WAN fault/recovery qualification listed in `docs/55`.
+Repository-controlled startup behavior was corrected and exercised on the development PC. At the time,
+release approval still required relay DNS/TLS restoration and the external clean-machine,
+reboot/resume, two-PC/two-Switch, and WAN fault/recovery qualification listed in `docs/55`.
+
+The DNS record was restored later on 2026-08-26. Current teardown and relay verification superseding
+the outage state above is recorded in `docs/78`.

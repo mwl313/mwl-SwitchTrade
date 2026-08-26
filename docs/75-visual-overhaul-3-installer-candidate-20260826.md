@@ -3,26 +3,26 @@
 ## Candidate identity
 
 - Branch: `production-beta`
-- Application commit: `125fbac0f18765ca79e00565de4276a45b550190`
-- Package: `SwitchTrade-unsigned-private-beta-125fbac.zip`
-- ZIP SHA-256: `3ac85518f63e118c5f5d44ae6797ad30d72de1d302fe13984c4761b0c6f0cb23`
-- ZIP size: `219381404` bytes
+- Application commit: `71d936c70c25d88b546256a9023a3936eee92e33`
+- Package: `SwitchTrade-unsigned-private-beta-71d936c.zip`
+- ZIP SHA-256: `1656effd19ac4c7f6577c5b272805566b43fe0fd715a81f1ebc4adf26fb028e8`
+- ZIP size: `219382404` bytes
 - Local build location: `artifacts/release-candidates/`
-- Configured relay: `https://relay.pangyostonefist.org` (currently unavailable because its DNS name
-  returns NXDOMAIN; this is an external release blocker)
+- Configured relay: `https://relay.pangyostonefist.org` (DNS/TLS health and public directory restored;
+  relay commit `71d936c` deployment remains required for stale-version teardown)
 - Signing state: explicitly labeled unsigned private beta, per owner exception
 
-The package manifest reports schema 2, release ID `beta-125fbac`, branch `production-beta`, and the
+The package manifest reports schema 2, release ID `beta-71d936c`, branch `production-beta`, and the
 full application commit above. The packaged Windows client is the native Visual Overhaul 3 WPF build,
 not the retired web frontend or the earlier `91f5a3e` client.
 
-The earlier `77dd538`, `9014e8f`, `28221e1`, `1e8b4bd`, `b2c9d36`, and `8667888` local candidates are
+The earlier `77dd538`, `9014e8f`, `28221e1`, `1e8b4bd`, `b2c9d36`, `8667888`, and `125fbac` local candidates are
 superseded and must not be distributed. They were retained only as diagnostic evidence for the fixes
 recorded in `docs/76` and `docs/77`.
 
 ## Reused verified system inputs
 
-The application and installer source were archived fresh from `125fbac`. The hardware/runtime inputs
+The application and installer source were archived fresh from `71d936c`. The hardware/runtime inputs
 were reused byte-for-byte from the previously integrity-qualified `91f5a3e` candidate because they are
 versioned independently of the UI:
 
@@ -45,7 +45,7 @@ builder then independently checked the kernel/modules manifest and regenerated e
 - New package schema-2 integrity verification: PASS
 - `SwitchTradeSetup.exe audit --allow-unsigned-package`: PASS, exit 0
 - Packaged `windows/SwitchTrade.exe --self-test`: PASS, exit 0
-- Product/installer regression suite: PASS, 86 tests
+- Product/installer regression suite: PASS, 90 tests
 - Kernel install/update/rollback configuration simulation: PASS
 - Real non-ASCII-profile kernel boot and same-release Repair: PASS
 - Real module extraction, `depmod`, `rtl8xxxu` vermagic, and firmware-presence gate: PASS
@@ -60,8 +60,13 @@ builder then independently checked the kernel/modules manifest and regenerated e
 - Actual package Update followed by installed WPF launch: PASS; UI Automation reached Home rather than
   the recovery screen, and no radio was required for Settings or online-room navigation
 - Launcher failure diagnostics are bounded and preserved under the startup log directory: PASS
-- Relay health failure is separated from local-control health: PASS; the current DNS NXDOMAIN is shown
-  as `relay.unavailable` and Public Rooms is disabled without disabling the rest of the app
+- WSL/glibc A/AAAA lookup through the host DNS proxy: PASS with `single-request-reopen`; IPv4 fallback
+  remains available when WSL has no IPv6 route
+- Member leave after an already-committed remote leave: PASS; stale local credentials are cleared
+  without displaying a false relay outage
+- Installed owner room creation and close: PASS; remote room version advanced and local authority was
+  removed
+- Installed Public Rooms proxy: PASS, five consecutive HTTP 200 responses
 - Desktop shortcut creation: PASS
 - ZIP checksum compared with the sibling `.sha256`: PASS
 
@@ -74,6 +79,6 @@ no unrelated packages were installed into the user's Ubuntu distribution during 
 ## Remaining release gates
 
 This is a current installable candidate, not release approval. It still requires extraction before
-launching `SwitchTradeSetup.exe`, Windows unsigned-publisher acceptance, relay DNS/TLS restoration,
+launching `SwitchTradeSetup.exe`, Windows unsigned-publisher acceptance, relay `71d936c` deployment,
 external clean-machine and reboot/resume qualification, two physical RTL8192EU endpoints,
 two-PC/two-Switch qualification, WAN fault/recovery testing, and private publication approval.
