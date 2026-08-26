@@ -48,10 +48,11 @@ def smoke(base_url: str, allow_http: bool = False) -> None:
         first["room"]["room_code"], "Smoke B", "hosting-smoke-b")
     room_id = first["room"]["room_id"]
     code = first["room"]["room_code"]
-    for credential in (first, second):
+    for credential, role in ((first, "creator"), (second, "finder")):
         room = relay.room(room_id, credential["member_token"])
         relay.room_command(
-            room_id, credential["member_token"], "/ready", {"ready": True},
+            room_id, credential["member_token"], "/ready",
+            {"ready": True, "switch_room_role": role},
             expected_version=room["room_version"],
         )
     room = relay.room(room_id, first["member_token"])
@@ -60,15 +61,8 @@ def smoke(base_url: str, allow_http: bool = False) -> None:
         expected_version=room["room_version"],
     )
     attempt_id = room["attempt"]["attempt_id"]
-    room = relay.room_command(
-        room_id, first["member_token"],
-        f"/attempts/{attempt_id}:claim-creator",
-        expected_version=room["room_version"],
-    )
-    relay.room_command(
-        room_id, first["member_token"], f"/attempts/{attempt_id}:lock-role",
-        expected_version=room["room_version"],
-    )
+    if not room["attempt"]["role_locked"]:
+        raise RuntimeError("manual Switch roles were not locked atomically")
     host = TunnelClient(base_url, code, "host", heartbeat_interval=1,
                         member_token=first["member_token"], attempt_id=attempt_id).start()
     guest = TunnelClient(base_url, code, "guest", heartbeat_interval=1,

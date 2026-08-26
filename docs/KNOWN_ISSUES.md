@@ -1,0 +1,204 @@
+# SwitchTrade beta bug register
+
+Last updated: 2026-08-26
+
+This is the authoritative register for reproducible defects in the current private-beta build. It
+separates observed evidence from suspected causes. An issue remains open until its acceptance checks
+pass on the affected Windows versions and the relevant two-PC workflow.
+
+## Status and priority
+
+- **Confirmed**: reproduced or proven from runtime evidence and source inspection.
+- **Investigating**: the failure is real, but the lowest failing layer is not yet proven.
+- **Fix ready for validation**: code is complete but has not passed the required external test.
+- **Closed**: the acceptance checks passed and the result was recorded.
+- **P0**: blocks or seriously misdirects the core two-player trading workflow.
+- **P1**: important reliability or recovery defect that does not always block trading.
+
+## Open issues
+
+### STB-001 — Connect reports a full/in-use room when the partner is absent
+
+- **Priority:** P0
+- **Status:** Fix ready for validation
+- **Scope:** Windows 10 and Windows 11 desktop clients; creator and joiner paths must both be tested.
+- **Observed build:** `0.2.0-beta.1`
+
+#### User-visible behavior
+
+Pressing **Connect this Switch** in a room containing only the local trainer eventually shows:
+
+> This Trade Room already has two players or is already in use.
+
+The authoritative snapshot from the reproduced room contained one online member, no partner, and no
+active connection attempt. The room was therefore neither full nor already in use.
+
+#### Confirmed cause
+
+`POST /api/v1/trade-room/connect` marks the local member ready and waits up to 20 seconds for exactly
+two online, ready members. When that condition is not reached, the control service returns HTTP 409
+with the correct detail:
+
+> both trainers must press Connect this Switch before the attempt starts
+
+The desktop client's error mapper replaces every unrecognized HTTP 409 response with the unrelated
+room-full message. The UI also enables Connect before the partner is present and does not explain the
+20-second coordination window.
+
+#### Temporary workaround
+
+Both trainers must first be visible in the same Trade Room, then both press **Connect this Switch**
+within the current coordination window. Do not reinstall WSL for this message.
+
+#### Required fix
+
+1. Give control/relay failures stable machine-readable error codes and preserve their specific user
+   messages in the desktop client. Only an actual `room_full` response may display the full-room text.
+2. Disable or replace Connect with **Waiting for partner** until two online members are present.
+3. Display each member's ready state and an explicit waiting state after the local trainer presses
+   Connect; do not present normal coordination as an error.
+4. Replace the hidden request-bound 20-second rendezvous with an asynchronous authoritative ready
+   flow, or visibly expose a bounded timeout with a safe retry.
+5. Clear stale attention banners when a newer authoritative room snapshot resolves their cause.
+
+#### Candidate implementation
+
+The `audit` candidate replaces automatic creator assignment with two explicit actions: **I am the
+Group Leader** and **I am Joining**. The buttons remain unavailable until both room members are
+present. The relay atomically accepts exactly one of each role, and the desktop preserves the
+specific coordination errors instead of converting them to a room-full message. Automated
+authority/control tests pass; real two-PC validation is still required before closure.
+
+#### Acceptance checks
+
+- With one member, Connect cannot produce a room-full error and the UI clearly waits for a partner.
+- With two members, either trainer may press first and remain ready without a fragile timing race.
+- Creator-first and joiner-first role-inversion paths both create exactly one attempt.
+- A genuinely full public room still produces a distinct, correct room-full message.
+- Disconnect, reconnect, room close, and retry do not retain a stale 409 banner.
+
+---
+
+### STB-002 — Windows 10 detects an RTL8192EU but cannot attach it when connection starts
+
+- **Priority:** P0
+- **Status:** Investigating
+- **Scope:** Observed on the Windows 10 22H2 qualification machine with RTL8192EU `0bda:818b`.
+- **Observed build:** `v0.2.0-win10test.3` lineage
+
+#### User-visible behavior
+
+The installed application and local backend start, and the adapter appears valid and selectable. On
+**Connect this Switch**, the attempt stops with:
+
+> The selected adapter could not be attached. Run SwitchTrade Setup Repair once if it is not shared.
+
+This is not evidence that WSL is absent: the installed client reached the running local control
+service and hardware-selection path. It is a failure between Windows USB ownership, `usbipd-win`, the
+isolated SwitchTrade distro, and Linux driver/radio readiness.
+
+#### Known evidence and remaining uncertainty
+
+- The adapter was detected and selected by the app.
+- The failure occurred at connection-time attachment, after installation and restart.
+- The exact Windows 10 `usbipd list` state and post-attach Linux driver state were not preserved, so
+  it is not yet proven whether Setup failed to bind/share the device, runtime attach used stale
+  identity, or Linux received the USB device but failed to bind the wireless driver.
+- A similarly worded error must not be treated as one condition: **detected**, **shared**, **attached**,
+  **USB-visible in WSL**, **driver-bound**, and **radio-ready** are separate gates.
+
+#### Temporary recovery
+
+Run the matching Setup package's **Repair** action once with the RTL8192EU connected, then reselect the
+adapter. If it still fails, preserve a support bundle and `usbipd list` output before unplugging,
+restarting, resetting WSL, or changing drivers.
+
+#### Required fix
+
+1. During Install/Repair, bind/share the selected physical device with elevation and verify the final
+   `usbipd-win` state instead of assuming the command succeeded.
+2. Resolve devices by stable USB identity and current bus ID at action time; never reuse an obsolete
+   bus ID after restart or replug.
+3. Make normal launch attach an already-shared adapter to the isolated `SwitchTrade` distro and report
+   the exact failed stage.
+4. Add an end-to-end radio gate: Windows presence -> shared -> attached -> `lsusb` visibility -> kernel
+   driver bound -> `iw phy`/interface available -> RX health.
+5. Show those stages separately in Settings and offer a targeted recovery action for the failed gate.
+6. Ensure the packaged app, Setup repair flow, and post-reboot continuation use the same manifest,
+   distro name, relay configuration, and hardware profile on Windows 10.
+
+#### Evidence required from the affected machine
+
+- Redacted SwitchTrade support bundle and Setup log from the failed run.
+- `usbipd list`, Windows build, installed `usbipd-win` version, and `wsl --list --verbose`.
+- Inside the `SwitchTrade` distro: `lsusb`, `iw dev`, `iw phy`, bound driver/module, and filtered USB
+  probe messages. No Nintendo keys or unrelated machine inventory are required.
+
+#### Acceptance checks
+
+- Clean Windows 10 22H2 install, required reboot, first launch, and RTL8192EU selection succeed.
+- Install and Repair both leave the selected adapter in a verified recoverable ownership state.
+- Unplug/replug and reboot may change bus ID without breaking device selection or attach.
+- A healthy adapter reaches radio-ready twice consecutively without manual shell commands.
+- Each injected failure reports its exact stage and recovery action; no generic attach message hides a
+  Linux driver or RX-health failure.
+- The same package retains the existing Windows 11 lifecycle behavior.
+
+---
+
+### STB-003 — Cold WSL start leaves RTL8192EU attached but driver-unbound
+
+- **Priority:** P0
+- **Status:** Confirmed
+- **Scope:** Any cold isolated-WSL start where module autoload does not run; reproduced on Windows 11
+  with RTL8192EU `0bda:818b`.
+
+#### Evidence
+
+Windows and `usbipd-win` reported bus `4-18` as attached, and WSL `lsusb` saw `0bda:818b`. The tested
+custom kernel, matching `rtl8xxxu` module, device alias, and firmware were present. Nevertheless,
+`rtl8xxxu`, `cfg80211`, and `mac80211` were not loaded, the USB interface had no driver, and `iw`
+reported no `nl80211` PHY. RX testing therefore never began.
+
+The preparation script labels RTL8192EU as strategy `vanilla` and fails immediately when automatic
+binding produced no interface. It explicitly loads a module only for `vanilla-then-module` profiles,
+so success currently depends on module state left by an earlier run.
+
+#### Required fix and acceptance
+
+- Explicitly load the profiled vanilla module before declaring that no interface exists.
+- Verify USB alias, module ABI, firmware, driver binding, PHY, interface, channel change, and RX as
+  separate named gates.
+- Pass from a cold WSL shutdown, after Windows reboot, and after unplug/replug without manual shell
+  commands; repeat twice to catch retained-module false positives.
+
+---
+
+### STB-004 — Failed Repair can leave Windows and WSL components on different revisions
+
+- **Priority:** P0
+- **Status:** Confirmed
+- **Scope:** Install/Update/Repair transaction ordering.
+
+#### Evidence
+
+Repair was launched from package `9d048d4`. It provisioned `/opt/switchtrade`, retained
+`/opt/switchtrade.previous`, then failed the radio gate before the Windows application swap. The
+installed Windows manifest remained older main build `ece57f9`. Setup therefore crossed a commit
+boundary before all required gates passed and did not restore the previous WSL runtime on failure.
+
+The progress dialog also discarded the actionable child output and displayed only the umbrella text
+“SwitchTrade driver/RX health gate failed,” hiding whether USB, driver, PHY, channel, or RX failed.
+
+#### Required fix and acceptance
+
+- Stage both Windows and WSL revisions, validate them, then commit both or roll back both.
+- Persist the complete Setup log and display the exact failed gate plus one recovery action.
+- Fault-inject every stage of Install, Update, and Repair and verify that the active Windows manifest,
+  WSL runtime, kernel state, and rollback metadata always describe one coherent release.
+
+## Regression rule
+
+Every P0 fix must add automated coverage for its state/error contract and must also pass the relevant
+clean-machine or two-PC acceptance checks above. Internal unit tests alone cannot close a USB,
+driver, radio, or cross-machine coordination issue.

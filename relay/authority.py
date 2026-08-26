@@ -211,9 +211,10 @@ class AuthorityStore:
         attempt = value.get("attempt")
         if attempt:
             attempt = dict(attempt)
+            active_attempt = attempt.get("phase") not in {"completed", "canceled", "failed"}
             attempt["local_switch_role"] = (
-                "creator" if attempt.get("creator_member_id") == local_member_id else
-                "finder" if attempt.get("creator_member_id") else None
+                "creator" if active_attempt and attempt.get("creator_member_id") == local_member_id else
+                "finder" if active_attempt and attempt.get("creator_member_id") else None
             )
             value["attempt"] = attempt
         return value
@@ -327,6 +328,7 @@ class AuthorityStore:
                 "members": [{
                     "member_id": member_id, "seat": "member_a", "display_name": display[:40],
                     "online_state": "online", "ready_state": "not_ready",
+                    "switch_room_role": None,
                     "compatibility": "compatible", "joined_at": _utc(now),
                     "reconnect_deadline": None, "last_seen_epoch": now,
                 }],
@@ -440,6 +442,7 @@ class AuthorityStore:
         room["members"].append({
             "member_id": member_id, "seat": "member_b", "display_name": display[:40],
             "online_state": "online", "ready_state": "not_ready",
+            "switch_room_role": None,
             "compatibility": "compatible", "joined_at": _utc(), "reconnect_deadline": None,
             "last_seen_epoch": time.time(),
         })
@@ -548,7 +551,11 @@ class AuthorityStore:
                     raise AuthorityError(409, "connection attempt is stale")
             if action == "ready":
                 ready = bool(payload.get("ready", True))
+                role = payload.get("switch_room_role")
+                if ready and role not in {"creator", "finder"}:
+                    raise AuthorityError(400, "choose Group Leader or Joining before connecting")
                 member["ready_state"] = "ready" if ready else "not_ready"
+                member["switch_room_role"] = role if ready else None
                 event = "member.ready" if ready else "member.not_ready"
             elif action == "heartbeat":
                 member["online_state"] = "online"
@@ -562,12 +569,19 @@ class AuthorityStore:
                 active = [m for m in room["members"] if m["online_state"] != "left"]
                 if len(active) != 2 or any(m["ready_state"] != "ready" for m in active):
                     raise AuthorityError(409, "both members must be ready")
+                roles = {member.get("switch_room_role") for member in active}
+                if roles != {"creator", "finder"}:
+                    raise AuthorityError(
+                        409, "one trainer must choose Group Leader and the other must choose Joining")
+                creator = next(
+                    member["member_id"] for member in active
+                    if member["switch_room_role"] == "creator")
                 number = (room.get("last_attempt_number") or 0) + 1
                 room["last_attempt_number"] = number
                 room["attempt"] = {
                     "attempt_id": uuid7(), "attempt_number": number,
-                    "phase": "choosing_creator", "creator_member_id": None,
-                    "role_locked": False, "role_lock_version": None,
+                    "phase": "connecting_switches", "creator_member_id": creator,
+                    "role_locked": True, "role_lock_version": room["room_version"] + 1,
                     "started_at": _utc(), "updated_at": _utc(), "retry_count": 0,
                     "recoverable_error": None,
                 }
@@ -614,6 +628,10 @@ class AuthorityStore:
                     room["state"] = "trading"
                 elif phase in {"completed", "canceled", "failed"}:
                     room["state"] = "ready_check"
+                    for active_member in room["members"]:
+                        if active_member["online_state"] != "left":
+                            active_member["ready_state"] = "not_ready"
+                            active_member["switch_room_role"] = None
                 event = f"attempt.{phase}"
             elif action == "leave":
                 if room["owner_member_id"] == member_id:
@@ -623,7 +641,9 @@ class AuthorityStore:
                         attempt.get("phase") not in {"completed", "canceled", "failed"}):
                     raise AuthorityError(409, "finish connection teardown before leaving")
                 member["online_state"] = "left"
-                member["ready_state"] = "not_ready"
+                for active_member in room["members"]:
+                    active_member["ready_state"] = "not_ready"
+                    active_member["switch_room_role"] = None
                 room["attempt"] = None
                 room["state"] = "waiting_for_partner"
                 room["waiting_expires_at_epoch"] = min(
@@ -648,7 +668,9 @@ class AuthorityStore:
                 if target_member["online_state"] != "offline":
                     raise AuthorityError(409, "member reconnect grace has not expired")
                 target_member["online_state"] = "left"
-                target_member["ready_state"] = "not_ready"
+                for active_member in room["members"]:
+                    active_member["ready_state"] = "not_ready"
+                    active_member["switch_room_role"] = None
                 room["attempt"] = None
                 room["state"] = "waiting_for_partner"
                 room["waiting_expires_at_epoch"] = min(
@@ -752,6 +774,7 @@ class AuthorityStore:
                         if deadline <= now:
                             member["online_state"] = "offline"
                             member["ready_state"] = "not_ready"
+                            member["switch_room_role"] = None
                             self._db.execute(
                                 "UPDATE credentials SET active=0 WHERE room_id=? AND member_id=?",
                                 (room["room_id"], member["member_id"]),
@@ -762,6 +785,9 @@ class AuthorityStore:
                                 attempt["recoverable_error"] = "member.reconnect_expired"
                                 attempt["updated_at"] = _utc(now)
                                 room["state"] = "ready_check"
+                                for active_member in room["members"]:
+                                    active_member["ready_state"] = "not_ready"
+                                    active_member["switch_room_role"] = None
                             changed = True
                             event = "member.offline"
                         else:

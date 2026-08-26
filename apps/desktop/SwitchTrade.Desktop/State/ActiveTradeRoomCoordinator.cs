@@ -58,17 +58,21 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
         RaiseChanged();
     }
 
-    public async Task<bool> StartConnectionAsync(CancellationToken cancellationToken = default)
+    public async Task<bool> StartConnectionAsync(
+        SwitchRoomRole switchRole, CancellationToken cancellationToken = default)
     {
-        if (Context is null || IsPending) return false;
+        if (Context is null || IsPending || switchRole == SwitchRoomRole.Unassigned) return false;
+        Context = Context with { SwitchRole = switchRole };
         ConnectionState = LegacyConnectionState.Starting;
-        StatusText = "Preparing the connection";
+        StatusText = switchRole == SwitchRoomRole.Creator
+            ? "Looking for the group on your Switch"
+            : "Preparing your partner’s group";
         RecoveryMessage = null;
         RaiseChanged();
         try
         {
             await _gateway.StartConnectionAsync(
-                Context.SwitchRole, Context.MembershipRole, Context.Room.RoomCode, cancellationToken);
+                switchRole, Context.MembershipRole, Context.Room.RoomCode, cancellationToken);
             StatusText = "Preparing the connection. Follow the Switch instructions.";
             RaiseChanged();
             return true;
@@ -154,7 +158,9 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
                 break;
             case "relay_connected":
                 ConnectionState = LegacyConnectionState.Starting;
-                StatusText = "Waiting for the room on the creator’s Switch";
+                StatusText = Context.SwitchRole == SwitchRoomRole.Creator
+                    ? "Looking for the group on your Switch"
+                    : "Preparing your partner’s group";
                 break;
             case "radio_ready":
                 ConnectionState = LegacyConnectionState.Starting;
@@ -207,9 +213,9 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
             StatusText = room.State switch
             {
                 "waiting_for_partner" => "Waiting for your partner",
-                "ready_check" when !room.BothReady => "Both trainers are here. Press Connect this Switch when ready.",
-                "ready_check" => "Both trainers are ready",
-                "connection_attempt" when !room.RoleLocked => "Assigning the Switch room creator",
+                "ready_check" when !room.BothReady => "Both trainers are here. Choose what your Switch is doing.",
+                "ready_check" => "Both trainers chose their Switch roles",
+                "connection_attempt" when !room.RoleLocked => "Waiting for opposite Switch roles",
                 "connection_attempt" => "Preparing both Switch connections",
                 "trading" => "Both Switches are in the trading room",
                 "closed" => "This Trade Room is closed",

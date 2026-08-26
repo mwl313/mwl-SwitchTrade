@@ -14,7 +14,12 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
     {
         _coordinator = coordinator;
         _coordinator.Changed += CoordinatorChanged;
-        ConnectionCommand = new AsyncCommand(ToggleConnectionAsync, CanToggleConnection);
+        GroupLeaderCommand = new AsyncCommand(
+            () => ChooseRoleAsync(SwitchRoomRole.Creator), CanChooseRole);
+        JoiningCommand = new AsyncCommand(
+            () => ChooseRoleAsync(SwitchRoomRole.Finder), CanChooseRole);
+        ConnectionCommand = new AsyncCommand(
+            () => _coordinator.StopConnectionAsync(), CanEndConnection);
         RepairAdapterCommand = new AsyncCommand(shell.RepairAdapterAsync, () => HasAdapterRepair);
         LeaveCommand = new AsyncCommand(LeaveAsync, () => !_coordinator.IsPending);
         CopyCodeCommand = new RelayCommand(() => Shell.Copy(RoomCode, "Room code copied"));
@@ -36,25 +41,24 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
     public string YouSummary => YouParty is null ? "Party data unavailable" : "Checksum-verified party";
     public string PartnerSummary => PartnerParty is null ? "Party data unavailable" : "Checksum-verified party";
     public string MainInstruction => Context?.SwitchRole == SwitchRoomRole.Unassigned
-            ? "Both trainers can press Connect this Switch. SwitchTrade will assign one creator safely."
+            ? "Choose what you are doing on your Switch"
         : Context?.SwitchRole == SwitchRoomRole.Creator
-            ? "Create the room on your Switch"
-            : "Find your partner’s room";
+            ? "Keep your group open on your Switch"
+            : "Keep searching on your Switch";
     public string InstructionDetails => Context?.SwitchRole == SwitchRoomRole.Unassigned
-            ? "When both trainers are ready, SwitchTrade will show each person the correct create or find instruction."
+            ? "Open Direct Connection in the game. Create a group or start searching, then choose the matching button below."
         : Context?.SwitchRole == SwitchRoomRole.Creator
-            ? "Open Direct Connection in the game and create a room. Keep it open while SwitchTrade looks for it."
-            : "Open room search in Direct Connection and keep the results open while SwitchTrade prepares your partner’s room.";
+            ? "SwitchTrade is looking for the group you created. Leave the group open."
+            : "SwitchTrade is preparing your partner’s group. Leave the search screen open.";
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Performance", "CA1822:Mark members as static",
         Justification = "The notice is a bindable property of the screen projection.")]
     public string LimitationNotice =>
-        "Room membership, readiness, and creator assignment are synchronized by SwitchTrade’s online room service.";
-    public string ConnectionActionText => _coordinator.ConnectionState == LegacyConnectionState.Idle
-        ? "Connect this Switch"
-        : "End connection";
+        "Use opposite choices: one trainer is Group Leader and the other is Joining.";
     public string ConnectionStatus => _coordinator.StatusText;
     public bool IsConnectionPending => _coordinator.IsPending;
+    public bool ShowRoleChoices => _coordinator.ConnectionState == LegacyConnectionState.Idle;
+    public bool ShowEndConnection => !ShowRoleChoices;
     public bool HasRecovery => !string.IsNullOrWhiteSpace(_coordinator.RecoveryMessage);
     public bool HasAdapterRepair => HasRecovery && Shell.RecoveryTechnicalDetails.Contains(
         "radio.failed", StringComparison.OrdinalIgnoreCase);
@@ -107,6 +111,8 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
     }
     public bool HasSelectedPokemon => SelectedPokemon is not null;
     public AsyncCommand ConnectionCommand { get; }
+    public AsyncCommand GroupLeaderCommand { get; }
+    public AsyncCommand JoiningCommand { get; }
     public AsyncCommand RepairAdapterCommand { get; }
     public AsyncCommand LeaveCommand { get; }
     public RelayCommand CopyCodeCommand { get; }
@@ -114,15 +120,12 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
     public RelayCommand<PokemonPartySlotViewData> SelectPokemonCommand { get; }
     public RelayCommand ClearPokemonCommand { get; }
 
-    private bool CanToggleConnection() => IsServiceReady && !_coordinator.IsPending && _coordinator.HasRoom;
+    private bool CanChooseRole() => IsServiceReady && !_coordinator.IsPending &&
+                                    _coordinator.HasRoom && _coordinator.PartnerOnline;
+    private bool CanEndConnection() => IsServiceReady && !_coordinator.IsPending &&
+                                       _coordinator.HasRoom && !ShowRoleChoices;
 
-    private async Task ToggleConnectionAsync()
-    {
-        if (_coordinator.ConnectionState == LegacyConnectionState.Idle)
-            await _coordinator.StartConnectionAsync();
-        else
-            await _coordinator.StopConnectionAsync();
-    }
+    private Task<bool> ChooseRoleAsync(SwitchRoomRole role) => _coordinator.StartConnectionAsync(role);
 
     private async Task LeaveAsync()
     {
@@ -156,15 +159,18 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
         OnPropertyChanged(nameof(MembershipActionText));
         OnPropertyChanged(nameof(MainInstruction));
         OnPropertyChanged(nameof(InstructionDetails));
-        OnPropertyChanged(nameof(ConnectionActionText));
         OnPropertyChanged(nameof(ConnectionStatus));
         OnPropertyChanged(nameof(IsConnectionPending));
+        OnPropertyChanged(nameof(ShowRoleChoices));
+        OnPropertyChanged(nameof(ShowEndConnection));
         OnPropertyChanged(nameof(HasRecovery));
         OnPropertyChanged(nameof(HasAdapterRepair));
         OnPropertyChanged(nameof(RecoveryMessage));
         OnPropertyChanged(nameof(StageHeading));
         OnPropertyChanged(nameof(LinklineState));
         ConnectionCommand.RaiseCanExecuteChanged();
+        GroupLeaderCommand.RaiseCanExecuteChanged();
+        JoiningCommand.RaiseCanExecuteChanged();
         RepairAdapterCommand.RaiseCanExecuteChanged();
         LeaveCommand.RaiseCanExecuteChanged();
     }
@@ -180,6 +186,8 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
     {
         base.NotifyShellState();
         ConnectionCommand.RaiseCanExecuteChanged();
+        GroupLeaderCommand.RaiseCanExecuteChanged();
+        JoiningCommand.RaiseCanExecuteChanged();
     }
 
     public void Dispose()

@@ -56,6 +56,10 @@ class JoinPublicRoom(BaseModel):
     trainer_display_name: str = Field(min_length=1, max_length=20)
 
 
+class ConnectTradeRoom(BaseModel):
+    switch_room_role: str = Field(pattern="^(creator|finder)$")
+
+
 class StartSession(BaseModel):
     tunnel_seat: str | None = Field(default=None, pattern="^(member_a|member_b)$")
     switch_room_role: str | None = Field(default=None, pattern="^(creator|finder)$")
@@ -780,16 +784,20 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             raise HTTPException(status_code=503, detail=str(error)) from error
 
     @app.post("/api/v1/trade-room/connect")
-    def connect_trade_room(request: Request) -> dict:
+    def connect_trade_room(payload: ConnectTradeRoom, request: Request) -> dict:
         state = runtime(request)
         credentials = state.read_authority()
+        if "manual-switch-role.v1" not in state.public_capabilities():
+            raise HTTPException(
+                status_code=503,
+                detail="the online room service must be updated for manual Switch roles",
+            )
         try:
             room = state.authoritative_room()
-            local = next(member for member in room["members"] if member["is_local"])
-            if local["ready_state"] != "ready":
-                room = state.relay.room_command(
-                    room["room_id"], credentials["member_token"], "/ready", {"ready": True},
-                    expected_version=room["room_version"])
+            room = state.relay.room_command(
+                room["room_id"], credentials["member_token"], "/ready", {
+                    "ready": True, "switch_room_role": payload.switch_room_role,
+                }, expected_version=room["room_version"])
             deadline = time.monotonic() + 20
             while time.monotonic() < deadline:
                 room = state.authoritative_room()
@@ -800,7 +808,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             else:
                 raise HTTPException(
                     status_code=409,
-                    detail="both trainers must press Connect this Switch before the attempt starts",
+                    detail="both trainers must choose their Switch role before connecting",
                 )
             if not room.get("attempt") or room["attempt"].get("phase") in {"completed", "canceled", "failed"}:
                 try:
@@ -813,34 +821,13 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                     room = state.authoritative_room()
             attempt = room.get("attempt")
             if not attempt:
-                raise HTTPException(status_code=409, detail="connection attempt was not created")
-            try:
-                room = state.relay.room_command(
-                    room["room_id"], credentials["member_token"],
-                    f"/attempts/{attempt['attempt_id']}:claim-creator",
-                    expected_version=room["room_version"],
+                raise HTTPException(
+                    status_code=409,
+                    detail="one trainer must choose Group Leader and the other must choose Joining",
                 )
-            except RelayError as error:
-                if "409" not in str(error):
-                    raise
-                room = state.authoritative_room()
-            attempt = room["attempt"]
             switch_role = attempt["local_switch_role"]
-            if switch_role not in {"creator", "finder"}:
-                raise HTTPException(status_code=409, detail="room creator assignment is incomplete")
-            if not attempt["role_locked"]:
-                try:
-                    room = state.relay.room_command(
-                        room["room_id"], credentials["member_token"],
-                        f"/attempts/{attempt['attempt_id']}:lock-role",
-                        expected_version=room["room_version"],
-                    )
-                except RelayError as error:
-                    if "409" not in str(error):
-                        raise
-                    room = state.authoritative_room()
-                    if not (room.get("attempt") or {}).get("role_locked"):
-                        raise
+            if switch_role != payload.switch_room_role or not attempt.get("role_locked"):
+                raise HTTPException(status_code=409, detail="the two Switch role choices do not match")
             local = next(member for member in room["members"] if member["is_local"])
             selected_usb_id = attach_selected_hardware(state)
             result = launch_session(

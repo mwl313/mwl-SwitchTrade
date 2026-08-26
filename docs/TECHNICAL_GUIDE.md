@@ -123,7 +123,8 @@ Important UI invariants:
 
 - the room authority, not the UI, decides membership and attempt state;
 - member A/member B remain stable identities during a room;
-- room creator/finder is a per-attempt radio role and can be assigned to either member;
+- each member explicitly selects Group Leader/creator or Joining/finder for every attempt;
+- the authority starts only one complementary creator/finder pair and never infers it from room ownership;
 - leave and close are idempotent user operations;
 - public browsing is unavailable when the relay does not advertise `public-directory.v1`;
 - errors must provide a recovery action rather than exposing command output;
@@ -203,10 +204,11 @@ Room properties:
   hashes;
 - a single active connection attempt at a time.
 
-Attempt state advances through creator selection, role lock, Switch discovery/advertising,
-connection, trading room, recovery, closing, and a terminal completed/canceled/failed state. Room
-identity is independent from the physical Switch-room creator. Either member may claim that role
-before it is locked.
+Each member first opens the matching in-game Direct Connection screen, then explicitly submits
+Group Leader/creator or Joining/finder. Attempt creation atomically requires and locks exactly one of
+each choice before Switch discovery/advertising, connection, trading room, recovery, closing, and a
+terminal completed/canceled/failed state. Online-room ownership and stable member seat remain
+independent from this per-attempt Switch role.
 
 Mutations require idempotency/command identifiers and optimistic room-version checks. An expired or
 stale attempt cannot mutate a new attempt. Active transport is disconnected before a member is

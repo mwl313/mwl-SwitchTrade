@@ -12,6 +12,8 @@ part of the public repository or release package.
   protocol specification recovered by the project.
 - [Development History](DEVELOPMENT_HISTORY.md) — milestones, corrections, and engineering lessons.
 - [Future TODO](FUTURE_TODO.md) — work deliberately excluded from the current beta.
+- [Known Issues](KNOWN_ISSUES.md) — authoritative beta defect register, evidence, workarounds, and
+  acceptance checks.
 
 The root [README](../README.md) is the short installation and user guide. Relay operators should also
 read [relay/DEPLOYMENT.md](../relay/DEPLOYMENT.md), and distribution engineers should read

@@ -67,6 +67,7 @@ class ReconnectPayload(StrictPayload):
 
 class ReadyPayload(StrictPayload):
     ready: bool = True
+    switch_room_role: Literal["creator", "finder"] | None = None
 
 
 class TransferPayload(StrictPayload):
@@ -189,7 +190,7 @@ async def health() -> dict:
         "status": "ready",
         "service": "switchtrade-relay",
         "room_contract": "room-control.v1",
-        "capabilities": ["public-directory.v1"],
+        "capabilities": ["manual-switch-role.v1", "public-directory.v1"],
         "payload_mode": "opaque",
     }
 

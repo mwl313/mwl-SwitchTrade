@@ -144,14 +144,24 @@
 
       <Border Grid.Row="1" Style="{StaticResource StickyActionBar}">
         <Grid>
-          <TextBlock Text="{Binding ConnectionStatus}" Style="{StaticResource SecondaryText}"
+          <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+          <TextBlock Grid.Column="0" Text="{Binding ConnectionStatus}" Style="{StaticResource SecondaryText}"
+                     Margin="0,0,18,0"
                      VerticalAlignment="Center" />
-          <Button Command="{Binding ConnectionCommand}" Style="{StaticResource PrimaryButton}"
-                  HorizontalAlignment="Right" MinWidth="190">
+          <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right"
+                      Visibility="{Binding ShowRoleChoices, Converter={StaticResource BooleanToVisibility}}">
+            <Button Content="I am the Group Leader" Command="{Binding GroupLeaderCommand}"
+                    Style="{StaticResource SecondaryButton}" MinWidth="210" Margin="0,0,10,0" />
+            <Button Content="I am Joining" Command="{Binding JoiningCommand}"
+                    Style="{StaticResource SecondaryButton}" MinWidth="210" />
+          </StackPanel>
+          <Button Grid.Column="1" Command="{Binding ConnectionCommand}" Style="{StaticResource PrimaryButton}"
+                  HorizontalAlignment="Right" MinWidth="190"
+                  Visibility="{Binding ShowEndConnection, Converter={StaticResource BooleanToVisibility}}">
             <StackPanel Orientation="Horizontal">
               <ProgressBar IsIndeterminate="True" Width="16" Height="16" Margin="0,0,10,0"
                            Visibility="{Binding IsConnectionPending, Converter={StaticResource BooleanToVisibility}}" />
-              <TextBlock Text="{Binding ConnectionActionText}" />
+              <TextBlock Text="End connection" />
             </StackPanel>
           </Button>
         </Grid>

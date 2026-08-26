@@ -45,9 +45,9 @@ Both players install SwitchTrade and connect one USB Wi-Fi adapter.
 1. One player chooses **Create a Trade Room** and shares the six-character code, or creates a public
    room.
 2. The second player joins with **Join a Private Room** or **Browse Public Rooms**.
-3. Both players mark themselves ready.
-4. Either player can choose to create the physical Direct Connection room on their Switch. The app
-   gives the other player the matching join instructions.
+3. In Direct Connection, one trainer creates the in-game group and the other starts searching.
+4. In SwitchTrade, the first trainer presses **I am the Group Leader** and the second presses
+   **I am Joining**. SwitchTrade scans and connects the matching sessions.
 5. When both Switch consoles enter the multiplayer room, walk to the trade chair and complete the
    normal trade flow.
 6. Return to the trade menu or leave the room. SwitchTrade closes the radio session and online room
@@ -77,6 +77,7 @@ the endpoints without decoding the game payload.
 - [FireRed/LeafGreen Communication Protocol](docs/FRLG_PROTOCOL.md)
 - [Development History](docs/DEVELOPMENT_HISTORY.md)
 - [Future TODO](docs/FUTURE_TODO.md)
+- [Known Issues](docs/KNOWN_ISSUES.md)
 - [Relay deployment](relay/DEPLOYMENT.md)
 - [Installer and package engineering](installer/README.md)
 

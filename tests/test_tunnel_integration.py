@@ -106,10 +106,11 @@ class TunnelIntegrationTest(unittest.TestCase):
     def _prepare_authority_attempt(self, first: dict, second: dict) -> str:
         relay = RelayClient(self.base)
         room_id = first["room"]["room_id"]
-        for credential in (first, second):
+        for credential, role in ((first, "creator"), (second, "finder")):
             room = relay.room(room_id, credential["member_token"])
             relay.room_command(
-                room_id, credential["member_token"], "/ready", {"ready": True},
+                room_id, credential["member_token"], "/ready",
+                {"ready": True, "switch_room_role": role},
                 expected_version=room["room_version"],
             )
         room = relay.room(room_id, first["member_token"])
@@ -118,15 +119,7 @@ class TunnelIntegrationTest(unittest.TestCase):
             expected_version=room["room_version"],
         )
         attempt_id = room["attempt"]["attempt_id"]
-        room = relay.room_command(
-            room_id, first["member_token"],
-            f"/attempts/{attempt_id}:claim-creator",
-            expected_version=room["room_version"],
-        )
-        relay.room_command(
-            room_id, first["member_token"], f"/attempts/{attempt_id}:lock-role",
-            expected_version=room["room_version"],
-        )
+        self.assertTrue(room["attempt"]["role_locked"])
         return attempt_id
 
     @staticmethod
@@ -327,7 +320,7 @@ class TunnelIntegrationTest(unittest.TestCase):
                 self.assertEqual(response.status_code, 200, response.text)
                 self.assertEqual(response.json()["group"]["passcode"], code)
 
-    def test_authoritative_controls_assign_one_creator_without_exposing_credentials(self):
+    def test_authoritative_controls_use_explicit_complementary_switch_roles(self):
         with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
             with TestClient(create_app(runs_root=first, relay_url=self.base)) as first_api, \
                     TestClient(create_app(runs_root=second, relay_url=self.base)) as second_api:
@@ -355,8 +348,10 @@ class TunnelIntegrationTest(unittest.TestCase):
                 with patch("switchtrade.control.subprocess.Popen", side_effect=process):
                     with ThreadPoolExecutor(max_workers=2) as executor:
                         responses = list(executor.map(
-                            lambda client: client.post("/api/v1/trade-room/connect"),
-                            (first_api, second_api),
+                            lambda pair: pair[0].post(
+                                "/api/v1/trade-room/connect",
+                                json={"switch_room_role": pair[1]}),
+                            ((first_api, "creator"), (second_api, "finder")),
                         ))
                 self.assertTrue(all(response.status_code == 200 for response in responses),
                                 [response.text for response in responses])

@@ -157,28 +157,33 @@ class AuthoritativeRoomTests(unittest.TestCase):
         chunked = asyncio.run(chunked_request())
         self.assertEqual(chunked.status_code, 413)
 
-    def test_idempotency_and_atomic_creator_claim(self):
+    def test_manual_roles_are_validated_and_locked_atomically(self):
         first = self._create()
         second = self._join(first["room"]["room_code"])
         room_id = first["room"]["room_id"]
-        for credential in (first, second):
-            response = self._mutate(room_id, credential["member_token"], "/ready", {"ready": True})
+        for credential, role in ((first, "creator"), (second, "finder")):
+            response = self._mutate(room_id, credential["member_token"], "/ready", {
+                "ready": True, "switch_room_role": role,
+            })
             self.assertEqual(response.status_code, 200, response.text)
         attempt = self._mutate(room_id, first["member_token"], "/attempts")
         self.assertEqual(attempt.status_code, 200, attempt.text)
-        attempt_id = attempt.json()["attempt"]["attempt_id"]
+        self.assertTrue(attempt.json()["attempt"]["role_locked"])
+        self.assertEqual(attempt.json()["attempt"]["local_switch_role"], "creator")
+        second_view = relay_server.authority.snapshot(room_id, second["member_token"])
+        self.assertEqual(second_view["attempt"]["local_switch_role"], "finder")
 
-        def claim(credential):
-            return relay_server.authority.mutate(
-                room_id, credential["member_token"], _command(), "claim_creator",
-                {"attempt_id": attempt_id})
-
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            snapshots = list(executor.map(claim, (first, second)))
-        creators = {snapshot["attempt"]["creator_member_id"] for snapshot in snapshots}
-        self.assertEqual(len(creators), 1)
-        self.assertIn(next(iter(creators)), {
-            first["room"]["local_member_id"], second["room"]["local_member_id"]})
+        first_same = self._create("same-a")
+        second_same = self._join(first_same["room"]["room_code"], "same-b")
+        same_room_id = first_same["room"]["room_id"]
+        for credential in (first_same, second_same):
+            self.assertEqual(self._mutate(
+                same_room_id, credential["member_token"], "/ready", {
+                    "ready": True, "switch_room_role": "creator",
+                }).status_code, 200)
+        rejected = self._mutate(same_room_id, first_same["member_token"], "/attempts")
+        self.assertEqual(rejected.status_code, 409)
+        self.assertIn("one trainer must choose Group Leader", rejected.text)
 
         key = _command()
         before = relay_server.authority.snapshot(room_id, first["member_token"])["room_version"]
@@ -195,9 +200,11 @@ class AuthoritativeRoomTests(unittest.TestCase):
             "Authorization": f"Bearer {first['member_token']}", "Idempotency-Key": _command(),
         })
         self.assertEqual(missing.status_code, 428)
-        for credential in (first, second):
+        for credential, role in ((first, "creator"), (second, "finder")):
             self.assertEqual(self._mutate(
-                room_id, credential["member_token"], "/ready", {"ready": True}).status_code, 200)
+                room_id, credential["member_token"], "/ready", {
+                    "ready": True, "switch_room_role": role,
+                }).status_code, 200)
 
         version = self.client.get(f"/v1/trade-rooms/{room_id}", headers={
             "Authorization": f"Bearer {first['member_token']}"}).json()["room_version"]
@@ -312,19 +319,14 @@ class AuthoritativeRoomTests(unittest.TestCase):
         second = self._join(first["room"]["room_code"])
         room_id = first["room"]["room_id"]
         target = second["room"]["local_member_id"]
-        for credential in (first, second):
+        for credential, role in ((first, "creator"), (second, "finder")):
             ready = self._mutate(
-                room_id, credential["member_token"], "/ready", {"ready": True})
+                room_id, credential["member_token"], "/ready", {
+                    "ready": True, "switch_room_role": role,
+                })
             self.assertEqual(ready.status_code, 200, ready.text)
         attempt = self._mutate(room_id, first["member_token"], "/attempts").json()["attempt"]
-        claimed = self._mutate(
-            room_id, first["member_token"],
-            f"/attempts/{attempt['attempt_id']}:claim-creator")
-        self.assertEqual(claimed.status_code, 200, claimed.text)
-        locked = self._mutate(
-            room_id, first["member_token"],
-            f"/attempts/{attempt['attempt_id']}:lock-role")
-        self.assertEqual(locked.status_code, 200, locked.text)
+        self.assertTrue(attempt["role_locked"])
         early = self._mutate(room_id, first["member_token"], "/members:remove-offline", {
             "target_member_id": target,
         })

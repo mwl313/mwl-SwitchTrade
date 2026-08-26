@@ -192,8 +192,18 @@ public sealed class ControlApiClient : IControlGateway
 
     public async Task StartConnectionAsync(
         SwitchRoomRole role, RoomMembershipRole membershipRole,
-        string roomCode, CancellationToken cancellationToken = default) =>
-        _ = await PostAsync<JsonElement>("/api/v1/trade-room/connect", new { }, cancellationToken);
+        string roomCode, CancellationToken cancellationToken = default)
+    {
+        var switchRoomRole = role switch
+        {
+            SwitchRoomRole.Creator => "creator",
+            SwitchRoomRole.Finder => "finder",
+            _ => throw new UserFacingException(
+                "Choose Group Leader or Joining before connecting.", "switch_role_required"),
+        };
+        _ = await PostAsync<JsonElement>("/api/v1/trade-room/connect",
+            new { switch_room_role = switchRoomRole }, cancellationToken);
+    }
 
     public async Task<AuthoritativeRoomProjection?> TryGetTradeRoomAsync(
         CancellationToken cancellationToken = default)
@@ -208,7 +218,8 @@ public sealed class ControlApiClient : IControlGateway
             var partner = room.Members?.FirstOrDefault(member => !member.IsLocal);
             var membership = room.OwnerMemberId == room.LocalMemberId
                 ? RoomMembershipRole.Owner : RoomMembershipRole.Member;
-            var switchRole = room.Attempt?.LocalSwitchRole?.ToLowerInvariant() switch
+            var selectedRole = room.Attempt?.LocalSwitchRole ?? local?.SwitchRoomRole;
+            var switchRole = selectedRole?.ToLowerInvariant() switch
             {
                 "creator" => SwitchRoomRole.Creator,
                 "finder" => SwitchRoomRole.Finder,
@@ -551,6 +562,10 @@ public sealed class ControlApiClient : IControlGateway
             "Select an available Wi-Fi adapter in Settings" => detail,
             "Detach the other identical Wi-Fi adapter from WSL, then try again." => detail,
             "The selected adapter could not be attached. Run SwitchTrade Setup Repair once if it is not shared." => detail,
+            "both trainers must choose their Switch role before connecting" => detail,
+            "one trainer must choose Group Leader and the other must choose Joining" => detail,
+            "the two Switch role choices do not match" => detail,
+            "the online room service must be updated for manual Switch roles" => detail,
             _ => response.StatusCode switch
         {
             HttpStatusCode.NotFound => "We couldn’t find that Trade Room. Check the code and try again.",
@@ -665,7 +680,8 @@ public sealed class ControlApiClient : IControlGateway
         string? Seat,
         [property: JsonPropertyName("is_local")] bool IsLocal,
         [property: JsonPropertyName("online_state")] string? OnlineState,
-        [property: JsonPropertyName("ready_state")] string? ReadyState);
+        [property: JsonPropertyName("ready_state")] string? ReadyState,
+        [property: JsonPropertyName("switch_room_role")] string? SwitchRoomRole);
     private sealed record AuthorityAttemptDto(
         [property: JsonPropertyName("local_switch_role")] string? LocalSwitchRole,
         string? Phase,

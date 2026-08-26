@@ -54,7 +54,8 @@ public partial class App : Application
             coordinator.Open(
                 new TradeRoomInfo("Room", "ABC123", "private", 1, "self_test"),
                 RoomMembershipRole.Owner, SwitchRoomRole.Creator);
-            var coordinatorWorks = coordinator.StartConnectionAsync().GetAwaiter().GetResult() &&
+            var coordinatorWorks = coordinator.StartConnectionAsync(
+                                       SwitchRoomRole.Creator).GetAwaiter().GetResult() &&
                                    fakeGateway.LastSwitchRole == SwitchRoomRole.Creator &&
                                    coordinator.StopConnectionAsync().GetAwaiter().GetResult() &&
                                    coordinator.ReleaseRoomAsync().GetAwaiter().GetResult() &&
