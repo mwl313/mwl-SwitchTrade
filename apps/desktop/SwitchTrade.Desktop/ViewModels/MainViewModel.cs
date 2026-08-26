@@ -211,7 +211,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             if (_activeTradeRoom is not null)
             {
                 var room = await Gateway.TryGetTradeRoomAsync();
-                if (room is not null) RoomCoordinator.ApplyRoom(room);
+                if (room?.State is "closed" or "expired")
+                {
+                    RoomCoordinator.ForceClear();
+                    _activeTradeRoom.Dispose();
+                    _activeTradeRoom = null;
+                    ShowHome();
+                    Announce("This Trade Room was closed remotely.");
+                }
+                else if (room is not null) RoomCoordinator.ApplyRoom(room);
             }
             await RefreshPartiesAsync();
         }

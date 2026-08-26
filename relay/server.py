@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 from fastapi import BackgroundTasks
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ import uuid
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import JSONResponse
 
@@ -32,9 +34,72 @@ CLOSE_RATE_LIMITED = 4429
 MAX_MESSAGE_BYTES = (1 << 20) + 256
 SESSION_TTL = 6 * 60 * 60
 MAX_CONTROL_BODY_BYTES = 64 * 1024
+RFU_CONTRACT = "rfu-tunnel.v1"
 
-app = FastAPI(title="SwitchTrade Relay", version="0.2.0-beta.1")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    try:
+        yield
+    finally:
+        authority.close()
+
+app = FastAPI(title="SwitchTrade Relay", version="0.2.0-beta.1", lifespan=lifespan)
 logger = logging.getLogger("uvicorn.error")
+
+
+ERROR_CODES = {
+    "trade room not found": ("room_not_found", "room", False, "check_room_code"),
+    "public room not found": ("room_not_found", "room", False, "refresh_rooms"),
+    "trade room is full": ("room_full", "room", False, "choose_another_room"),
+    "trade room is not active": ("room_not_active", "room", False, "leave_room"),
+    "trade room is no longer available": ("room_not_active", "room", False, "leave_room"),
+    "room version conflict": ("room_version_conflict", "room", True, "refresh_room"),
+    "both members must be ready": ("waiting_for_partner_role", "coordination", True, "wait"),
+    "one trainer must choose Group Leader and the other must choose Joining": (
+        "complementary_role_required", "coordination", True, "choose_role"),
+    "a connection attempt is already active": ("attempt_active", "coordination", True, "refresh_room"),
+    "connection attempt is stale": ("attempt_stale", "coordination", True, "retry"),
+    "member credential is required": ("member_credential_required", "authentication", False, "rejoin_room"),
+    "member credential is invalid": ("member_credential_invalid", "authentication", True, "reconnect"),
+    "reconnect credential is invalid": ("reconnect_credential_invalid", "authentication", False, "rejoin_room"),
+    "rate limit exceeded": ("rate_limited", "relay", True, "retry_later"),
+    "rate limit capacity exceeded": ("rate_limited", "relay", True, "retry_later"),
+}
+
+
+def _error_fields(status: int, detail: str) -> tuple[str, str, bool, str | None]:
+    if detail in ERROR_CODES:
+        return ERROR_CODES[detail]
+    if status == 404:
+        return "not_found", "relay", False, "check_request"
+    if status == 409:
+        return "state_conflict", "coordination", True, "refresh_room"
+    if status == 429:
+        return "rate_limited", "relay", True, "retry_later"
+    if status >= 500:
+        return "relay_internal_error", "relay", True, "retry"
+    return "invalid_request", "relay", False, "check_request"
+
+
+def _error_response(request: Request, status: int, detail: str) -> JSONResponse:
+    code, stage, recoverable, action = _error_fields(status, detail)
+    correlation_id = getattr(request.state, "correlation_id", str(uuid.uuid4()))
+    return JSONResponse(status_code=status, content={
+        "code": code, "message": detail, "detail": detail, "stage": stage,
+        "recoverable": recoverable, "primary_action": action,
+        "correlation_id": correlation_id,
+    }, headers={"X-Correlation-ID": correlation_id})
+
+
+@app.exception_handler(HTTPException)
+async def http_error(request: Request, error: HTTPException) -> JSONResponse:
+    return _error_response(request, error.status_code, str(error.detail))
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request: Request, _error: RequestValidationError) -> JSONResponse:
+    return _error_response(request, 422, "request validation failed")
 
 
 class StrictPayload(BaseModel):
@@ -107,6 +172,7 @@ def _authority_path() -> str:
 
 
 authority = AuthorityStore(_authority_path())
+authority.fail_active_attempts("relay.restart")
 
 
 class RateLimiter:
@@ -190,6 +256,7 @@ async def health() -> dict:
         "status": "ready",
         "service": "switchtrade-relay",
         "room_contract": "room-control.v1",
+        "rfu_contract": RFU_CONTRACT,
         "capabilities": ["manual-switch-role.v1", "public-directory.v1"],
         "payload_mode": "opaque",
     }
@@ -204,13 +271,12 @@ async def metrics() -> dict:
 @app.middleware("http")
 async def structured_request_log(request: Request, call_next):
     started = time.monotonic()
+    request.state.correlation_id = request.headers.get("x-correlation-id", "").strip() or str(uuid.uuid4())
     if request.method not in {"GET", "HEAD", "OPTIONS"}:
         body = bytearray()
         async for chunk in request.stream():
             if len(body) + len(chunk) > MAX_CONTROL_BODY_BYTES:
-                return JSONResponse(status_code=413, content={
-                    "detail": "request body is too large",
-                })
+                return _error_response(request, 413, "request body is too large")
             body.extend(chunk)
         request._body = bytes(body)
     authority.sweep_presence()
@@ -228,6 +294,7 @@ async def structured_request_log(request: Request, call_next):
         "status": response.status_code,
         "duration_ms": round((time.monotonic() - started) * 1000, 1),
     }, separators=(",", ":")))
+    response.headers["X-Correlation-ID"] = request.state.correlation_id
     return response
 
 
@@ -372,7 +439,12 @@ async def close_trade_room(room_id: str, request: Request) -> dict:
 async def shutdown(background_tasks: BackgroundTasks) -> dict:
     if os.environ.get("SWITCHTRADE_ALLOW_PROCESS_SHUTDOWN") != "1":
         raise HTTPException(status_code=409, detail="relay shutdown is not enabled")
-    background_tasks.add_task(lambda: (time.sleep(0.1), os.kill(os.getpid(), 15)))
+    def close_and_stop() -> None:
+        time.sleep(0.1)
+        authority.close()
+        os.kill(os.getpid(), 15)
+
+    background_tasks.add_task(close_and_stop)
     return {"status": "stopping"}
 
 
@@ -383,6 +455,7 @@ class Session:
         self.guest: WebSocket | None = None
         self.participants = 0
         self.advertisement: bytes | None = None
+        self.ready_frames: dict[str, bytes] = {}
         self.lock = asyncio.Lock()
         self.created = self.last_activity = time.monotonic()
 
@@ -398,6 +471,7 @@ async def _disconnect_session(sid: str, reason: str) -> None:
         peers = [peer for peer in (session.host, session.guest) if peer is not None]
         session.host = session.guest = None
         session.advertisement = None
+        session.ready_frames.clear()
     for peer in peers:
         try:
             await peer.close(code=CLOSE_PEER_OFFLINE, reason=reason)
@@ -514,6 +588,9 @@ async def ws_session(websocket: WebSocket, sid: str, role: str = "host",
     }, separators=(",", ":")))
     if protocol == "rfu" and role == "guest" and session.advertisement is not None:
         await websocket.send_bytes(session.advertisement)
+    peer_ready = session.ready_frames.get(peer_role)
+    if protocol == "rfu" and getattr(session, peer_role) is not None and peer_ready is not None:
+        await websocket.send_bytes(peer_ready)
 
     try:
         while True:
@@ -540,6 +617,8 @@ async def ws_session(websocket: WebSocket, sid: str, role: str = "host",
                     break
                 if role == "host" and envelope.kind == Kind.ADVERTISEMENT:
                     session.advertisement = data
+                if envelope.kind == Kind.PEER_READY:
+                    session.ready_frames[role] = data
 
             peer = getattr(session, peer_role)
             if peer is None:
@@ -561,7 +640,12 @@ async def ws_session(websocket: WebSocket, sid: str, role: str = "host",
         async with session.lock:
             if getattr(session, role) is websocket:
                 setattr(session, role, None)
+                session.ready_frames.pop(role, None)
             session.last_activity = time.monotonic()
+        if (protocol == "rfu" and identity and attempt_id and
+                authority.fail_transport_attempt(
+                    identity["room_id"], attempt_id, "relay.peer_lost")):
+            await _disconnect_session(sid, "RFU peer disconnected")
         logger.info(json.dumps({
             "event": "rfu_peer_disconnected", "room_id": identity["room_id"] if identity else None,
             "attempt_id": attempt_id, "role": role, "protocol": protocol,

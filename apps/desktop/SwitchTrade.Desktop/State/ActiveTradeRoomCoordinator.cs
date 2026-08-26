@@ -197,6 +197,11 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
     public void ApplyRoom(AuthoritativeRoomProjection room)
     {
         if (Context is null) return;
+        if (room.State is "closed" or "expired")
+        {
+            ForceClear();
+            return;
+        }
         Context = Context with
         {
             MembershipRole = room.MembershipRole,

@@ -524,6 +524,22 @@ class AuthorityStore:
         with self._lock:
             self._db.execute("SELECT 1").fetchone()
 
+    @staticmethod
+    def _begin_attempt(room: dict, active: list[dict]) -> None:
+        creator = next(
+            member["member_id"] for member in active
+            if member["switch_room_role"] == "creator")
+        number = (room.get("last_attempt_number") or 0) + 1
+        room["last_attempt_number"] = number
+        room["attempt"] = {
+            "attempt_id": uuid7(), "attempt_number": number,
+            "phase": "connecting_switches", "creator_member_id": creator,
+            "role_locked": True, "role_lock_version": room["room_version"] + 1,
+            "started_at": _utc(), "updated_at": _utc(), "retry_count": 0,
+            "recoverable_error": None,
+        }
+        room["state"] = "connection_attempt"
+
     def mutate(self, room_id: str, bearer: str, command_id: str, action: str,
                payload: dict | None = None, expected_version: int | None = None) -> dict:
         payload = payload or {}
@@ -536,6 +552,11 @@ class AuthorityStore:
                 raise AuthorityError(409, "trade room is not active")
             if expected_version is not None and expected_version != room["room_version"]:
                 attempt = room.get("attempt") or {}
+                if (action == "attempt" and
+                        attempt.get("phase") not in {None, "completed", "canceled", "failed"}):
+                    response = self._public(room, member_id)
+                    self._remember(scope, command_id, response)
+                    return response
                 if (action == "claim_creator" and attempt.get("creator_member_id") and
                         payload.get("attempt_id") == attempt.get("attempt_id")):
                     response = self._public(room, member_id)
@@ -557,6 +578,20 @@ class AuthorityStore:
                 member["ready_state"] = "ready" if ready else "not_ready"
                 member["switch_room_role"] = role if ready else None
                 event = "member.ready" if ready else "member.not_ready"
+                active = [m for m in room["members"] if m["online_state"] != "left"]
+                current = room.get("attempt")
+                if current and current.get("phase") not in {"completed", "canceled", "failed"}:
+                    if (member["ready_state"] != "ready" or
+                            member["switch_room_role"] != self._public(room, member_id)["attempt"]["local_switch_role"]):
+                        raise AuthorityError(409, "finish connection teardown before changing roles")
+                elif (len(active) == 2 and all(m["ready_state"] == "ready" for m in active) and
+                      {m.get("switch_room_role") for m in active} == {"creator", "finder"}):
+                    self._begin_attempt(room, active)
+                    event = "attempt.started"
+                elif ready:
+                    room["state"] = "waiting_for_complementary_role"
+                else:
+                    room["state"] = "ready_check"
             elif action == "heartbeat":
                 member["online_state"] = "online"
                 member["reconnect_deadline"] = None
@@ -565,7 +600,9 @@ class AuthorityStore:
             elif action == "attempt":
                 current = room.get("attempt")
                 if current and current.get("phase") not in {"completed", "canceled", "failed"}:
-                    raise AuthorityError(409, "a connection attempt is already active")
+                    response = self._public(room, member_id)
+                    self._remember(scope, command_id, response)
+                    return response
                 active = [m for m in room["members"] if m["online_state"] != "left"]
                 if len(active) != 2 or any(m["ready_state"] != "ready" for m in active):
                     raise AuthorityError(409, "both members must be ready")
@@ -573,19 +610,7 @@ class AuthorityStore:
                 if roles != {"creator", "finder"}:
                     raise AuthorityError(
                         409, "one trainer must choose Group Leader and the other must choose Joining")
-                creator = next(
-                    member["member_id"] for member in active
-                    if member["switch_room_role"] == "creator")
-                number = (room.get("last_attempt_number") or 0) + 1
-                room["last_attempt_number"] = number
-                room["attempt"] = {
-                    "attempt_id": uuid7(), "attempt_number": number,
-                    "phase": "connecting_switches", "creator_member_id": creator,
-                    "role_locked": True, "role_lock_version": room["room_version"] + 1,
-                    "started_at": _utc(), "updated_at": _utc(), "retry_count": 0,
-                    "recoverable_error": None,
-                }
-                room["state"] = "connection_attempt"
+                self._begin_attempt(room, active)
                 event = "attempt.started"
             elif action == "claim_creator":
                 attempt = room.get("attempt")
@@ -683,6 +708,10 @@ class AuthorityStore:
             elif action == "close":
                 if room["owner_member_id"] != member_id:
                     raise AuthorityError(403, "only the room owner can close this room")
+                attempt = room.get("attempt") or {}
+                if attempt.get("phase") not in {None, "completed", "canceled", "failed"}:
+                    attempt["phase"] = "canceled"
+                    attempt["updated_at"] = _utc()
                 room["state"] = "closed"
                 self._db.execute("UPDATE credentials SET active=0 WHERE room_id=?", (room_id,))
                 event = "room.closed"
@@ -751,6 +780,41 @@ class AuthorityStore:
                 } for row in rows],
                 "last_event_sequence": room["last_event_sequence"],
             }
+
+    def fail_transport_attempt(self, room_id: str, attempt_id: str, code: str) -> bool:
+        """Fail one active attempt after an authenticated RFU peer is lost."""
+        with self._transaction():
+            room = self._load(room_id)
+            attempt = room.get("attempt") or {}
+            if (room.get("state") in {"closed", "expired"} or
+                    attempt.get("attempt_id") != attempt_id or
+                    attempt.get("phase") in {None, "completed", "canceled", "failed"}):
+                return False
+            attempt["phase"] = "failed"
+            attempt["recoverable_error"] = code
+            attempt["updated_at"] = _utc()
+            room["state"] = "ready_check"
+            for member in room["members"]:
+                if member["online_state"] != "left":
+                    member["ready_state"] = "not_ready"
+                    member["switch_room_role"] = None
+            room["room_version"] += 1
+            self._event(room, "attempt.failed", None, {"code": code})
+            self._save(room)
+            return True
+
+    def fail_active_attempts(self, code: str) -> int:
+        """Invalidate process-local transports after a relay process restart."""
+        with self._lock:
+            rows = self._db.execute("SELECT room_id,document FROM rooms").fetchall()
+        failed = 0
+        for row in rows:
+            room = json.loads(row["document"])
+            attempt = room.get("attempt") or {}
+            attempt_id = attempt.get("attempt_id")
+            if attempt_id and self.fail_transport_attempt(row["room_id"], attempt_id, code):
+                failed += 1
+        return failed
 
     def sweep_presence(self) -> None:
         now = time.time()

@@ -16,6 +16,7 @@ import secrets
 import sys
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -33,6 +34,52 @@ READINESS_CONTRACT = "app-readiness.v1"
 ROOM_CONTRACT = "room-control.v1"
 PARTY_CONTRACT = "party-commit.v1"
 PUBLIC_DIRECTORY_CONTRACT = "public-directory.v1"
+RFU_CONTRACT = "rfu-tunnel.v1"
+
+LOCAL_ERROR_CODES = {
+    "no active trade room": ("room_not_active", "room", False, "return_home"),
+    "no active authoritative trade room": ("room_not_active", "room", False, "return_home"),
+    "both trainers must choose their Switch role before connecting": (
+        "waiting_for_partner_role", "coordination", True, "wait"),
+    "one trainer must choose Group Leader and the other must choose Joining": (
+        "complementary_role_required", "coordination", True, "choose_role"),
+    "the two Switch role choices do not match": (
+        "role_choice_conflict", "coordination", True, "choose_role"),
+    "the online room service must be updated for manual Switch roles": (
+        "relay_contract_incompatible", "relay", False, "update"),
+    "a session is already running": ("session_active", "session", True, "end_session"),
+    "Select an available Wi-Fi adapter in Settings": (
+        "adapter_selection_required", "hardware", True, "select_adapter"),
+    "The selected adapter is no longer connected": (
+        "adapter_disconnected", "hardware", True, "select_adapter"),
+    "This adapter is quarantined and cannot trade": (
+        "adapter_quarantined", "hardware", False, "select_adapter"),
+    "End the current connection before changing adapters": (
+        "session_active", "hardware", True, "end_session"),
+    "The selected adapter could not be attached. Run SwitchTrade Setup Repair once if it is not shared.": (
+        "adapter_attach_failed", "hardware", True, "repair_adapter"),
+}
+
+
+class ControlApiError(HTTPException):
+    def __init__(self, status: int, code: str, message: str, *, stage: str = "control",
+                 recoverable: bool = False, primary_action: str | None = None,
+                 correlation_id: str | None = None):
+        super().__init__(status_code=status, detail=message)
+        self.code = code
+        self.message = message
+        self.stage = stage
+        self.recoverable = recoverable
+        self.primary_action = primary_action
+        self.correlation_id = correlation_id
+
+
+def relay_api_error(error: RelayError) -> ControlApiError:
+    return ControlApiError(
+        error.status, error.code, error.message, stage=error.stage,
+        recoverable=error.recoverable, primary_action=error.primary_action,
+        correlation_id=error.correlation_id,
+    )
 
 
 class CreateGroup(BaseModel):
@@ -118,6 +165,7 @@ class Runtime:
         self.relay = RelayClient(relay_url)
         self.relay_capabilities: set[str] = set()
         self.relay_capability_error: str | None = None
+        self.relay_failure: RelayError | None = None
         self.next_capability_probe = 0.0
         self.endpoint: subprocess.Popen | None = None
         self.endpoint_session: str | None = None
@@ -151,17 +199,31 @@ class Runtime:
             return sorted(self.relay_capabilities)
         try:
             health = RelayClient(self.relay_url, timeout=0.5).health()
+            if (health.get("status") != "ready" or health.get("room_contract") != ROOM_CONTRACT or
+                    health.get("rfu_contract") != RFU_CONTRACT):
+                raise RelayError(
+                    "the online room service uses an incompatible contract",
+                    status=503, code="relay_contract_incompatible", stage="relay",
+                    recoverable=False, primary_action="update",
+                )
             advertised = health.get("capabilities", [])
             self.relay_capabilities = {
                 str(capability) for capability in advertised if isinstance(capability, str)
             }
             self.relay_capability_error = None
+            self.relay_failure = None
             self.next_capability_probe = now + 30
         except RelayError as error:
             self.relay_capabilities = set()
             self.relay_capability_error = str(error)
+            self.relay_failure = error
             self.next_capability_probe = now + 5
         return sorted(self.relay_capabilities)
+
+    def require_relay_contract(self) -> None:
+        self.public_capabilities()
+        if self.relay_failure is not None:
+            raise relay_api_error(self.relay_failure)
 
     def read_hardware_selection(self) -> dict:
         try:
@@ -197,6 +259,12 @@ class Runtime:
 
     def save_authority(self, response: dict) -> dict:
         room = response.get("room") or {}
+        if room.get("contract_version") != ROOM_CONTRACT:
+            raise ControlApiError(
+                503, "relay_contract_incompatible",
+                "the online room service returned an incompatible room contract",
+                stage="relay", recoverable=False, primary_action="update",
+            )
         value = {
             "room_id": room.get("room_id"),
             "room_code": room.get("room_code"),
@@ -224,10 +292,24 @@ class Runtime:
         try:
             return self.relay.room(credentials["room_id"], credentials["member_token"])
         except RelayError as error:
-            if "401" not in str(error) or not credentials.get("reconnect_token"):
+            if error.status != 401 or not credentials.get("reconnect_token"):
                 raise
-            response = self.relay.reconnect_trade_room(
-                credentials["room_id"], credentials["reconnect_token"])
+            try:
+                response = self.relay.reconnect_trade_room(
+                    credentials["room_id"], credentials["reconnect_token"])
+            except RelayError as reconnect_error:
+                if reconnect_error.status not in {401, 404, 410}:
+                    raise
+                self.clear_authority()
+                raise RelayError(
+                    "trade room is no longer active",
+                    status=410,
+                    code="room_not_active",
+                    stage="room",
+                    recoverable=False,
+                    primary_action="return_home",
+                    correlation_id=reconnect_error.correlation_id,
+                ) from reconnect_error
             return self.save_authority(response)
 
     def sync_authoritative_phase(self, endpoint: dict, parties: dict) -> None:
@@ -367,6 +449,47 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         runtime.log.close("api_stopped")
 
     app = FastAPI(title="SwitchTrade Control API", version=__version__, lifespan=lifespan)
+
+    def error_response(request: Request, status: int, message: str, *, code: str | None = None,
+                       stage: str | None = None, recoverable: bool | None = None,
+                       primary_action: str | None = None,
+                       correlation_id: str | None = None) -> JSONResponse:
+        if code is None:
+            mapped = LOCAL_ERROR_CODES.get(message)
+            if mapped:
+                code, stage, recoverable, primary_action = mapped
+            elif status == 404:
+                code, stage, recoverable, primary_action = "not_found", "control", False, "check_request"
+            elif status == 409:
+                code, stage, recoverable, primary_action = "state_conflict", "control", True, "retry"
+            elif status >= 500:
+                code, stage, recoverable, primary_action = "control_unavailable", "control", True, "retry"
+            else:
+                code, stage, recoverable, primary_action = "invalid_request", "control", False, "check_request"
+        correlation_id = correlation_id or getattr(
+            request.state, "correlation_id", secrets.token_hex(16))
+        return JSONResponse(status_code=status, content={
+            "code": code, "message": message, "detail": message,
+            "stage": stage or "control", "recoverable": bool(recoverable),
+            "primary_action": primary_action, "correlation_id": correlation_id,
+        }, headers={"X-Correlation-ID": correlation_id})
+
+    @app.exception_handler(HTTPException)
+    async def http_error(request: Request, error: HTTPException) -> JSONResponse:
+        if isinstance(error, ControlApiError):
+            return error_response(
+                request, error.status_code, error.message, code=error.code, stage=error.stage,
+                recoverable=error.recoverable, primary_action=error.primary_action,
+                correlation_id=error.correlation_id,
+            )
+        return error_response(request, error.status_code, str(error.detail))
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, _error: RequestValidationError) -> JSONResponse:
+        return error_response(
+            request, 422, "request validation failed", code="validation_failed",
+            stage="control", recoverable=False, primary_action="check_request",
+        )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://127.0.0.1:3000", "http://localhost:3000"],
@@ -381,10 +504,17 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
 
     @app.middleware("http")
     async def reject_cross_origin_control(request: Request, call_next):
+        request.state.correlation_id = (
+            request.headers.get("x-correlation-id", "").strip() or secrets.token_hex(16))
         origin = request.headers.get("origin")
         if origin and not re.fullmatch(r"http://(127\.0\.0\.1|localhost):\d+", origin):
-            return JSONResponse(status_code=403, content={"detail": "cross-origin control is blocked"})
-        return await call_next(request)
+            return error_response(
+                request, 403, "cross-origin control is blocked", code="cross_origin_blocked",
+                stage="control", recoverable=False, primary_action="use_desktop_app")
+        response = await call_next(request)
+        if "X-Correlation-ID" not in response.headers:
+            response.headers["X-Correlation-ID"] = request.state.correlation_id
+        return response
 
     def runtime(request: Request) -> Runtime:
         return request.app.state.runtime
@@ -559,7 +689,9 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 tunnel_seat, usb_id, switch_room_role=switch_room_role,
                 allow_experimental_hardware=allow_experimental_hardware,
             )
-        except (RelayError, ValueError) as error:
+        except RelayError as error:
+            raise relay_api_error(error) from error
+        except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         with state.lock:
             if state.endpoint_running():
@@ -588,11 +720,40 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         return {"status": "starting", "session_id": code, "hardware": plan,
                 "run_id": state.log.run_id}
 
+    def launch_authoritative_attempt(state: Runtime, room: dict) -> dict | None:
+        attempt = room.get("attempt") or {}
+        if attempt.get("phase") in {"completed", "canceled", "failed"}:
+            if state.endpoint_session == room.get("room_code"):
+                state.stop_endpoint()
+            return None
+        if not attempt.get("role_locked") or attempt.get("phase") is None:
+            return None
+        switch_role = attempt.get("local_switch_role")
+        local = next((member for member in room.get("members", []) if member.get("is_local")), None)
+        if switch_role not in {"creator", "finder"} or local is None:
+            raise ControlApiError(
+                409, "role_choice_conflict", "the two Switch role choices do not match",
+                stage="coordination", recoverable=True, primary_action="choose_role",
+            )
+        if (state.endpoint_session == room.get("room_code") and
+                state.endpoint_running()):
+            return {"status": "starting", "session_id": room.get("room_code"),
+                    "run_id": state.log.run_id}
+        selected_usb_id = attach_selected_hardware(state)
+        return launch_session(
+            state, code=room["room_code"], tunnel_seat=local["seat"],
+            switch_room_role=switch_role, usb_id=selected_usb_id,
+            attempt_id=attempt["attempt_id"], member_token_file=state.member_token_file,
+        )
+
     def authoritative_command(state: Runtime, path: str, payload: dict | None = None,
                               method: str = "POST") -> dict:
         credentials = state.read_authority()
         if not credentials.get("room_id") or not credentials.get("member_token"):
-            raise HTTPException(status_code=409, detail="no active authoritative trade room")
+            raise ControlApiError(
+                410, "room_not_active", "no active authoritative trade room",
+                stage="room", recoverable=False, primary_action="return_home",
+            )
         try:
             room = state.authoritative_room()
             return state.relay.room_command(
@@ -600,20 +761,18 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 payload, method=method, expected_version=room["room_version"],
             )
         except RelayError as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
+            raise relay_api_error(error) from error
 
     def release_authoritative_room(state: Runtime, path: str) -> dict:
         try:
             return authoritative_command(state, path, method="DELETE")
         except HTTPException as error:
-            detail = str(error.detail)
-            already_released = any(message in detail for message in (
-                "no active authoritative trade room",
-                "member credential is invalid",
-                "reconnect credential is invalid",
-                "trade room is not active",
-                "trade room not found",
-            ))
+            already_released = (
+                isinstance(error, ControlApiError) and error.code in {
+                    "room_not_active", "room_not_found", "member_credential_invalid",
+                    "reconnect_credential_invalid",
+                }
+            )
             if not already_released:
                 raise
             return {}
@@ -681,6 +840,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     @app.post("/api/v1/trade-room")
     def create_trade_room(payload: CreateGroup, request: Request) -> dict:
         state = runtime(request)
+        state.require_relay_contract()
         try:
             response = state.relay.create_trade_room({
                 "name": payload.name.strip(),
@@ -693,7 +853,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 "note": payload.note.strip(),
             }, state.client_id)
         except RelayError as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
+            raise relay_api_error(error) from error
         room = state.save_authority(response)
         state.log.event("authoritative_room_created", room_id=room.get("room_id"))
         return {"contract_version": ROOM_CONTRACT, "room": room, "run_id": state.log.run_id}
@@ -701,12 +861,12 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     @app.post("/api/v1/trade-room/join")
     def join_trade_room(payload: JoinGroup, request: Request) -> dict:
         state = runtime(request)
+        state.require_relay_contract()
         try:
             response = state.relay.join_trade_room(
                 payload.passcode.upper(), payload.trainer_display_name.strip(), state.client_id)
         except RelayError as error:
-            status = 404 if "404" in str(error) else 409 if "409" in str(error) else 503
-            raise HTTPException(status_code=status, detail=str(error)) from error
+            raise relay_api_error(error) from error
         room = state.save_authority(response)
         state.log.event("authoritative_room_joined", room_id=room.get("room_id"))
         return {"contract_version": ROOM_CONTRACT, "room": room, "run_id": state.log.run_id}
@@ -717,6 +877,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             availability: str = "open", sort: str = "recent", cursor: int = 0,
             limit: int = 25) -> dict:
         state = runtime(request)
+        state.require_relay_contract()
         if availability not in {"open", "all"} or sort not in {"recent", "oldest", "name"}:
             raise HTTPException(status_code=400, detail="public room filter is invalid")
         if game not in {"", "FireRed", "LeafGreen"}:
@@ -729,29 +890,27 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 availability=availability, sort=sort, cursor=max(0, cursor),
                 limit=max(1, min(limit, 50)))
         except RelayError as error:
-            status = 404 if "404" in str(error) else 503
-            raise HTTPException(status_code=status, detail=str(error)) from error
+            raise relay_api_error(error) from error
 
     @app.get("/api/v1/public-trade-rooms/{listing_id}")
     def get_public_trade_room(listing_id: str, request: Request) -> dict:
         state = runtime(request)
+        state.require_relay_contract()
         try:
             return state.relay.public_trade_room(listing_id)
         except RelayError as error:
-            status = 404 if "404" in str(error) else 410 if "410" in str(error) else 503
-            raise HTTPException(status_code=status, detail=str(error)) from error
+            raise relay_api_error(error) from error
 
     @app.post("/api/v1/public-trade-rooms/{listing_id}/join")
     def join_public_trade_room(
             listing_id: str, payload: JoinPublicRoom, request: Request) -> dict:
         state = runtime(request)
+        state.require_relay_contract()
         try:
             response = state.relay.join_public_trade_room(
                 listing_id, payload.trainer_display_name.strip(), state.client_id)
         except RelayError as error:
-            status = (404 if "404" in str(error) else 410 if "410" in str(error)
-                      else 409 if "409" in str(error) else 503)
-            raise HTTPException(status_code=status, detail=str(error)) from error
+            raise relay_api_error(error) from error
         room = state.save_authority(response)
         state.log.event("authoritative_public_room_joined", room_id=room.get("room_id"))
         return {"contract_version": ROOM_CONTRACT, "room": room, "run_id": state.log.run_id}
@@ -767,9 +926,10 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                     room["room_id"], credentials["member_token"], "/heartbeat",
                     expected_version=room["room_version"])
                 state.last_authority_heartbeat = time.monotonic()
+            launch_authoritative_attempt(state, room)
             return room
         except RelayError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
+            raise relay_api_error(error) from error
 
     @app.get("/api/v1/trade-room/events")
     def get_trade_room_events(request: Request, after: int = 0) -> dict:
@@ -781,16 +941,18 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             return state.relay.room_events(
                 credentials["room_id"], credentials["member_token"], after)
         except RelayError as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
+            raise relay_api_error(error) from error
 
     @app.post("/api/v1/trade-room/connect")
     def connect_trade_room(payload: ConnectTradeRoom, request: Request) -> dict:
         state = runtime(request)
         credentials = state.read_authority()
-        if "manual-switch-role.v1" not in state.public_capabilities():
-            raise HTTPException(
-                status_code=503,
-                detail="the online room service must be updated for manual Switch roles",
+        state.require_relay_contract()
+        if "manual-switch-role.v1" not in state.relay_capabilities:
+            raise ControlApiError(
+                503, "relay_capability_missing",
+                "the online room service must be updated for manual Switch roles",
+                stage="relay", recoverable=False, primary_action="update",
             )
         try:
             room = state.authoritative_room()
@@ -798,47 +960,13 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 room["room_id"], credentials["member_token"], "/ready", {
                     "ready": True, "switch_room_role": payload.switch_room_role,
                 }, expected_version=room["room_version"])
-            deadline = time.monotonic() + 20
-            while time.monotonic() < deadline:
-                room = state.authoritative_room()
-                active = [m for m in room["members"] if m["online_state"] != "left"]
-                if len(active) == 2 and all(m["ready_state"] == "ready" for m in active):
-                    break
-                time.sleep(0.25)
-            else:
-                raise HTTPException(
-                    status_code=409,
-                    detail="both trainers must choose their Switch role before connecting",
-                )
-            if not room.get("attempt") or room["attempt"].get("phase") in {"completed", "canceled", "failed"}:
-                try:
-                    room = state.relay.room_command(
-                        room["room_id"], credentials["member_token"], "/attempts",
-                        expected_version=room["room_version"])
-                except RelayError as error:
-                    if "409" not in str(error):
-                        raise
-                    room = state.authoritative_room()
-            attempt = room.get("attempt")
-            if not attempt:
-                raise HTTPException(
-                    status_code=409,
-                    detail="one trainer must choose Group Leader and the other must choose Joining",
-                )
-            switch_role = attempt["local_switch_role"]
-            if switch_role != payload.switch_room_role or not attempt.get("role_locked"):
-                raise HTTPException(status_code=409, detail="the two Switch role choices do not match")
-            local = next(member for member in room["members"] if member["is_local"])
-            selected_usb_id = attach_selected_hardware(state)
-            result = launch_session(
-                state, code=room["room_code"], tunnel_seat=local["seat"],
-                switch_room_role=switch_role, usb_id=selected_usb_id,
-                attempt_id=attempt["attempt_id"], member_token_file=state.member_token_file,
-            )
-            result["room"] = room
-            return result
+            result = launch_authoritative_attempt(state, room) or {
+                "status": room.get("state", "waiting_for_complementary_role"),
+                "run_id": state.log.run_id,
+            }
+            return {**result, "room": room}
         except RelayError as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
+            raise relay_api_error(error) from error
 
     @app.delete("/api/v1/trade-room/members/me")
     def leave_trade_room(request: Request) -> dict:
@@ -954,7 +1082,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         try:
             code = state.relay.create_session()
         except RelayError as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
+            raise relay_api_error(error) from error
         group = Group(
             payload.name.strip(), code, payload.visibility,
             trainer_display_name=payload.trainer_display_name.strip(),
@@ -972,7 +1100,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         try:
             state.relay.status(code)
         except RelayError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
+            raise relay_api_error(error) from error
         with state.lock:
             group = state.groups.get(code)
             if group is None:
@@ -1074,7 +1202,22 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         if state.endpoint_running():
             raise HTTPException(status_code=409, detail="the current session is still running")
         if state.read_authority().get("member_token"):
-            return connect_trade_room(request)
+            try:
+                room = state.authoritative_room()
+                if result := launch_authoritative_attempt(state, room):
+                    return {**result, "room": room}
+                local = next(
+                    (member for member in room.get("members", []) if member.get("is_local")), {})
+                switch_role = local.get("switch_room_role") or previous.get("switch_room_role")
+                if switch_role in {"creator", "finder"}:
+                    return connect_trade_room(
+                        ConnectTradeRoom(switch_room_role=switch_role), request)
+            except RelayError as error:
+                raise relay_api_error(error) from error
+            raise ControlApiError(
+                409, "no_recoverable_session", "no recoverable session is available",
+                stage="session", recoverable=False, primary_action="choose_role",
+            )
         required = ("session_id", "tunnel_seat", "switch_room_role")
         if any(not previous.get(name) for name in required):
             raise HTTPException(status_code=409, detail="no recoverable session is available")
@@ -1102,7 +1245,8 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         prepare = Path(__file__).resolve().parents[1] / "scripts" / "wsl-radio-prepare.sh"
-        command = [str(prepare), "--usb-id", plan["usb_id"], "--role", plan["radio_role"]]
+        command = [str(prepare), "--usb-id", plan["usb_id"], "--role", plan["radio_role"],
+                   "--reset-on-rx-failure"]
         if payload.allow_experimental_hardware:
             command.append("--allow-experimental-hardware")
         state.log.event("repair_started", action=payload.action, usb_id=plan["usb_id"])

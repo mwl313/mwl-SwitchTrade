@@ -3,7 +3,7 @@ import json
 import os
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -47,7 +47,9 @@ class Gate4RuntimeContractTests(unittest.TestCase):
     def test_public_directory_capability_is_gated_by_relay_health(self):
         with tempfile.TemporaryDirectory() as temporary:
             with patch("switchtrade.control.RelayClient.health", return_value={
-                    "status": "ready", "capabilities": ["public-directory.v1"]}):
+                    "status": "ready", "room_contract": "room-control.v1",
+                    "rfu_contract": "rfu-tunnel.v1",
+                    "capabilities": ["public-directory.v1"]}):
                 with TestClient(create_app(
                         runs_root=temporary, relay_url="https://relay.example")) as client:
                     body = client.get("/api/v1/app/readiness").json()
@@ -55,7 +57,8 @@ class Gate4RuntimeContractTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary:
             with patch("switchtrade.control.RelayClient.health", return_value={
-                    "status": "ready", "capabilities": []}):
+                    "status": "ready", "room_contract": "room-control.v1",
+                    "rfu_contract": "rfu-tunnel.v1", "capabilities": []}):
                 with TestClient(create_app(
                         runs_root=temporary, relay_url="https://relay.example")) as client:
                     body = client.get("/api/v1/app/readiness").json()
@@ -99,7 +102,11 @@ class Gate4RuntimeContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             with TestClient(create_app(runs_root=temporary)) as client:
                 runtime = client.app.state.runtime
-                with patch.object(runtime.relay, "public_trade_rooms", return_value={
+                with patch("switchtrade.control.RelayClient.health", return_value={
+                        "status": "ready", "room_contract": "room-control.v1",
+                        "rfu_contract": "rfu-tunnel.v1",
+                        "capabilities": ["public-directory.v1"]}), patch.object(
+                        runtime.relay, "public_trade_rooms", return_value={
                         "contract_version": "public-directory.v1", "rooms": [listing],
                         "next_cursor": None}) as public_rooms:
                     response = client.get(
@@ -110,6 +117,7 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 public_rooms.assert_called_once()
 
                 room = {
+                    "contract_version": "room-control.v1",
                     "room_id": "room-1", "room_code": "ABC123",
                     "members": [], "visibility": "public",
                 }
@@ -127,18 +135,49 @@ class Gate4RuntimeContractTests(unittest.TestCase):
             with TestClient(create_app(runs_root=temporary)) as client:
                 runtime = client.app.state.runtime
                 expired = {
-                    "room": {"room_id": "room-1", "room_code": "ABC123"},
+                    "room": {"contract_version": "room-control.v1",
+                             "room_id": "room-1", "room_code": "ABC123"},
                     "member_token": "expired-member", "reconnect_token": "expired-reconnect",
                 }
                 with patch.object(runtime.relay, "room", side_effect=RelayError(
-                        "relay returned 401: member credential is invalid")), patch.object(
+                        "member credential is invalid", status=401,
+                        code="member_credential_invalid", stage="authentication",
+                        primary_action="reconnect")), patch.object(
                         runtime.relay, "reconnect_trade_room", side_effect=RelayError(
-                            "relay returned 401: reconnect credential is invalid")):
+                            "reconnect credential is invalid", status=401,
+                            code="reconnect_credential_invalid", stage="authentication",
+                            recoverable=False, primary_action="rejoin_room")):
                     for path in ("/api/v1/trade-room/members/me", "/api/v1/trade-room"):
                         runtime.save_authority(expired)
                         response = client.delete(path)
                         self.assertEqual(response.status_code, 200, response.text)
                         self.assertFalse(runtime.authority_state.exists())
+
+    def test_remote_room_close_clears_local_authority_and_returns_stable_state(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                runtime = client.app.state.runtime
+                runtime.save_authority({
+                    "room": {"contract_version": "room-control.v1",
+                             "room_id": "room-1", "room_code": "ABC123"},
+                    "member_token": "expired-member", "reconnect_token": "expired-reconnect",
+                })
+                with patch.object(runtime.relay, "room", side_effect=RelayError(
+                        "member credential is invalid", status=401,
+                        code="member_credential_invalid", stage="authentication",
+                        primary_action="reconnect")), patch.object(
+                        runtime.relay, "reconnect_trade_room", side_effect=RelayError(
+                            "room is no longer active", status=410,
+                            code="room_not_active", stage="room",
+                            recoverable=False, primary_action="return_home",
+                            correlation_id="relay-correlation")):
+                    response = client.get("/api/v1/trade-room")
+                self.assertEqual(response.status_code, 410, response.text)
+                self.assertEqual(response.json()["code"], "room_not_active")
+                self.assertEqual(response.json()["primary_action"], "return_home")
+                self.assertEqual(response.json()["correlation_id"], "relay-correlation")
+                self.assertEqual(response.headers["X-Correlation-ID"], "relay-correlation")
+                self.assertFalse(runtime.authority_state.exists())
 
     def test_end_connection_succeeds_when_relay_teardown_sync_is_unavailable(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -156,6 +195,68 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 response = client.post("/api/v1/app/retry")
                 self.assertEqual(response.status_code, 409)
 
+    def test_structured_relay_error_and_contract_gate_are_preserved(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                runtime = client.app.state.runtime
+                healthy = {
+                    "status": "ready", "room_contract": "room-control.v1",
+                    "rfu_contract": "rfu-tunnel.v1",
+                    "capabilities": ["manual-switch-role.v1"],
+                }
+                with patch("switchtrade.control.RelayClient.health", return_value=healthy), \
+                        patch.object(runtime.relay, "create_trade_room", side_effect=RelayError(
+                            "trade room is full", status=409, code="room_full", stage="room",
+                            recoverable=False, primary_action="choose_another_room")):
+                    response = client.post("/api/v1/trade-room", json={
+                        "name": "Room", "visibility": "private", "trainer_display_name": "Leaf",
+                        "game": "LeafGreen", "language": "English",
+                    })
+                self.assertEqual(response.status_code, 409, response.text)
+                self.assertEqual(response.json()["code"], "room_full")
+                self.assertEqual(response.json()["stage"], "room")
+                self.assertFalse(response.json()["recoverable"])
+                self.assertTrue(response.json()["correlation_id"])
+
+                runtime.next_capability_probe = 0
+                with patch("switchtrade.control.RelayClient.health", return_value={
+                        **healthy, "room_contract": "room-control.v2"}), patch.object(
+                        runtime.relay, "create_trade_room") as create:
+                    incompatible = client.post("/api/v1/trade-room", json={
+                        "name": "Room", "visibility": "private", "trainer_display_name": "Leaf",
+                        "game": "LeafGreen", "language": "English",
+                    })
+                self.assertEqual(incompatible.status_code, 503, incompatible.text)
+                self.assertEqual(incompatible.json()["code"], "relay_contract_incompatible")
+                create.assert_not_called()
+
+    def test_retry_reconciles_authoritative_attempt_without_type_error(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                runtime = client.app.state.runtime
+                runtime.save_authority({
+                    "room": {"contract_version": "room-control.v1",
+                             "room_id": "room-1", "room_code": "ABC123"},
+                    "member_token": "m" * 43, "reconnect_token": "r" * 43,
+                })
+                runtime.endpoint_session = "ABC123"
+                room = {
+                    "room_id": "room-1", "room_code": "ABC123", "room_version": 4,
+                    "members": [{"is_local": True, "seat": "member_a",
+                                 "switch_room_role": "creator"}],
+                    "attempt": {"attempt_id": "attempt-1", "phase": "connecting_switches",
+                                "role_locked": True, "local_switch_role": "creator"},
+                }
+                process = MagicMock()
+                process.pid = 1234
+                process.poll.return_value = None
+                with patch.object(runtime, "authoritative_room", return_value=room), patch(
+                        "switchtrade.control.subprocess.Popen", return_value=process) as popen:
+                    response = client.post("/api/v1/app/retry")
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["session_id"], "ABC123")
+                popen.assert_called_once()
+
     def test_repair_action_is_allowlisted(self):
         with tempfile.TemporaryDirectory() as temporary:
             with TestClient(create_app(runs_root=temporary)) as client:
@@ -169,6 +270,7 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 command = run.call_args.args[0]
                 self.assertNotIsInstance(command, str)
                 self.assertIn("wsl-radio-prepare.sh", command[0])
+                self.assertIn("--reset-on-rx-failure", command)
 
     def test_endpoint_command_keeps_seat_and_switch_role_independent(self):
         with tempfile.TemporaryDirectory() as temporary:

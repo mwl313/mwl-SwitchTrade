@@ -213,6 +213,13 @@ def run_endpoint(args) -> int:
             raise TimeoutError(f"relay connection failed: {tunnel.last_error or 'timeout'}")
         state.write("relay_connected", radio_checked=False, tunnel_connected=True,
                     failure_stage=None, recovery_action=None, **plan)
+        peer_deadline = time.monotonic() + args.connect_timeout
+        while time.monotonic() < peer_deadline and not stopping:
+            if any(frame.kind == Kind.PEER_READY for frame in tunnel.poll()):
+                break
+            time.sleep(0.02)
+        else:
+            raise TimeoutError("the authenticated RFU peer did not become ready")
 
         failure_stage = "radio"
         if plan["switch_room_role"] == "creator":
@@ -265,6 +272,8 @@ def run_endpoint(args) -> int:
         deadline = time.monotonic()
         next_report = deadline + 1.0
         while not stopping and not sim.host_disconnected:
+            if not tunnel.connected.is_set():
+                raise ConnectionError("the authenticated RFU peer disconnected")
             sim.tick()
             deadline += period
             if time.monotonic() >= next_report:

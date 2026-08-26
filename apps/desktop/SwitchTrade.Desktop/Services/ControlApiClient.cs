@@ -7,11 +7,17 @@ using SwitchTrade.Desktop.Models;
 
 namespace SwitchTrade.Desktop.Services;
 
-public sealed class UserFacingException(string userMessage, string? technicalCode = null)
+public sealed class UserFacingException(string userMessage, string? technicalCode = null,
+    string? stage = null, bool recoverable = false, string? primaryAction = null,
+    string? correlationId = null)
     : Exception(userMessage)
 {
     public string UserMessage { get; } = userMessage;
     public string? TechnicalCode { get; } = technicalCode;
+    public string? Stage { get; } = stage;
+    public bool Recoverable { get; } = recoverable;
+    public string? PrimaryAction { get; } = primaryAction;
+    public string? CorrelationId { get; } = correlationId;
 }
 
 public interface IControlGateway : IDisposable
@@ -211,7 +217,20 @@ public sealed class ControlApiClient : IControlGateway
         try
         {
             using var response = await _http.GetAsync("/api/v1/trade-room", cancellationToken);
-            if (!response.IsSuccessStatusCode) return null;
+            if (!response.IsSuccessStatusCode)
+            {
+                try
+                {
+                    var problem = await response.Content.ReadFromJsonAsync<ProblemDto>(
+                        JsonOptions, cancellationToken);
+                    if (problem?.Code is "room_not_active" or "room_not_found")
+                        return new(0, 0, "closed", RoomMembershipRole.Member,
+                            SwitchRoomRole.Unassigned, false, false, "none", false);
+                }
+                catch (JsonException) { }
+                catch (NotSupportedException) { }
+                return null;
+            }
             var room = await response.Content.ReadFromJsonAsync<AuthorityRoomDto>(JsonOptions, cancellationToken);
             if (room is null) return null;
             var local = room.Members?.FirstOrDefault(member => member.IsLocal);
@@ -545,36 +564,36 @@ public sealed class ControlApiClient : IControlGateway
     private static async Task EnsureSuccess(HttpResponseMessage response, CancellationToken cancellationToken)
     {
         if (response.IsSuccessStatusCode) return;
-        string? detail = null;
+        ProblemDto? problem = null;
         try
         {
-            var problem = await response.Content.ReadFromJsonAsync<ProblemDto>(JsonOptions, cancellationToken);
-            detail = problem?.Detail;
+            problem = await response.Content.ReadFromJsonAsync<ProblemDto>(JsonOptions, cancellationToken);
         }
         catch (JsonException) { }
         catch (NotSupportedException) { }
 
-        var message = detail switch
+        var message = problem?.Code switch
         {
-            "The selected adapter is no longer connected" => detail,
-            "This adapter is quarantined and cannot trade" => detail,
-            "End the current connection before changing adapters" => detail,
-            "Select an available Wi-Fi adapter in Settings" => detail,
-            "Detach the other identical Wi-Fi adapter from WSL, then try again." => detail,
-            "The selected adapter could not be attached. Run SwitchTrade Setup Repair once if it is not shared." => detail,
-            "both trainers must choose their Switch role before connecting" => detail,
-            "one trainer must choose Group Leader and the other must choose Joining" => detail,
-            "the two Switch role choices do not match" => detail,
-            "the online room service must be updated for manual Switch roles" => detail,
-            _ => response.StatusCode switch
-        {
-            HttpStatusCode.NotFound => "We couldn’t find that Trade Room. Check the code and try again.",
-            HttpStatusCode.Conflict => "This Trade Room already has two players or is already in use.",
-            HttpStatusCode.ServiceUnavailable => "Online rooms are temporarily unavailable.",
-            HttpStatusCode.BadRequest => "SwitchTrade can’t start this connection yet. Check the room and adapter.",
+            "adapter_disconnected" => "The selected adapter is no longer connected.",
+            "adapter_quarantined" => "This adapter is quarantined and cannot trade.",
+            "adapter_selection_required" => "Select an available Wi-Fi adapter in Settings.",
+            "adapter_attach_failed" => "The selected adapter could not be attached. Run Repair adapter and try again.",
+            "waiting_for_partner_role" => "Waiting for your partner to choose their Switch role.",
+            "complementary_role_required" or "role_choice_conflict" =>
+                "Choose opposite Switch roles: one Group Leader and one Joining.",
+            "room_full" => "This Trade Room already has two players.",
+            "room_not_found" or "not_found" => "We couldn’t find that Trade Room. Check the code and try again.",
+            "room_not_active" => "This Trade Room is no longer active.",
+            "relay_contract_incompatible" or "relay_capability_missing" =>
+                "The online room service must be updated before trading.",
+            "relay_unavailable" or "relay_internal_error" or "control_unavailable" =>
+                "Online rooms are temporarily unavailable.",
+            "room_version_conflict" or "state_conflict" => "The Trade Room changed. Refresh it and try again.",
             _ => "SwitchTrade couldn’t complete that action. Try again.",
-        }};
-        throw new UserFacingException(message, detail);
+        };
+        throw new UserFacingException(
+            message, problem?.Code ?? "unknown_error", problem?.Stage,
+            problem?.Recoverable ?? false, problem?.PrimaryAction, problem?.CorrelationId);
     }
 
     private static TradeRoomInfo ToTradeRoom(AuthorityRoomDto? room, string offering = "",
@@ -732,5 +751,12 @@ public sealed class ControlApiClient : IControlGateway
         bool Attached,
         bool Selected);
     private sealed record SupportBundleResponse(string? Path);
-    private sealed record ProblemDto(string? Detail);
+    private sealed record ProblemDto(
+        string? Code,
+        string? Message,
+        string? Detail,
+        string? Stage,
+        bool Recoverable,
+        [property: JsonPropertyName("primary_action")] string? PrimaryAction,
+        [property: JsonPropertyName("correlation_id")] string? CorrelationId);
 }

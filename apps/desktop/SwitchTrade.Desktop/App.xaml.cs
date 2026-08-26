@@ -77,9 +77,14 @@ public partial class App : Application
             var authoritativeProjectionWorks = memberCoordinator.RoleLocked &&
                                                memberCoordinator.BothReady &&
                                                memberCoordinator.AttemptPhase == "connecting_switches";
+            memberCoordinator.ApplyRoom(new AuthoritativeRoomProjection(
+                5, 0, "closed", RoomMembershipRole.Member,
+                SwitchRoomRole.Unassigned, false, false, "none", false));
+            var remoteCloseClearsRoom = !memberCoordinator.HasRoom;
             Shutdown(apiIsLocal && codeNormalizes && requiredRoomFieldsWork &&
-                     highContrastResourcesLoad && capabilityGateWorks &&
-                     coordinatorWorks && memberReleaseWorks && authoritativeProjectionWorks ? 0 : 1);
+                      highContrastResourcesLoad && capabilityGateWorks &&
+                      coordinatorWorks && memberReleaseWorks && authoritativeProjectionWorks &&
+                      remoteCloseClearsRoom ? 0 : 1);
             return;
         }
         _singleInstance = new Mutex(true, "Local\\SwitchTrade.Desktop", out var createdNew);

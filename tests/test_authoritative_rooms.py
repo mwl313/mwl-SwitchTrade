@@ -80,12 +80,19 @@ class AuthoritativeRoomTests(unittest.TestCase):
             "room_code": room["room_code"], "trainer_display_name": "Blue",
         }, headers={"Idempotency-Key": _command(), "X-SwitchTrade-Client": "client-c"})
         self.assertEqual(third.status_code, 409)
+        problem = third.json()
+        self.assertEqual(problem["code"], "room_full")
+        self.assertEqual(problem["stage"], "room")
+        self.assertFalse(problem["recoverable"])
+        self.assertTrue(problem["correlation_id"])
 
     def test_public_directory_is_authoritative_sanitized_and_atomically_joinable(self):
         private = self._create()
         public = self._create_public()
         health = self.client.get("/health")
         self.assertIn("public-directory.v1", health.json()["capabilities"])
+        self.assertEqual(health.json()["room_contract"], "room-control.v1")
+        self.assertEqual(health.json()["rfu_contract"], "rfu-tunnel.v1")
 
         listed = self.client.get(
             "/v1/public-trade-rooms?query=vulpix&game=LeafGreen&language=English")
@@ -217,9 +224,80 @@ class AuthoritativeRoomTests(unittest.TestCase):
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             responses = list(executor.map(create_attempt, (first, second)))
-        self.assertEqual(sorted(response.status_code for response in responses), [200, 409])
+        self.assertEqual([response.status_code for response in responses], [200, 200])
+        attempt_id = relay_server.authority.snapshot(
+            room_id, first["member_token"])["attempt"]["attempt_id"]
+        self.assertEqual(
+            {response.json()["attempt"]["attempt_id"] for response in responses},
+            {attempt_id},
+        )
         room = relay_server.authority.snapshot(room_id, first["member_token"])
         self.assertEqual(room["last_attempt_number"], 1)
+
+    def test_second_complementary_ready_choice_starts_one_attempt_without_waiting(self):
+        first = self._create()
+        second = self._join(first["room"]["room_code"])
+        room_id = first["room"]["room_id"]
+        first_ready = self._mutate(room_id, first["member_token"], "/ready", {
+            "ready": True, "switch_room_role": "creator",
+        })
+        self.assertEqual(first_ready.status_code, 200, first_ready.text)
+        self.assertIsNone(first_ready.json()["attempt"])
+        self.assertEqual(first_ready.json()["state"], "waiting_for_complementary_role")
+        second_ready = self._mutate(room_id, second["member_token"], "/ready", {
+            "ready": True, "switch_room_role": "finder",
+        })
+        self.assertEqual(second_ready.status_code, 200, second_ready.text)
+        self.assertTrue(second_ready.json()["attempt"]["role_locked"])
+        self.assertEqual(second_ready.json()["last_attempt_number"], 1)
+
+    def test_transport_loss_and_restart_fail_active_attempt_recoverably(self):
+        first = self._create()
+        second = self._join(first["room"]["room_code"])
+        room_id = first["room"]["room_id"]
+        for credential, role in ((first, "creator"), (second, "finder")):
+            room = self._mutate(room_id, credential["member_token"], "/ready", {
+                "ready": True, "switch_room_role": role,
+            }).json()
+        attempt_id = room["attempt"]["attempt_id"]
+        self.assertTrue(relay_server.authority.fail_transport_attempt(
+            room_id, attempt_id, "relay.peer_lost"))
+        failed = relay_server.authority.snapshot(room_id, first["member_token"])
+        self.assertEqual(failed["attempt"]["phase"], "failed")
+        self.assertEqual(failed["attempt"]["recoverable_error"], "relay.peer_lost")
+        self.assertTrue(all(member["ready_state"] == "not_ready" for member in failed["members"]))
+        self.assertFalse(relay_server.authority.fail_transport_attempt(
+            room_id, attempt_id, "relay.peer_lost"))
+
+        for credential, role in ((first, "creator"), (second, "finder")):
+            room = self._mutate(room_id, credential["member_token"], "/ready", {
+                "ready": True, "switch_room_role": role,
+            }).json()
+        replacement_id = room["attempt"]["attempt_id"]
+        self.assertNotEqual(replacement_id, attempt_id)
+        self.assertEqual(relay_server.authority.fail_active_attempts("relay.restart"), 1)
+        restarted = relay_server.authority.snapshot(room_id, first["member_token"])
+        self.assertEqual(restarted["attempt"]["phase"], "failed")
+        self.assertEqual(restarted["attempt"]["recoverable_error"], "relay.restart")
+
+    def test_owner_close_cancels_attempt_and_peer_cleanup_cannot_reopen_room(self):
+        owner = self._create()
+        member = self._join(owner["room"]["room_code"])
+        room_id = owner["room"]["room_id"]
+        for credential, role in ((owner, "creator"), (member, "finder")):
+            room = self._mutate(room_id, credential["member_token"], "/ready", {
+                "ready": True, "switch_room_role": role,
+            }).json()
+        attempt_id = room["attempt"]["attempt_id"]
+        closed = self.client.delete(f"/v1/trade-rooms/{room_id}", headers={
+            "Authorization": f"Bearer {owner['member_token']}",
+            "Idempotency-Key": _command(), "If-Match": str(room["room_version"]),
+        })
+        self.assertEqual(closed.status_code, 200, closed.text)
+        self.assertEqual(closed.json()["state"], "closed")
+        self.assertEqual(closed.json()["attempt"]["phase"], "canceled")
+        self.assertFalse(relay_server.authority.fail_transport_attempt(
+            room_id, attempt_id, "relay.peer_lost"))
 
     def test_member_leave_and_owner_close_ignore_stale_presence_version(self):
         owner = self._create()

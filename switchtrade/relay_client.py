@@ -18,7 +18,17 @@ USER_AGENT = f"SwitchTrade/{__version__}"
 
 
 class RelayError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, status: int = 503, code: str = "relay_unavailable",
+                 stage: str = "relay", recoverable: bool = True,
+                 primary_action: str | None = "retry", correlation_id: str | None = None):
+        super().__init__(message)
+        self.status = status
+        self.code = code
+        self.message = message
+        self.stage = stage
+        self.recoverable = recoverable
+        self.primary_action = primary_action
+        self.correlation_id = correlation_id
 
 
 class RelayClient:
@@ -48,10 +58,19 @@ class RelayClient:
                 return json.load(response)
         except HTTPError as error:
             try:
-                detail = json.loads(error.read())["detail"]
+                problem = json.loads(error.read())
+                detail = problem.get("message") or problem.get("detail") or error.reason
             except Exception:
+                problem = {}
                 detail = error.reason
-            raise RelayError(f"relay returned {error.code}: {detail}") from error
+            raise RelayError(
+                str(detail), status=error.code,
+                code=str(problem.get("code") or f"relay_http_{error.code}"),
+                stage=str(problem.get("stage") or "relay"),
+                recoverable=bool(problem.get("recoverable", error.code >= 500)),
+                primary_action=problem.get("primary_action"),
+                correlation_id=problem.get("correlation_id"),
+            ) from error
         except (URLError, OSError, ValueError) as error:
             raise RelayError(f"relay unavailable: {error}") from error
 

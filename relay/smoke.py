@@ -29,7 +29,9 @@ def smoke(base_url: str, allow_http: bool = False) -> None:
     headers = {"User-Agent": USER_AGENT}
     with urlopen(Request(f"{base_url}/health", headers=headers), timeout=5) as response:
         health = json.load(response)
-    if health.get("status") != "ready" or health.get("payload_mode") != "opaque":
+    if (health.get("status") != "ready" or health.get("payload_mode") != "opaque" or
+            health.get("room_contract") != "room-control.v1" or
+            health.get("rfu_contract") != "rfu-tunnel.v1"):
         raise RuntimeError("relay health contract is not ready")
     try:
         urlopen(Request(f"{base_url}/session/create", method="POST", headers=headers), timeout=5)

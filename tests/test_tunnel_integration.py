@@ -42,6 +42,7 @@ class TunnelIntegrationTest(unittest.TestCase):
         cls.environment["SWITCHTRADE_AUTH_DB"] = str(
             Path(cls.relay_state.name) / "authority.sqlite3")
         cls.environment["SWITCHTRADE_ENABLE_LEGACY_RELAY"] = "1"
+        cls.environment["SWITCHTRADE_ALLOW_PROCESS_SHUTDOWN"] = "1"
         cls._start_relay()
 
     @classmethod
@@ -66,7 +67,11 @@ class TunnelIntegrationTest(unittest.TestCase):
 
     @classmethod
     def _stop_relay(cls):
-        cls.proc.terminate()
+        if cls.proc.poll() is None:
+            try:
+                urlopen(Request(f"{cls.base}/shutdown", method="POST"), timeout=2).close()
+            except OSError:
+                cls.proc.terminate()
         try:
             cls.proc.wait(5)
         except subprocess.TimeoutExpired:
@@ -217,6 +222,8 @@ class TunnelIntegrationTest(unittest.TestCase):
             self.assertFalse(unbound.wait_connected(0.5))
             self.assertTrue(host.wait_connected(5))
             self.assertTrue(guest.wait_connected(5))
+            self.assertEqual(self._wait(host, Kind.PEER_READY).kind, Kind.PEER_READY)
+            self.assertEqual(self._wait(guest, Kind.PEER_READY).kind, Kind.PEER_READY)
             arbitrary = bytes(range(256)) * 3
             host.send(arbitrary)
             self.assertEqual(self._wait(guest, Kind.RFU).payload, arbitrary)
@@ -246,6 +253,7 @@ class TunnelIntegrationTest(unittest.TestCase):
                             member_token=first["member_token"], attempt_id=attempt_id).start()
         guest = TunnelClient(self.base, sid, "guest", heartbeat_interval=0.2,
                              member_token=second["member_token"], attempt_id=attempt_id).start()
+        replacement_host = replacement_guest = None
         try:
             self.assertTrue(host.wait_connected(5))
             self.assertTrue(guest.wait_connected(5))
@@ -259,14 +267,76 @@ class TunnelIntegrationTest(unittest.TestCase):
             self.assertFalse(host.connected.is_set())
             self.assertFalse(guest.connected.is_set())
             self._start_relay()
-            self.assertTrue(host.wait_connected(8))
-            self.assertTrue(guest.wait_connected(8))
-            host.poll()
-            guest.poll()
-            guest.send(b"after-restart")
-            self.assertEqual(self._wait(host, Kind.RFU).payload, b"after-restart")
-            self.assertGreaterEqual(host.stats["reconnects"], 1)
-            self.assertGreaterEqual(guest.stats["reconnects"], 1)
+            self.assertFalse(host.wait_connected(2))
+            self.assertFalse(guest.wait_connected(2))
+            relay = RelayClient(self.base)
+            room = relay.room(first["room"]["room_id"], first["member_token"])
+            self.assertEqual(room["attempt"]["phase"], "failed")
+            self.assertEqual(room["attempt"]["recoverable_error"], "relay.restart")
+            host.stop()
+            guest.stop()
+            for credential, role in ((first, "creator"), (second, "finder")):
+                room = relay.room(first["room"]["room_id"], credential["member_token"])
+                room = relay.room_command(
+                    room["room_id"], credential["member_token"], "/ready",
+                    {"ready": True, "switch_room_role": role},
+                    expected_version=room["room_version"],
+                )
+            replacement_attempt = room["attempt"]["attempt_id"]
+            self.assertNotEqual(replacement_attempt, attempt_id)
+            replacement_host = TunnelClient(
+                self.base, sid, "host", heartbeat_interval=0.2,
+                member_token=first["member_token"], attempt_id=replacement_attempt).start()
+            replacement_guest = TunnelClient(
+                self.base, sid, "guest", heartbeat_interval=0.2,
+                member_token=second["member_token"], attempt_id=replacement_attempt).start()
+            self.assertTrue(replacement_host.wait_connected(5))
+            self.assertTrue(replacement_guest.wait_connected(5))
+            replacement_guest.send(b"after-clean-restart")
+            self.assertEqual(
+                self._wait(replacement_host, Kind.RFU).payload, b"after-clean-restart")
+        finally:
+            host.stop()
+            guest.stop()
+            if replacement_host is not None:
+                replacement_host.stop()
+            if replacement_guest is not None:
+                replacement_guest.stop()
+
+    def test_authenticated_peer_loss_fails_attempt_and_disconnects_partner(self):
+        first = self._authority_request("/v1/trade-rooms", {
+            "name": "Peer loss", "trainer_display_name": "Leaf",
+            "game": "LeafGreen", "language": "English",
+        }, {"Idempotency-Key": uuid7(), "X-SwitchTrade-Client": "peer-loss-a"})
+        second = self._authority_request("/v1/trade-rooms:join", {
+            "room_code": first["room"]["room_code"], "trainer_display_name": "Red",
+        }, {"Idempotency-Key": uuid7(), "X-SwitchTrade-Client": "peer-loss-b"})
+        room_id = first["room"]["room_id"]
+        sid = first["room"]["room_code"]
+        attempt_id = self._prepare_authority_attempt(first, second)
+        host = TunnelClient(
+            self.base, sid, "host", heartbeat_interval=0.2,
+            member_token=first["member_token"], attempt_id=attempt_id).start()
+        guest = TunnelClient(
+            self.base, sid, "guest", heartbeat_interval=0.2,
+            member_token=second["member_token"], attempt_id=attempt_id).start()
+        try:
+            self.assertTrue(host.wait_connected(5))
+            self.assertTrue(guest.wait_connected(5))
+            host.stop()
+            relay = RelayClient(self.base)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                room = relay.room(room_id, second["member_token"])
+                if room["attempt"]["phase"] == "failed":
+                    break
+                time.sleep(0.02)
+            self.assertEqual(room["attempt"]["phase"], "failed")
+            self.assertEqual(room["attempt"]["recoverable_error"], "relay.peer_lost")
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline and guest.connected.is_set():
+                time.sleep(0.02)
+            self.assertFalse(guest.connected.is_set())
         finally:
             host.stop()
             guest.stop()
@@ -353,13 +423,18 @@ class TunnelIntegrationTest(unittest.TestCase):
                                 json={"switch_room_role": pair[1]}),
                             ((first_api, "creator"), (second_api, "finder")),
                         ))
+                    snapshots = [
+                        first_api.get("/api/v1/trade-room"),
+                        second_api.get("/api/v1/trade-room"),
+                    ]
                 self.assertTrue(all(response.status_code == 200 for response in responses),
                                 [response.text for response in responses])
-                roles = {response.json()["room"]["attempt"]["local_switch_role"]
-                         for response in responses}
+                self.assertTrue(all(response.status_code == 200 for response in snapshots),
+                                [response.text for response in snapshots])
+                roles = {response.json()["attempt"]["local_switch_role"]
+                         for response in snapshots}
                 self.assertEqual(roles, {"creator", "finder"})
-                seats = {response.json()["hardware"]["tunnel_seat"] for response in responses}
-                self.assertEqual(seats, {"member_a", "member_b"})
+                self.assertEqual(len(processes), 2)
 
     def test_control_group_preserves_invitation_fields_and_releases_membership(self):
         with tempfile.TemporaryDirectory() as temporary:
