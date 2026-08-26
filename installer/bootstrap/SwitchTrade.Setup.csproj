@@ -8,6 +8,7 @@
     <AssemblyName>SwitchTradeSetup</AssemblyName>
     <Version>0.2.0-beta.1</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\..\assets\branding\SwitchTrade.ico</ApplicationIcon>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
 </Project>
