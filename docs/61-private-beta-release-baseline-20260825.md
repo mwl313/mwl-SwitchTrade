@@ -71,9 +71,11 @@ not hidden beta claims.
 
 ## 5. Version boundaries
 
-- Source currently remains `0.2.0-beta.0`/`0.2.0` while the contracts are unimplemented.
-- Promote every component to `0.2.0-beta.1` together only after the authoritative room/local API,
-  endpoint role split, and final approved WPF integration pass internal tests.
+- The repository-controlled application, setup, and relay components are aligned at
+  `0.2.0-beta.1`; this identifies an internal release candidate, not a signed or hardware-qualified
+  public artifact.
+- Preserve the `0.2.0-beta.1` component alignment while the external signed-artifact,
+  clean-machine, relay-hosting, and physical qualification gates run.
 - The desktop, local runtime, RFU envelope, room-control, party-commit, privacy-statistics, kernel, driver
   bundle, and installer versions are separately reported in diagnostics.
 - A major local contract mismatch blocks connection and directs the user to Update or Repair.

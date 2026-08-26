@@ -26,6 +26,9 @@ $dirty = & git -C $Repo status --porcelain
 if ($dirty) { throw 'refusing to package a dirty worktree; commit the beta source first' }
 $Stage = Join-Path $OutputRoot "SwitchTrade-beta-$Version"
 . (Join-Path $PSScriptRoot 'PackageIntegrity.ps1')
+$kernelIdentity = 'not-bundled'
+$driverIdentity = 'rtl8xxxu'
+$firmwareIdentity = 'kernel-bundle'
 
 if ($Release) {
     $missing = @()
@@ -87,6 +90,13 @@ if ($Kernel -or $KernelModules -or $KernelManifest) {
     New-Item -ItemType Directory -Force -Path $kernelPayload | Out-Null
     $resolvedManifest = (Resolve-Path -LiteralPath $KernelManifest).Path
     $metadata = Get-Content -Raw -LiteralPath $resolvedManifest | ConvertFrom-Json
+    $kernelIdentity = [string]$metadata.kernel_release
+    if ($metadata.PSObject.Properties.Name -contains 'driver') {
+        $driverIdentity = [string]$metadata.driver
+    }
+    if ($metadata.PSObject.Properties.Name -contains 'firmware_sha256') {
+        $firmwareIdentity = [string]$metadata.firmware_sha256
+    }
     $resolvedKernel = (Resolve-Path -LiteralPath $Kernel).Path
     if (-not $metadata.kernel_release -or -not $metadata.kernel_sha256) {
         throw 'kernel manifest is missing required release/checksum fields'
@@ -193,7 +203,9 @@ if (Test-Path -LiteralPath (Join-Path $Stage 'windows\SwitchTrade.exe')) {
 $manifestPath = Join-Path $Stage 'manifest.json'
 $manifestArgs = @(
     (Join-Path $Repo 'scripts\write-release-manifest.py'), '--output', $manifestPath,
-    '--package-root', $Stage, '--release-id', "beta-$Version"
+    '--package-root', $Stage, '--release-id', "beta-$Version",
+    '--kernel-build', $kernelIdentity, '--driver', $driverIdentity,
+    '--firmware', $firmwareIdentity, '--usb-id', '0bda:818b'
 )
 if ($Release) { $manifestArgs += '--signature-required' }
 & python @manifestArgs

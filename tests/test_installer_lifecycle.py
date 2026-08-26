@@ -17,12 +17,18 @@ class InstallerLifecycleTests(unittest.TestCase):
         for action in ("Audit", "Install", "Repair", "Update", "Resume", "Rollback", "Uninstall"):
             self.assertIn(action, setup)
         self.assertIn("VerifyPackage", program)
+        self.assertIn("SetupDialog.Show", program)
         self.assertIn("PACKAGE_SIGNATURE_MISSING", program)
         self.assertIn("RunOnce", setup)
         launcher = (ROOT / "installer" / "Launch-SwitchTrade.ps1").read_text(encoding="utf-8")
         self.assertIn("Choose a detected adapter in Settings", launcher)
         self.assertIn("--unregister $Distro", setup)
         self.assertNotIn("--unregister Ubuntu", setup)
+        dialog = (ROOT / "installer" / "bootstrap" / "SetupDialog.cs").read_text(encoding="utf-8")
+        self.assertIn("DeferHardwareSetup", dialog)
+        self.assertIn("global WSL 2 kernel selection", dialog)
+        self.assertIn("$UsbId.ToLowerInvariant()", setup)
+        self.assertIn("wslHealthArguments", setup)
 
     def test_package_accepts_versioned_external_release_inputs(self):
         builder = (ROOT / "installer" / "Build-Package.ps1").read_text(encoding="utf-8")
@@ -40,6 +46,17 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertIn("tar -xzf", setup)
         self.assertIn("KERNEL_ABI_OR_FIRMWARE_MISMATCH", setup)
         self.assertIn("CUSTOM_KERNEL_BLOCKED_BY_POLICY", setup)
+
+    def test_application_and_wsl_runtime_rollback_are_kept_together(self):
+        provision = (ROOT / "installer" / "provision-wsl.sh").read_text(encoding="utf-8")
+        setup = (ROOT / "installer" / "SwitchTradeSetup.ps1").read_text(encoding="utf-8")
+        launcher = (ROOT / "installer" / "Launch-SwitchTrade.ps1").read_text(encoding="utf-8")
+        self.assertIn("--rollback", provision)
+        self.assertIn('${TARGET}.previous', provision)
+        self.assertNotIn('${TARGET}.previous.$(date', provision)
+        self.assertIn("application, WSL runtime, and retained kernel rollback completed", setup)
+        self.assertIn("Test-InstalledConfiguration", launcher)
+        self.assertIn("payload/release-config.json", launcher)
 
     @unittest.skipUnless(shutil.which("powershell"), "Windows PowerShell is required")
     def test_schema2_package_manifest_detects_tampering(self):

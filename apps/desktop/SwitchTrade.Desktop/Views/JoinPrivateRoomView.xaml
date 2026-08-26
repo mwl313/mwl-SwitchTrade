@@ -16,7 +16,7 @@
                  FontSize="20" automation:AutomationProperties.Name="Private Trade Room code" />
         <Button Grid.Column="2" Content="Paste" Command="{Binding PasteCommand}" Style="{StaticResource SecondaryButton}" />
       </Grid>
-      <TextBlock Text="Compatibility mode accepts 4–8 letters or numbers. The final room service uses six."
+      <TextBlock Text="Room codes contain exactly six letters or numbers."
                  Style="{StaticResource SecondaryText}" Margin="0,8,0,0" />
       <Border Style="{StaticResource ErrorNotice}" Margin="0,18,0,0"
               Visibility="{Binding HasError, Converter={StaticResource BooleanToVisibility}}"

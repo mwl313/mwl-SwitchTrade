@@ -25,7 +25,8 @@ HEARTBEAT_INTERVAL = 10.0
 RECONNECT_DELAY = 0.5
 
 
-def relay_websocket_url(base: str, session_id: str, role: str) -> str:
+def relay_websocket_url(base: str, session_id: str, role: str,
+                        attempt_id: str | None = None) -> str:
     """Accept an HTTP/WS relay base or a complete session WebSocket URL."""
     direction_for_role(role)  # validate before touching the URL
     parts = urlsplit(base.strip())
@@ -38,6 +39,8 @@ def relay_websocket_url(base: str, session_id: str, role: str) -> str:
         path += marker
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
     query.update(role=role, protocol="rfu")
+    if attempt_id:
+        query["attempt_id"] = attempt_id
     return urlunsplit((scheme, parts.netloc, path, urlencode(query), ""))
 
 
@@ -60,11 +63,11 @@ class TunnelClient:
     def __init__(self, relay_url: str, session_id: str, role: str, *,
                  capacity: int = 256, log=lambda *args: None,
                  heartbeat_interval: float = HEARTBEAT_INTERVAL,
-                 member_token: str | None = None):
+                 member_token: str | None = None, attempt_id: str | None = None):
         self.session_id = session_id
         self.role = role
         self.direction = direction_for_role(role)
-        self.url = relay_websocket_url(relay_url, session_id, role)
+        self.url = relay_websocket_url(relay_url, session_id, role, attempt_id)
         self.log = log
         self.heartbeat_interval = heartbeat_interval
         self.member_token = member_token

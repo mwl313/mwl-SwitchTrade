@@ -10,6 +10,7 @@ param(
     [switch]$AcceptGlobalKernelChange,
     [switch]$AcceptPrerequisiteChanges,
     [switch]$AcceptVmwareRelease,
+    [switch]$DeferHardwareSetup,
     [switch]$AllowUnsignedPackage,
     [switch]$NoShortcut,
     [switch]$PurgeDistro
@@ -50,6 +51,7 @@ function Save-SetupResume([string]$ResumeAction) {
         accept_global_kernel_change = [bool]$AcceptGlobalKernelChange
         accept_prerequisite_changes = [bool]$AcceptPrerequisiteChanges
         accept_vmware_release = [bool]$AcceptVmwareRelease
+        defer_hardware_setup = [bool]$DeferHardwareSetup
         no_shortcut = [bool]$NoShortcut
     } | ConvertTo-Json | Set-Content -LiteralPath $ResumeStatePath -Encoding UTF8
     $setupExe = Join-Path $PackageRoot 'SwitchTradeSetup.exe'
@@ -88,6 +90,7 @@ if ($WasResume) {
     $AcceptGlobalKernelChange = [bool]$resume.accept_global_kernel_change
     $AcceptPrerequisiteChanges = [bool]$resume.accept_prerequisite_changes
     $AcceptVmwareRelease = [bool]$resume.accept_vmware_release
+    $DeferHardwareSetup = [bool]$resume.defer_hardware_setup
     $NoShortcut = [bool]$resume.no_shortcut
     $PreviousInstall = "$InstallRoot.previous"
 }
@@ -171,20 +174,42 @@ if ($Action -eq 'Rollback') {
     if (-not (Test-Path -LiteralPath $PreviousInstall -PathType Container)) {
         throw 'no retained SwitchTrade application version is available for rollback'
     }
-    Switch-SwitchTradeKernelRollback -StateRoot $StateRoot | Out-Null
     $swap = "$InstallRoot.rollback-swap"
     if (Test-Path -LiteralPath $swap) { throw "stale rollback swap path requires repair: $swap" }
-    if (Test-Path -LiteralPath $InstallRoot) { Move-Item -LiteralPath $InstallRoot -Destination $swap }
+    $runtimeRolledBack = $false
+    $kernelRolledBack = $false
     try {
+        if ((Get-Distros) -contains $Distro) {
+            & wsl.exe --terminate $Distro 2>$null
+            $runtimeProvision = Convert-ToWslPath (Join-Path $PSScriptRoot 'provision-wsl.sh')
+            & wsl.exe -d $Distro -u root -- bash $runtimeProvision --rollback
+            if ($LASTEXITCODE -ne 0) { throw 'the retained SwitchTrade WSL runtime could not be activated' }
+            $runtimeRolledBack = $true
+        }
+        $kernelRolledBack = Switch-SwitchTradeKernelRollback -StateRoot $StateRoot
+        if (Test-Path -LiteralPath $InstallRoot) {
+            Move-Item -LiteralPath $InstallRoot -Destination $swap
+        }
         Move-Item -LiteralPath $PreviousInstall -Destination $InstallRoot
         if (Test-Path -LiteralPath $swap) { Move-Item -LiteralPath $swap -Destination $PreviousInstall }
     } catch {
+        $failure = $_
         if (-not (Test-Path -LiteralPath $InstallRoot) -and (Test-Path -LiteralPath $swap)) {
             Move-Item -LiteralPath $swap -Destination $InstallRoot
         }
-        throw
+        try {
+            if ($kernelRolledBack) { Switch-SwitchTradeKernelRollback -StateRoot $StateRoot | Out-Null }
+            if ($runtimeRolledBack) {
+                & wsl.exe --terminate $Distro 2>$null
+                & wsl.exe -d $Distro -u root -- bash $runtimeProvision --rollback
+                if ($LASTEXITCODE -ne 0) { throw 'WSL runtime rollback recovery failed' }
+            }
+        } catch {
+            throw "ROLLBACK_PARTIAL_FAILURE: $($failure.Exception.Message); recovery: $($_.Exception.Message)"
+        }
+        throw $failure
     }
-    Write-Host 'SwitchTrade application rollback completed; the retained kernel was switched when the prior release used one.'
+    Write-Host 'SwitchTrade application, WSL runtime, and retained kernel rollback completed.'
     exit
 }
 
@@ -314,19 +339,28 @@ $provision = Convert-ToWslPath (Join-Path $PackageRoot 'installer\provision-wsl.
 & wsl.exe -d $Distro -u root -- bash $provision --source $source
 if ($LASTEXITCODE -ne 0) { throw 'SwitchTrade WSL provisioning failed.' }
 
-$radioPreflight = Join-Path $Payload 'scripts\windows\wsl-radio-preflight.ps1'
-$profileFile = Join-Path $Payload 'config\wsl-radio-hardware.tsv'
-$preflightArguments = @{
-    Distro = $Distro; ProfileFile = $profileFile; Prepare = $true; AutoAttach = $true
+if ($DeferHardwareSetup) {
+    Write-Host 'Wi-Fi adapter setup was deferred. Select an adapter in SwitchTrade Settings, then run Setup Repair once if binding is required.'
+} else {
+    $radioPreflight = Join-Path $Payload 'scripts\windows\wsl-radio-preflight.ps1'
+    $profileFile = Join-Path $Payload 'config\wsl-radio-hardware.tsv'
+    $preflightArguments = @{
+        Distro = $Distro; ProfileFile = $profileFile; Prepare = $true; AutoAttach = $true
+    }
+    if ($BusId) { $preflightArguments.BusId = $BusId }
+    if ($UsbId) { $preflightArguments.UsbId = @($UsbId) }
+    & $radioPreflight @preflightArguments
+    if ($LASTEXITCODE -ne 0) { throw 'SwitchTrade USB/WSL ownership preflight failed.' }
+    $wslHealthArguments = @(
+        '-d', $Distro, '-u', 'root', '--cd', '/opt/switchtrade', '--',
+        './scripts/wsl-radio-prepare.sh', '--role', 'guest',
+        '--health-channels', '1,6,11', '--target-channel', '6'
+    )
+    if ($UsbId) { $wslHealthArguments += @('--usb-id', $UsbId.ToLowerInvariant()) }
+    $wslHealthArguments += @('--', 'true')
+    & wsl.exe @wslHealthArguments
+    if ($LASTEXITCODE -ne 0) { throw 'SwitchTrade driver/RX health gate failed.' }
 }
-if ($BusId) { $preflightArguments.BusId = $BusId }
-if ($UsbId) { $preflightArguments.UsbId = @($UsbId) }
-& $radioPreflight @preflightArguments
-if ($LASTEXITCODE -ne 0) { throw 'SwitchTrade USB/WSL ownership preflight failed.' }
-& wsl.exe -d $Distro -u root --cd /opt/switchtrade -- `
-    ./scripts/wsl-radio-prepare.sh --role guest --health-channels 1,6,11 `
-    --target-channel 6 -- true
-if ($LASTEXITCODE -ne 0) { throw 'SwitchTrade driver/RX health gate failed.' }
 
 $installParent = Split-Path -Parent $InstallRoot
 New-Item -ItemType Directory -Force -Path $installParent | Out-Null
@@ -336,6 +370,9 @@ try {
     Copy-Item -LiteralPath (Join-Path $PackageRoot 'installer') -Destination $stage -Recurse
     Copy-Item -LiteralPath $Payload -Destination $stage -Recurse
     Copy-Item -LiteralPath (Join-Path $PackageRoot 'manifest.json') -Destination $stage
+    if (Test-Path -LiteralPath (Join-Path $PackageRoot 'manifest.json.p7s') -PathType Leaf) {
+        Copy-Item -LiteralPath (Join-Path $PackageRoot 'manifest.json.p7s') -Destination $stage
+    }
     Copy-Item -LiteralPath $ReleaseConfig -Destination (Join-Path $stage 'config.json')
     if (Test-Path -LiteralPath $DesktopExe -PathType Leaf) {
         Copy-Item -LiteralPath $DesktopExe -Destination (Join-Path $stage 'SwitchTrade.exe')

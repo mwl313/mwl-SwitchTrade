@@ -3,7 +3,8 @@
 > Status: authoritative current execution order.
 > Product scope: real Switch-to-real Switch. The PC-host implementation remains a protocol oracle
 > and regression harness, not the production peer.
-> Hardware policy: RTL8192EU is the beta-certified target. The runtime remains profile-driven so new
+> Hardware policy: RTL8192EU is the sole beta qualification target. It becomes release-certified only
+> after Gate 7. The runtime remains profile-driven so new
 > hardware and drivers can be added without changing the RFU tunnel, GUI, or session logic.
 
 ## Immediate tasks — do in this order
@@ -97,17 +98,11 @@
    - Emit exactly one idempotent committed-trade event only after protocol evidence distinguishes a
      completed trade from offer, animation, failed save, rollback, cancel, or disconnect.
 
-12. **Deploy the production relay, authoritative lobby, and consented trade-statistics service.**
+12. **Finish and deploy the production relay and authoritative lobby.**
    - Keep RFU forwarding opaque while the server authoritatively manages exactly two member seats,
      readiness, reconnect tokens, room-creator assignment, and session lifecycle.
-   - Store locally validated successful-trade records only with explicit consent and a versioned privacy
-     contract. The proposed record includes UTC timestamp, both exchanged Pokémon, both trainers'
-     approved trainer/link metadata, session provenance, server-observed source IP, and disclosed coarse
-     IP-derived location.
-   - Treat raw IP, location, trainer IDs, and Pokémon data as sensitive: minimize and separate analytics,
-     restrict and audit raw access, encrypt data, use short retention for raw IP, use pseudonymous
-     identifiers for statistics, and support deletion/export and consent withdrawal.
-   - Trading and local party display must continue when analytics is declined or unavailable.
+   - Keep client privacy/consent and committed-trade analytics outside this client/relay per owner
+     direction. No Pokémon, trainer, raw-IP, or location analytics are uploaded by the beta code.
 
 13. **Run the first production Switch-to-Switch test.**
    - Use two RTL8192EU endpoints.
@@ -183,27 +178,26 @@ The real first milestone is a private/code-only Switch-to-Switch Trade Room. Pub
 demonstrated with clearly labeled mock/local data; the production directory and matchmaking service
 remain backlog work.
 
-## Implementation snapshot — beta.0 internal build
+## Implementation snapshot — beta.1 repository candidate
 
-As of the `0.2.0-beta.0` internal build:
+As of the `0.2.0-beta.1` repository candidate:
 
-- Tasks 1-5 have working foundations: one integration branch, profile-driven hardware policy,
-  Windows/WSL preflight, health-gated endpoint launch, structured run logs, and support bundles.
-- Tasks 7-11 have internal-validation foundations: the feature-neutral RFU tunnel, relay-backed
-  private sessions, real control API, native WPF frontend, optional static web frontend, and
-  launcher/state integration. The WPF presentation has the approved Linkline foundation and labeled
-  UI previews; authoritative two-member room state, either-member creator assignment, and live party
-  data remain release-blocking backend work.
+- Tasks 1-5 and 7-11 are implemented inside the repository: one integration branch, pinned runtime,
+  profile-driven hardware policy, guided adapter selection, Windows/WSL health-gated launch,
+  structured diagnostics, attempt-bound RFU tunnel, server-authoritative private rooms, reconnect,
+  either-member creator assignment, passive party projection, and native WPF integration.
 - The tunnel mirrors the leader Switch's original LDN application advertisement and carries opaque
   Reliable AppData. It does not depend on trade opcodes, the Pokémon decoder, or a specific future
   two-player activity.
-- Task 15 has a checksummed minimal-rootfs package/bootstrap foundation. Its isolated install, repair,
-  rollback retention, and uninstall/purge path passed a throwaway-distro test. It provisions only the
-  named `SwitchTrade` distro and deliberately leaves the global/custom WSL kernel policy unchanged.
-- Task 6 still needs the second RTL8192EU and hardware qualification. Tasks 13-14 still need the
-  requested real two-endpoint Switch test and reliability campaign. The final signed clean-machine
-  installer still needs signing, reboot/resume validation, a genuinely clean external-machine test,
-  and release approval.
+- Task 8 passed recorded byte-exact replay, duplicate/stale/reorder guards, relay restart/reconnect,
+  bounded queue, and teardown tests without Switch hardware.
+- Task 12 is hosting-ready in `relay/`; the separate hosting operator still must deploy public TLS,
+  prove backup/restart and two-NAT operation, and return the HTTPS URL.
+- Task 15's native setup and signed-package mechanism implement install, resume, repair, update, atomic
+  Windows/WSL/kernel rollback, uninstall, optional named-distro purge, and signed relay configuration.
+- Task 6 and Tasks 13-14 still require the second RTL8192EU and real two-endpoint qualification. Final
+  release also requires owner assets/notices/support, signed external artifacts, clean-machine and
+  Defender/SmartScreen testing, and written approval.
 
-Internal software validation is recorded in `docs/53-beta0-internal-build-20260825.md`. This snapshot
-does not promote RTL8188EU or claim real Switch-to-Switch certification.
+Current evidence and exact external blockers are recorded in `docs/69`; safe recovery is in `docs/70`.
+This snapshot does not promote RTL8188EU or claim real Switch-to-Switch certification.

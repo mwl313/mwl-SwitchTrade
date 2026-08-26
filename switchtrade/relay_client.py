@@ -90,12 +90,18 @@ class RelayClient:
         return self._request("GET", f"/v1/trade-rooms/{room_id}/events?after={max(0, after)}",
                              headers=self._auth(token))
 
-    def reconnect_trade_room(self, room_id: str, reconnect_token: str) -> dict:
+    def reconnect_trade_room(self, room_id: str, reconnect_token: str,
+                             command_id: str | None = None) -> dict:
         return self._request("POST", f"/v1/trade-rooms/{room_id}:reconnect",
-                             {"reconnect_token": reconnect_token})
+                             {"reconnect_token": reconnect_token}, {
+                                 "Idempotency-Key": command_id or self.command_id(),
+                             })
 
     def room_command(self, room_id: str, token: str, path: str,
                      payload: dict | None = None, command_id: str | None = None,
-                     method: str = "POST") -> dict:
+                     method: str = "POST", expected_version: int | None = None) -> dict:
+        headers = self._auth(token, command_id or self.command_id())
+        if expected_version is not None:
+            headers["If-Match"] = str(expected_version)
         return self._request(method, f"/v1/trade-rooms/{room_id}{path}", payload,
-                             self._auth(token, command_id or self.command_id()))
+                             headers)

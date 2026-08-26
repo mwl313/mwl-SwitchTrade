@@ -40,6 +40,11 @@ The packaged `SwitchTrade.exe` is a native WPF application. It does not embed or
 Chromium, WebView2, or the user's browser. On an installed copy it starts the adjacent WSL launcher
 and communicates with the modular runtime through the localhost JSON control API.
 
+Double-clicking `SwitchTradeSetup.exe` opens a native guided setup window. It exposes only the safe
+Install/Update/Repair/Rollback/Uninstall actions available for the current state, requires explicit
+prerequisite/global-kernel consent, lists profiled USB radios by bus ID, labels experimental choices,
+and permits adapter setup to be deferred. Command-line actions remain available for automated QA.
+
 The retired web/demo frontend is not bundled into the WSL runtime or required by the native beta.
 
 ## Setup safety
@@ -60,4 +65,6 @@ The retired web/demo frontend is not bundled into the WSL runtime or required by
   reports `CUSTOM_KERNEL_BLOCKED_BY_POLICY`; such systems are unsupported by the private beta.
 
 The localhost relay default is for internal same-machine validation. A cross-network beta must supply
-a reachable HTTPS relay URL in the installed `config.json`.
+a reachable HTTPS relay URL through `Build-Package.ps1 -Release`; the installed `config.json` is
+verified against the signed package manifest on every launch. Relay hosting is documented in
+`relay/DEPLOYMENT.md`, and user-safe recovery is documented in `docs/70`.

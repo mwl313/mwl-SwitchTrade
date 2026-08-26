@@ -58,11 +58,14 @@ class RelayOfflineTest(unittest.TestCase):
         cls.port = _free_port()
         cls.http = f"http://127.0.0.1:{cls.port}"
         cls.ws = f"ws://127.0.0.1:{cls.port}"
+        environment = dict(os.environ)
+        environment["SWITCHTRADE_ENABLE_LEGACY_RELAY"] = "1"
         cls.proc = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "relay.server:app",
              "--host", "127.0.0.1", "--port", str(cls.port),
              "--log-level", "warning"],
             cwd=PROJECT_ROOT,
+            env=environment,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,

@@ -16,7 +16,8 @@
 ```
 
 - **기반 기술** (이미 존재, 검증됨): kinnay/LDN (로컬 무선 계층) + tornadus/frlg-ldn-trade (FRLG 게임 계층)
-- **미싱 링크**: PC↔PC 인터넷 터널/릴레이 + 세션 매칭 (신규 개발)
+- **현재 구현**: 서버 권위 2인 private room + credentialed opaque RFU relay + native Windows/WSL client
+- **출시 전 잔여**: 외부 TLS 배포, signed artifacts, clean-machine 및 two-PC/two-Switch qualification
 - **참고 아키텍처**: GB-Link/Celio 생태계 (실기 GBA를 인터넷에 연결한 형제 프로젝트)
 
 ## 문서
@@ -44,12 +45,16 @@
 | [docs/63-second-native-ui-overhaul-codex-handoff-20260825.md](docs/63-second-native-ui-overhaul-codex-handoff-20260825.md) | GPT의 두 번째 native UI audit 및 Codex 구현 지침 |
 | [docs/64-second-native-ui-overhaul-implementation-report-20260825.md](docs/64-second-native-ui-overhaul-implementation-report-20260825.md) | 두 번째 native WPF audit 구현 결과, C1–C12 결정, 검증 기록 |
 | [docs/67-hardware-support-expansion-20260826.md](docs/67-hardware-support-expansion-20260826.md) | WSL USB 카드 매트릭스, host engine 정책, 자동 진단과 실기 승격 게이트 |
+| [docs/69-repository-preflight-completion-and-relay-handoff-20260826.md](docs/69-repository-preflight-completion-and-relay-handoff-20260826.md) | Repository preflight 완료 범위, relay hosting 인계, 남은 외부 gate |
+| [docs/70-private-beta-support-and-recovery-guide-20260826.md](docs/70-private-beta-support-and-recovery-guide-20260826.md) | Private-beta 지원 범위와 안전한 복구 가이드 |
+| [relay/DEPLOYMENT.md](relay/DEPLOYMENT.md) | 별도 hosting agent용 production relay 배포·smoke runbook |
 | [docs/30-native-fixed-handshake-20260824.md](docs/30-native-fixed-handshake-20260824.md) | Native two-Switch fixed-channel gold, PC-host root cause, and byte-verified Session fix |
 | [handoff/HANDOFF-20260824-wsl-dual-radio.md](handoff/HANDOFF-20260824-wsl-dual-radio.md) | WSL 두 카드 최종 상태, 확장 구조, 다음 G5/G6 절차 |
 | [handoff/HANDOFF-20260824-native-host-session.md](handoff/HANDOFF-20260824-native-host-session.md) | Next-agent gate for PC-host Pia and host/parent Reliable work |
 | [docs/research/01-frlg-ldn-trade.md](docs/research/01-frlg-ldn-trade.md) | Tornadus 프로젝트 리서치 |
 | [docs/research/02-gb-link-celio.md](docs/research/02-gb-link-celio.md) | GB-Link/Celio 생태계 리서치 |
 | [docs/research/03-kinnay-ldn.md](docs/research/03-kinnay-ldn.md) | LDN 프로토콜 리서치 |
+| [docs/research/04-youtube-videos.md](docs/research/04-youtube-videos.md) | YouTube 영상 2건 정리 |
 
 WSL 무선 실행은 Windows에서 `scripts/windows/wsl-radio-preflight.ps1 -Prepare -AutoAttach`를 먼저 실행하고,
 Linux에서는 `scripts/wsl-radio-prepare.sh --usb-id VID:PID --role ROLE -- COMMAND...`를 사용한다.
@@ -57,7 +62,6 @@ Linux에서는 `scripts/wsl-radio-prepare.sh --usb-id VID:PID --role ROLE -- COM
 새 카드의 read-only 진단은 `python -m switchtrade.hardware_diagnostics --usb-id VID:PID`로 실행한다.
 research/driver candidate는 명시적으로 선택할 수 있지만 실험용이며 작동이 보장되지 않는다.
 quarantined 카드는 실행할 수 없다. 모든 카드의 기본 host engine은 `ldn.create_network()`이다.
-| [docs/research/04-youtube-videos.md](docs/research/04-youtube-videos.md) | YouTube 영상 2건 정리 |
 
 ## 상태
 
@@ -67,8 +71,8 @@ quarantined 카드는 실행할 수 없다. 모든 카드의 기본 host engine�
 - [x] Phase 1: 코드 분석 + 트랜스포트 확장 지점 식별 (~90% — RemoteTransport 확장점 확정·구현)
 - [x] Phase 2a: 릴레이 인프라 완성 (RemoteTransport + relay/server.py + FSM 훅, 테스트 9건 통과)
 - [ ] Phase 2b: LAN 2브리지 실기 테스트 (진행 중 — `docs/07-2b-테스트-실측-20260821.md`)
-- [ ] Phase 2c: 인터넷 (NAT 통과) 트레이드
-- [ ] Phase 3: 세션 시스템 + 클라이언트
+- [ ] Phase 2c: 인터넷 (relay code hosting-ready; public TLS/two-NAT 실증 대기)
+- [x] Phase 3: authoritative private session + native client 내부 구현
 - [ ] Phase 4: 확장 (배틀, Gen 2)
 
 ## 리포 구조 (2026-08-25)
@@ -99,18 +103,18 @@ raw 802.11 캡처와 framerelay 실행은 반드시 `scripts/radio-health-gate.s
 1/6/11은 LDN 구현의 후보 채널이며, 전체 2.4GHz 진단이 필요하면
 `--health-channels 1,2,3,4,5,6,7,8,9,10,11,12,13`으로 확장할 수 있다.
 
-## 0.2.0-beta.0 internal build
+## 0.2.0-beta.1 repository candidate
 
-Private relay sessions, the feature-neutral RFU endpoint tunnel, real control API integration, native
-Windows frontend, optional static web frontend, and isolated-distro bootstrap source are implemented. The pinned Linux runtime test
-suite passes without Switch hardware. See
-[`docs/53-beta0-internal-build-20260825.md`](docs/53-beta0-internal-build-20260825.md).
+Authoritative private rooms, the attempt-bound feature-neutral RFU tunnel, real control API, native
+Windows frontend, passive decoder observer, isolated WSL lifecycle, native setup UI, signed-package
+verification, and hosting-ready relay are implemented. The pinned Linux/WSL runtime suite passes
+without Switch hardware. See [`docs/69-repository-preflight-completion-and-relay-handoff-20260826.md`](docs/69-repository-preflight-completion-and-relay-handoff-20260826.md).
 
 This is an internal beta candidate, not a signed user release. Two physical RTL8192EU endpoints,
 Switch-to-Switch validation, WAN/recovery soak, external clean-machine/reboot qualification, and
-artifact signing remain release gates. A checksummed minimal rootfs and isolated install/repair/
-uninstall cycle now pass internally. The bootstrap leaves the global/custom WSL kernel configuration
-unchanged.
+artifact signing remain release gates. The lifecycle manages only the named SwitchTrade distro and
+backs up/restores the user's complete `.wslconfig`; when a verified custom-kernel bundle is supplied,
+its kernel selection is global to WSL 2 and requires explicit consent.
 
 ## 핵심 원칙
 
