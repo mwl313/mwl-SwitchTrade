@@ -279,7 +279,10 @@ public sealed class ControlApiClient : IControlGateway
             return new(room.RoomVersion, active.Length, room.State ?? "waiting_for_partner", membership,
                 switchRole, partner?.OnlineState == "online",
                 active.Length == 2 && active.All(member => member.ReadyState == "ready"),
-                room.Attempt?.Phase ?? "none", room.Attempt?.RoleLocked == true);
+                room.Attempt?.Phase ?? "none", room.Attempt?.RoleLocked == true,
+                ToTradeRoom(room), room.Attempt?.Failure?.Code, room.Attempt?.Failure?.Stage,
+                room.Attempt?.Failure?.Recoverable == true,
+                room.Attempt?.Failure?.PrimaryAction);
         }
         catch (HttpRequestException) { return null; }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return null; }
@@ -639,6 +642,8 @@ public sealed class ControlApiClient : IControlGateway
             "room_full" => "This Trade Room already has two players.",
             "room_not_found" or "not_found" => "We couldn’t find that Trade Room. Check the code and try again.",
             "room_not_active" => "This Trade Room is no longer active.",
+            "room_already_active" =>
+                "An existing Trade Room is still active. Resume or leave it before opening another.",
             "relay_contract_incompatible" or "relay_capability_missing" =>
                 "The online room service must be updated before trading.",
             "relay_unavailable" or "relay_internal_error" or "control_unavailable" =>
@@ -760,7 +765,13 @@ public sealed class ControlApiClient : IControlGateway
     private sealed record AuthorityAttemptDto(
         [property: JsonPropertyName("local_switch_role")] string? LocalSwitchRole,
         string? Phase,
-        [property: JsonPropertyName("role_locked")] bool RoleLocked);
+        [property: JsonPropertyName("role_locked")] bool RoleLocked,
+        AttemptFailureDto? Failure);
+    private sealed record AttemptFailureDto(
+        string? Code,
+        string? Stage,
+        bool Recoverable,
+        [property: JsonPropertyName("primary_action")] string? PrimaryAction);
     private sealed record PublicDirectoryDto(
         [property: JsonPropertyName("contract_version")] string? ContractVersion,
         IReadOnlyList<PublicRoomDto>? Rooms,

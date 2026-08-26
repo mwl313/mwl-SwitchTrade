@@ -165,8 +165,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (status is not null)
         {
             ApplyStatus(status);
-            await RefreshPartiesAsync(cancellationToken);
-            if (IsServiceReady) ShowHome();
+            if (IsServiceReady)
+            {
+                var activeRoom = await Gateway.TryGetTradeRoomAsync(cancellationToken);
+                if (activeRoom is { Room: not null } &&
+                    activeRoom.State is not ("closed" or "expired"))
+                {
+                    OpenTradeRoom(
+                        activeRoom.Room, activeRoom.MembershipRole, activeRoom.SwitchRole);
+                    RoomCoordinator.ApplyRoom(activeRoom);
+                    await RefreshPartiesAsync(cancellationToken);
+                }
+                else ShowHome();
+            }
             else CurrentScreen = new RecoveryScreenViewModel(this);
             return;
         }

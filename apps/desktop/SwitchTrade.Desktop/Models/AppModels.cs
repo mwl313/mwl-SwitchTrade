@@ -85,7 +85,12 @@ public sealed record AuthoritativeRoomProjection(
     bool PartnerOnline,
     bool BothReady,
     string AttemptPhase,
-    bool RoleLocked);
+    bool RoleLocked,
+    TradeRoomInfo? Room = null,
+    string? FailureCode = null,
+    string? FailureStage = null,
+    bool FailureRecoverable = false,
+    string? FailureAction = null);
 
 public sealed record AdapterProfileViewData(
     string UsbId,

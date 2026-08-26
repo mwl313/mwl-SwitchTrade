@@ -85,6 +85,27 @@ public partial class App : Application
                 hardware.UsbId, hardware.InstanceId, hardware.BusId).GetAwaiter().GetResult();
             var hardwareContractWorks = hardware.InstanceId.EndsWith("RADIO-A", StringComparison.Ordinal) &&
                                         selectionBody.Contains("instance_id", StringComparison.Ordinal);
+            using var roomContractClient = new ControlApiClient(new SelfTestHttpHandler(_ =>
+                Task.FromResult(JsonResponse("""
+                    {"room_id":"room-1","room_version":8,"name":"Resumed Room",
+                    "visibility":"private","room_code":"ABC123",
+                    "profile":{"owner_display_name":"Leaf","game":"LeafGreen","language":"English"},
+                    "owner_member_id":"owner","local_member_id":"member",
+                    "state":"ready_check","members":[
+                    {"member_id":"owner","seat":"member_a","is_local":false,"online_state":"online",
+                    "ready_state":"not_ready","switch_room_role":null},
+                    {"member_id":"member","seat":"member_b","is_local":true,"online_state":"online",
+                    "ready_state":"not_ready","switch_room_role":null}],
+                    "attempt":{"local_switch_role":null,"phase":"failed","role_locked":true,
+                    "failure":{"code":"relay.restart","stage":"relay","recoverable":true,
+                    "primary_action":"retry"}}}
+                    """))));
+            var failedProjection = roomContractClient.TryGetTradeRoomAsync().GetAwaiter().GetResult();
+            var attemptFailureContractWorks = failedProjection is
+            {
+                FailureCode: "relay.restart", FailureStage: "relay",
+                FailureRecoverable: true, FailureAction: "retry", Room.RoomCode: "ABC123",
+            };
             var malformedInventoryContained = InventoryFailureCode(
                 new SelfTestHttpHandler(_ => Task.FromResult(JsonResponse("{")))) ==
                 "usb_inventory_invalid";
@@ -119,6 +140,13 @@ public partial class App : Application
             var authoritativeProjectionWorks = memberCoordinator.RoleLocked &&
                                                memberCoordinator.BothReady &&
                                                memberCoordinator.AttemptPhase == "connecting_switches";
+            memberCoordinator.ApplyRoom(failedProjection!);
+            var attemptFailureMapsToRecovery =
+                memberCoordinator.ConnectionState == LegacyConnectionState.NeedsRecovery &&
+                memberCoordinator.RecoveryCode == "relay.restart" &&
+                memberCoordinator.RecoveryStage == "relay" &&
+                memberCoordinator.RecoveryRecoverable &&
+                memberCoordinator.RecoveryAction == "retry";
             memberCoordinator.ApplyRoom(new AuthoritativeRoomProjection(
                 5, 0, "closed", RoomMembershipRole.Member,
                 SwitchRoomRole.Unassigned, false, false, "none", false));
@@ -147,10 +175,28 @@ public partial class App : Application
                                                 "RADIO-A", StringComparison.Ordinal) == true &&
                                             settings.InventoryErrorCode == "usb_inventory_timeout" &&
                                             settings.InventoryRecoveryAction == "run_hardware_diagnostics";
+            var resumedRoom = new TradeRoomInfo(
+                "Resumed Room", "ABC123", "private", 1, "authoritative", "Leaf",
+                GameVersionChoice.LeafGreen, GameLanguage.English);
+            var resumeGateway = new SelfTestGateway
+            {
+                Status = ReadyStatus(),
+                ActiveRoom = new AuthoritativeRoomProjection(
+                    9, 1, "waiting_for_partner", RoomMembershipRole.Owner,
+                    SwitchRoomRole.Unassigned, false, false, "none", false, resumedRoom),
+            };
+            using var resumeShell = new MainViewModel(
+                resumeGateway, new BackendLauncher(), new WindowsDialogService(),
+                new WindowsClipboardService());
+            resumeShell.InitializeAsync().GetAwaiter().GetResult();
+            var startupResumeWorks = resumeGateway.RoomProbeCount == 1 &&
+                                     resumeShell.CurrentScreen is TradeRoomScreenViewModel &&
+                                     resumeShell.RoomCoordinator.Context?.Room.RoomCode == "ABC123";
             Shutdown(apiIsLocal && codeNormalizes && requiredRoomFieldsWork &&
                       highContrastResourcesLoad && capabilityGateWorks && exactReleaseGateWorks &&
                       coordinatorWorks && memberReleaseWorks && authoritativeProjectionWorks &&
-                      remoteCloseClearsRoom && hardwareContractWorks &&
+                      attemptFailureContractWorks && attemptFailureMapsToRecovery &&
+                      remoteCloseClearsRoom && startupResumeWorks && hardwareContractWorks &&
                       malformedInventoryContained && timedOutInventoryContained &&
                       lastGoodInventorySurvives ? 0 : 1);
             return;
@@ -198,6 +244,8 @@ public partial class App : Application
         public IReadOnlyList<AdapterProfileViewData> AdapterProfiles { get; init; } = [];
         public IReadOnlyList<HardwareDeviceViewData> HardwareDevices { get; init; } = [];
         public UserFacingException? HardwareFailure { get; set; }
+        public AuthoritativeRoomProjection? ActiveRoom { get; init; }
+        public int RoomProbeCount { get; private set; }
         public SwitchRoomRole? LastSwitchRole { get; private set; }
         public RoomMembershipRole? LastMembershipRole { get; private set; }
         public Task<ControlStatus?> TryGetStatusAsync(CancellationToken cancellationToken = default) =>
@@ -212,8 +260,11 @@ public partial class App : Application
         public Task<TradeRoomInfo> JoinPublicRoomAsync(
             string listingId, string trainerDisplayName, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
-        public Task<AuthoritativeRoomProjection?> TryGetTradeRoomAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<AuthoritativeRoomProjection?>(null);
+        public Task<AuthoritativeRoomProjection?> TryGetTradeRoomAsync(CancellationToken cancellationToken = default)
+        {
+            RoomProbeCount++;
+            return Task.FromResult(ActiveRoom);
+        }
         public Task StartConnectionAsync(SwitchRoomRole role, RoomMembershipRole membershipRole,
             string roomCode, CancellationToken cancellationToken = default)
         {

@@ -35,6 +35,12 @@ PARTY_CONTRACT = "party-commit.v1"
 PUBLIC_DIRECTORY_CONTRACT = "public-directory.v1"
 RFU_CONTRACT = "rfu-tunnel.v1"
 
+ATTEMPT_FAILURES = {
+    "relay.peer_lost": ("relay", True, "retry"),
+    "relay.restart": ("relay", True, "retry"),
+    "member.reconnect_expired": ("coordination", True, "wait_for_partner"),
+}
+
 LOCAL_ERROR_CODES = {
     "no active trade room": ("room_not_active", "room", False, "return_home"),
     "no active authoritative trade room": ("room_not_active", "room", False, "return_home"),
@@ -79,6 +85,19 @@ def relay_api_error(error: RelayError) -> ControlApiError:
         recoverable=error.recoverable, primary_action=error.primary_action,
         correlation_id=error.correlation_id,
     )
+
+
+def control_room(room: dict) -> dict:
+    """Add the stable local recovery contract to an authoritative room snapshot."""
+    attempt = room.get("attempt")
+    if not isinstance(attempt, dict) or attempt.get("phase") != "failed":
+        return room
+    code = str(attempt.get("recoverable_error") or "session.failed")
+    stage, recoverable, action = ATTEMPT_FAILURES.get(code, ("session", True, "retry"))
+    return {**room, "attempt": {**attempt, "failure": {
+        "code": code, "stage": stage, "recoverable": recoverable,
+        "primary_action": action,
+    }}}
 
 
 def runtime_release_id() -> str:
@@ -300,7 +319,7 @@ class Runtime:
         if token:
             self.member_token_file.write_text(str(token), encoding="utf-8")
             os.chmod(self.member_token_file, 0o600)
-        return room
+        return control_room(room)
 
     def clear_authority(self) -> None:
         self.authority_state.unlink(missing_ok=True)
@@ -311,7 +330,8 @@ class Runtime:
         if not credentials.get("room_id") or not credentials.get("member_token"):
             raise RelayError("no active trade room")
         try:
-            return self.relay.room(credentials["room_id"], credentials["member_token"])
+            return control_room(
+                self.relay.room(credentials["room_id"], credentials["member_token"]))
         except RelayError as error:
             if error.status != 401 or not credentials.get("reconnect_token"):
                 raise
@@ -924,9 +944,27 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             "stats": {},
         }
 
+    def require_no_active_room(state: Runtime) -> None:
+        if not state.read_authority().get("member_token"):
+            return
+        try:
+            room = state.authoritative_room()
+        except RelayError as error:
+            if error.code == "room_not_active":
+                return
+            raise relay_api_error(error) from error
+        if room.get("state") not in {"closed", "expired"}:
+            raise ControlApiError(
+                409, "room_already_active",
+                "an existing Trade Room must be resumed or released before opening another",
+                stage="room", recoverable=True, primary_action="resume_room",
+            )
+        state.clear_authority()
+
     @app.post("/api/v1/trade-room")
     def create_trade_room(payload: CreateGroup, request: Request) -> dict:
         state = runtime(request)
+        require_no_active_room(state)
         state.require_relay_contract()
         try:
             response = state.relay.create_trade_room({
@@ -948,6 +986,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     @app.post("/api/v1/trade-room/join")
     def join_trade_room(payload: JoinGroup, request: Request) -> dict:
         state = runtime(request)
+        require_no_active_room(state)
         state.require_relay_contract()
         try:
             response = state.relay.join_trade_room(
@@ -992,6 +1031,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     def join_public_trade_room(
             listing_id: str, payload: JoinPublicRoom, request: Request) -> dict:
         state = runtime(request)
+        require_no_active_room(state)
         state.require_relay_contract()
         try:
             response = state.relay.join_public_trade_room(
@@ -1013,6 +1053,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                     room["room_id"], credentials["member_token"], "/heartbeat",
                     expected_version=room["room_version"])
                 state.last_authority_heartbeat = time.monotonic()
+            room = control_room(room)
             launch_authoritative_attempt(state, room)
             return room
         except RelayError as error:

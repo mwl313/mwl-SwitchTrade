@@ -29,6 +29,10 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
     public LegacyConnectionState ConnectionState { get; private set; } = LegacyConnectionState.Idle;
     public string StatusText { get; private set; } = "Connection not started";
     public string? RecoveryMessage { get; private set; }
+    public string? RecoveryCode { get; private set; }
+    public string? RecoveryStage { get; private set; }
+    public bool RecoveryRecoverable { get; private set; }
+    public string? RecoveryAction { get; private set; }
     public string RoomState { get; private set; } = "waiting_for_partner";
     public string AttemptPhase { get; private set; } = "none";
     public bool PartnerOnline { get; private set; }
@@ -49,7 +53,7 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
         Context = new(room, membershipRole, switchRole, localInvitation);
         ConnectionState = LegacyConnectionState.Idle;
         StatusText = "Connection not started";
-        RecoveryMessage = null;
+        ClearRecovery();
         RoomState = room.Participants >= 2 ? "ready_check" : "waiting_for_partner";
         AttemptPhase = "none";
         PartnerOnline = room.Participants >= 2;
@@ -67,7 +71,7 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
         StatusText = switchRole == SwitchRoomRole.Creator
             ? "Looking for the group on your Switch"
             : "Preparing your partner’s group";
-        RecoveryMessage = null;
+        ClearRecovery();
         RaiseChanged();
         try
         {
@@ -82,6 +86,10 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
             ConnectionState = LegacyConnectionState.NeedsRecovery;
             StatusText = error.UserMessage;
             RecoveryMessage = error.UserMessage;
+            RecoveryCode = error.TechnicalCode;
+            RecoveryStage = error.Stage;
+            RecoveryRecoverable = error.Recoverable;
+            RecoveryAction = error.PrimaryAction;
             RaiseChanged();
             return false;
         }
@@ -92,7 +100,7 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
         if (Context is null || ConnectionState == LegacyConnectionState.Idle) return true;
         ConnectionState = LegacyConnectionState.Ending;
         StatusText = "Ending the connection…";
-        RecoveryMessage = null;
+        ClearRecovery();
         RaiseChanged();
         try
         {
@@ -107,6 +115,10 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
             ConnectionState = LegacyConnectionState.NeedsRecovery;
             StatusText = "SwitchTrade couldn’t confirm that the connection ended.";
             RecoveryMessage = error.UserMessage;
+            RecoveryCode = error.TechnicalCode;
+            RecoveryStage = error.Stage;
+            RecoveryRecoverable = error.Recoverable;
+            RecoveryAction = error.PrimaryAction;
             RaiseChanged();
             return false;
         }
@@ -123,7 +135,7 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
         StatusText = context.MembershipRole == RoomMembershipRole.Owner
             ? "Closing this Trade Room…"
             : "Leaving this Trade Room…";
-        RecoveryMessage = null;
+        ClearRecovery();
         RaiseChanged();
         try
         {
@@ -139,6 +151,10 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
                 ? "SwitchTrade couldn’t confirm that the Trade Room closed."
                 : "SwitchTrade couldn’t confirm that you left the Trade Room.";
             RecoveryMessage = error.UserMessage;
+            RecoveryCode = error.TechnicalCode;
+            RecoveryStage = error.Stage;
+            RecoveryRecoverable = error.Recoverable;
+            RecoveryAction = error.PrimaryAction;
             RaiseChanged();
             return false;
         }
@@ -186,7 +202,7 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
             case "completed":
                 ConnectionState = LegacyConnectionState.Idle;
                 StatusText = "Connection ended. This Trade Room is still open.";
-                RecoveryMessage = null;
+                ClearRecovery();
                 break;
             default:
                 return;
@@ -213,6 +229,28 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
         PartnerOnline = room.PartnerOnline;
         BothReady = room.BothReady;
         RoleLocked = room.RoleLocked;
+        if (room.AttemptPhase == "failed")
+        {
+            ConnectionState = LegacyConnectionState.NeedsRecovery;
+            StatusText = "This connection needs attention.";
+            RecoveryCode = room.FailureCode ?? "session.failed";
+            RecoveryStage = room.FailureStage ?? "session";
+            RecoveryRecoverable = room.FailureRecoverable;
+            RecoveryAction = room.FailureAction ?? "retry";
+            RecoveryMessage = RecoveryCode switch
+            {
+                "relay.restart" => "The online relay restarted. End this attempt and try again.",
+                "relay.peer_lost" => "The partner connection was lost. End this attempt and try again.",
+                "member.reconnect_expired" => "Your partner did not reconnect in time.",
+                _ => "End this attempt and try again. Export a support bundle if it repeats.",
+            };
+        }
+        else if (ConnectionState == LegacyConnectionState.Idle && room.RoleLocked)
+        {
+            ConnectionState = room.State == "trading"
+                ? LegacyConnectionState.Active
+                : LegacyConnectionState.Starting;
+        }
         if (ConnectionState == LegacyConnectionState.Idle)
         {
             StatusText = room.State switch
@@ -235,7 +273,7 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
         Context = null;
         ConnectionState = LegacyConnectionState.Idle;
         StatusText = "Connection not started";
-        RecoveryMessage = null;
+        ClearRecovery();
         RoomState = "waiting_for_partner";
         AttemptPhase = "none";
         PartnerOnline = false;
@@ -245,4 +283,13 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
     }
 
     private void RaiseChanged() => Changed?.Invoke(this, EventArgs.Empty);
+
+    private void ClearRecovery()
+    {
+        RecoveryMessage = null;
+        RecoveryCode = null;
+        RecoveryStage = null;
+        RecoveryRecoverable = false;
+        RecoveryAction = null;
+    }
 }

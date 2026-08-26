@@ -190,6 +190,78 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                         self.assertEqual(response.status_code, 200, response.text)
                         self.assertFalse(runtime.authority_state.exists())
 
+    def test_active_authority_cannot_be_overwritten_by_another_room(self):
+        room = {
+            "contract_version": "room-control.v1", "room_id": "room-1",
+            "room_code": "ABC123", "room_version": 7, "state": "ready_check",
+            "members": [],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                runtime = client.app.state.runtime
+                runtime.save_authority({
+                    "room": room, "member_token": "member-secret",
+                    "reconnect_token": "reconnect-secret",
+                })
+                retained = runtime.authority_state.read_text(encoding="utf-8")
+                with patch.object(runtime, "authoritative_room", return_value=room), \
+                        patch.object(runtime.relay, "create_trade_room") as create, \
+                        patch.object(runtime.relay, "join_trade_room") as join, \
+                        patch.object(runtime.relay, "join_public_trade_room") as public_join:
+                    responses = [
+                        client.post("/api/v1/trade-room", json={
+                            "name": "Replacement", "visibility": "private",
+                            "trainer_display_name": "Leaf", "game": "LeafGreen",
+                            "language": "English",
+                        }),
+                        client.post("/api/v1/trade-room/join", json={
+                            "passcode": "DEF456", "trainer_display_name": "Red",
+                        }),
+                        client.post("/api/v1/public-trade-rooms/listing-2/join", json={
+                            "trainer_display_name": "Red",
+                        }),
+                    ]
+                for response in responses:
+                    self.assertEqual(response.status_code, 409, response.text)
+                    self.assertEqual(response.json()["code"], "room_already_active")
+                    self.assertEqual(response.json()["primary_action"], "resume_room")
+                create.assert_not_called()
+                join.assert_not_called()
+                public_join.assert_not_called()
+                self.assertEqual(runtime.authority_state.read_text(encoding="utf-8"), retained)
+
+    def test_attempt_failures_are_exposed_as_stable_recovery_contracts(self):
+        room = {
+            "contract_version": "room-control.v1", "room_id": "room-1",
+            "room_code": "ABC123", "room_version": 8, "state": "ready_check",
+            "members": [{"member_id": "member-1", "is_local": True,
+                         "seat": "member_a", "online_state": "online",
+                         "ready_state": "not_ready", "switch_room_role": None}],
+            "attempt": {"attempt_id": "attempt-1", "phase": "failed",
+                        "role_locked": True},
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                runtime = client.app.state.runtime
+                for code in ("relay.restart", "relay.peer_lost"):
+                    with self.subTest(code=code):
+                        failed_room = {**room, "attempt": {
+                            **room["attempt"], "recoverable_error": code,
+                        }}
+                        runtime.save_authority({
+                            "room": failed_room, "member_token": "member-secret",
+                            "reconnect_token": "reconnect-secret",
+                        })
+                        with patch.object(runtime.relay, "room", return_value=failed_room), \
+                                patch.object(runtime.relay, "room_command",
+                                             return_value=failed_room):
+                            response = client.get("/api/v1/trade-room")
+                        self.assertEqual(response.status_code, 200, response.text)
+                        self.assertEqual(response.json()["attempt"]["failure"], {
+                            "code": code, "stage": "relay", "recoverable": True,
+                            "primary_action": "retry",
+                        })
+
     def test_remote_room_close_clears_local_authority_and_returns_stable_state(self):
         with tempfile.TemporaryDirectory() as temporary:
             with TestClient(create_app(runs_root=temporary)) as client:

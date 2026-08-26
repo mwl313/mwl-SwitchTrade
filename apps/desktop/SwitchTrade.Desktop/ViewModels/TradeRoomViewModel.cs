@@ -63,6 +63,10 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
     public bool HasAdapterRepair => HasRecovery && Shell.RecoveryTechnicalDetails.Contains(
         "radio.failed", StringComparison.OrdinalIgnoreCase);
     public string RecoveryMessage => _coordinator.RecoveryMessage ?? "";
+    public string RecoveryCode => _coordinator.RecoveryCode ?? "";
+    public string RecoveryStage => _coordinator.RecoveryStage ?? "";
+    public bool RecoveryRecoverable => _coordinator.RecoveryRecoverable;
+    public string RecoveryAction => _coordinator.RecoveryAction ?? "";
     public string StageHeading => _coordinator.ConnectionState == LegacyConnectionState.Active
             ? "Both Switches are connected"
             : MainInstruction;
@@ -166,6 +170,10 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
         OnPropertyChanged(nameof(HasRecovery));
         OnPropertyChanged(nameof(HasAdapterRepair));
         OnPropertyChanged(nameof(RecoveryMessage));
+        OnPropertyChanged(nameof(RecoveryCode));
+        OnPropertyChanged(nameof(RecoveryStage));
+        OnPropertyChanged(nameof(RecoveryRecoverable));
+        OnPropertyChanged(nameof(RecoveryAction));
         OnPropertyChanged(nameof(StageHeading));
         OnPropertyChanged(nameof(LinklineState));
         ConnectionCommand.RaiseCanExecuteChanged();
