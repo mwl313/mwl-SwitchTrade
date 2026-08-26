@@ -1,8 +1,10 @@
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using SwitchTrade.Desktop.Models;
 
 namespace SwitchTrade.Desktop.Services;
@@ -57,12 +59,14 @@ public sealed class ControlApiClient : IControlGateway
     };
 
     private readonly HttpClient _http;
+    private readonly string? _expectedReleaseId;
 
-    public ControlApiClient(HttpMessageHandler? handler = null)
+    public ControlApiClient(HttpMessageHandler? handler = null, string? expectedReleaseId = null)
     {
         _http = handler is null ? new HttpClient() : new HttpClient(handler, disposeHandler: true);
         _http.BaseAddress = new Uri(ApiBase);
         _http.Timeout = TimeSpan.FromSeconds(30);
+        _expectedReleaseId = expectedReleaseId ?? InstalledReleaseId();
     }
 
     public async Task<ControlStatus?> TryGetStatusAsync(CancellationToken cancellationToken = default)
@@ -88,7 +92,8 @@ public sealed class ControlApiClient : IControlGateway
                 ? sessionAxis.TechnicalCode.Replace("session.", "", StringComparison.OrdinalIgnoreCase)
                 : "idle";
             var compatible = dto.Compatible && dto.ContractVersion == ReadinessContract &&
-                             (dto.ProductVersion?.StartsWith(CompatibleProductPrefix, StringComparison.Ordinal) ?? false);
+                             (dto.ProductVersion?.StartsWith(CompatibleProductPrefix, StringComparison.Ordinal) ?? false) &&
+                             _expectedReleaseId is not null && dto.ReleaseId == _expectedReleaseId;
             return new ControlStatus(
                 session, dto.ProductVersion ?? "unknown", dto.RunId ?? "",
                 dto.EndpointProcessRunning,
@@ -96,12 +101,37 @@ public sealed class ControlApiClient : IControlGateway
                 states.TryGetValue("relay", out var relay) && relay.Status == "ready",
                 dto.SessionId, dto.Failure?.Message,
                 dto.ContractVersion ?? "unknown", compatible, states,
-                dto.Failure?.Stage, dto.Failure?.PrimaryAction, dto.Capabilities ?? []);
+                dto.Failure?.Stage, dto.Failure?.PrimaryAction, dto.Capabilities ?? [], dto.ReleaseId);
         }
         catch (HttpRequestException) { return null; }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return null; }
         catch (JsonException) { return null; }
         catch (NotSupportedException) { return null; }
+    }
+
+    private static string? InstalledReleaseId()
+    {
+        try
+        {
+            var manifest = Path.Combine(AppContext.BaseDirectory, "manifest.json");
+            var marker = Path.Combine(AppContext.BaseDirectory, ".switchtrade-release.json");
+            using var document = JsonDocument.Parse(File.ReadAllBytes(manifest));
+            using var markerDocument = JsonDocument.Parse(File.ReadAllBytes(marker));
+            var root = document.RootElement;
+            var markerRoot = markerDocument.RootElement;
+            if (!root.TryGetProperty("schema", out var schema) || schema.GetInt32() != 2 ||
+                !root.TryGetProperty("release_id", out var release) ||
+                !markerRoot.TryGetProperty("schema", out var markerSchema) || markerSchema.GetInt32() != 1 ||
+                !markerRoot.TryGetProperty("release_id", out var markerRelease)) return null;
+            var value = release.GetString();
+            return value is not null && markerRelease.GetString() == value &&
+                   Regex.IsMatch(value, "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+                ? value : null;
+        }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
+        catch (JsonException) { return null; }
+        catch (InvalidOperationException) { return null; }
     }
 
     public async Task<TradeRoomInfo> CreateTradeRoomAsync(
@@ -667,6 +697,7 @@ public sealed class ControlApiClient : IControlGateway
     private sealed record ReadinessDto(
         [property: JsonPropertyName("contract_version")] string? ContractVersion,
         [property: JsonPropertyName("product_version")] string? ProductVersion,
+        [property: JsonPropertyName("release_id")] string? ReleaseId,
         bool Compatible,
         [property: JsonPropertyName("run_id")] string? RunId,
         [property: JsonPropertyName("endpoint_process_running")] bool EndpointProcessRunning,

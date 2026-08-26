@@ -790,8 +790,27 @@ if ($DeferHardwareSetup) {
     Invoke-LoggedWsl -Arguments $wslHealthArguments -FailureCode 'RADIO_RX_HEALTH_FAILED' `
         -Stage $SetupStage | Out-Null
     if ($UsbInstanceId -and $UsbId -and $BusId) {
-        Write-SwitchTradeHardwareSelection -StateRoot $StateRoot -UsbId $UsbId `
-            -InstanceId $UsbInstanceId -BusId $BusId | Out-Null
+        $windowsSelection = Write-SwitchTradeHardwareSelection -StateRoot $StateRoot -UsbId $UsbId `
+            -InstanceId $UsbInstanceId -BusId $BusId
+        $selectionSource = Convert-ToWslPath $windowsSelection
+        $selectionRoot = '/root/.local/state/switchtrade/runtime'
+        $selectionTarget = "$selectionRoot/hardware-selection.json"
+        $selectionTemporary = "$selectionRoot/.hardware-selection.$ReleaseId.tmp"
+        Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--',
+            'install', '-d', '-m', '0700', $selectionRoot) `
+            -FailureCode 'HARDWARE_SELECTION_IMPORT_FAILED' -Stage 'hardware_selection_import' | Out-Null
+        try {
+            Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--',
+                'install', '-m', '0600', $selectionSource, $selectionTemporary) `
+                -FailureCode 'HARDWARE_SELECTION_IMPORT_FAILED' -Stage 'hardware_selection_import' | Out-Null
+            Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--',
+                'mv', '-f', $selectionTemporary, $selectionTarget) `
+                -FailureCode 'HARDWARE_SELECTION_IMPORT_FAILED' -Stage 'hardware_selection_import' | Out-Null
+        } finally {
+            Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--',
+                'rm', '-f', $selectionTemporary) `
+                -FailureCode 'HARDWARE_SELECTION_CLEANUP_FAILED' -Stage 'hardware_selection_import' | Out-Null
+        }
     }
 }
 

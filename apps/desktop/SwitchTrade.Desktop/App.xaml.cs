@@ -50,6 +50,24 @@ public partial class App : Application
             var capabilityGateWorks = new ControlStatus(
                 "idle", "0.2.0", "self-test", false, false, false, null, null,
                 Capabilities: ["public-directory.v1"]).HasCapability("public-directory.v1");
+            var unexpectedReleaseGateRequests = 0;
+            bool ReleaseGateAccepts(string runtimeRelease, string installedRelease)
+            {
+                using var client = new ControlApiClient(new SelfTestHttpHandler(request =>
+                {
+                    if (request.RequestUri?.AbsolutePath != "/api/v1/app/readiness")
+                        unexpectedReleaseGateRequests++;
+                    return Task.FromResult(JsonResponse(
+                        "{\"contract_version\":\"app-readiness.v1\",\"product_version\":\"0.2.0\"," +
+                        $"\"release_id\":\"{runtimeRelease}\",\"compatible\":true," +
+                        "\"states\":{\"control\":{\"status\":\"ready\",\"user_message\":\"Ready\"," +
+                        "\"technical_code\":\"control.ready\"}}}"));
+                }), installedRelease);
+                return client.TryGetStatusAsync().GetAwaiter().GetResult()?.Compatible == true;
+            }
+            var exactReleaseGateWorks = !ReleaseGateAccepts("release-a", "release-b") &&
+                                        ReleaseGateAccepts("release-a", "release-a") &&
+                                        unexpectedReleaseGateRequests == 0;
             var selectionBody = "";
             using var contractClient = new ControlApiClient(new SelfTestHttpHandler(async request =>
             {
@@ -130,7 +148,7 @@ public partial class App : Application
                                             settings.InventoryErrorCode == "usb_inventory_timeout" &&
                                             settings.InventoryRecoveryAction == "run_hardware_diagnostics";
             Shutdown(apiIsLocal && codeNormalizes && requiredRoomFieldsWork &&
-                      highContrastResourcesLoad && capabilityGateWorks &&
+                      highContrastResourcesLoad && capabilityGateWorks && exactReleaseGateWorks &&
                       coordinatorWorks && memberReleaseWorks && authoritativeProjectionWorks &&
                       remoteCloseClearsRoom && hardwareContractWorks &&
                       malformedInventoryContained && timedOutInventoryContained &&

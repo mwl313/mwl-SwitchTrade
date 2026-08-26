@@ -107,7 +107,6 @@ public sealed class SettingsScreenViewModel : ScreenViewModel
         }
         try
         {
-            var previousInstance = SelectedDevice?.InstanceId;
             var previousUsbId = SelectedAdapter?.UsbId;
             var adapters = await Shell.Gateway.GetAdapterProfilesAsync();
             var devices = await Shell.Gateway.GetHardwareDevicesAsync();
@@ -115,10 +114,7 @@ public sealed class SettingsScreenViewModel : ScreenViewModel
             foreach (var adapter in adapters) Adapters.Add(adapter);
             Devices.Clear();
             foreach (var device in devices) Devices.Add(device);
-            SelectedDevice = Devices.FirstOrDefault(device => device.IsSelected) ??
-                             Devices.FirstOrDefault(device => string.Equals(
-                                 device.InstanceId, previousInstance, StringComparison.OrdinalIgnoreCase)) ??
-                             Devices.FirstOrDefault();
+            SelectedDevice = Devices.FirstOrDefault(device => device.IsSelected);
             SelectedAdapter = Adapters.FirstOrDefault(adapter =>
                                   adapter.UsbId == (SelectedDevice?.UsbId ?? previousUsbId)) ??
                               Adapters.FirstOrDefault();

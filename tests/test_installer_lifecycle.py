@@ -51,6 +51,8 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertIn("KernelStorageRoot = $KernelStorageRoot", setup)
         self.assertIn("Register-SwitchTradeUsbWatcherStartup", setup)
         self.assertIn("Unregister-SwitchTradeUsbWatcherStartup", setup)
+        self.assertIn("HARDWARE_SELECTION_IMPORT_FAILED", setup)
+        self.assertIn("'install', '-m', '0600'", setup)
         self.assertIn("SETUP_ELEVATION_FAILED", program)
         self.assertIn("--invoking-user-profile-b64=", program)
         self.assertIn("-InvokingUserSid", program)

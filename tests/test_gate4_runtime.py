@@ -473,29 +473,39 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                                      r"USB\VID_0E8D&PID_7610\TEST")
 
     def test_selected_instance_resolves_a_changed_bus_id_before_attach(self):
-        instance_id = r"USB\VID_0BDA&PID_818B\RADIO-A"
-        current_bus = ["4-20"]
+        instance_id = r"USB\VID_0BDA&PID_818B\RADIO-B"
+        other_instance = r"USB\VID_0BDA&PID_818B\RADIO-A"
+        current_bus = ["9-7"]
         commands = []
 
         def run(command, **_kwargs):
             commands.append(command)
             result = MagicMock(returncode=0, stdout="", stderr="")
             if command[:2] == ["usbipd.exe", "state"]:
-                result.stdout = json.dumps({"Devices": [{
-                    "BusId": current_bus[0], "ClientIPAddress": None,
-                    "Description": "Realtek RTL8192EU", "InstanceId": instance_id,
-                }]})
+                result.stdout = json.dumps({"Devices": [
+                    {
+                        "BusId": "4-20", "ClientIPAddress": None,
+                        "Description": "Realtek RTL8192EU", "InstanceId": other_instance,
+                    },
+                    {
+                        "BusId": current_bus[0], "ClientIPAddress": None,
+                        "Description": "Realtek RTL8192EU", "InstanceId": instance_id,
+                    },
+                ]})
             return result
 
         with tempfile.TemporaryDirectory() as temporary:
             with TestClient(create_app(runs_root=temporary)) as client:
                 with patch("switchtrade.control.subprocess.run", side_effect=run):
-                    selected = client.post("/api/v1/hardware/selection", json={
-                        "usb_id": "0bda:818b", "bus_id": current_bus[0],
-                        "instance_id": instance_id,
-                    })
-                    self.assertEqual(selected.status_code, 200, selected.text)
-                    current_bus[0] = "9-7"
+                    runtime = client.app.state.runtime
+                    runtime.hardware_selection_file.write_bytes(
+                        b"\xef\xbb\xbf" + json.dumps({
+                            "schema": 1, "usb_id": "0bda:818b", "bus_id": "4-21",
+                            "instance_id": instance_id,
+                        }).encode("utf-8"))
+                    devices = client.get("/api/v1/hardware/devices").json()["devices"]
+                    selected = [device for device in devices if device["selected"]]
+                    self.assertEqual([device["instance_id"] for device in selected], [instance_id])
                     repaired = client.post(
                         "/api/v1/app/repair", json={"action": "recheck_adapter"})
                     self.assertEqual(repaired.status_code, 200, repaired.text)
@@ -504,6 +514,20 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                     persisted = client.app.state.runtime.read_hardware_selection()
                     self.assertEqual(persisted["instance_id"], instance_id)
                     self.assertEqual(persisted["bus_id"], "9-7")
+
+    def test_inventory_does_not_present_unpersisted_fallback_as_selected(self):
+        usbipd_state = {"Devices": [{
+            "BusId": "4-20", "ClientIPAddress": None,
+            "Description": "Realtek RTL8192EU",
+            "InstanceId": r"USB\VID_0BDA&PID_818B\RADIO-A",
+        }]}
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                with patch("switchtrade.control.subprocess.run") as run:
+                    run.return_value.returncode = 0
+                    run.return_value.stdout = json.dumps(usbipd_state)
+                    devices = client.get("/api/v1/hardware/devices").json()["devices"]
+                    self.assertFalse(devices[0]["selected"])
 
     def test_control_reads_powershell_51_bom_hardware_selection(self):
         with tempfile.TemporaryDirectory() as temporary:

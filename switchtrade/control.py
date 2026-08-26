@@ -710,10 +710,6 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 "attached": bool(device.get("ClientIPAddress")),
                 "selected": is_selected,
             })
-        if not any(device["selected"] for device in inventory):
-            automatic = [device for device in inventory if profiles[device["usb_id"]].auto_select]
-            if len(automatic) == 1:
-                automatic[0]["selected"] = True
         return inventory
 
     def attach_selected_hardware(state: Runtime) -> str | None:

@@ -253,7 +253,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             ? "The desktop app and installed SwitchTrade runtime are not compatible."
             : status.Error ?? "The installed runtime needs attention.";
         RecoveryTechnicalDetails = !status.Compatible
-            ? $"app.version_mismatch · UI expects {ControlApiClient.ReadinessContract} / 0.2.x; runtime reported {status.ContractVersion} / {status.Version}."
+            ? $"app.version_mismatch · UI expects {ControlApiClient.ReadinessContract} / 0.2.x and the installed release; runtime reported {status.ContractVersion} / {status.Version} / {status.ReleaseId ?? "missing release"}."
             : $"{status.FailureStage ?? "control"}.failed · run {status.RunId} · action {status.RecoveryAction ?? "retry"}";
         RecoveryStage = !status.Compatible ? "version" : status.FailureStage ?? "control";
         RecoveryInstructions = RecoveryStage switch
