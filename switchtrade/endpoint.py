@@ -77,7 +77,8 @@ class EndpointLog:
 
 
 def runtime_plan(identity: str, usb_id: str | None = None,
-                 *, switch_room_role: str | None = None) -> dict:
+                 *, switch_room_role: str | None = None,
+                 allow_experimental_hardware: bool = False) -> dict:
     """Resolve stable tunnel identity separately from temporary radio behavior."""
     if identity in LEGACY_ROLE_AXES:
         tunnel_seat, legacy_switch_role = LEGACY_ROLE_AXES[identity]
@@ -89,7 +90,10 @@ def runtime_plan(identity: str, usb_id: str | None = None,
     if switch_room_role not in SWITCH_TO_RADIO_ROLE:
         raise ValueError("Switch room role must be creator or finder")
     radio_role = SWITCH_TO_RADIO_ROLE[switch_room_role]
-    profile = require_role(select_profile(usb_id), radio_role)
+    profile = require_role(
+        select_profile(usb_id), radio_role,
+        allow_experimental=allow_experimental_hardware,
+    )
     return {
         "tunnel_seat": tunnel_seat,
         "tunnel_role": SEAT_TO_TUNNEL_ROLE[tunnel_seat],
@@ -99,6 +103,9 @@ def runtime_plan(identity: str, usb_id: str | None = None,
         "driver_strategy": profile.strategy,
         "allowed_drivers": list(profile.allowed_drivers),
         "profile_status": profile.status,
+        "hardware_model": profile.model,
+        "host_engine": profile.host_engine,
+        "allow_experimental_hardware": allow_experimental_hardware,
     }
 
 
@@ -147,7 +154,10 @@ def run_endpoint(args) -> int:
     identity = args.tunnel_seat or args.role
     if identity is None:
         raise ValueError("--tunnel-seat is required")
-    plan = runtime_plan(identity, args.usb_id, switch_room_role=args.switch_room_role)
+    plan = runtime_plan(
+        identity, args.usb_id, switch_room_role=args.switch_room_role,
+        allow_experimental_hardware=args.allow_experimental_hardware,
+    )
     if args.dry_run:
         print(plan)
         return 0
@@ -209,6 +219,7 @@ def run_endpoint(args) -> int:
             transport = transportmod.HostTransport(
                 nickname=args.name, keys_path=args.keys, phyname=args.phy,
                 channel=args.channel, application_data=advertisement, log=log,
+                host_engine=plan["host_engine"],
             )
             transport.start(timeout=args.radio_timeout)
 
@@ -296,6 +307,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--relay-url", required=True)
     parser.add_argument("--session-id", required=True)
     parser.add_argument("--usb-id", help="profiled VID:PID; defaults to the registry auto candidate")
+    parser.add_argument(
+        "--allow-experimental-hardware", action="store_true",
+        help="allow one explicit upstream/driver candidate for this attempt",
+    )
     parser.add_argument("--phy", default="phy0")
     parser.add_argument("--channel", type=int, choices=range(1, 14), default=6)
     parser.add_argument("--name", default="CODEX")

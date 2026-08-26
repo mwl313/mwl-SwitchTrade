@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -73,6 +74,42 @@ class Gate4RuntimeContractTests(unittest.TestCase):
             self.assertIn("member_a", command)
             self.assertIn("--switch-room-role", command)
             self.assertIn("finder", command)
+
+    def test_hardware_profiles_publish_engine_availability_and_candidates(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                body = client.get("/api/hardware/profiles").json()
+                self.assertEqual(len(body["profiles"]), 9)
+                self.assertEqual(
+                    [engine["id"] for engine in body["host_engines"] if engine["selectable"]],
+                    ["ldn"],
+                )
+                candidate = next(
+                    profile for profile in body["profiles"] if profile["usb_id"] == "0e8d:7610")
+                self.assertTrue(candidate["requires_opt_in"])
+                self.assertEqual(candidate["host_engine"], "ldn")
+
+    def test_hardware_diagnostic_api_returns_machine_readable_report(self):
+        fake_report = {
+            "contract_version": "hardware-diagnostic.v1",
+            "run_id": "20260826T000000Z-1234abcd",
+            "overall_status": "partial",
+            "stages": [],
+            "incompatibilities": [],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                with patch("switchtrade.control.subprocess.run") as run:
+                    run.return_value.returncode = 0
+                    run.return_value.stdout = json.dumps(fake_report) + "\n"
+                    run.return_value.stderr = ""
+                    response = client.post(
+                        "/api/v1/hardware/diagnostics",
+                        json={"usb_id": "0e8d:7610", "mode": "quick"},
+                    )
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["report"]["overall_status"], "partial")
+                self.assertIn("switchtrade.hardware_diagnostics", run.call_args.args[0])
 
 
 if __name__ == "__main__":

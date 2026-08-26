@@ -1502,7 +1502,7 @@ class HostTransport:
     def __init__(self, password=None, nickname="EMU", keys_path="~/.switch/prod.keys",
                  phyname="phy0", ifname="ldn", ifname_monitor="ldn-mon", channel=6,
                  trainer_id=None, use_ap_engine=False, ap_passphrase=None,
-                 application_data=None, log=print):
+                 application_data=None, log=print, host_engine="ldn"):
         self.info = getattr(log, "info", log)   # clean milestone sink (default-mode narration)
         self.password = password if password else GBA_APP_PASSPHRASE
         self.nickname = nickname
@@ -1519,10 +1519,17 @@ class HostTransport:
         self.trainer_id = (trainer_id if trainer_id is not None
                            else secrets.randbelow(0x10000))
         self.rfu_session_id = secrets.randbelow(0xFFFF) + 1     # nonzero, same rationale
-        # A안 hybrid (docs/19): prefer the ApEngine backend (hostapd) for HOST mode -
-        # rtl8xxxu does not beacon from ldn's NL80211_CMD_START_AP alone. False (or a
-        # guest-only/unknown card) falls back to the stock ldn create_network path.
-        self.use_ap_engine = use_ap_engine
+        # Production policy is explicit: HostTransport + ldn.create_network() is the
+        # available engine. The retained hostapd and direct-nl80211 prototypes are not
+        # selectable until they implement the complete Nintendo LDN lifecycle.
+        if use_ap_engine:
+            host_engine = "hostapd"
+        if host_engine != "ldn":
+            raise RuntimeError(
+                f"host engine {host_engine!r} is In Development; use 'ldn'"
+            )
+        self.host_engine = host_engine
+        self.use_ap_engine = False
         self.ap_passphrase = ap_passphrase      # None = open network (LDN does its own auth)
         self._application_data_override = (bytes(application_data)
                                            if application_data is not None else None)

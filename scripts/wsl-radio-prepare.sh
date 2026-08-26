@@ -13,6 +13,7 @@ TARGET_CHANNEL="${RADIO_TARGET_CHANNEL:-6}"
 RX_TIMEOUT="${RADIO_HEALTH_TIMEOUT:-2}"
 REQUIRED_ROLE="${RADIO_ROLE:-}"
 MODE=ensure
+ALLOW_EXPERIMENTAL=false
 
 msg() { printf '%s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -32,6 +33,8 @@ Options:
   --target-channel N     Channel left configured for COMMAND (default: 6)
   --timeout SECONDS      Per-channel health timeout (default: 2)
   --role ROLE            Require a profile role: host, guest, or relay
+  --allow-experimental-hardware
+                         Allow an upstream/driver candidate for this invocation only
   --status               Report attached USB devices/drivers without mutation
   --list-profiles        Print supported profiles without mutation
 EOF
@@ -51,8 +54,8 @@ profile_for() {
 
 list_profiles() {
     awk -F '\t' '
-        BEGIN { printf "%-10s %-20s %-20s %-18s %-16s %-5s\n", "USB_ID", "STRATEGY", "DRIVERS", "ROLES", "STATUS", "AUTO" }
-        $0 !~ /^#/ && NF >= 8 { printf "%-10s %-20s %-20s %-18s %-16s %-5s\n", $1, $2, $4, $5, $6, $7 }
+        BEGIN { printf "%-10s %-20s %-20s %-18s %-20s %-5s %-24s\n", "USB_ID", "STRATEGY", "DRIVERS", "ROLES", "STATUS", "AUTO", "ENGINE" }
+        $0 !~ /^#/ && NF >= 8 { printf "%-10s %-20s %-20s %-18s %-20s %-5s %-24s\n", $1, $2, $4, $5, $6, $7, (NF >= 11 ? $11 : "ldn") }
     ' "$PROFILE_FILE"
 }
 
@@ -248,6 +251,7 @@ while (($#)); do
         --target-channel) [[ $# -ge 2 ]] || die "--target-channel needs a value"; TARGET_CHANNEL=$2; shift 2 ;;
         --timeout) [[ $# -ge 2 ]] || die "--timeout needs a value"; RX_TIMEOUT=$2; shift 2 ;;
         --role) [[ $# -ge 2 ]] || die "--role needs a value"; REQUIRED_ROLE=$2; shift 2 ;;
+        --allow-experimental-hardware) ALLOW_EXPERIMENTAL=true; shift ;;
         --status) MODE=status; shift ;;
         --list-profiles) MODE=profiles; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -270,7 +274,19 @@ esac
 selection="$(select_device)"
 IFS=$'\t' read -r USB_ID DEVICE <<< "$selection"
 profile="$(profile_for "$USB_ID")"
-IFS=$'\t' read -r _ strategy module_file allowed_drivers roles status auto_select _notes <<< "$profile"
+IFS=$'\t' read -r _ strategy module_file allowed_drivers roles status auto_select _notes _model _chipset host_engine _evidence <<< "$profile"
+host_engine=${host_engine:-ldn}
+case $status in
+    production-verified|beta-candidate) ;;
+    upstream-candidate|driver-candidate)
+        [[ $ALLOW_EXPERIMENTAL == true ]] || die \
+            "HARDWARE_EXPERIMENTAL_OPT_IN_REQUIRED: $USB_ID is $status; pass --allow-experimental-hardware for this invocation"
+        ;;
+    quarantined) die "HARDWARE_QUARANTINED: $USB_ID cannot be used for a trading attempt" ;;
+    *) die "HARDWARE_STATUS_BLOCKED: unknown profile status $status for $USB_ID" ;;
+esac
+[[ $host_engine == ldn ]] || die \
+    "HOST_ENGINE_IN_DEVELOPMENT: $host_engine cannot be selected; use ldn"
 if [[ -n $REQUIRED_ROLE ]]; then
     case $REQUIRED_ROLE in host|guest|relay) ;; *) die "invalid role: $REQUIRED_ROLE" ;; esac
     role_allowed "$REQUIRED_ROLE" "$roles" || die "$USB_ID does not support role $REQUIRED_ROLE (roles=$roles)"
@@ -327,7 +343,7 @@ if [[ $module_file != - ]]; then
         die "$USB_ID uses $driver but its profiled artifact $module_file is unavailable"
     fi
 fi
-msg "[driver] PASS usb=$USB_ID strategy=$strategy driver=$driver iface=$iface roles=$roles status=$status auto_select=$auto_select${REQUIRED_ROLE:+ required_role=$REQUIRED_ROLE}"
+msg "[driver] PASS usb=$USB_ID strategy=$strategy driver=$driver iface=$iface roles=$roles status=$status auto_select=$auto_select engine=$host_engine${REQUIRED_ROLE:+ required_role=$REQUIRED_ROLE}"
 
 exec "$HEALTH_GATE" --iface "$iface" --usb-id "$USB_ID" \
     --health-channels "$HEALTH_CHANNELS" --target-channel "$TARGET_CHANNEL" \
