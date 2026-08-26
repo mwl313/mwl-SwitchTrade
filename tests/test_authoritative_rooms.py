@@ -590,6 +590,57 @@ class AuthoritativeRoomTests(unittest.TestCase):
         self.assertEqual(recovered.status_code, 200, recovered.text)
         self.assertNotEqual(recovered.json()["member_token"], rotated["member_token"])
 
+    def test_matched_inactive_reconnect_credentials_report_terminal_lifecycle(self):
+        first = self._create()
+        second = self._join(first["room"]["room_code"])
+        room_id = first["room"]["room_id"]
+        invalid = self.client.post(f"/v1/trade-rooms/{room_id}:reconnect", json={
+            "reconnect_token": "not-a-valid-secret-that-matches-nothing",
+        }, headers={"Idempotency-Key": _command()})
+        self.assertEqual(invalid.status_code, 401, invalid.text)
+        self.assertEqual(invalid.json()["code"], "reconnect_credential_invalid")
+
+        relay_server.authority.mutate(room_id, first["member_token"], _command(), "close")
+        closed = self.client.post(f"/v1/trade-rooms/{room_id}:reconnect", json={
+            "reconnect_token": second["reconnect_token"],
+        }, headers={"Idempotency-Key": _command()})
+        self.assertEqual(closed.status_code, 410, closed.text)
+        self.assertEqual(closed.json()["code"], "room_not_active")
+
+        owner = self._create("left-owner")
+        member = self._join(owner["room"]["room_code"], "left-member")
+        relay_server.authority.mutate(
+            owner["room"]["room_id"], member["member_token"], _command(), "leave")
+        left = self.client.post(
+            f"/v1/trade-rooms/{owner['room']['room_id']}:reconnect",
+            json={"reconnect_token": member["reconnect_token"]},
+            headers={"Idempotency-Key": _command()})
+        self.assertEqual(left.status_code, 410, left.text)
+        self.assertEqual(left.json()["code"], "room_not_active")
+
+        expiring = self._create("expired-owner")
+        with patch("relay.authority.time.time", return_value=time.time() + 7 * 60 * 60):
+            expired = self.client.post(
+                f"/v1/trade-rooms/{expiring['room']['room_id']}:reconnect",
+                json={"reconnect_token": expiring["reconnect_token"]},
+                headers={"Idempotency-Key": _command()})
+        self.assertEqual(expired.status_code, 410, expired.text)
+        self.assertEqual(expired.json()["code"], "room_not_active")
+
+        reconnecting = self._create("deadline-owner")
+        partner = self._join(reconnecting["room"]["room_code"], "deadline-member")
+        baseline = time.time()
+        with patch("relay.authority.time.time", return_value=baseline + 46):
+            relay_server.authority.sweep_presence()
+        with patch("relay.authority.time.time", return_value=baseline + 137):
+            relay_server.authority.sweep_presence()
+            deadline = self.client.post(
+                f"/v1/trade-rooms/{reconnecting['room']['room_id']}:reconnect",
+                json={"reconnect_token": partner["reconnect_token"]},
+                headers={"Idempotency-Key": _command()})
+        self.assertEqual(deadline.status_code, 410, deadline.text)
+        self.assertEqual(deadline.json()["code"], "reconnect_deadline_expired")
+
     def test_presence_moves_through_bounded_reconnect_window(self):
         first = self._create()
         second = self._join(first["room"]["room_code"])

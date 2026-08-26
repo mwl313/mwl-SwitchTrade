@@ -493,6 +493,55 @@ class TunnelIntegrationTest(unittest.TestCase):
                 self.assertEqual(roles, {"creator", "finder"})
                 self.assertEqual(len(processes), 2)
 
+    def test_rotated_credentials_leave_and_remote_close_cleanup_across_two_controls(self):
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            with TestClient(create_app(runs_root=first, relay_url=self.base)) as owner_api, \
+                    TestClient(create_app(runs_root=second, relay_url=self.base)) as member_api:
+                created = owner_api.post("/api/v1/trade-room", json={
+                    "name": "Rotated leave", "visibility": "private",
+                    "trainer_display_name": "Leaf", "game": "LeafGreen", "language": "English",
+                })
+                self.assertEqual(created.status_code, 200, created.text)
+                joined = member_api.post("/api/v1/trade-room/join", json={
+                    "passcode": created.json()["room"]["room_code"],
+                    "trainer_display_name": "Red",
+                })
+                self.assertEqual(joined.status_code, 200, joined.text)
+
+                member_runtime = member_api.app.state.runtime
+                stale = member_runtime.read_authority()
+                member_runtime.relay.reconnect_trade_room(
+                    stale["room_id"], stale["reconnect_token"])
+                left = member_api.delete("/api/v1/trade-room/members/me")
+                self.assertEqual(left.status_code, 200, left.text)
+                self.assertFalse(member_runtime.authority_state.exists())
+                closed = owner_api.delete("/api/v1/trade-room")
+                self.assertEqual(closed.status_code, 200, closed.text)
+
+                created = owner_api.post("/api/v1/trade-room", json={
+                    "name": "Rotated close", "visibility": "private",
+                    "trainer_display_name": "Leaf", "game": "LeafGreen", "language": "English",
+                })
+                self.assertEqual(created.status_code, 200, created.text)
+                joined = member_api.post("/api/v1/trade-room/join", json={
+                    "passcode": created.json()["room"]["room_code"],
+                    "trainer_display_name": "Red",
+                })
+                self.assertEqual(joined.status_code, 200, joined.text)
+
+                owner_runtime = owner_api.app.state.runtime
+                stale = owner_runtime.read_authority()
+                owner_runtime.relay.reconnect_trade_room(
+                    stale["room_id"], stale["reconnect_token"])
+                closed = owner_api.delete("/api/v1/trade-room")
+                self.assertEqual(closed.status_code, 200, closed.text)
+                self.assertFalse(owner_runtime.authority_state.exists())
+
+                left = member_api.delete("/api/v1/trade-room/members/me")
+                self.assertEqual(left.status_code, 200, left.text)
+                self.assertEqual(left.json()["status"], "left")
+                self.assertFalse(member_runtime.authority_state.exists())
+
     def test_control_group_preserves_invitation_fields_and_releases_membership(self):
         with tempfile.TemporaryDirectory() as temporary:
             with TestClient(create_app(runs_root=temporary, relay_url=self.base)) as api:

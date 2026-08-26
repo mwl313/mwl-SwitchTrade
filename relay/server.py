@@ -68,6 +68,8 @@ ERROR_CODES = {
     "member credential is required": ("member_credential_required", "authentication", False, "rejoin_room"),
     "member credential is invalid": ("member_credential_invalid", "authentication", True, "reconnect"),
     "reconnect credential is invalid": ("reconnect_credential_invalid", "authentication", False, "rejoin_room"),
+    "reconnect deadline expired": (
+        "reconnect_deadline_expired", "authentication", False, "rejoin_room"),
     "rate limit exceeded": ("rate_limited", "relay", True, "retry_later"),
     "rate limit capacity exceeded": ("rate_limited", "relay", True, "retry_later"),
     "relay session capacity exceeded": ("relay_capacity", "relay", True, "retry_later"),

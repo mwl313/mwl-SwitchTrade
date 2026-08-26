@@ -842,13 +842,19 @@ class AuthorityStore:
                 "(previous_reconnect_hash=? AND previous_reconnect_until>?))",
                 (room_id, token_hash, token_hash, time.time()),
             ).fetchone()
-            if row is None or not row["active"]:
+            if row is None:
                 raise AuthorityError(401, "reconnect credential is invalid")
             room = self._load(room_id)
             member = next(item for item in room["members"] if item["member_id"] == row["member_id"])
+            if room["state"] in {"closed", "expired"} or member["online_state"] == "left":
+                raise AuthorityError(410, "trade room is not active")
             deadline = member.get("reconnect_deadline")
-            if deadline and datetime.fromisoformat(deadline.replace("Z", "+00:00")).timestamp() < time.time():
+            if (member["online_state"] == "offline" or
+                    deadline and datetime.fromisoformat(
+                        deadline.replace("Z", "+00:00")).timestamp() <= time.time()):
                 raise AuthorityError(410, "reconnect deadline expired")
+            if not row["active"]:
+                raise AuthorityError(401, "reconnect credential is invalid")
             token, reconnect = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
             self._db.execute(
                 "UPDATE credentials SET token_hash=?,reconnect_hash=?,previous_reconnect_hash=?,"
