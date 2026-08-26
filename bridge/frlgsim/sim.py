@@ -15,7 +15,7 @@ A capture path mirrors every datagram to a .jsonl so it can be decrypted/analyse
 import json
 import os
 import time
-from collections import deque
+from collections import OrderedDict, deque
 
 from . import crypto as cryptomod, reliable, gbaframe, rfu, pia_connect, ni, linkplayer, trade as trademod
 
@@ -105,6 +105,16 @@ PARENT_RTX_LIMIT = MAX_INFLIGHT
 # bounds the pending-K list as a memory safety net (K is a monotonic ts ack; the host re-sends un-acked T,
 # so dropping the oldest deferred K is safe).
 K_BACKLOG_MAX = 32         # pending-K list cap (memory safety net)
+
+
+def _remember_recent(store, value, limit):
+    """Remember insertion order deterministically and accept a value again after eviction."""
+    if value in store:
+        return False
+    store[value] = None
+    if len(store) > limit:
+        store.popitem(last=False)
+    return True
 # K in-flight cap: at most this many of OUR K-acks unacked at once. K is droppable (monotonic ts ack; the
 # host re-sends un-acked T), so capping it RESERVES room in the small window for the critical per-poll T
 # (recv-NI ack / UNI slot), which must never be starved. Sized = MAX_INFLIGHT - RTX_GAP_LIMIT_NI(2) - 1 (the
@@ -212,7 +222,7 @@ class Sim:
         # UNIQUE host 'T' ts (k_seq global +1 from 1; host idle T (slot_len<=1) is acked too; the host
         # sends us NO K). `mid` (1-based position within the OUT Pia datagram) is assigned at flush.
         self._k_seq = 0                  # last k_seq used (next K is _k_seq+1)
-        self._acked_ts = set()           # host T ts values already K-acked (dedup)
+        self._acked_ts = OrderedDict()   # host T ts values already K-acked (ordered dedup)
         self._pending_k = []             # [(k_seq, acked_ts)] queued, awaiting a datagram flush
         self._k_seqs = set()             # reliable seqs of OUR K-acks still in flight (for K_INFLIGHT_MAX)
         # NI sender machine: after the host accepts our 'C' (the 'A' frame), the child
@@ -345,7 +355,7 @@ class Sim:
         # does not gate emission on it (informational here).
         self._slot_credit = 0
         self._last_seat_emit = -100      # last tick we emitted a seat/leave held-keys (keepalive floor)
-        self._seen_in = set()
+        self._seen_in = OrderedDict()
         self.rx_count = self.tx_count = 0
         self.rx_fail = 0                 # host datagrams that failed to decrypt (SSID/key mismatch)
         self.rx_protos = {}              # proto id -> count of IN Pia messages seen
@@ -619,12 +629,7 @@ class Sim:
             return
         # K-ack EVERY unique host T ts (one K per unique ts; host idle T is still acked).
         ts = rec.get("ts")
-        if ts is not None and ts not in self._acked_ts:
-            self._acked_ts.add(ts)
-            self._k_seq += 1
-            self._pending_k.append((self._k_seq, ts))
-            if len(self._acked_ts) > 8192:         # bound memory on a long session
-                self._acked_ts = set(list(self._acked_ts)[-2048:])
+        self._queue_k_ack(ts)
         # RECV-side NI: a host NI-window 'T' (NI_START/NI/NI_END/NULL, NOT UNI) carries record['ni'].
         # When it is the host's OWN outgoing NI (ack=0) enqueue a recv-NI ACK slot MIRRORING its
         # (state, n, phase) with ack=1, sz=0 (the host's NI data content is discarded). NIReceiver
@@ -665,13 +670,21 @@ class Sim:
         self.engine.feed_in_frame(rec)
 
     def _note_in_seq(self, seq):
-        if seq in self._seen_in:
+        if not _remember_recent(self._seen_in, seq, 4096):
             return
-        self._seen_in.add(seq)
-        if len(self._seen_in) > 4096:
-            self._seen_in = set(list(self._seen_in)[-1024:])
         if ((seq - self.last_in_seq) & 0xFFFF) < 0x8000:
             self.last_in_seq = seq
+
+    def _queue_k_ack(self, ts):
+        """Queue one emulator K without forgetting an acknowledgement that never reached the wire."""
+        if ts is None or ts in self._acked_ts:
+            return False
+        if len(self._pending_k) >= K_BACKLOG_MAX:
+            return False
+        _remember_recent(self._acked_ts, ts, 8192)
+        self._k_seq += 1
+        self._pending_k.append((self._k_seq, ts))
+        return True
 
     # ---- TX ----------------------------------------------------------------
     def _next_pktid(self, dv):
@@ -841,7 +854,7 @@ class Sim:
             self._k_seqs.add(seq)
             k_frames.append((seq, reliable.FLAGSA_GBA, kf))
             queued += 1
-        self._pending_k = self._pending_k[queued:][-K_BACKLOG_MAX:]
+        self._pending_k = self._pending_k[queued:]
         # 3. our own 'T' slot - ONE per VBlank, ONLY after the host ACCEPTS our connect ('A'), window-bounded.
         t_frames = []
         if self._gba_accepted:

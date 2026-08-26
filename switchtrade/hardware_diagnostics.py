@@ -16,6 +16,7 @@ from switchtrade.hardware import (
     BLOCKED_STATUSES, DEFAULT_PROFILE_PATH, EXPERIMENTAL_STATUSES, USB_ID,
     load_profiles,
 )
+from switchtrade.endpoint import runtime_phy
 
 
 DIAGNOSTIC_CONTRACT = "hardware-diagnostic.v1"
@@ -309,6 +310,7 @@ def diagnose_hardware(usb_id: str, *, mode: str = "quick", role: str = "host",
 
     if mode == "full" and can_mutate:
         smoke = [
+            str(PREPARE), "--usb-id", usb_id, "--role", role, "--",
             sys.executable, "-m", "switchtrade.hardware_diagnostics",
             "--ldn-smoke-worker", "--usb-id", usb_id,
         ]
@@ -374,7 +376,7 @@ def _ldn_smoke_worker(usb_id: str) -> int:
         sys.path.insert(0, str(bridge))
     from frlgsim.transport import HostTransport
 
-    transport = HostTransport(host_engine="ldn", nickname="DIAG", phyname="phy0")
+    transport = HostTransport(host_engine="ldn", nickname="DIAG", phyname=runtime_phy())
     try:
         transport.start(timeout=45)
         print(f"LDN room ready for {usb_id}; tap={transport.iface}")

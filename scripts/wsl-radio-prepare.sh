@@ -12,6 +12,7 @@ HEALTH_CHANNELS="${RADIO_HEALTH_CHANNELS:-1,6,11}"
 TARGET_CHANNEL="${RADIO_TARGET_CHANNEL:-6}"
 RX_TIMEOUT="${RADIO_HEALTH_TIMEOUT:-2}"
 REQUIRED_ROLE="${RADIO_ROLE:-}"
+RESET_ON_RX_FAILURE=0
 MODE=ensure
 
 msg() { printf '%s\n' "$*"; }
@@ -32,6 +33,7 @@ Options:
   --target-channel N     Channel left configured for COMMAND (default: 6)
   --timeout SECONDS      Per-channel health timeout (default: 2)
   --role ROLE            Require a profile role: host, guest, or relay
+  --reset-on-rx-failure  Explicit recovery: USB-reset once after an RX timeout
   --allow-experimental-hardware
                          Deprecated compatibility flag; candidates no longer require confirmation
   --status               Report attached USB devices/drivers without mutation
@@ -250,6 +252,7 @@ while (($#)); do
         --target-channel) [[ $# -ge 2 ]] || die "--target-channel needs a value"; TARGET_CHANNEL=$2; shift 2 ;;
         --timeout) [[ $# -ge 2 ]] || die "--timeout needs a value"; RX_TIMEOUT=$2; shift 2 ;;
         --role) [[ $# -ge 2 ]] || die "--role needs a value"; REQUIRED_ROLE=$2; shift 2 ;;
+        --reset-on-rx-failure) RESET_ON_RX_FAILURE=1; shift ;;
         --allow-experimental-hardware) shift ;;
         --status) MODE=status; shift ;;
         --list-profiles) MODE=profiles; shift ;;
@@ -296,12 +299,18 @@ if [[ -z $iface && -n $driver ]]; then
 fi
 
 if [[ -z $iface ]]; then
-    [[ $strategy == vanilla-then-module ]] || die "$USB_ID vanilla driver produced no interface"
-    module="$(resolve_module "$module_file")" || die "module not found for $USB_ID: $module_file"
-    verify_module "$module"
-    module_name="$(modinfo -F name "$module")"
+    if [[ $strategy == vanilla ]]; then
+        module_name="${allowed_drivers%%,*}"
+        msg "[driver] cold-loading in-tree module $module_name for $USB_ID"
+        modprobe "$module_name" || die "could not load in-tree module $module_name for $USB_ID"
+    else
+        [[ $strategy == vanilla-then-module ]] || die "unsupported driver strategy $strategy for $USB_ID"
+        module="$(resolve_module "$module_file")" || die "module not found for $USB_ID: $module_file"
+        verify_module "$module"
+        module_name="$(modinfo -F name "$module")"
+    fi
     before="$(dmesg | wc -l)"
-    if ! lsmod | awk '{print $1}' | grep -qx "$module_name"; then
+    if [[ $strategy == vanilla-then-module ]] && ! lsmod | awk '{print $1}' | grep -qx "$module_name"; then
         msg "[driver] loading $module_name for $USB_ID from $module"
         insmod "$module"
     fi
@@ -341,6 +350,8 @@ if [[ $module_file != - ]]; then
 fi
 msg "[driver] PASS usb=$USB_ID strategy=$strategy driver=$driver iface=$iface roles=$roles status=$status auto_select=$auto_select engine=$host_engine${REQUIRED_ROLE:+ required_role=$REQUIRED_ROLE}"
 
+health_args=()
+(( RESET_ON_RX_FAILURE == 0 )) || health_args+=(--reset-on-rx-failure)
 exec "$HEALTH_GATE" --iface "$iface" --usb-id "$USB_ID" \
     --health-channels "$HEALTH_CHANNELS" --target-channel "$TARGET_CHANNEL" \
-    --timeout "$RX_TIMEOUT" -- "$@"
+    --timeout "$RX_TIMEOUT" "${health_args[@]}" -- "$@"

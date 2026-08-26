@@ -18,6 +18,7 @@ class FakeTunnel:
     def __init__(self):
         self.sent = []
         self.inbound = []
+        self.connection_generation = 1
 
     def send(self, payload, **fields):
         self.sent.append((bytes(payload), fields))
@@ -96,6 +97,19 @@ class RfuEndpointTest(unittest.TestCase):
         ))
         sim._drive_tunnel_reliable()
         self.assertEqual(batches, [])
+
+    def test_reconnect_discards_remote_frames_from_the_old_link(self):
+        sim, tunnel, batches = self._sim()
+        sim._pending_remote.append(Envelope(
+            "ABC123", Direction.HOST_TO_GUEST, 0, 1, 0, 1,
+            b"stale", kind=Kind.RFU, flags=0x01,
+        ))
+        tunnel.connection_generation += 1
+
+        sim._drive_tunnel_reliable()
+
+        self.assertEqual(batches, [])
+        self.assertEqual(list(sim._pending_remote), [])
 
     def test_host_transport_keeps_mirrored_advertisement_override(self):
         transport = HostTransport(application_data=b"leader-advertisement")

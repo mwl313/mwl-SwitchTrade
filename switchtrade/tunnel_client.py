@@ -77,6 +77,7 @@ class TunnelClient:
         self.connected = threading.Event()
         self._thread: threading.Thread | None = None
         self._epoch = secrets.randbits(32)
+        self.connection_generation = 0
         self._sequence = 0
         self._gate = SequenceGate()
         self.last_error = ""
@@ -141,6 +142,14 @@ class TunnelClient:
             except queue.Empty:
                 return
 
+    def _clear_inbox(self) -> None:
+        while True:
+            try:
+                self._inbox.get_nowait()
+                self.stats["dropped"] += 1
+            except queue.Empty:
+                return
+
     def _encode(self, pending: _Pending) -> bytes:
         envelope = Envelope(
             session_id=self.session_id,
@@ -169,8 +178,11 @@ class TunnelClient:
                     connect_args[header_name] = {"Authorization": f"Bearer {self.member_token}"}
                 async with websockets.connect(self.url, **connect_args) as websocket:
                     self._epoch = (self._epoch + 1) & 0xFFFFFFFF
+                    self.connection_generation += 1
                     self._sequence = 0
                     self._clear_outbox()
+                    self._clear_inbox()
+                    self._gate = SequenceGate()
                     if not first:
                         self.stats["reconnects"] += 1
                     first = False

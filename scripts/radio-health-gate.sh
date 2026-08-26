@@ -10,6 +10,7 @@ RX_TIMEOUT="${RADIO_HEALTH_TIMEOUT:-2}"
 IFACE=""
 EXPECTED_USB_ID=""
 DRY_RUN=0
+RESET_ON_RX_FAILURE=0
 
 msg() { printf '%s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -25,11 +26,12 @@ Options:
   --health-channels CSV  Receive-test channels (default: 1,6,11)
   --target-channel N     Channel left configured for COMMAND (default: 6)
   --timeout SECONDS      Per-channel receive timeout (default: 2)
+  --reset-on-rx-failure  Explicit recovery: USB-reset once after an RX timeout
   --dry-run              Detect and report only; do not change the radio
   -h, --help             Show this help
 
-The selected interface and USB ID are exported to COMMAND as
-SWITCHTRADE_IFACE and SWITCHTRADE_USB_ID.
+The selected interface, USB ID, and PHY are exported to COMMAND as
+SWITCHTRADE_IFACE, SWITCHTRADE_USB_ID, and SWITCHTRADE_PHY.
 EOF
 }
 
@@ -162,6 +164,7 @@ while [[ $# -gt 0 ]]; do
         --health-channels) [[ $# -ge 2 ]] || die "--health-channels needs a value"; HEALTH_CHANNELS=$2; shift 2 ;;
         --target-channel) [[ $# -ge 2 ]] || die "--target-channel needs a value"; TARGET_CHANNEL=$2; shift 2 ;;
         --timeout) [[ $# -ge 2 ]] || die "--timeout needs a value"; RX_TIMEOUT=$2; shift 2 ;;
+        --reset-on-rx-failure) RESET_ON_RX_FAILURE=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
         --) shift; break ;;
@@ -189,13 +192,20 @@ command -v tcpdump >/dev/null 2>&1 || die "tcpdump is required"
 reject_stale_capture
 configure_monitor
 if ! has_rx; then
-    reset_card
-    configure_monitor
-    has_rx || die "radio still receives zero frames after USB reset"
+    if (( RESET_ON_RX_FAILURE )); then
+        reset_card
+        configure_monitor
+        has_rx || die "RX_UNHEALTHY: radio still receives zero frames after explicit USB recovery"
+    else
+        die "RX_INCONCLUSIVE: no packets were observed; retry near an active 2.4 GHz source or run explicit adapter recovery"
+    fi
 fi
 iw dev "$IFACE" set channel "$TARGET_CHANNEL"
 msg "[health] PASS; $IFACE restored to channel $TARGET_CHANNEL"
 
+PHY="$(basename "$(readlink -f "/sys/class/net/$IFACE/phy80211" 2>/dev/null)")"
+[[ $PHY =~ ^phy[0-9]+$ ]] || die "PHY_UNRESOLVED: could not resolve the radio PHY for $IFACE"
 export SWITCHTRADE_IFACE="$IFACE"
 export SWITCHTRADE_USB_ID="$CARD_ID"
+export SWITCHTRADE_PHY="$PHY"
 (( $# == 0 )) || exec "$@"

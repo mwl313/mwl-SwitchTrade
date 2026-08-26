@@ -26,6 +26,7 @@ class TunnelSim(Sim):
                  observer=None, local_seat="member_a", log=lambda *args: None):
         self.tunnel = tunnel
         self._pending_remote = deque()
+        self._tunnel_generation = getattr(tunnel, "connection_generation", None)
         self.parent = bool(parent)
         self.observer = observer
         self.local_seat = local_seat
@@ -45,6 +46,10 @@ class TunnelSim(Sim):
             self.observer.submit(self.local_seat, sender_role, payload)
 
     def _drain_tunnel(self):
+        generation = getattr(self.tunnel, "connection_generation", None)
+        if generation != self._tunnel_generation:
+            self._pending_remote.clear()
+            self._tunnel_generation = generation
         for envelope in self.tunnel.poll():
             if envelope.kind == Kind.PEER_CLOSE:
                 self.host_disconnected = True

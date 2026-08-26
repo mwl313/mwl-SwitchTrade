@@ -43,6 +43,30 @@ class HostTransportCleanupTest(unittest.TestCase):
         free_radio.assert_not_called()
 
 
+class LiveTransportCleanupTest(unittest.TestCase):
+    def test_stop_waits_full_grace_before_light_cleanup(self):
+        client = transport.LiveTransport()
+        thread = FakeThread()
+        client._thread = thread
+
+        with mock.patch.object(transport, "light_cleanup") as cleanup:
+            client.stop()
+
+        self.assertEqual(thread.join_timeout, client.THREAD_JOIN_GRACE)
+        self.assertIsNone(client._thread)
+        cleanup.assert_called_once_with(client.log)
+
+    def test_stop_refuses_cleanup_while_radio_thread_is_alive(self):
+        client = transport.LiveTransport()
+        client._thread = FakeThread(alive=True)
+
+        with mock.patch.object(transport, "light_cleanup") as cleanup:
+            with self.assertRaisesRegex(RuntimeError, "thread still alive"):
+                client.stop()
+
+        cleanup.assert_not_called()
+
+
 class LdnDestroyCompatTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

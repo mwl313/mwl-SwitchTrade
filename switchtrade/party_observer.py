@@ -172,6 +172,9 @@ class PassivePartyObserver:
             )
             candidate = next((item for item in candidates if item.valid and item.offset == 0), None)
             if candidate is None:
+                if any(record):
+                    self._invalidate(seat, "invalid_pokemon_checksum")
+                    return False
                 slots.append({"occupied": False})
                 continue
             self.stats["valid_records"] += 1

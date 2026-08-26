@@ -1156,7 +1156,12 @@ class LiveTransport:
             except OSError:
                 pass
         if self._thread is not None:
-            self._thread.join(timeout=2)
+            self._thread.join(timeout=self.THREAD_JOIN_GRACE)
+            if self._thread.is_alive():
+                raise RuntimeError(
+                    "radio thread still alive - refusing concurrent vif cleanup "
+                    f"after {self.THREAD_JOIN_GRACE}s")
+            self._thread = None
         light_cleanup(self.log)                         # delete the LDN vifs on teardown
 
 

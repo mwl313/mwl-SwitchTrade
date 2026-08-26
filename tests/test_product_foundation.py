@@ -3,10 +3,11 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 import zipfile
 
 from switchtrade.diagnostics import RunLogger
-from switchtrade.endpoint import runtime_plan
+from switchtrade.endpoint import runtime_phy, runtime_plan
 from switchtrade.hardware import HardwarePolicyError, load_profiles, require_host_engine
 from switchtrade.hardware_diagnostics import (
     classify_output, diagnose_hardware, parse_iw_capabilities,
@@ -47,6 +48,13 @@ class HardwarePolicyTests(unittest.TestCase):
         self.assertEqual(plan["host_engine"], "ldn")
         self.assertTrue(plan["experimental_hardware"])
         self.assertFalse(plan["allow_experimental_hardware"])
+
+    def test_endpoint_uses_health_gate_phy_and_never_guesses_phy0(self):
+        with mock.patch.dict("os.environ", {"SWITCHTRADE_PHY": "phy7"}, clear=False):
+            self.assertEqual(runtime_phy(), "phy7")
+        with mock.patch.dict("os.environ", {}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "PHY_UNRESOLVED"):
+                runtime_phy()
 
     def test_in_development_engines_are_not_selectable(self):
         self.assertEqual(require_host_engine("ldn"), "ldn")
@@ -218,6 +226,23 @@ class PassiveObserverTests(unittest.TestCase):
             serialized = json.dumps(snapshot)
             self.assertNotIn("raw_hex", serialized)
             self.assertNotIn("canonical_hex", serialized)
+
+    def test_nonzero_invalid_record_fails_closed_instead_of_becoming_empty(self):
+        fixtures = Path(__file__).resolve().parent / "fixtures" / "pokemon"
+        valid = (fixtures / "0001_BULBASAUR_user_20260824.pk3").read_bytes()
+        corrupt = bytearray(valid)
+        corrupt[32] ^= 0xFF
+        with tempfile.TemporaryDirectory() as temporary:
+            observer = PassivePartyObserver(
+                Path(temporary) / "party.json", "attempt", "member_a")
+
+            observer._consume_party_block(
+                "member_a", SimpleNamespace(payload=bytes(corrupt) + valid, ordinal=0))
+
+            party = observer.snapshot()["parties"]["member_a"]
+            self.assertEqual(party["status"], "unavailable")
+            self.assertEqual(party["reason"], "invalid_pokemon_checksum")
+            self.assertIsNone(party["snapshot"])
 
     def test_trade_commit_requires_finish_save_and_swapped_post_parties(self):
         fixtures = Path(__file__).resolve().parent / "fixtures" / "pokemon"

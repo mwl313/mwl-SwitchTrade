@@ -40,6 +40,16 @@ LEGACY_ROLE_AXES = {
 }
 
 
+def runtime_phy(explicit: str | None = None) -> str:
+    """Return the PHY proven by the radio gate; never guess ``phy0``."""
+    phy = explicit or os.environ.get("SWITCHTRADE_PHY", "")
+    if not phy.startswith("phy") or not phy[3:].isdigit():
+        raise RuntimeError(
+            "PHY_UNRESOLVED: launch through run-beta-endpoint.sh so the selected adapter can be verified"
+        )
+    return phy
+
+
 class StateReporter:
     def __init__(self, path: str | None, defaults: dict | None = None):
         self.path = Path(path).expanduser() if path else None
@@ -162,6 +172,8 @@ def run_endpoint(args) -> int:
     if args.dry_run:
         print(plan)
         return 0
+
+    args.phy = runtime_phy(args.phy)
 
     state = StateReporter(args.state_file, {
         "session_id": args.session_id,
@@ -287,14 +299,23 @@ def run_endpoint(args) -> int:
                     ), **plan)
         return 1
     finally:
-        if observer is not None:
-            observer.stop(clear=True)
-        if sim is not None:
-            sim.close()
-        if transport is not None:
-            transport.stop()
-        tunnel.stop()
-        logger.close(outcome)
+        cleanup_errors = []
+        for name, cleanup in (
+            ("observer", (lambda: observer.stop(clear=True)) if observer is not None else None),
+            ("simulation", sim.close if sim is not None else None),
+            ("transport", transport.stop if transport is not None else None),
+            ("tunnel", tunnel.stop),
+        ):
+            if cleanup is None:
+                continue
+            try:
+                cleanup()
+            except Exception as error:  # cleanup must continue across subsystem failures
+                cleanup_errors.append(f"{name}: {error}")
+                logger.event("cleanup_failed", level="error", subsystem=name, error=str(error))
+        logger.close("failed" if cleanup_errors else outcome)
+        if cleanup_errors:
+            raise RuntimeError("endpoint cleanup failed: " + "; ".join(cleanup_errors))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -312,7 +333,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-experimental-hardware", action="store_true",
         help="allow one explicit upstream/driver candidate for this attempt",
     )
-    parser.add_argument("--phy", default="phy0")
+    parser.add_argument("--phy", help="verified radio PHY; normally supplied by the health gate")
     parser.add_argument("--channel", type=int, choices=range(1, 14), default=6)
     parser.add_argument("--name", default="CODEX")
     parser.add_argument("--keys", default="./config/prod.keys")
