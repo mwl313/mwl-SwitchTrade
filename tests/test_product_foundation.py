@@ -6,7 +6,7 @@ import unittest
 from unittest import mock
 import zipfile
 
-from switchtrade.diagnostics import RunLogger
+from switchtrade.diagnostics import RunLogger, redact_text
 from switchtrade.endpoint import runtime_phy, runtime_plan
 from switchtrade.hardware import HardwarePolicyError, load_profiles, require_host_engine
 from switchtrade.hardware_diagnostics import (
@@ -88,6 +88,17 @@ class DiagnosticsTests(unittest.TestCase):
         codes = [item["code"] for item in classify_output(
             "firmware failed to load; invalid module format")]
         self.assertEqual(codes, ["FIRMWARE_LOAD_FAILED", "MODULE_KERNEL_MISMATCH"])
+
+    def test_free_text_redacts_authorization_and_reconnect_credentials(self):
+        source = (
+            "Authorization: Bearer member.secret-123 "
+            "reconnect_token=please-do-not-log member_token:also-secret"
+        )
+        redacted = redact_text(source)
+        self.assertNotIn("member.secret-123", redacted)
+        self.assertNotIn("please-do-not-log", redacted)
+        self.assertNotIn("also-secret", redacted)
+        self.assertIn("<redacted>", redacted)
 
     def test_candidate_quick_diagnostic_is_redacted_and_actionable(self):
         with tempfile.TemporaryDirectory() as temporary:

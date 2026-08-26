@@ -23,6 +23,12 @@ SENSITIVE_NAMES = (
     "session_id", "room_code",
 )
 TEXT_SECRETS = (
+    (re.compile(r"(?i)\bauthorization\s*[:=]\s*bearer\s+[^\s,;\"']+"),
+     "Authorization: Bearer <redacted>"),
+    (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+"), "Bearer <redacted>"),
+    (re.compile(
+        r"(?i)\b(member_token|reconnect_token)\b\s*[\"']?\s*[:=]\s*[\"']?[^\s,;}\"']+"
+    ), r"\1=<redacted>"),
     (re.compile(r"(?i)\b(pass(?:word|code|phrase)|token|secret)\s*[=:]\s*\S+"), r"\1=<redacted>"),
     (re.compile(r"(?i)\b(?:[0-9a-f]{2}:){5}[0-9a-f]{2}\b"), "<redacted-mac>"),
 )
