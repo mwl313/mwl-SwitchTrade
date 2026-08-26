@@ -48,6 +48,15 @@ refused to claim ABI verification without the `kmod` tools.
 - The existing isolated distro passed real module extraction, `depmod`, `rtl8xxxu` vermagic, and
   firmware-presence verification after the fallback.
 
+## Same-release Repair correction
+
+A second retry exposed a Windows file-lock issue: Repair tried to overwrite the content-addressed
+kernel file that WSL was already running. The lifecycle now verifies and reuses an existing kernel or
+modules file when its SHA-256 matches, rejects a content-address collision, and preserves the prior
+rollback pointer during same-release Repair. The actual partially installed distro then passed a
+same-release repair probe with the kernel reused, rollback state preserved, and the expected release
+running.
+
 The earlier `77dd538` package retains the defective user-profile kernel path and must not be used for
 installation on a Windows account whose physical profile path contains non-ASCII characters. A
 replacement package must be built from the fix commit.

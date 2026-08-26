@@ -49,6 +49,13 @@ try {
             [IO.Path]::GetFullPath($kernelStorageRoot), [StringComparison]::OrdinalIgnoreCase)) {
         throw 'kernel was not copied to the dedicated WSL-safe storage root'
     }
+    Install-SwitchTradeKernel -Kernel $kernelOne -KernelModules $modulesOne `
+        -Manifest $manifestOne -StateRoot $stateRoot -KernelStorageRoot $kernelStorageRoot `
+        -AcceptGlobalKernelChange | Out-Null
+    $sameRelease = Get-Content -Raw -LiteralPath (Join-Path $stateRoot 'kernel-state.json') | ConvertFrom-Json
+    if ($sameRelease.rollback_kernel_path -or $sameRelease.kernel_path -ne $installedState.kernel_path) {
+        throw 'same-release repair replaced the active kernel or invented a rollback release'
+    }
     Install-SwitchTradeKernel -Kernel $kernelTwo -Manifest $manifestTwo -StateRoot $stateRoot `
         -KernelStorageRoot $kernelStorageRoot `
         -AcceptGlobalKernelChange | Out-Null

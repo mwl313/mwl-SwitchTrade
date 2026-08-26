@@ -103,7 +103,13 @@ function Install-SwitchTradeKernel {
     $safeRelease = ([string]$metadata.kernel_release) -replace '[^A-Za-z0-9._-]', '_'
     $kernelIdentity = (Get-FileSha256 $Kernel).Substring(0, 12)
     $installedKernel = Join-Path $kernelRoot "kernel-$safeRelease-$kernelIdentity"
-    Copy-Item -LiteralPath $Kernel -Destination $installedKernel -Force
+    if (Test-Path -LiteralPath $installedKernel -PathType Leaf) {
+        if ((Get-FileSha256 $installedKernel) -ne (Get-FileSha256 $Kernel)) {
+            throw 'stored custom kernel does not match its content-addressed identity'
+        }
+    } else {
+        Copy-Item -LiteralPath $Kernel -Destination $installedKernel
+    }
     $installedModules = ''
     $modulesFormat = 'none'
     if ($KernelModules) {
@@ -112,7 +118,13 @@ function Install-SwitchTradeKernel {
             [IO.Path]::GetExtension($KernelModules).ToLowerInvariant()
         } else { '.tar.gz' }
         $installedModules = Join-Path $kernelRoot "modules-$safeRelease-$moduleIdentity$moduleExtension"
-        Copy-Item -LiteralPath $KernelModules -Destination $installedModules -Force
+        if (Test-Path -LiteralPath $installedModules -PathType Leaf) {
+            if ((Get-FileSha256 $installedModules) -ne (Get-FileSha256 $KernelModules)) {
+                throw 'stored custom kernel modules do not match their content-addressed identity'
+            }
+        } else {
+            Copy-Item -LiteralPath $KernelModules -Destination $installedModules
+        }
         $modulesFormat = if ([IO.Path]::GetExtension($KernelModules).ToLowerInvariant() -in @('.vhd', '.vhdx')) {
             'vhd'
         } else { 'archive' }
@@ -147,17 +159,26 @@ function Install-SwitchTradeKernel {
         modules_format = $modulesFormat
         kernel_release = [string]$metadata.kernel_release
         rollback_kernel_path = if ($existingState -and $existingState.owns_kernel_change) {
-            [string]$existingState.kernel_path
+            if ([string]$existingState.kernel_path -eq $installedKernel) {
+                [string]$existingState.rollback_kernel_path
+            } else { [string]$existingState.kernel_path }
         } else { '' }
         rollback_modules_path = if ($existingState -and $existingState.owns_kernel_change) {
-            [string]$existingState.modules_path
+            if ([string]$existingState.kernel_path -eq $installedKernel) {
+                [string]$existingState.rollback_modules_path
+            } else { [string]$existingState.modules_path }
         } else { '' }
         rollback_modules_format = if ($existingState -and $existingState.owns_kernel_change -and
             $existingState.PSObject.Properties.Name -contains 'modules_format') {
-            [string]$existingState.modules_format
+            if ([string]$existingState.kernel_path -eq $installedKernel -and
+                $existingState.PSObject.Properties.Name -contains 'rollback_modules_format') {
+                [string]$existingState.rollback_modules_format
+            } else { [string]$existingState.modules_format }
         } else { 'none' }
         rollback_kernel_release = if ($existingState -and $existingState.owns_kernel_change) {
-            [string]$existingState.kernel_release
+            if ([string]$existingState.kernel_path -eq $installedKernel) {
+                [string]$existingState.rollback_kernel_release
+            } else { [string]$existingState.kernel_release }
         } else { '' }
     }
     $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
