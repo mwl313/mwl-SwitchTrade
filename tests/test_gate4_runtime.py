@@ -740,6 +740,84 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 self.assertEqual(relaunched.status_code, 200, relaunched.text)
                 self.assertEqual(runtime.endpoint_session, "XYZ789")
 
+    def test_terminal_room_does_not_stop_reconciled_endpoint_for_another_session(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                runtime = client.app.state.runtime
+                runtime.endpoint_session = "ABC123"
+                runtime.last_authority_heartbeat = time.monotonic()
+                room = {
+                    "room_id": "room-1", "room_code": "ABC123", "room_version": 7,
+                    "attempt": {"attempt_id": "attempt-1", "phase": "completed"},
+                    "members": [],
+                }
+
+                def reconcile_live_endpoint():
+                    runtime.endpoint_session = "XYZ789"
+                    return True
+
+                with patch.object(runtime, "authoritative_room", return_value=room), patch.object(
+                        runtime, "endpoint_running", side_effect=reconcile_live_endpoint) as running, \
+                        patch.object(runtime, "stop_endpoint") as stop:
+                    response = client.get("/api/v1/trade-room")
+                self.assertEqual(response.status_code, 200, response.text)
+                running.assert_called_once_with()
+                stop.assert_not_called()
+                self.assertEqual(runtime.endpoint_session, "XYZ789")
+
+    def test_nonterminal_room_rejects_other_live_session_before_hardware_mutation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                runtime = client.app.state.runtime
+                runtime.endpoint_session = "ABC123"
+                runtime.last_authority_heartbeat = time.monotonic()
+                room = {
+                    "room_id": "room-1", "room_code": "ABC123", "room_version": 7,
+                    "attempt": {"attempt_id": "attempt-1", "phase": "connecting_switches",
+                                "role_locked": True, "local_switch_role": "creator"},
+                    "members": [{"is_local": True, "seat": "member_a"}],
+                }
+
+                def reconcile_live_endpoint():
+                    runtime.endpoint_session = "XYZ789"
+                    return True
+
+                with patch.object(runtime, "authoritative_room", return_value=room), patch.object(
+                        runtime, "endpoint_running", side_effect=reconcile_live_endpoint), patch.object(
+                        runtime, "read_hardware_selection") as hardware_selection:
+                    response = client.get("/api/v1/trade-room")
+                self.assertEqual(response.status_code, 409, response.text)
+                self.assertEqual(response.json()["code"], "session_active")
+                self.assertEqual(response.json()["stage"], "session")
+                self.assertEqual(response.json()["primary_action"], "end_session")
+                hardware_selection.assert_not_called()
+                self.assertEqual(runtime.endpoint_session, "XYZ789")
+
+    def test_terminal_room_cleans_disappeared_cached_session_idempotently(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                runtime = client.app.state.runtime
+                runtime.endpoint_session = "ABC123"
+                runtime.last_authority_heartbeat = time.monotonic()
+                room = {
+                    "room_id": "room-1", "room_code": "ABC123", "room_version": 7,
+                    "attempt": {"attempt_id": "attempt-1", "phase": "failed"},
+                    "members": [],
+                }
+
+                def clear_disappeared_endpoint():
+                    runtime.endpoint = None
+                    runtime.endpoint_session = None
+
+                with patch.object(runtime, "authoritative_room", return_value=room), patch.object(
+                        runtime, "endpoint_running", return_value=False) as running, patch.object(
+                        runtime, "stop_endpoint", side_effect=clear_disappeared_endpoint) as stop:
+                    response = client.get("/api/v1/trade-room")
+                self.assertEqual(response.status_code, 200, response.text)
+                running.assert_called_once_with()
+                stop.assert_called_once_with()
+                self.assertIsNone(runtime.endpoint_session)
+
     def test_windows_control_rejects_endpoint_from_another_wsl_distro(self):
         with tempfile.TemporaryDirectory() as temporary:
             state_path = Path(temporary) / "runtime" / "endpoint-state.json"

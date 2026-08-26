@@ -973,10 +973,9 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
 
     def launch_authoritative_attempt(state: Runtime, room: dict) -> dict | None:
         attempt = room.get("attempt") or {}
+        endpoint_running = state.endpoint_running()
         if attempt.get("phase") in {"completed", "canceled", "failed"}:
-            if (state.endpoint_session == room.get("room_code") or
-                    (state.endpoint_running() and
-                     state.endpoint_session == room.get("room_code"))):
+            if state.endpoint_session == room.get("room_code"):
                 state.stop_endpoint()
             return None
         if not attempt.get("role_locked") or attempt.get("phase") is None:
@@ -988,10 +987,14 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 409, "role_choice_conflict", "the two Switch role choices do not match",
                 stage="coordination", recoverable=True, primary_action="choose_role",
             )
-        if (state.endpoint_running() and
-                state.endpoint_session == room.get("room_code")):
-            return {"status": "starting", "session_id": room.get("room_code"),
-                    "run_id": state.log.run_id}
+        if endpoint_running:
+            if state.endpoint_session == room.get("room_code"):
+                return {"status": "starting", "session_id": room.get("room_code"),
+                        "run_id": state.log.run_id}
+            raise ControlApiError(
+                409, "session_active", "a different Switch endpoint session is already running",
+                stage="session", recoverable=True, primary_action="end_session",
+            )
         selected_usb_id = attach_selected_hardware(state)
         return launch_session(
             state, code=room["room_code"], tunnel_seat=local["seat"],
