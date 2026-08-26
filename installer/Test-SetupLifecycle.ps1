@@ -48,6 +48,13 @@ New-TestRelease -Root $active -ReleaseId release-a
 New-TestRelease -Root $candidate -ReleaseId release-b
 New-SwitchTradeTransaction -Path $transaction -Action Update -ReleaseId release-b `
     -PriorReleaseId release-a -WindowsStage $candidate | Out-Null
+$recordedTransaction = Get-Content -Raw -LiteralPath $transaction | ConvertFrom-Json
+if ([int]$recordedTransaction.schema -ne 2 -or
+        [string]$recordedTransaction.wsl_active_path -cne '/opt/switchtrade' -or
+        [string]$recordedTransaction.wsl_commit_swap_path -cne '/opt/switchtrade.commit-swap' -or
+        -not ($recordedTransaction.PSObject.Properties.Name -contains 'distro_existed_before')) {
+    throw 'transaction did not persist exact pre-mutation paths and ownership facts'
+}
 Set-SwitchTradeTransactionPhase -Path $transaction -Phase windows_staged | Out-Null
 $prior = Commit-SwitchTradeWindowsRelease -Candidate $candidate -Active $active `
     -Previous $previous -ExpectedReleaseId release-b
@@ -61,6 +68,143 @@ if ((Get-InstalledWindowsReleaseId $active) -ne 'release-a' -or
     (Get-InstalledWindowsReleaseId $previous) -ne 'release-b') {
     throw 'B to A compensation did not restore the coherent prior pair'
 }
+
+$recoveryTransaction = [pscustomobject]@{
+    schema = 2; transaction_id = 'test-transaction'; phase = 'wsl_staged'
+    release_id = 'release-b'; prior_release_id = 'release-a'
+    package_root = (Join-Path $TestRoot 'package-a')
+    distro_existed_before = $true; distro_owned_before = $true
+    wsl_prior_release_id = 'release-a'; kernel_prior_release_id = 'release-a'
+    kernel_change_expected = $true
+}
+function New-RecoveryActual {
+    param([hashtable]$Changes = @{})
+    $value = [ordered]@{
+        DistroExists = $true; DistroOwned = $true
+        WindowsActiveExists = $true; WindowsActiveRelease = 'release-a'
+        WindowsPreviousExists = $false; WindowsPreviousRelease = ''
+        WindowsStageExists = $true
+        WslActiveRelease = 'release-a'; WslCandidateExists = $true
+        WslCandidateRelease = 'release-b'; WslPreviousRelease = ''
+        WslCommitSwapExists = $false; WslCommitSwapRelease = ''
+        KernelRelease = 'release-a'
+    }
+    foreach ($key in $Changes.Keys) { $value[$key] = $Changes[$key] }
+    return [pscustomobject]$value
+}
+
+$phaseMatrix = @(
+    @{
+        Name = 'death_after_windows_stage_before_phase_persist'; Actual = (New-RecoveryActual -Changes @{
+            WslCandidateExists = $false; WslCandidateRelease = ''
+        })
+        Windows = 'none'; Wsl = 'none'; Kernel = 'none'; RemoveStage = $true
+    },
+    @{
+        Name = 'death_after_wsl_stage_before_phase_persist'; Actual = (New-RecoveryActual)
+        Windows = 'none'; Wsl = 'abort_candidate'; Kernel = 'none'; RemoveStage = $true
+    },
+    @{
+        Name = 'death_inside_wsl_commit_swap'; Actual = (New-RecoveryActual -Changes @{
+            WslActiveRelease = ''; WslCommitSwapExists = $true
+            WslCommitSwapRelease = 'release-a'
+        })
+        Windows = 'none'; Wsl = 'recover_interrupted'; Kernel = 'none'; RemoveStage = $true
+    },
+    @{
+        Name = 'death_after_wsl_commit_before_phase_persist'; Actual = (New-RecoveryActual -Changes @{
+            WslActiveRelease = 'release-b'; WslCandidateExists = $false
+            WslCandidateRelease = ''; WslPreviousRelease = 'release-a'
+        })
+        Windows = 'none'; Wsl = 'compensate'; Kernel = 'none'; RemoveStage = $true
+    },
+    @{
+        Name = 'death_after_kernel_apply_before_phase_persist'; Actual = (New-RecoveryActual -Changes @{
+            KernelRelease = 'release-b'
+        })
+        Windows = 'none'; Wsl = 'abort_candidate'; Kernel = 'rollback'; RemoveStage = $true
+    },
+    @{
+        Name = 'death_after_windows_move_before_phase_persist'; Actual = (New-RecoveryActual -Changes @{
+            WindowsActiveExists = $false; WindowsActiveRelease = ''
+            WindowsPreviousExists = $true; WindowsPreviousRelease = 'release-a'
+        })
+        Windows = 'restore_prior'; Wsl = 'abort_candidate'; Kernel = 'none'; RemoveStage = $true
+    }
+)
+foreach ($case in $phaseMatrix) {
+    $plan = Resolve-SwitchTradeTransactionRecovery -Transaction $recoveryTransaction `
+        -Actual $case.Actual
+    if ($plan.Disposition -ne 'compensate' -or $plan.WindowsAction -ne $case.Windows -or
+            $plan.WslAction -ne $case.Wsl -or $plan.KernelAction -ne $case.Kernel -or
+            $plan.RemoveStage -ne $case.RemoveStage) {
+        throw "transaction recovery matrix failed: $($case.Name)"
+    }
+}
+
+$committed = New-RecoveryActual -Changes @{
+    WindowsActiveRelease = 'release-b'; WindowsPreviousExists = $true
+    WindowsPreviousRelease = 'release-a'; WindowsStageExists = $false
+    WslActiveRelease = 'release-b'; WslCandidateExists = $false; WslCandidateRelease = ''
+    WslPreviousRelease = 'release-a'; KernelRelease = 'release-b'
+}
+$finalize = Resolve-SwitchTradeTransactionRecovery -Transaction $recoveryTransaction -Actual $committed
+if ($finalize.Disposition -ne 'finalize') { throw 'coherent post-commit transaction was not finalized' }
+
+$afterCompensation = New-RecoveryActual -Changes @{
+    WindowsStageExists = $false; WslCandidateExists = $false; WslCandidateRelease = ''
+}
+$rerun = Resolve-SwitchTradeTransactionRecovery -Transaction $recoveryTransaction `
+    -Actual $afterCompensation
+if ($rerun.Disposition -ne 'compensate' -or $rerun.WindowsAction -ne 'none' -or
+        $rerun.WslAction -ne 'none' -or $rerun.KernelAction -ne 'none') {
+    throw 'rerun Repair did not converge on the proven prior release'
+}
+
+$newDistroTransaction = $recoveryTransaction.PSObject.Copy()
+$newDistroTransaction.prior_release_id = ''
+$newDistroTransaction.wsl_prior_release_id = ''
+$newDistroTransaction.kernel_prior_release_id = ''
+$newDistroTransaction.kernel_change_expected = $false
+$newDistroTransaction.distro_existed_before = $false
+$newDistroTransaction.distro_owned_before = $false
+$newDistroActual = New-RecoveryActual -Changes @{
+    WindowsActiveExists = $false; WindowsActiveRelease = ''; KernelRelease = ''
+    WslActiveRelease = ''; WslCandidateExists = $false; WslCandidateRelease = ''
+}
+$newDistroPlan = Resolve-SwitchTradeTransactionRecovery -Transaction $newDistroTransaction `
+    -Actual $newDistroActual
+if ($newDistroPlan.WslAction -ne 'unregister_new') {
+    throw 'death between distro import and phase persistence was not compensated from recorded pre-state'
+}
+
+$legacyFailedClosed = $false
+try {
+    $legacy = $recoveryTransaction.PSObject.Copy(); $legacy.schema = 1
+    Resolve-SwitchTradeTransactionRecovery -Transaction $legacy -Actual $afterCompensation | Out-Null
+} catch { $legacyFailedClosed = [string]$_.Exception.Message -match 'LEGACY_AMBIGUOUS' }
+if (-not $legacyFailedClosed) { throw 'legacy ambiguous transaction did not fail closed' }
+
+$mismatchFailedClosed = $false
+try {
+    Assert-SwitchTradeTransactionPackage -Transaction $recoveryTransaction `
+        -PackageRoot (Join-Path $TestRoot 'package-b') -ReleaseId 'release-b'
+} catch { $mismatchFailedClosed = [string]$_.Exception.Message -match 'PACKAGE_MISMATCH' }
+if (-not $mismatchFailedClosed) { throw 'mismatched Repair package was accepted' }
+
+$foreignFailedClosed = $false
+try {
+    $foreign = New-RecoveryActual -Changes @{ DistroOwned = $false }
+    Resolve-SwitchTradeTransactionRecovery -Transaction $recoveryTransaction -Actual $foreign | Out-Null
+} catch { $foreignFailedClosed = [string]$_.Exception.Message -match 'DISTRO_OWNERSHIP_CHANGED' }
+if (-not $foreignFailedClosed) { throw 'foreign distro was accepted for transaction recovery' }
+
+$unsafeStageFailedClosed = $false
+try {
+    Assert-SwitchTradeRecordedStagePath -Recorded (Join-Path $TestRoot 'outside\stage') `
+        -InstallRoot (Join-Path $TestRoot 'Programs\SwitchTrade') | Out-Null
+} catch { $unsafeStageFailedClosed = [string]$_.Exception.Message -match 'PATH_INVALID' }
+if (-not $unsafeStageFailedClosed) { throw 'unvalidated transaction path was accepted' }
 
 'tampered' | Set-Content -LiteralPath (Join-Path $previous 'config.json') -Encoding UTF8
 $failedClosed = $false

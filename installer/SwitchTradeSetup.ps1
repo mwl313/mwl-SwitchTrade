@@ -39,9 +39,14 @@ trap {
         try { Write-SwitchTradeSetupLog -Path $SetupLog -Stage $SetupStage -Message ($_ | Out-String) -Level error } catch { }
     }
     [Console]::Error.WriteLine("SWITCHTRADE_SETUP_ERROR: $message")
+    $manualRecovery = $code -match '^SETUP_TRANSACTION_(LEGACY_AMBIGUOUS|.*_AMBIGUOUS|.*_MISMATCH|.*_INVALID|DISTRO_OWNERSHIP_CHANGED)'
+    $primaryAction = if ($code -eq 'SETUP_TRANSACTION_PACKAGE_MISMATCH') {
+        'Run Repair from the package that started the transaction'
+    } elseif ($manualRecovery) { 'Contact SwitchTrade support' } else { 'Run Setup Repair' }
+    $recoverable = $code -eq 'SETUP_TRANSACTION_PACKAGE_MISMATCH' -or -not $manualRecovery
     $failure = [ordered]@{
         code = $code; message = Redact-SwitchTradeSetupText $message; stage = $SetupStage
-        recoverable = $true; primary_action = 'Run Setup Repair'; action = $Action
+        recoverable = $recoverable; primary_action = $primaryAction; action = $Action
         correlation_id = [guid]::NewGuid().ToString('N')
     }
     [Console]::Error.WriteLine("SWITCHTRADE_SETUP_FAILURE: $($failure | ConvertTo-Json -Compress)")
@@ -203,6 +208,232 @@ function Invoke-LoggedWsl {
     return $result.Output
 }
 
+function Get-SwitchTradeWslRuntimeState {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][ValidateSet('active', 'candidate', 'previous', 'commit_swap')]
+        [string]$Location
+    )
+    $path = @{
+        active = '/opt/switchtrade'; candidate = '/opt/switchtrade.candidate'
+        previous = '/opt/switchtrade.previous'; commit_swap = '/opt/switchtrade.commit-swap'
+    }[$Location]
+    $probe = 'p="{0}"; if [ ! -e "$p" ]; then printf ''absent''; elif [ ! -d "$p" ] || [ ! -f "$p/.switchtrade-release.json" ]; then printf ''invalid''; else cat "$p/.switchtrade-release.json"; fi' -f $path
+    try {
+        $result = Invoke-BoundedNativeProcess -FilePath 'wsl.exe' `
+            -Arguments @('-d', $Name, '-u', 'root', '--', 'sh', '-lc', $probe) -TimeoutSeconds 30
+    } catch {
+        return [pscustomobject]@{ Exists = $true; Valid = $false; ReleaseId = '' }
+    }
+    $raw = $result.Output.Trim()
+    if ($result.ExitCode -ne 0 -or $raw -eq 'invalid') {
+        return [pscustomobject]@{ Exists = $true; Valid = $false; ReleaseId = '' }
+    }
+    if ($raw -eq 'absent') {
+        return [pscustomobject]@{ Exists = $false; Valid = $true; ReleaseId = '' }
+    }
+    try {
+        $marker = $raw | ConvertFrom-Json
+        $release = [string]$marker.release_id
+        $valid = [int]$marker.schema -eq 1 -and $release -match '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'
+        return [pscustomobject]@{ Exists = $true; Valid = $valid; ReleaseId = $(if ($valid) { $release } else { '' }) }
+    } catch {
+        return [pscustomobject]@{ Exists = $true; Valid = $false; ReleaseId = '' }
+    }
+}
+
+function Repair-SwitchTradeInterruptedTransaction {
+    param([Parameter(Mandatory)]$Transaction)
+    $script:SetupStage = 'transaction_recovery'
+    if ($Action -ne 'Repair') {
+        throw "SETUP_TRANSACTION_INCOMPLETE: transaction $($Transaction.transaction_id) stopped at $($Transaction.phase); run the matching package Repair"
+    }
+    if ([int]$Transaction.schema -ne 2) {
+        throw 'SETUP_TRANSACTION_LEGACY_AMBIGUOUS: legacy transaction lacks pre-mutation ownership facts; contact support'
+    }
+    Assert-SwitchTradeTransactionPackage -Transaction $Transaction -PackageRoot $PackageRoot `
+        -ReleaseId $ReleaseId
+    Assert-SwitchTradeRecordedPath -Recorded ([string]$Transaction.install_root) `
+        -Expected $InstallRoot -Code 'SETUP_TRANSACTION_INSTALL_PATH_MISMATCH' | Out-Null
+    Assert-SwitchTradeRecordedPath -Recorded ([string]$Transaction.previous_install) `
+        -Expected $PreviousInstall -Code 'SETUP_TRANSACTION_PREVIOUS_PATH_MISMATCH' | Out-Null
+    Assert-SwitchTradeRecordedPath -Recorded ([string]$Transaction.distro_root) `
+        -Expected $DistroRoot -Code 'SETUP_TRANSACTION_DISTRO_PATH_MISMATCH' | Out-Null
+    Assert-SwitchTradeRecordedPath -Recorded ([string]$Transaction.kernel_state_path) `
+        -Expected (Join-Path $StateRoot 'kernel-state.json') `
+        -Code 'SETUP_TRANSACTION_KERNEL_PATH_MISMATCH' | Out-Null
+    if ([string]$Transaction.distro_name -cne $Distro) {
+        throw 'SETUP_TRANSACTION_DISTRO_MISMATCH: recorded distribution name does not match Repair'
+    }
+    $expectedWslPaths = @{
+        wsl_active_path = '/opt/switchtrade'; wsl_candidate_path = '/opt/switchtrade.candidate'
+        wsl_previous_path = '/opt/switchtrade.previous'
+        wsl_commit_swap_path = '/opt/switchtrade.commit-swap'
+    }
+    foreach ($property in $expectedWslPaths.Keys) {
+        if ([string]$Transaction.$property -cne $expectedWslPaths[$property]) {
+            throw 'SETUP_TRANSACTION_WSL_PATH_MISMATCH: recorded runtime paths are not the fixed product paths'
+        }
+    }
+    $stage = Assert-SwitchTradeRecordedStagePath -Recorded ([string]$Transaction.windows_stage) `
+        -InstallRoot $InstallRoot
+
+    $distroExists = (Get-Distros) -contains $Distro
+    $distroOwned = $distroExists -and (Test-SwitchTradeDistroOwned -Name $Distro)
+    $emptyWsl = [pscustomobject]@{ Exists = $false; Valid = $true; ReleaseId = '' }
+    $wslActive = $emptyWsl; $wslCandidate = $emptyWsl
+    $wslPrevious = $emptyWsl; $wslCommitSwap = $emptyWsl
+    if ($distroOwned) {
+        $wslActive = Get-SwitchTradeWslRuntimeState -Name $Distro -Location active
+        $wslCandidate = Get-SwitchTradeWslRuntimeState -Name $Distro -Location candidate
+        $wslPrevious = Get-SwitchTradeWslRuntimeState -Name $Distro -Location previous
+        $wslCommitSwap = Get-SwitchTradeWslRuntimeState -Name $Distro -Location commit_swap
+        foreach ($runtimeState in @($wslActive, $wslCandidate, $wslPrevious, $wslCommitSwap)) {
+            if (-not $runtimeState.Valid) {
+                throw 'SETUP_TRANSACTION_WSL_LAYOUT_INVALID: a runtime transaction path is not a proven release tree'
+            }
+        }
+    }
+    $kernelStatePath = Join-Path $StateRoot 'kernel-state.json'
+    $kernelState = $null
+    if (Test-Path -LiteralPath $kernelStatePath -PathType Leaf) {
+        try { $kernelState = Get-Content -Raw -LiteralPath $kernelStatePath | ConvertFrom-Json }
+        catch { throw 'SETUP_TRANSACTION_KERNEL_STATE_INVALID: kernel state is unreadable' }
+    }
+    foreach ($windowsTree in @(
+            @($InstallRoot, (Test-Path -LiteralPath $InstallRoot -PathType Container)),
+            @($PreviousInstall, (Test-Path -LiteralPath $PreviousInstall -PathType Container)))) {
+        if ($windowsTree[1]) {
+            $treeRelease = Get-InstalledWindowsReleaseId -Root $windowsTree[0]
+            if (-not $treeRelease) {
+                throw 'SETUP_TRANSACTION_WINDOWS_TREE_INVALID: a Windows release tree has no valid identity'
+            }
+            Test-WindowsReleaseTree -Root $windowsTree[0] -ExpectedReleaseId $treeRelease | Out-Null
+        }
+    }
+    if ($kernelState) {
+        if (-not [bool]$kernelState.owns_kernel_change -or
+                -not (Test-Path -LiteralPath ([string]$kernelState.kernel_path) -PathType Leaf) -or
+                (Get-FileSha256 ([string]$kernelState.kernel_path)) -ne [string]$kernelState.kernel_sha256) {
+            throw 'SETUP_TRANSACTION_KERNEL_STATE_INVALID: active kernel artifact is not proven'
+        }
+        if ($kernelState.modules_path -and
+                (-not (Test-Path -LiteralPath ([string]$kernelState.modules_path) -PathType Leaf) -or
+                 (Get-FileSha256 ([string]$kernelState.modules_path)) -ne [string]$kernelState.modules_sha256)) {
+            throw 'SETUP_TRANSACTION_KERNEL_STATE_INVALID: active kernel modules are not proven'
+        }
+        if ([string]$kernelState.package_release_id -eq [string]$Transaction.kernel_prior_release_id -and
+                ([string]$kernelState.kernel_path -ne [string]$Transaction.kernel_prior_path -or
+                 [string]$kernelState.modules_path -ne [string]$Transaction.kernel_prior_modules_path)) {
+            throw 'SETUP_TRANSACTION_KERNEL_PRIOR_MISMATCH: active prior kernel paths changed'
+        }
+        if ([string]$kernelState.package_release_id -eq $ReleaseId -and
+                [string]$Transaction.kernel_prior_release_id) {
+            if ([string]$kernelState.rollback_kernel_path -ne [string]$Transaction.kernel_prior_path -or
+                    [string]$kernelState.rollback_modules_path -ne [string]$Transaction.kernel_prior_modules_path) {
+                throw 'SETUP_TRANSACTION_KERNEL_ROLLBACK_MISMATCH: retained kernel paths differ from the recorded prior state'
+            }
+            Test-SwitchTradeKernelRollback -StateRoot $StateRoot `
+                -ExpectedReleaseId ([string]$Transaction.kernel_prior_release_id) | Out-Null
+        }
+    }
+    $actual = [pscustomobject]@{
+        DistroExists = $distroExists; DistroOwned = $distroOwned
+        WindowsActiveExists = (Test-Path -LiteralPath $InstallRoot -PathType Container)
+        WindowsActiveRelease = Get-InstalledWindowsReleaseId -Root $InstallRoot
+        WindowsPreviousExists = (Test-Path -LiteralPath $PreviousInstall -PathType Container)
+        WindowsPreviousRelease = Get-InstalledWindowsReleaseId -Root $PreviousInstall
+        WindowsStageExists = (Test-Path -LiteralPath $stage -PathType Container)
+        WslActiveRelease = $wslActive.ReleaseId
+        WslCandidateExists = $wslCandidate.Exists; WslCandidateRelease = $wslCandidate.ReleaseId
+        WslPreviousRelease = $wslPrevious.ReleaseId
+        WslCommitSwapExists = $wslCommitSwap.Exists; WslCommitSwapRelease = $wslCommitSwap.ReleaseId
+        KernelRelease = if ($kernelState) { [string]$kernelState.package_release_id } else { '' }
+    }
+    $plan = Resolve-SwitchTradeTransactionRecovery -Transaction $Transaction -Actual $actual
+    if ($plan.Disposition -eq 'finalize') {
+        $provision = Convert-ToWslPath (Join-Path $PackageRoot 'installer\provision-wsl.sh')
+        Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'bash', $provision,
+            '--validate-active', '--release-id', $ReleaseId) `
+            -FailureCode 'WSL_RECOVERY_ACTIVE_INVALID' -Stage $SetupStage | Out-Null
+        if ([string]$Transaction.wsl_prior_release_id) {
+            Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'bash', $provision,
+                '--validate-retained', '--release-id', [string]$Transaction.wsl_prior_release_id) `
+                -FailureCode 'WSL_RECOVERY_RETAINED_INVALID' -Stage $SetupStage | Out-Null
+        }
+        Set-SwitchTradeTransactionPhase -Path $TransactionPath -Phase 'completed' `
+            -Fields @{ windows_committed = $true; wsl_committed = $true } | Out-Null
+        Write-SwitchTradeSetupLog -Path $SetupLog -Stage $SetupStage `
+            -Message "finalized coherent interrupted transaction $($Transaction.transaction_id)"
+        return 'finalize'
+    }
+
+    if ($plan.KernelAction -eq 'rollback') {
+        if ([string]$kernelState.rollback_kernel_path -ne [string]$Transaction.kernel_prior_path -or
+                [string]$kernelState.rollback_modules_path -ne [string]$Transaction.kernel_prior_modules_path) {
+            throw 'SETUP_TRANSACTION_KERNEL_ROLLBACK_MISMATCH: retained kernel paths differ from the recorded prior state'
+        }
+        Switch-SwitchTradeKernelRollback -StateRoot $StateRoot `
+            -ExpectedReleaseId ([string]$Transaction.kernel_prior_release_id) `
+            -UserProfileRoot $UserProfileRoot | Out-Null
+    } elseif ($plan.KernelAction -eq 'restore_original') {
+        Restore-SwitchTradeKernel -StateRoot $StateRoot -UserProfileRoot $UserProfileRoot | Out-Null
+    }
+
+    $provision = Convert-ToWslPath (Join-Path $PackageRoot 'installer\provision-wsl.sh')
+    switch ($plan.WslAction) {
+        'abort_candidate' {
+            Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'bash', $provision,
+                '--abort', '--release-id', $ReleaseId) -FailureCode 'WSL_RECOVERY_ABORT_FAILED' `
+                -Stage $SetupStage | Out-Null
+        }
+        'compensate' {
+            Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'bash', $provision,
+                '--compensate', '--release-id', [string]$Transaction.wsl_prior_release_id) `
+                -FailureCode 'WSL_RECOVERY_COMPENSATION_FAILED' -Stage $SetupStage | Out-Null
+        }
+        'recover_interrupted' {
+            Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'bash', $provision,
+                '--recover-interrupted', '--release-id', $ReleaseId, '--prior-release-id',
+                [string]$Transaction.wsl_prior_release_id) `
+                -FailureCode 'WSL_RECOVERY_SWAP_FAILED' -Stage $SetupStage | Out-Null
+        }
+        'unregister_new' {
+            Assert-SwitchTradeDistroOwned -Name $Distro
+            $unregister = Invoke-BoundedNativeProcess -FilePath 'wsl.exe' `
+                -Arguments @('--unregister', $Distro) -TimeoutSeconds 120
+            if ($unregister.ExitCode -ne 0) { throw 'DISTRO_RECOVERY_UNREGISTER_FAILED' }
+        }
+    }
+
+    switch ($plan.WindowsAction) {
+        'rollback' {
+            Switch-SwitchTradeWindowsRollback -Active $InstallRoot -Previous $PreviousInstall `
+                -ExpectedReleaseId ([string]$Transaction.prior_release_id) | Out-Null
+        }
+        'restore_prior' {
+            Test-WindowsReleaseTree -Root $PreviousInstall `
+                -ExpectedReleaseId ([string]$Transaction.prior_release_id) | Out-Null
+            Move-Item -LiteralPath $PreviousInstall -Destination $InstallRoot
+        }
+        'remove_new' {
+            Test-WindowsReleaseTree -Root $InstallRoot -ExpectedReleaseId $ReleaseId | Out-Null
+            Remove-Item -LiteralPath $InstallRoot -Recurse -Force
+        }
+    }
+    if ($plan.RemoveStage) {
+        $stageItem = Get-Item -LiteralPath $stage -Force
+        if ($stageItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw 'SETUP_TRANSACTION_STAGE_REPARSE_POINT: refusing to remove a redirected stage path'
+        }
+        Remove-Item -LiteralPath $stage -Recurse -Force
+    }
+    Set-SwitchTradeTransactionPhase -Path $TransactionPath -Phase 'compensated' | Out-Null
+    Write-SwitchTradeSetupLog -Path $SetupLog -Stage $SetupStage `
+        -Message "compensated interrupted transaction $($Transaction.transaction_id)"
+    return 'compensate'
+}
+
 function Resolve-StableUsbBusId {
     if (-not $UsbInstanceId) { return $BusId }
     $script:SetupStage = 'usb_identity'
@@ -362,11 +593,15 @@ $SetupStage = 'mutex'
 $SetupMutex = Enter-SwitchTradeSetupMutex
 Write-SwitchTradeSetupLog -Path $SetupLog -Stage $SetupStage -Message "setup action=$Action acquired the mutation mutex"
 $namedDistroExists = (Get-Distros) -contains $Distro
+$recoveredCommitted = $false
 if ($namedDistroExists) { Assert-SwitchTradeDistroOwned -Name $Distro }
 if (Test-Path -LiteralPath $TransactionPath -PathType Leaf) {
     $staleTransaction = Get-Content -Raw -LiteralPath $TransactionPath | ConvertFrom-Json
     if ([string]$staleTransaction.phase -notin @('completed', 'compensated')) {
-        throw "SETUP_TRANSACTION_INCOMPLETE: transaction $($staleTransaction.transaction_id) stopped at $($staleTransaction.phase); run the matching package Repair"
+        $recoveryDisposition = Repair-SwitchTradeInterruptedTransaction -Transaction $staleTransaction
+        $recoveredCommitted = $recoveryDisposition -eq 'finalize'
+        $namedDistroExists = (Get-Distros) -contains $Distro
+        if ($namedDistroExists) { Assert-SwitchTradeDistroOwned -Name $Distro }
     }
 }
 
@@ -549,10 +784,10 @@ if ($usbipdNeedsInstall) {
     }
 }
 Assert-SwitchTradeHostCapabilities
+if (-not $recoveredCommitted) {
 $installParent = Split-Path -Parent $InstallRoot
 New-Item -ItemType Directory -Force -Path $installParent | Out-Null
 $stage = Join-Path $installParent ("SwitchTrade.stage." + [guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $stage | Out-Null
 $priorReleaseId = ''
 if (Test-Path -LiteralPath $InstallRoot -PathType Container) {
     $priorReleaseId = Get-InstalledWindowsReleaseId -Root $InstallRoot
@@ -561,6 +796,36 @@ if (Test-Path -LiteralPath $InstallRoot -PathType Container) {
     }
     Test-WindowsReleaseTree -Root $InstallRoot -ExpectedReleaseId $priorReleaseId | Out-Null
 }
+$distroExistedBefore = $namedDistroExists
+$distroOwnedBefore = $namedDistroExists -and (Test-SwitchTradeDistroOwned -Name $Distro)
+$wslPriorReleaseId = ''
+if ($distroExistedBefore) {
+    if (-not $distroOwnedBefore) { throw 'DISTRO_NAME_COLLISION' }
+    $wslPriorState = Get-SwitchTradeWslRuntimeState -Name $Distro -Location active
+    if (-not $wslPriorState.Valid -or -not $wslPriorState.ReleaseId) {
+        throw 'INSTALLED_WSL_RELEASE_ID_MISSING: existing runtime is not a committed SwitchTrade release'
+    }
+    $wslPriorReleaseId = [string]$wslPriorState.ReleaseId
+}
+$kernelStatePath = Join-Path $StateRoot 'kernel-state.json'
+$kernelPriorState = $null
+if (Test-Path -LiteralPath $kernelStatePath -PathType Leaf) {
+    try { $kernelPriorState = Get-Content -Raw -LiteralPath $kernelStatePath | ConvertFrom-Json }
+    catch { throw 'KERNEL_STATE_INVALID: existing kernel ownership state is unreadable' }
+}
+$kernelPriorReleaseId = if ($kernelPriorState) { [string]$kernelPriorState.package_release_id } else { '' }
+$kernelPriorPath = if ($kernelPriorState) { [string]$kernelPriorState.kernel_path } else { '' }
+$kernelPriorModulesPath = if ($kernelPriorState) { [string]$kernelPriorState.modules_path } else { '' }
+$softwarePriorAxes = @(@($priorReleaseId, $wslPriorReleaseId) | Where-Object { $_ })
+if ($softwarePriorAxes.Count -ne 0 -and
+        ($softwarePriorAxes.Count -ne 2 -or $priorReleaseId -ne $wslPriorReleaseId)) {
+    throw 'INSTALLED_RELEASE_MISMATCH: Windows and WSL must identify the same committed release before Repair or Update'
+}
+if ($kernelPriorReleaseId -and $priorReleaseId -and $kernelPriorReleaseId -ne $priorReleaseId) {
+    throw 'INSTALLED_KERNEL_RELEASE_MISMATCH: managed kernel state does not match the installed release'
+}
+$kernelChangeExpected = (Test-Path -LiteralPath $Kernel -PathType Leaf) -and
+    (Test-Path -LiteralPath $KernelManifest -PathType Leaf)
 $distroImported = $false
 $kernelApplied = $false
 $kernelHadManagedPrior = $false
@@ -572,9 +837,16 @@ $wslCommitAttempted = $false
 $windowsCommitted = $false
 $provision = ''
 $transaction = New-SwitchTradeTransaction -Path $TransactionPath -Action $Action -ReleaseId $ReleaseId `
-    -PriorReleaseId $priorReleaseId -WindowsStage $stage
+    -PriorReleaseId $priorReleaseId -WindowsStage $stage -PackageRoot $PackageRoot `
+    -InstallRoot $InstallRoot -PreviousInstall $PreviousInstall -DistroName $Distro `
+    -DistroRoot $DistroRoot -DistroExistedBefore $distroExistedBefore `
+    -DistroOwnedBefore $distroOwnedBefore -WslPriorReleaseId $wslPriorReleaseId `
+    -KernelPriorReleaseId $kernelPriorReleaseId -KernelStatePath $kernelStatePath `
+    -KernelPriorPath $kernelPriorPath -KernelPriorModulesPath $kernelPriorModulesPath `
+    -KernelChangeExpected $kernelChangeExpected
 try {
     $SetupStage = 'windows_stage'
+    New-Item -ItemType Directory -Path $stage | Out-Null
     Copy-Item -LiteralPath (Join-Path $PackageRoot 'installer') -Destination $stage -Recurse
     Copy-Item -LiteralPath $Payload -Destination $stage -Recurse
     Copy-Item -LiteralPath (Join-Path $PackageRoot 'manifest.json') -Destination $stage
@@ -751,6 +1023,7 @@ try {
         throw "SETUP_COMPENSATION_FAILED: $($transactionFailure.Exception.Message); compensation: $($_.Exception.Message)"
     }
     throw $transactionFailure
+}
 }
 
 if ($audit.VmwareUsbArbitrator -eq 'Running') {

@@ -7,6 +7,7 @@ TARGET=/opt/switchtrade
 CANDIDATE=/opt/switchtrade.candidate
 MODE=stage
 RELEASE_ID=""
+PRIOR_RELEASE_ID=""
 
 die() { printf 'switchtrade provision: %s\n' "$*" >&2; exit 1; }
 release_of() {
@@ -31,7 +32,8 @@ while (($#)); do
     case $1 in
         --source) [[ $# -ge 2 ]] || die "--source requires a directory"; SOURCE=$2; shift 2 ;;
         --release-id) [[ $# -ge 2 ]] || die "--release-id requires a value"; RELEASE_ID=$2; shift 2 ;;
-        --stage|--validate|--validate-candidate|--validate-active|--commit|--abort|--rollback|--compensate|--validate-retained)
+        --prior-release-id) [[ $# -ge 2 ]] || die "--prior-release-id requires a value"; PRIOR_RELEASE_ID=$2; shift 2 ;;
+        --stage|--validate|--validate-candidate|--validate-active|--commit|--abort|--rollback|--compensate|--validate-retained|--recover-interrupted)
             MODE=${1#--}; shift ;;
         *) die "unknown argument: $1" ;;
     esac
@@ -40,6 +42,9 @@ done
 ((EUID == 0)) || die "run as root inside the SwitchTrade distribution"
 [[ $TARGET == /opt/switchtrade && $CANDIDATE == /opt/switchtrade.candidate ]] || die "unsafe runtime paths"
 [[ $RELEASE_ID =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || die "RUNTIME_RELEASE_ID_INVALID"
+if [[ $MODE == recover-interrupted ]]; then
+    [[ $PRIOR_RELEASE_ID =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || die "RUNTIME_PRIOR_RELEASE_ID_INVALID"
+fi
 
 case $MODE in
     validate)
@@ -119,6 +124,22 @@ case $MODE in
         fi
         require_release "$TARGET" "$RELEASE_ID"
         printf '[wsl] runtime committed release=%s\n' "$RELEASE_ID"
+        exit 0 ;;
+    recover-interrupted)
+        previous=${TARGET}.previous
+        swap=${TARGET}.commit-swap
+        require_release "$swap" "$PRIOR_RELEASE_ID"
+        [[ ! -e $previous ]] || die "RUNTIME_INTERRUPTED_PREVIOUS_UNSAFE"
+        if [[ -e $CANDIDATE ]]; then require_release "$CANDIDATE" "$RELEASE_ID"; fi
+        if [[ -e $TARGET ]]; then
+            require_release "$TARGET" "$RELEASE_ID"
+            [[ ! -e $CANDIDATE ]] || die "RUNTIME_INTERRUPTED_CANDIDATE_CONFLICT"
+            mv -- "$TARGET" "$CANDIDATE"
+        fi
+        mv -- "$swap" "$TARGET"
+        rm -rf -- "$CANDIDATE"
+        require_release "$TARGET" "$PRIOR_RELEASE_ID"
+        printf '[wsl] interrupted commit compensated release=%s\n' "$PRIOR_RELEASE_ID"
         exit 0 ;;
 esac
 

@@ -160,16 +160,46 @@ function New-SwitchTradeTransaction {
         [Parameter(Mandatory)][string]$Action,
         [Parameter(Mandatory)][string]$ReleaseId,
         [string]$PriorReleaseId = '',
-        [string]$WindowsStage = ''
+        [string]$WindowsStage = '',
+        [string]$PackageRoot = '',
+        [string]$InstallRoot = '',
+        [string]$PreviousInstall = '',
+        [string]$DistroName = '',
+        [string]$DistroRoot = '',
+        [bool]$DistroExistedBefore = $false,
+        [bool]$DistroOwnedBefore = $false,
+        [string]$WslPriorReleaseId = '',
+        [string]$KernelPriorReleaseId = '',
+        [string]$KernelStatePath = '',
+        [string]$KernelPriorPath = '',
+        [string]$KernelPriorModulesPath = '',
+        [bool]$KernelChangeExpected = $false
     )
     $state = [ordered]@{
-        schema = 1
+        schema = 2
         transaction_id = [guid]::NewGuid().ToString('N')
         action = $Action
         release_id = $ReleaseId
         prior_release_id = $PriorReleaseId
         phase = 'created'
         windows_stage = $WindowsStage
+        package_root = $PackageRoot
+        install_root = $InstallRoot
+        previous_install = $PreviousInstall
+        distro_name = $DistroName
+        distro_root = $DistroRoot
+        distro_existed_before = $DistroExistedBefore
+        distro_owned_before = $DistroOwnedBefore
+        wsl_prior_release_id = $WslPriorReleaseId
+        wsl_active_path = '/opt/switchtrade'
+        wsl_candidate_path = '/opt/switchtrade.candidate'
+        wsl_previous_path = '/opt/switchtrade.previous'
+        wsl_commit_swap_path = '/opt/switchtrade.commit-swap'
+        kernel_prior_release_id = $KernelPriorReleaseId
+        kernel_state_path = $KernelStatePath
+        kernel_prior_path = $KernelPriorPath
+        kernel_prior_modules_path = $KernelPriorModulesPath
+        kernel_change_expected = $KernelChangeExpected
         distro_imported = $false
         wsl_staged = $false
         kernel_applied = $false
@@ -179,6 +209,144 @@ function New-SwitchTradeTransaction {
     }
     Write-AtomicJson -Path $Path -Value $state
     return $state
+}
+
+function Assert-SwitchTradeRecordedPath {
+    param(
+        [Parameter(Mandatory)][string]$Recorded,
+        [Parameter(Mandatory)][string]$Expected,
+        [Parameter(Mandatory)][string]$Code
+    )
+    $recordedPath = [IO.Path]::GetFullPath($Recorded).TrimEnd('\')
+    $expectedPath = [IO.Path]::GetFullPath($Expected).TrimEnd('\')
+    if (-not [string]::Equals($recordedPath, $expectedPath,
+            [StringComparison]::OrdinalIgnoreCase)) {
+        throw "$Code`: recorded path does not match this installation"
+    }
+    return $recordedPath
+}
+
+function Assert-SwitchTradeRecordedStagePath {
+    param(
+        [Parameter(Mandatory)][string]$Recorded,
+        [Parameter(Mandatory)][string]$InstallRoot
+    )
+    $stage = [IO.Path]::GetFullPath($Recorded).TrimEnd('\')
+    $parent = [IO.Path]::GetFullPath((Split-Path -Parent $InstallRoot)).TrimEnd('\')
+    if (-not [string]::Equals((Split-Path -Parent $stage).TrimEnd('\'), $parent,
+            [StringComparison]::OrdinalIgnoreCase) -or
+        (Split-Path -Leaf $stage) -notmatch '^SwitchTrade\.stage\.[0-9a-f]{32}$') {
+        throw 'SETUP_TRANSACTION_PATH_INVALID: recorded Windows stage is outside the installation boundary'
+    }
+    return $stage
+}
+
+function Assert-SwitchTradeTransactionPackage {
+    param(
+        [Parameter(Mandatory)]$Transaction,
+        [Parameter(Mandatory)][string]$PackageRoot,
+        [Parameter(Mandatory)][string]$ReleaseId
+    )
+    if ([string]$Transaction.release_id -ne $ReleaseId -or
+            -not [string]::Equals(
+                [IO.Path]::GetFullPath([string]$Transaction.package_root).TrimEnd('\'),
+                [IO.Path]::GetFullPath($PackageRoot).TrimEnd('\'),
+                [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'SETUP_TRANSACTION_PACKAGE_MISMATCH: rerun Repair from the exact package that started the transaction'
+    }
+}
+
+function Resolve-SwitchTradeTransactionRecovery {
+    param(
+        [Parameter(Mandatory)]$Transaction,
+        [Parameter(Mandatory)]$Actual
+    )
+    if ([int]$Transaction.schema -ne 2) {
+        throw 'SETUP_TRANSACTION_LEGACY_AMBIGUOUS: the interrupted transaction cannot prove pre-mutation ownership'
+    }
+    if ($Actual.DistroExists -and -not $Actual.DistroOwned) {
+        throw 'SETUP_TRANSACTION_DISTRO_OWNERSHIP_CHANGED: the named distribution is not installer-owned'
+    }
+    if ([bool]$Transaction.distro_existed_before -and
+            (-not [bool]$Transaction.distro_owned_before -or -not $Actual.DistroExists)) {
+        throw 'SETUP_TRANSACTION_PRIOR_DISTRO_MISSING: the prior owned distribution cannot be proven'
+    }
+
+    $release = [string]$Transaction.release_id
+    $windowsPrior = [string]$Transaction.prior_release_id
+    $wslPrior = [string]$Transaction.wsl_prior_release_id
+    $kernelPrior = [string]$Transaction.kernel_prior_release_id
+    $kernelExpected = if ([bool]$Transaction.kernel_change_expected) { $release } else { $kernelPrior }
+    $retainedReady = (-not $windowsPrior -or $Actual.WindowsPreviousRelease -eq $windowsPrior) -and
+        (-not $wslPrior -or $Actual.WslPreviousRelease -eq $wslPrior)
+    $coherentCommit = $Actual.WindowsActiveRelease -eq $release -and
+        $Actual.WslActiveRelease -eq $release -and
+        $Actual.KernelRelease -eq $kernelExpected -and $retainedReady -and
+        -not $Actual.WindowsStageExists -and -not $Actual.WslCandidateExists -and
+        -not $Actual.WslCommitSwapExists
+    if ($coherentCommit) {
+        return [pscustomobject]@{
+            Disposition = 'finalize'; WindowsAction = 'none'; WslAction = 'none'
+            KernelAction = 'none'; RemoveStage = $false
+        }
+    }
+
+    $windowsAction = 'none'
+    if ($Actual.WindowsActiveExists -and -not $Actual.WindowsActiveRelease) {
+        throw 'SETUP_TRANSACTION_WINDOWS_ACTIVE_INVALID: the active Windows tree is not a proven release'
+    }
+    if ($Actual.WindowsPreviousExists -and -not $Actual.WindowsPreviousRelease) {
+        throw 'SETUP_TRANSACTION_WINDOWS_RETAINED_INVALID: the retained Windows tree is not a proven release'
+    }
+    if ($windowsPrior) {
+        if ($Actual.WindowsActiveRelease -eq $windowsPrior) { $windowsAction = 'none' }
+        elseif ($Actual.WindowsActiveRelease -eq $release -and
+                $Actual.WindowsPreviousRelease -eq $windowsPrior) { $windowsAction = 'rollback' }
+        elseif (-not $Actual.WindowsActiveExists -and
+                $Actual.WindowsPreviousRelease -eq $windowsPrior) { $windowsAction = 'restore_prior' }
+        else { throw 'SETUP_TRANSACTION_WINDOWS_AMBIGUOUS: Windows release state cannot be compensated safely' }
+    } elseif ($Actual.WindowsActiveRelease -eq $release) {
+        $windowsAction = 'remove_new'
+    } elseif ($Actual.WindowsActiveExists) {
+        throw 'SETUP_TRANSACTION_WINDOWS_AMBIGUOUS: an unexpected Windows release is active'
+    }
+
+    $wslAction = 'none'
+    if (-not [bool]$Transaction.distro_existed_before) {
+        if ($Actual.DistroExists) { $wslAction = 'unregister_new' }
+    } else {
+        if (-not $wslPrior) {
+            throw 'SETUP_TRANSACTION_WSL_PRIOR_UNKNOWN: the prior WSL release was not recorded'
+        }
+        if (($Actual.WslCandidateExists -and $Actual.WslCandidateRelease -ne $release) -or
+                ($Actual.WslCommitSwapExists -and $Actual.WslCommitSwapRelease -ne $wslPrior)) {
+            throw 'SETUP_TRANSACTION_WSL_LAYOUT_INVALID: an unproven WSL runtime occupies a transaction path'
+        }
+        if ($Actual.WslActiveRelease -eq $wslPrior -and -not $Actual.WslCommitSwapExists) {
+            if ($Actual.WslCandidateExists) { $wslAction = 'abort_candidate' }
+        } elseif ($Actual.WslActiveRelease -eq $release -and
+                $Actual.WslPreviousRelease -eq $wslPrior -and
+                -not $Actual.WslCommitSwapExists) {
+            $wslAction = 'compensate'
+        } elseif ($Actual.WslCommitSwapRelease -eq $wslPrior -and
+                $Actual.WslActiveRelease -in @('', $release)) {
+            $wslAction = 'recover_interrupted'
+        } else {
+            throw 'SETUP_TRANSACTION_WSL_AMBIGUOUS: WSL release state cannot be compensated safely'
+        }
+    }
+
+    $kernelAction = 'none'
+    if ($Actual.KernelRelease -eq $kernelPrior) { $kernelAction = 'none' }
+    elseif ([bool]$Transaction.kernel_change_expected -and $Actual.KernelRelease -eq $release) {
+        $kernelAction = if ($kernelPrior) { 'rollback' } else { 'restore_original' }
+    } else {
+        throw 'SETUP_TRANSACTION_KERNEL_AMBIGUOUS: kernel release state cannot be compensated safely'
+    }
+    return [pscustomobject]@{
+        Disposition = 'compensate'; WindowsAction = $windowsAction; WslAction = $wslAction
+        KernelAction = $kernelAction; RemoveStage = [bool]$Actual.WindowsStageExists
+    }
 }
 
 function Set-SwitchTradeTransactionPhase {
