@@ -82,7 +82,8 @@ The original failure was reproduced with WSL's working directory set to `/`. The
 then completed from the same unrelated directory and activated the staged runtime successfully. The
 lifecycle regression test also requires the self-check to precede backup and activation.
 
-The final replacement is `SwitchTrade-unsigned-private-beta-b2c9d36.zip`. It passed package integrity,
+The cwd-independent runtime replacement was `SwitchTrade-unsigned-private-beta-b2c9d36.zip`. It passed package integrity,
 Setup Audit, installed WPF self-test, exact kernel/module ABI comparison, Python imports, endpoint
 dry-run, control readiness, graceful shutdown, shortcut/config checks, and an actual reinstall launched
-from an unrelated Windows working directory.
+from an unrelated Windows working directory. The later `8667888` package supersedes it with the same
+runtime fix plus a native progress window and concise success messaging.
