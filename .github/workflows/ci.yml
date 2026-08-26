@@ -58,6 +58,23 @@ jobs:
       - name: Run PowerShell 7 kernel lifecycle simulation
         shell: pwsh
         run: ./installer/Test-KernelLifecycle.ps1 -TestRoot "$env:RUNNER_TEMP/kernel-lifecycle-pwsh"
+      - name: Run Windows PowerShell 5.1 setup lifecycle simulation
+        shell: powershell
+        run: ./installer/Test-SetupLifecycle.ps1 -TestRoot "$env:RUNNER_TEMP/setup-lifecycle-ps5"
+      - name: Run PowerShell 7 setup lifecycle simulation
+        shell: pwsh
+        run: ./installer/Test-SetupLifecycle.ps1 -TestRoot "$env:RUNNER_TEMP/setup-lifecycle-pwsh"
+      - name: Reject vulnerable .NET dependency graphs
+        shell: pwsh
+        run: |
+          foreach ($project in @(
+            'apps/desktop/SwitchTrade.Desktop/SwitchTrade.Desktop.csproj',
+            'installer/bootstrap/SwitchTrade.Setup.csproj'
+          )) {
+            $report = dotnet list $project package --vulnerable --include-transitive 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) { throw $report }
+            if ($report -match 'has the following vulnerable packages') { throw $report }
+          }
 
   ubuntu:
     runs-on: ubuntu-latest
