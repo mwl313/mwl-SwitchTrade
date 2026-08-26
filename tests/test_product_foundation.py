@@ -227,6 +227,15 @@ class PassiveObserverTests(unittest.TestCase):
             observer.submit("member_a", "parent", b"second")
             self.assertEqual(observer.stats["dropped"], 1)
 
+    def test_observer_rejects_late_frames_after_stop(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            observer = PassivePartyObserver(
+                Path(temporary) / "party.json", "attempt", "member_a").start()
+            observer.stop()
+            observer.submit("member_a", "parent", b"late")
+            self.assertEqual(observer.stats["dropped"], 1)
+            self.assertTrue(observer._queue.empty())
+
     def test_three_complete_party_blocks_publish_only_safe_projection(self):
         fixtures = Path(__file__).resolve().parent / "fixtures" / "pokemon"
         pair = ((fixtures / "0001_BULBASAUR_user_20260824.pk3").read_bytes() +

@@ -83,6 +83,9 @@ class PassivePartyObserver:
 
     def submit(self, source_seat: str, sender_role: str, payload: bytes) -> None:
         """Copy and enqueue without waiting. The caller's primary path always wins."""
+        if self._stop.is_set():
+            self.stats["dropped"] += 1
+            return
         try:
             self._queue.put_nowait((source_seat, sender_role, bytes(payload)))
             self.stats["submitted"] += 1
@@ -93,6 +96,8 @@ class PassivePartyObserver:
     def stop(self, *, clear: bool = True, timeout: float = 2.0) -> None:
         self._stop.set()
         self._thread.join(timeout)
+        if self._thread.is_alive():
+            raise RuntimeError("passive observer thread did not stop before its cleanup deadline")
         if clear:
             for seat in self._parties:
                 self._parties[seat] = {
