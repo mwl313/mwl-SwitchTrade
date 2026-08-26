@@ -16,6 +16,14 @@ class BoundedDedupTest(unittest.TestCase):
         self.assertTrue(_remember_recent(recent, 0, 3))
         self.assertEqual(list(recent), [3, 4, 0])
 
+    def test_sequence_wrap_soak_stays_bounded_and_accepts_the_new_cycle(self):
+        recent = OrderedDict()
+        accepted = 0
+        for absolute in range(70_000):
+            accepted += int(_remember_recent(recent, absolute & 0xFFFF, 4096))
+        self.assertEqual(accepted, 70_000)
+        self.assertEqual(len(recent), 4096)
+
     def test_full_k_backlog_does_not_mark_an_unsent_ack_as_complete(self):
         sim = Sim.__new__(Sim)
         sim._acked_ts = OrderedDict()
