@@ -12,6 +12,7 @@ import threading
 import time
 import signal
 import secrets
+import sys
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,7 +22,7 @@ from pydantic import BaseModel, Field
 from switchtrade import __version__
 from switchtrade.diagnostics import RunLogger, default_runs_root
 from switchtrade.endpoint import runtime_plan
-from switchtrade.hardware import DEFAULT_PROFILE_PATH, load_profiles
+from switchtrade.hardware import DEFAULT_PROFILE_PATH, host_engines_public, load_profiles
 from switchtrade.process_guard import AlreadyRunningError, SingleInstanceLock
 from switchtrade.relay_client import RelayClient, RelayError
 
@@ -56,11 +57,20 @@ class StartSession(BaseModel):
     passcode: str = Field(min_length=4, max_length=8, pattern="^[A-Za-z0-9]+$")
     usb_id: str | None = Field(default=None, pattern="^[0-9A-Fa-f]{4}:[0-9A-Fa-f]{4}$")
     attempt_id: str | None = Field(default=None, max_length=80)
+    allow_experimental_hardware: bool = False
 
 
 class RepairRequest(BaseModel):
     action: str = Field(pattern="^recheck_adapter$")
     usb_id: str | None = Field(default=None, pattern="^[0-9A-Fa-f]{4}:[0-9A-Fa-f]{4}$")
+    allow_experimental_hardware: bool = False
+
+
+class HardwareDiagnosticRequest(BaseModel):
+    usb_id: str | None = Field(default=None, pattern="^[0-9A-Fa-f]{4}:[0-9A-Fa-f]{4}$")
+    mode: str = Field(default="quick", pattern="^(quick|certify|full)$")
+    role: str = Field(default="host", pattern="^(host|guest|relay)$")
+    allow_experimental_hardware: bool = False
 
 
 @dataclass
@@ -247,7 +257,8 @@ def endpoint_command(identity: str, passcode: str, relay_url: str,
                      *, switch_room_role: str | None = None,
                      party_state_file: Path | None = None,
                      attempt_id: str | None = None,
-                     member_token_file: Path | None = None) -> list[str]:
+                     member_token_file: Path | None = None,
+                     allow_experimental_hardware: bool = False) -> list[str]:
     if identity in {"host", "guest"} and switch_room_role is None:
         args = ["--role", identity]
     else:
@@ -255,6 +266,8 @@ def endpoint_command(identity: str, passcode: str, relay_url: str,
     args += ["--session-id", passcode, "--relay-url", relay_url]
     if usb_id:
         args += ["--usb-id", usb_id.lower()]
+    if allow_experimental_hardware:
+        args += ["--allow-experimental-hardware"]
     if state_file:
         args += ["--state-file", _wsl_path(state_file) if os.name == "nt" else str(state_file)]
     if party_state_file:
@@ -271,6 +284,24 @@ def endpoint_command(identity: str, passcode: str, relay_url: str,
         return ["wsl.exe", "-d", distro, "--cd", root, "--", "sudo",
                 "./scripts/run-beta-endpoint.sh", *args]
     return [str(Path(__file__).resolve().parents[1] / "scripts" / "run-beta-endpoint.sh"), *args]
+
+
+def hardware_diagnostic_command(usb_id: str, mode: str, role: str,
+                                runs_root: Path,
+                                *, allow_experimental_hardware: bool = False) -> list[str]:
+    args = [
+        "-m", "switchtrade.hardware_diagnostics", "--usb-id", usb_id.lower(),
+        "--mode", mode, "--role", role, "--runs-root",
+        _wsl_path(runs_root) if os.name == "nt" else str(runs_root),
+    ]
+    if allow_experimental_hardware:
+        args.append("--allow-experimental-hardware")
+    if os.name == "nt":
+        distro = os.environ.get("SWITCHTRADE_WSL_DISTRO", "SwitchTrade")
+        root = os.environ.get("SWITCHTRADE_WSL_ROOT", "/opt/switchtrade")
+        python = os.environ.get("SWITCHTRADE_WSL_PYTHON", "./bridge/.venv/bin/python")
+        return ["wsl.exe", "-d", distro, "--cd", root, "--", "sudo", python, *args]
+    return [sys.executable, *args]
 
 
 def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str | Path | None = None,
@@ -377,10 +408,14 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     def launch_session(state: Runtime, *, code: str, tunnel_seat: str,
                        switch_room_role: str, usb_id: str | None,
                        attempt_id: str | None = None,
-                       member_token_file: Path | None = None) -> dict:
+                       member_token_file: Path | None = None,
+                       allow_experimental_hardware: bool = False) -> dict:
         try:
             state.relay.status(code)
-            plan = runtime_plan(tunnel_seat, usb_id, switch_room_role=switch_room_role)
+            plan = runtime_plan(
+                tunnel_seat, usb_id, switch_room_role=switch_room_role,
+                allow_experimental_hardware=allow_experimental_hardware,
+            )
         except (RelayError, ValueError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         with state.lock:
@@ -389,10 +424,11 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             state.endpoint_state.unlink(missing_ok=True)
             state.party_state.unlink(missing_ok=True)
             command = endpoint_command(
-                plan["tunnel_seat"], code, state.relay_url, usb_id,
+                plan["tunnel_seat"], code, state.relay_url, plan["usb_id"],
                 state.endpoint_state, switch_room_role=plan["switch_room_role"],
                 party_state_file=state.party_state, attempt_id=attempt_id or code,
                 member_token_file=member_token_file,
+                allow_experimental_hardware=allow_experimental_hardware,
             )
             try:
                 state.endpoint = subprocess.Popen(command, cwd=Path(__file__).resolve().parents[1])
@@ -402,6 +438,8 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         state.log.event(
             "session_started", passcode=code, tunnel_seat=plan["tunnel_seat"],
             switch_room_role=plan["switch_room_role"], usb_id=plan["usb_id"],
+            host_engine=plan["host_engine"],
+            experimental_hardware=allow_experimental_hardware,
             pid=state.endpoint.pid,
         )
         return {"status": "starting", "session_id": code, "hardware": plan,
@@ -615,7 +653,65 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     @app.get("/api/hardware/profiles")
     def hardware_profiles(request: Request) -> dict:
         state = runtime(request)
-        return {"profiles": [profile.public() for profile in state.profiles]}
+        return {
+            "profiles": [profile.public() for profile in state.profiles],
+            "host_engines": host_engines_public(),
+        }
+
+    @app.post("/api/v1/hardware/diagnostics")
+    def hardware_diagnostics(payload: HardwareDiagnosticRequest, request: Request) -> dict:
+        state = runtime(request)
+        usb_id = payload.usb_id.lower() if payload.usb_id else next(
+            profile.usb_id for profile in state.profiles if profile.auto_select)
+        diagnostic_root = state.log.run_dir / "hardware-diagnostics"
+        command = hardware_diagnostic_command(
+            usb_id, payload.mode, payload.role, diagnostic_root,
+            allow_experimental_hardware=payload.allow_experimental_hardware,
+        )
+        state.log.event(
+            "hardware_diagnostic_started", usb_id=usb_id, mode=payload.mode,
+            experimental_hardware=payload.allow_experimental_hardware,
+        )
+        try:
+            result = subprocess.run(
+                command, cwd=Path(__file__).resolve().parents[1], capture_output=True,
+                text=True, timeout={"quick": 35, "certify": 70, "full": 130}[payload.mode],
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            state.log.event(
+                "hardware_diagnostic_failed", level="error", usb_id=usb_id,
+                error=type(error).__name__,
+            )
+            raise HTTPException(status_code=503, detail="hardware diagnostics did not complete") from error
+        report = None
+        for line in reversed(result.stdout.splitlines()):
+            try:
+                candidate = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(candidate, dict) and candidate.get("contract_version") == "hardware-diagnostic.v1":
+                report = candidate
+                break
+        if report is None:
+            state.log.event(
+                "hardware_diagnostic_failed", level="error", usb_id=usb_id,
+                exit_code=result.returncode,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="hardware diagnostics produced no machine-readable report",
+            )
+        report_path = diagnostic_root / report["run_id"] / "diagnostic-report.json"
+        state.log.event(
+            "hardware_diagnostic_completed", usb_id=usb_id,
+            diagnostic_run_id=report["run_id"], outcome=report["overall_status"],
+        )
+        return {"report": report, "report_path": str(report_path), "run_id": state.log.run_id}
+
+    @app.post("/api/hardware/diagnostics")
+    def hardware_diagnostics_legacy(payload: HardwareDiagnosticRequest, request: Request) -> dict:
+        return hardware_diagnostics(payload, request)
 
     @app.get("/api/groups/public")
     def public_groups(request: Request) -> dict:
@@ -723,13 +819,17 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             )
         code = payload.passcode.upper()
         try:
-            plan = runtime_plan(identity, payload.usb_id, switch_room_role=switch_role)
+            plan = runtime_plan(
+                identity, payload.usb_id, switch_room_role=switch_role,
+                allow_experimental_hardware=payload.allow_experimental_hardware,
+            )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         return launch_session(
             state, code=code, tunnel_seat=plan["tunnel_seat"],
             switch_room_role=plan["switch_room_role"], usb_id=payload.usb_id,
             attempt_id=payload.attempt_id,
+            allow_experimental_hardware=payload.allow_experimental_hardware,
         )
 
     @app.post("/api/v1/session/start")
@@ -752,6 +852,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             state, code=previous["session_id"], tunnel_seat=previous["tunnel_seat"],
             switch_room_role=previous["switch_room_role"], usb_id=previous.get("usb_id"),
             attempt_id=previous.get("attempt_id"),
+            allow_experimental_hardware=bool(previous.get("allow_experimental_hardware")),
         )
 
     @app.post("/api/v1/app/repair")
@@ -763,11 +864,14 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             plan = runtime_plan(
                 previous.get("tunnel_seat", "member_a"), payload.usb_id or previous.get("usb_id"),
                 switch_room_role=switch_role,
+                allow_experimental_hardware=payload.allow_experimental_hardware,
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         prepare = Path(__file__).resolve().parents[1] / "scripts" / "wsl-radio-prepare.sh"
         command = [str(prepare), "--usb-id", plan["usb_id"], "--role", plan["radio_role"]]
+        if payload.allow_experimental_hardware:
+            command.append("--allow-experimental-hardware")
         state.log.event("repair_started", action=payload.action, usb_id=plan["usb_id"])
         try:
             result = subprocess.run(

@@ -13,6 +13,7 @@ role=""
 switch_room_role=""
 usb_id=""
 channel=6
+allow_experimental=false
 args=("$@")
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -24,6 +25,7 @@ while [[ $# -gt 0 ]]; do
         --usb-id=*) usb_id=${1#*=}; usb_id=${usb_id,,} ;;
         --channel) [[ $# -ge 2 ]] || die "--channel requires 1..13"; channel=$2; shift ;;
         --channel=*) channel=${1#*=} ;;
+        --allow-experimental-hardware) allow_experimental=true ;;
     esac
     shift
 done
@@ -47,6 +49,7 @@ radio_role=guest
 
 gate=("$PREP")
 [[ -z $usb_id ]] || gate+=(--usb-id "$usb_id")
+[[ $allow_experimental == false ]] || gate+=(--allow-experimental-hardware)
 gate+=(--role "$radio_role" --target-channel "$channel" --)
 
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"

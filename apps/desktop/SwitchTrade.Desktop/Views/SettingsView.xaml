@@ -38,6 +38,14 @@
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
             </ItemsControl>
+            <TextBlock Text="Diagnostic profile" FontWeight="SemiBold" Margin="0,20,0,6" />
+            <ComboBox ItemsSource="{Binding Adapters}" SelectedItem="{Binding SelectedAdapter}"
+                      DisplayMemberPath="FriendlyName" MaxWidth="420" HorizontalAlignment="Left"
+                      automation:AutomationProperties.Name="Diagnostic adapter profile" />
+            <Button Content="Run read-only diagnostics" Command="{Binding DiagnosticCommand}"
+                    Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left" Margin="0,10,0,0" />
+            <TextBlock Text="{Binding DiagnosticFilePath}" FontFamily="Cascadia Mono, Consolas"
+                       FontSize="12" TextWrapping="Wrap" Margin="0,8,0,0" />
             <Button Content="Check again" Command="{Binding RecheckCommand}" Style="{StaticResource SecondaryButton}"
                     HorizontalAlignment="Left" Margin="0,20,0,0" />
           </StackPanel>
@@ -72,8 +80,12 @@
           <StackPanel Margin="18,22,12,32">
             <TextBlock Text="Advanced" Style="{StaticResource SectionTitle}" />
             <Border Style="{StaticResource WarningNotice}">
-              <TextBlock Text="The RTL8188EU remains test-only and is not selected for normal trading." />
+              <TextBlock Text="Quarantined cards are blocked. Research and driver candidates require explicit consent for every trading attempt." />
             </Border>
+            <TextBlock Text="Host/AP engines" FontWeight="SemiBold" Margin="0,18,0,8" />
+            <TextBlock Text="HostTransport + ldn.create_network() — Available and default" />
+            <TextBlock Text="hostapd AP engine — In Development (not selectable)" Style="{StaticResource SecondaryText}" Margin="0,5,0,0" />
+            <TextBlock Text="direct nl80211 AP engine — In Development (not selectable)" Style="{StaticResource SecondaryText}" Margin="0,5,0,16" />
             <TextBlock Text="Driver, USB, and runtime details appear here only for troubleshooting. Normal trading should not require this section." />
           </StackPanel>
         </ScrollViewer>
