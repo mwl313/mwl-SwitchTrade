@@ -100,7 +100,7 @@ scripts/config \
 for SPEC in $EXTRA_KERNEL_CONFIG; do
   KEY="${SPEC%%=*}"
   VALUE="${SPEC#*=}"
-  [[ "$KEY" =~ ^CONFIG_[A-Z0-9_]+$ ]] || { echo "[오류] 잘못된 config symbol: $KEY"; exit 1; }
+  [[ "$KEY" =~ ^CONFIG_[A-Za-z0-9_]+$ ]] || { echo "[오류] 잘못된 config symbol: $KEY"; exit 1; }
   case "$VALUE" in
     y) scripts/config --enable "$KEY" ;;
     m) scripts/config --module "$KEY" ;;

@@ -97,6 +97,9 @@ public partial class App : Application
         }
         public Task<IReadOnlyList<AdapterProfileViewData>> GetAdapterProfilesAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<AdapterProfileViewData>>([]);
+        public Task<HardwareDiagnosticViewData> RunHardwareDiagnosticsAsync(
+            string usbId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new HardwareDiagnosticViewData("self-test", "partial", "Self-test", ""));
         public Task<LivePartyProjection?> TryGetPartiesAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<LivePartyProjection?>(null);
         public Task RepairAdapterAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;

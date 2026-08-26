@@ -43,6 +43,7 @@
 | [docs/62-final-ui-overhaul-gpt-handoff-20260825.md](docs/62-final-ui-overhaul-gpt-handoff-20260825.md) | 최종 GPT/owner WPF UI overhaul 입력 및 Gate 0 승인 기준 |
 | [docs/63-second-native-ui-overhaul-codex-handoff-20260825.md](docs/63-second-native-ui-overhaul-codex-handoff-20260825.md) | GPT의 두 번째 native UI audit 및 Codex 구현 지침 |
 | [docs/64-second-native-ui-overhaul-implementation-report-20260825.md](docs/64-second-native-ui-overhaul-implementation-report-20260825.md) | 두 번째 native WPF audit 구현 결과, C1–C12 결정, 검증 기록 |
+| [docs/67-hardware-support-expansion-20260826.md](docs/67-hardware-support-expansion-20260826.md) | WSL USB 카드 매트릭스, host engine 정책, 자동 진단과 실기 승격 게이트 |
 | [docs/30-native-fixed-handshake-20260824.md](docs/30-native-fixed-handshake-20260824.md) | Native two-Switch fixed-channel gold, PC-host root cause, and byte-verified Session fix |
 | [handoff/HANDOFF-20260824-wsl-dual-radio.md](handoff/HANDOFF-20260824-wsl-dual-radio.md) | WSL 두 카드 최종 상태, 확장 구조, 다음 G5/G6 절차 |
 | [handoff/HANDOFF-20260824-native-host-session.md](handoff/HANDOFF-20260824-native-host-session.md) | Next-agent gate for PC-host Pia and host/parent Reliable work |
@@ -53,6 +54,9 @@
 WSL 무선 실행은 Windows에서 `scripts/windows/wsl-radio-preflight.ps1 -Prepare -AutoAttach`를 먼저 실행하고,
 Linux에서는 `scripts/wsl-radio-prepare.sh --usb-id VID:PID --role ROLE -- COMMAND...`를 사용한다.
 지원 카드와 driver/role 정책은 `config/wsl-radio-hardware.tsv`에 있다.
+새 카드의 read-only 진단은 `python -m switchtrade.hardware_diagnostics --usb-id VID:PID`로 실행한다.
+research/driver candidate의 실제 실행은 각 attempt마다 `--allow-experimental-hardware`가 필요하며,
+quarantined 카드는 실행할 수 없다. 모든 카드의 기본 host engine은 `ldn.create_network()`이다.
 | [docs/research/04-youtube-videos.md](docs/research/04-youtube-videos.md) | YouTube 영상 2건 정리 |
 
 ## 상태

@@ -25,6 +25,8 @@ public interface IControlGateway : IDisposable
     Task StopConnectionAsync(CancellationToken cancellationToken = default);
     Task ReleaseTradeRoomAsync(string roomCode, RoomMembershipRole role, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<AdapterProfileViewData>> GetAdapterProfilesAsync(CancellationToken cancellationToken = default);
+    Task<HardwareDiagnosticViewData> RunHardwareDiagnosticsAsync(
+        string usbId, CancellationToken cancellationToken = default);
     Task<LivePartyProjection?> TryGetPartiesAsync(CancellationToken cancellationToken = default);
     Task RepairAdapterAsync(CancellationToken cancellationToken = default);
     Task<string> CreateSupportBundleAsync(CancellationToken cancellationToken = default);
@@ -185,25 +187,27 @@ public sealed class ControlApiClient : IControlGateway
             var result = await response.Content.ReadFromJsonAsync<ProfilesResponse>(JsonOptions, cancellationToken);
             return (result?.Profiles ?? []).Select(profile =>
             {
-                var friendly = profile.UsbId?.ToLowerInvariant() switch
-                {
-                    "0bda:818b" => "Realtek RTL8192EU",
-                    "0bda:8179" => "Realtek RTL8188EU",
-                    _ => "USB Wi-Fi adapter",
-                };
-                var supported = profile.Status == "beta-candidate";
+                var friendly = profile.Model ?? "USB Wi-Fi adapter";
+                var supported = profile.Status is "production-verified" or "beta-candidate";
                 var label = profile.Status switch
                 {
+                    "production-verified" => "Production verified",
                     "beta-candidate" => "Beta candidate",
-                    "quarantined" => "Test-only adapter",
+                    "upstream-candidate" => "Research candidate",
+                    "driver-candidate" => "Driver candidate",
+                    "quarantined" => "Quarantined",
                     _ => "Needs review",
                 };
                 return new AdapterProfileViewData(
+                    profile.UsbId ?? "unknown",
                     friendly, label,
                     supported ? "Available for the current beta workflow; two-adapter certification is pending."
-                              : "Not selected automatically for trading.",
-                    $"USB {profile.UsbId?.ToUpperInvariant()} · {string.Join(", ", profile.Roles ?? [])}",
-                    supported);
+                              : profile.RequiresOptIn
+                                  ? "Not certified. Run diagnostics first; every attempt requires explicit opt-in."
+                                  : "Blocked from trading; retained for diagnostic evidence only.",
+                    $"USB {profile.UsbId?.ToUpperInvariant()} · {profile.Chipset ?? "Unknown chipset"} · " +
+                    $"{string.Join(", ", profile.Roles ?? [])} · engine {profile.HostEngine ?? "ldn"}",
+                    supported, profile.RequiresOptIn, profile.HostEngine ?? "ldn");
             }).ToArray();
         }
         catch (HttpRequestException)
@@ -222,6 +226,23 @@ public sealed class ControlApiClient : IControlGateway
         {
             throw new UserFacingException("SwitchTrade received an incompatible response.", "invalid_response");
         }
+    }
+
+    public async Task<HardwareDiagnosticViewData> RunHardwareDiagnosticsAsync(
+        string usbId, CancellationToken cancellationToken = default)
+    {
+        var result = await PostAsync<HardwareDiagnosticResponse>(
+            "/api/v1/hardware/diagnostics",
+            new { usb_id = usbId, mode = "quick", role = "host" }, cancellationToken);
+        var report = result.Report ?? throw new UserFacingException(
+            "SwitchTrade received an incomplete diagnostic report.", "invalid_response");
+        var first = report.Incompatibilities is { Count: > 0 } ? report.Incompatibilities[0] : null;
+        var summary = first is null
+            ? "Software checks completed. Physical Switch checks remain separate."
+            : $"{first.Code}: {first.Action}";
+        return new HardwareDiagnosticViewData(
+            report.RunId ?? "unknown", report.OverallStatus ?? "unknown", summary,
+            result.ReportPath ?? "Diagnostic report created");
     }
 
     public async Task<string> CreateSupportBundleAsync(CancellationToken cancellationToken = default)
@@ -519,7 +540,19 @@ public sealed class ControlApiClient : IControlGateway
     private sealed record ProfileDto(
         [property: JsonPropertyName("usb_id")] string? UsbId,
         string? Status,
-        IReadOnlyList<string>? Roles);
+        IReadOnlyList<string>? Roles,
+        string? Model,
+        string? Chipset,
+        [property: JsonPropertyName("host_engine")] string? HostEngine,
+        [property: JsonPropertyName("requires_opt_in")] bool RequiresOptIn);
+    private sealed record HardwareDiagnosticResponse(
+        HardwareDiagnosticReportDto? Report,
+        [property: JsonPropertyName("report_path")] string? ReportPath);
+    private sealed record HardwareDiagnosticReportDto(
+        [property: JsonPropertyName("run_id")] string? RunId,
+        [property: JsonPropertyName("overall_status")] string? OverallStatus,
+        IReadOnlyList<HardwareIncompatibilityDto>? Incompatibilities);
+    private sealed record HardwareIncompatibilityDto(string? Code, string? Action);
     private sealed record SupportBundleResponse(string? Path);
     private sealed record ProblemDto(string? Detail);
 }

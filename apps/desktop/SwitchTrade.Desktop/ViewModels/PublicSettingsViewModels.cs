@@ -172,12 +172,16 @@ public sealed class SettingsScreenViewModel : ScreenViewModel
 {
     private string _statusMessage = "";
     private string _supportFilePath = "";
+    private string _diagnosticFilePath = "";
+    private AdapterProfileViewData? _selectedAdapter;
     private SettingsSection _selectedSection;
 
     public SettingsScreenViewModel(MainViewModel shell) : base(shell)
     {
         RecheckCommand = new AsyncCommand(LoadAsync);
         SupportCommand = new AsyncCommand(CreateSupportAsync, () => IsServiceReady);
+        DiagnosticCommand = new AsyncCommand(
+            RunDiagnosticsAsync, () => IsServiceReady && SelectedAdapter is not null);
         CopySupportPathCommand = new RelayCommand(
             () => Shell.Copy(SupportFilePath, "Support file location copied"), () => HasSupportFile);
     }
@@ -191,6 +195,15 @@ public sealed class SettingsScreenViewModel : ScreenViewModel
     ];
     public SettingsSection SelectedSection { get => _selectedSection; set => Set(ref _selectedSection, value); }
     public ObservableCollection<AdapterProfileViewData> Adapters { get; } = [];
+    public AdapterProfileViewData? SelectedAdapter
+    {
+        get => _selectedAdapter;
+        set
+        {
+            if (!Set(ref _selectedAdapter, value)) return;
+            DiagnosticCommand.RaiseCanExecuteChanged();
+        }
+    }
     public string StatusMessage { get => _statusMessage; private set => Set(ref _statusMessage, value); }
     public string SupportFilePath
     {
@@ -203,8 +216,14 @@ public sealed class SettingsScreenViewModel : ScreenViewModel
         }
     }
     public bool HasSupportFile => !string.IsNullOrWhiteSpace(SupportFilePath);
+    public string DiagnosticFilePath
+    {
+        get => _diagnosticFilePath;
+        private set => Set(ref _diagnosticFilePath, value);
+    }
     public AsyncCommand RecheckCommand { get; }
     public AsyncCommand SupportCommand { get; }
+    public AsyncCommand DiagnosticCommand { get; }
     public RelayCommand CopySupportPathCommand { get; }
 
     public override Task OnNavigatedToAsync() => LoadAsync();
@@ -220,7 +239,22 @@ public sealed class SettingsScreenViewModel : ScreenViewModel
         try
         {
             foreach (var adapter in await Shell.Gateway.GetAdapterProfilesAsync()) Adapters.Add(adapter);
-            StatusMessage = "Compatibility profiles are available. Live device selection and repair are not available yet.";
+            SelectedAdapter = Adapters.FirstOrDefault();
+            StatusMessage = "Select a profile to run read-only WSL, USB, driver, firmware, and radio checks.";
+        }
+        catch (UserFacingException error) { StatusMessage = error.UserMessage; }
+    }
+
+    private async Task RunDiagnosticsAsync()
+    {
+        if (SelectedAdapter is null) return;
+        try
+        {
+            StatusMessage = $"Checking {SelectedAdapter.FriendlyName}...";
+            var result = await Shell.Gateway.RunHardwareDiagnosticsAsync(SelectedAdapter.UsbId);
+            DiagnosticFilePath = result.ReportPath;
+            StatusMessage = $"Diagnostics {result.OverallStatus}: {result.Summary}";
+            Shell.Announce(StatusMessage);
         }
         catch (UserFacingException error) { StatusMessage = error.UserMessage; }
     }
@@ -240,5 +274,6 @@ public sealed class SettingsScreenViewModel : ScreenViewModel
     {
         base.NotifyShellState();
         SupportCommand.RaiseCanExecuteChanged();
+        DiagnosticCommand.RaiseCanExecuteChanged();
     }
 }

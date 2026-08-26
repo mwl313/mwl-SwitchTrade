@@ -22,6 +22,10 @@ SENSITIVE_NAMES = (
     "password", "passcode", "passphrase", "secret", "token", "master_key", "prod.keys",
     "session_id", "room_code",
 )
+TEXT_SECRETS = (
+    (re.compile(r"(?i)\b(pass(?:word|code|phrase)|token|secret)\s*[=:]\s*\S+"), r"\1=<redacted>"),
+    (re.compile(r"(?i)\b(?:[0-9a-f]{2}:){5}[0-9a-f]{2}\b"), "<redacted-mac>"),
+)
 
 
 def default_runs_root() -> Path:
@@ -46,6 +50,13 @@ def _redact(value: Any, name: str = "") -> Any:
         return {"length": len(value), "sha256": hashlib.sha256(value).hexdigest()}
     if isinstance(value, Path):
         return str(value)
+    return value
+
+
+def redact_text(value: str) -> str:
+    """Redact common credentials and device identifiers from command output."""
+    for pattern, replacement in TEXT_SECRETS:
+        value = pattern.sub(replacement, value)
     return value
 
 
@@ -107,10 +118,29 @@ class RunLogger:
     def support_bundle(self, destination: str | Path | None = None,
                        summary: dict | None = None) -> Path:
         destination = Path(destination) if destination else self.root / f"support-{self.run_id}.zip"
+        contents = ["metadata.json", "events.jsonl", "console.log"]
+        for path in sorted(self.run_dir.glob("diagnostic-*.txt")):
+            contents.append(path.name)
+        if (self.run_dir / "diagnostic-report.json").is_file():
+            contents.append("diagnostic-report.json")
+        diagnostic_root = self.run_dir / "hardware-diagnostics"
+        if diagnostic_root.is_dir():
+            for run_dir in sorted(diagnostic_root.iterdir()):
+                if (not run_dir.is_dir() or run_dir.is_symlink() or
+                        not RUN_ID.fullmatch(run_dir.name)):
+                    continue
+                for name in ("metadata.json", "events.jsonl", "console.log",
+                             "diagnostic-report.json"):
+                    path = run_dir / name
+                    if path.is_file() and not path.is_symlink():
+                        contents.append(path.relative_to(self.run_dir).as_posix())
+                for path in sorted(run_dir.glob("diagnostic-*.txt")):
+                    if path.is_file() and not path.is_symlink():
+                        contents.append(path.relative_to(self.run_dir).as_posix())
         manifest = {
             "run_id": self.run_id,
             "created_utc": _utc_now().isoformat(),
-            "contents": ["metadata.json", "events.jsonl", "console.log"],
+            "contents": contents,
             "privacy": "Known secret fields are redacted. Review before sharing.",
         }
         with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as bundle:

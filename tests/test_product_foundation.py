@@ -7,7 +7,10 @@ import zipfile
 
 from switchtrade.diagnostics import RunLogger
 from switchtrade.endpoint import runtime_plan
-from switchtrade.hardware import load_profiles
+from switchtrade.hardware import HardwarePolicyError, load_profiles, require_host_engine
+from switchtrade.hardware_diagnostics import (
+    classify_output, diagnose_hardware, parse_iw_capabilities,
+)
 from switchtrade.party_observer import (
     CONFIRM_FINISH_TRADE, READY_FINISH_TRADE, READY_TO_TRADE,
     SET_MONS_TO_TRADE, START_TRADE, PassivePartyObserver,
@@ -26,6 +29,8 @@ class HardwarePolicyTests(unittest.TestCase):
         rtl8188 = next(profile for profile in profiles if profile.usb_id == "0bda:8179")
         self.assertEqual(rtl8188.status, "quarantined")
         self.assertEqual(rtl8188.roles, ("observe",))
+        self.assertTrue(all(profile.host_engine == "ldn" for profile in profiles))
+        self.assertEqual(len(profiles), 9)
 
     def test_endpoint_roles_are_resolved_through_profiles(self):
         self.assertEqual(runtime_plan("host")["radio_role"], "guest")
@@ -36,8 +41,61 @@ class HardwarePolicyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             runtime_plan("host", "0bda:8179")
 
+    def test_candidate_requires_explicit_per_attempt_consent(self):
+        with self.assertRaisesRegex(
+                HardwarePolicyError, "HARDWARE_EXPERIMENTAL_OPT_IN_REQUIRED"):
+            runtime_plan("host", "0e8d:7610")
+        plan = runtime_plan(
+            "host", "0e8d:7610", allow_experimental_hardware=True)
+        self.assertEqual(plan["hardware_model"], "ALFA AWUS036ACHM")
+        self.assertEqual(plan["host_engine"], "ldn")
+        self.assertTrue(plan["allow_experimental_hardware"])
+
+    def test_in_development_engines_are_not_selectable(self):
+        self.assertEqual(require_host_engine("ldn"), "ldn")
+        for engine in ("hostapd", "nl80211"):
+            with self.assertRaisesRegex(HardwarePolicyError, "HOST_ENGINE_IN_DEVELOPMENT"):
+                require_host_engine(engine)
+
 
 class DiagnosticsTests(unittest.TestCase):
+    @staticmethod
+    def _healthy_runner(command, _timeout):
+        from subprocess import CompletedProcess
+
+        output = {
+            "uname": "6.18.0-microsoft-standard-WSL2\n",
+            "lsusb": "Bus 001 Device 002: ID 0e8d:7610 MediaTek Inc.\n",
+            "bash": "mt76x0u\n",
+            "iw": ("Supported interface modes:\n\t * managed\n\t * AP\n\t * monitor\n"
+                   "valid interface combinations:\n\t * #{ AP } <= 1, #{ monitor } <= 1\n"),
+            "rfkill": "0: phy0: Wireless LAN\n\tSoft blocked: no\n\tHard blocked: no\n",
+            "modinfo": "filename: /lib/modules/mt76x0u.ko\n",
+            "dmesg": "",
+        }.get(command[0], "")
+        return CompletedProcess(command, 0, output, "")
+
+    def test_capabilities_and_failure_classifier_use_stable_codes(self):
+        capabilities = parse_iw_capabilities(
+            "Supported interface modes:\n * AP\n * monitor\n"
+            "valid interface combinations:\n * #{ AP } <= 1, #{ monitor } <= 1\n")
+        self.assertTrue(capabilities["ap_monitor_concurrent"])
+        codes = [item["code"] for item in classify_output(
+            "firmware failed to load; invalid module format")]
+        self.assertEqual(codes, ["FIRMWARE_LOAD_FAILED", "MODULE_KERNEL_MISMATCH"])
+
+    def test_candidate_quick_diagnostic_is_redacted_and_actionable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report, logger = diagnose_hardware(
+                "0e8d:7610", runs_root=temporary, runner=self._healthy_runner)
+            self.assertEqual(report["contract_version"], "hardware-diagnostic.v1")
+            self.assertEqual(report["overall_status"], "partial")
+            self.assertEqual(report["stages"][0]["code"],
+                             "HARDWARE_EXPERIMENTAL_OPT_IN_REQUIRED")
+            self.assertTrue((logger.run_dir / "diagnostic-report.json").is_file())
+            self.assertIn("SWITCH_ASSOCIATION_NOT_TESTED",
+                          [stage["code"] for stage in report["stages"]])
+
     def test_redaction_and_support_bundle(self):
         with tempfile.TemporaryDirectory() as temporary:
             logger = RunLogger("test", temporary)
@@ -54,6 +112,17 @@ class DiagnosticsTests(unittest.TestCase):
                 self.assertIn("privacy-manifest.json", archive.namelist())
                 summary = json.loads(archive.read("runtime-summary.json"))
                 self.assertEqual(summary["session_id"], "<redacted>")
+
+    def test_support_bundle_includes_safe_nested_hardware_diagnostics(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            logger = RunLogger("control", temporary)
+            report, _ = diagnose_hardware(
+                "0e8d:7610", runs_root=logger.run_dir / "hardware-diagnostics",
+                runner=self._healthy_runner)
+            with zipfile.ZipFile(logger.support_bundle()) as archive:
+                expected = (f"hardware-diagnostics/{report['run_id']}/"
+                            "diagnostic-report.json")
+                self.assertIn(expected, archive.namelist())
 
     def test_process_lock_rejects_a_duplicate_and_releases_cleanly(self):
         with tempfile.TemporaryDirectory() as temporary:

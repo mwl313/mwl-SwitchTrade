@@ -80,11 +80,20 @@ public sealed record AuthoritativeRoomProjection(
     bool BothReady);
 
 public sealed record AdapterProfileViewData(
+    string UsbId,
     string FriendlyName,
     string SupportLabel,
     string Summary,
     string TechnicalDetails,
-    bool IsSupported);
+    bool IsSupported,
+    bool RequiresOptIn,
+    string HostEngine);
+
+public sealed record HardwareDiagnosticViewData(
+    string RunId,
+    string OverallStatus,
+    string Summary,
+    string ReportPath);
 
 public enum PreviewAvailability { Open, Full }
 public enum PublicSearchBy { AnyField, RoomName, Trainer, OfferedPokemon, WantedPokemon }
