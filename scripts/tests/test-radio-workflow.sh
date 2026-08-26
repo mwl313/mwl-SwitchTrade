@@ -10,7 +10,7 @@ fail() { printf 'radio workflow test: %s\n' "$*" >&2; exit 1; }
 assert_contains() { grep -Fq -- "$2" "$1" || fail "expected '$2' in $1"; }
 
 new_case() {
-    local name=$1 case_root="$TEST_ROOT/$1" fake
+    local case_root="$TEST_ROOT/$1" fake
     mkdir -p "$case_root/sys/bus/usb/devices/1-1/1-1:1.0" \
         "$case_root/sys/class/net" "$case_root/sys/class/ieee80211" \
         "$case_root/sys/drivers/rtl8xxxu" "$case_root/bin" "$case_root/locks"
@@ -99,6 +99,7 @@ run_prepare() {
 }
 
 cold="$(new_case cold)"
+# shellcheck disable=SC2016 # Variables intentionally expand inside the child shell.
 run_prepare "$cold" -- bash -c \
     'printf "%s %s %s\n" "$SWITCHTRADE_IFACE" "$SWITCHTRADE_USB_ID" "$SWITCHTRADE_PHY"' \
     > "$cold/output" 2>&1
@@ -125,6 +126,7 @@ fi
 assert_contains "$warning/output" "fatal compatibility warning"
 
 locked="$(new_case locked)"
+# shellcheck disable=SC2016 # Variables intentionally expand inside the child shell.
 run_prepare "$locked" -- bash -c 'touch "$SWITCHTRADE_TEST_STATE/owner-ready"; sleep 2' \
     > "$locked/owner-output" 2>&1 &
 owner_pid=$!
