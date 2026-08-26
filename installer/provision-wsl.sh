@@ -4,19 +4,37 @@ set -euo pipefail
 
 SOURCE=""
 TARGET=/opt/switchtrade
+MODE=install
 
 die() { printf 'switchtrade provision: %s\n' "$*" >&2; exit 1; }
 
 while (($#)); do
     case $1 in
         --source) [[ $# -ge 2 ]] || die "--source requires a directory"; SOURCE=$2; shift 2 ;;
+        --rollback) MODE=rollback; shift ;;
         *) die "unknown argument: $1" ;;
     esac
 done
 
 ((EUID == 0)) || die "run as root inside the SwitchTrade distribution"
-[[ -d $SOURCE && -f $SOURCE/requirements.txt ]] || die "invalid packaged source: $SOURCE"
 [[ $TARGET == /opt/switchtrade ]] || die "unsafe target: $TARGET"
+
+if [[ $MODE == rollback ]]; then
+    previous=${TARGET}.previous
+    swap=${TARGET}.rollback-swap
+    [[ -d $TARGET && -d $previous && ! -e $swap ]] || \
+        die "one retained WSL runtime and a clean swap path are required"
+    mv -- "$TARGET" "$swap"
+    if ! mv -- "$previous" "$TARGET"; then
+        mv -- "$swap" "$TARGET"
+        die "could not activate the retained WSL runtime"
+    fi
+    mv -- "$swap" "$previous"
+    printf '[wsl] runtime rollback completed; one prior runtime remains available\n'
+    exit 0
+fi
+
+[[ -d $SOURCE && -f $SOURCE/requirements.txt ]] || die "invalid packaged source: $SOURCE"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
@@ -36,12 +54,17 @@ python3 -m venv "$stage/bridge/.venv"
     --requirement "$stage/bridge/requirements.txt"
 find "$stage/scripts" -type f -name '*.sh' -exec chmod 0755 {} +
 
+backup=""
 if [[ -e $TARGET ]]; then
-    backup="${TARGET}.previous.$(date -u +%Y%m%dT%H%M%SZ)"
+    backup="${TARGET}.previous"
+    rm -rf -- "$backup"
     mv -- "$TARGET" "$backup"
     printf '[wsl] previous runtime retained at %s\n' "$backup"
 fi
-mv -- "$stage" "$TARGET"
+if ! mv -- "$stage" "$TARGET"; then
+    [[ -z $backup || ! -d $backup ]] || mv -- "$backup" "$TARGET"
+    die "could not activate the staged runtime; the previous runtime was restored"
+fi
 trap - EXIT
 
 "$TARGET/bridge/.venv/bin/python" -m switchtrade.endpoint \

@@ -1,0 +1,37 @@
+services:
+  relay:
+    build:
+      context: ..
+      dockerfile: relay/Dockerfile
+    image: switchtrade-relay:0.2.0-beta.1
+    restart: unless-stopped
+    init: true
+    read_only: true
+    environment:
+      SWITCHTRADE_AUTH_DB: /var/lib/switchtrade/authority.sqlite3
+      SWITCHTRADE_ENABLE_LEGACY_RELAY: "0"
+    volumes:
+      - authority:/var/lib/switchtrade
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    ports:
+      - "127.0.0.1:8788:8788"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import json,urllib.request;
+          assert json.load(urllib.request.urlopen('http://127.0.0.1:8788/health',timeout=2))['status']=='ready'
+      interval: 15s
+      timeout: 3s
+      retries: 4
+      start_period: 10s
+
+volumes:
+  authority:

@@ -19,6 +19,8 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.responses import JSONResponse
 
 from switchtrade import __version__
 from switchtrade.diagnostics import RunLogger, default_runs_root
@@ -219,6 +221,7 @@ class Runtime:
             self.relay.room_command(
                 room["room_id"], credentials["member_token"],
                 f"/attempts/{attempt['attempt_id']}:phase", {"phase": phase},
+                expected_version=room["room_version"],
             )
             self.last_published_phase = phase
         except RelayError as error:
@@ -344,6 +347,17 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["Content-Type"],
     )
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=["127.0.0.1", "localhost", "testserver"],
+    )
+
+    @app.middleware("http")
+    async def reject_cross_origin_control(request: Request, call_next):
+        origin = request.headers.get("origin")
+        if origin and not re.fullmatch(r"http://(127\.0\.0\.1|localhost):\d+", origin):
+            return JSONResponse(status_code=403, content={"detail": "cross-origin control is blocked"})
+        return await call_next(request)
 
     def runtime(request: Request) -> Runtime:
         return request.app.state.runtime
@@ -497,7 +511,8 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                        member_token_file: Path | None = None,
                        allow_experimental_hardware: bool = False) -> dict:
         try:
-            state.relay.status(code)
+            if member_token_file is None:
+                state.relay.status(code)
             plan = runtime_plan(
                 tunnel_seat, usb_id, switch_room_role=switch_room_role,
                 allow_experimental_hardware=allow_experimental_hardware,
@@ -537,9 +552,10 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         if not credentials.get("room_id") or not credentials.get("member_token"):
             raise HTTPException(status_code=409, detail="no active authoritative trade room")
         try:
+            room = state.authoritative_room()
             return state.relay.room_command(
                 credentials["room_id"], credentials["member_token"], path,
-                payload, method=method,
+                payload, method=method, expected_version=room["room_version"],
             )
         except RelayError as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
@@ -640,7 +656,8 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             if time.monotonic() - state.last_authority_heartbeat >= 10:
                 credentials = state.read_authority()
                 room = state.relay.room_command(
-                    room["room_id"], credentials["member_token"], "/heartbeat")
+                    room["room_id"], credentials["member_token"], "/heartbeat",
+                    expected_version=room["room_version"])
                 state.last_authority_heartbeat = time.monotonic()
             return room
         except RelayError as error:
@@ -667,7 +684,8 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             local = next(member for member in room["members"] if member["is_local"])
             if local["ready_state"] != "ready":
                 room = state.relay.room_command(
-                    room["room_id"], credentials["member_token"], "/ready", {"ready": True})
+                    room["room_id"], credentials["member_token"], "/ready", {"ready": True},
+                    expected_version=room["room_version"])
             deadline = time.monotonic() + 20
             while time.monotonic() < deadline:
                 room = state.authoritative_room()
@@ -683,7 +701,8 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             if not room.get("attempt") or room["attempt"].get("phase") in {"completed", "canceled", "failed"}:
                 try:
                     room = state.relay.room_command(
-                        room["room_id"], credentials["member_token"], "/attempts")
+                        room["room_id"], credentials["member_token"], "/attempts",
+                        expected_version=room["room_version"])
                 except RelayError as error:
                     if "409" not in str(error):
                         raise
@@ -695,6 +714,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 room = state.relay.room_command(
                     room["room_id"], credentials["member_token"],
                     f"/attempts/{attempt['attempt_id']}:claim-creator",
+                    expected_version=room["room_version"],
                 )
             except RelayError as error:
                 if "409" not in str(error):
@@ -705,10 +725,18 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             if switch_role not in {"creator", "finder"}:
                 raise HTTPException(status_code=409, detail="room creator assignment is incomplete")
             if not attempt["role_locked"]:
-                room = state.relay.room_command(
-                    room["room_id"], credentials["member_token"],
-                    f"/attempts/{attempt['attempt_id']}:lock-role",
-                )
+                try:
+                    room = state.relay.room_command(
+                        room["room_id"], credentials["member_token"],
+                        f"/attempts/{attempt['attempt_id']}:lock-role",
+                        expected_version=room["room_version"],
+                    )
+                except RelayError as error:
+                    if "409" not in str(error):
+                        raise
+                    room = state.authoritative_room()
+                    if not (room.get("attempt") or {}).get("role_locked"):
+                        raise
             local = next(member for member in room["members"] if member["is_local"])
             selected_usb_id = attach_selected_hardware(state)
             result = launch_session(
@@ -900,9 +928,12 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 state.relay.room_command(
                     room["room_id"], credentials["member_token"],
                     f"/attempts/{attempt['attempt_id']}:phase", {"phase": "canceled"},
+                    expected_version=room["room_version"],
                 )
+                room = state.authoritative_room()
             state.relay.room_command(
-                room["room_id"], credentials["member_token"], "/ready", {"ready": False})
+                room["room_id"], credentials["member_token"], "/ready", {"ready": False},
+                expected_version=room["room_version"])
             state.last_published_phase = "canceled"
         except RelayError:
             state.log.event("authority_teardown_sync_failed", level="warning")
@@ -969,9 +1000,11 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         state = runtime(request)
         previous = state.read_endpoint()
         switch_role = previous.get("switch_room_role", "creator")
+        selected_usb_id = attach_selected_hardware(state)
         try:
             plan = runtime_plan(
-                previous.get("tunnel_seat", "member_a"), payload.usb_id or previous.get("usb_id"),
+                previous.get("tunnel_seat", "member_a"),
+                payload.usb_id or previous.get("usb_id") or selected_usb_id,
                 switch_room_role=switch_role,
                 allow_experimental_hardware=payload.allow_experimental_hardware,
             )

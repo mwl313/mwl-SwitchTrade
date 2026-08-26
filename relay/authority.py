@@ -22,7 +22,12 @@ import uuid
 CONTRACT = "room-control.v1"
 ROOM_CODE_CHARS = string.ascii_uppercase + string.digits
 ROOM_TTL_SECONDS = 6 * 60 * 60
+WAITING_TTL_SECONDS = 30 * 60
+OFFLINE_DETECTION_SECONDS = 45
 RECONNECT_SECONDS = 90
+SECRET_RESPONSE_SECONDS = 10 * 60
+COMMAND_RETENTION_SECONDS = 24 * 60 * 60
+AUTHORITY_RETENTION_SECONDS = 14 * 24 * 60 * 60
 
 
 class AuthorityError(RuntimeError):
@@ -61,7 +66,7 @@ class AuthorityStore:
         self._db = sqlite3.connect(database, check_same_thread=False, isolation_level=None)
         self._db.row_factory = sqlite3.Row
         self._lock = threading.RLock()
-        self._ephemeral_responses: dict[tuple[str, str], dict] = {}
+        self._ephemeral_responses: dict[tuple[str, str], tuple[float, dict]] = {}
         self._db.executescript(
             """
             PRAGMA journal_mode=WAL;
@@ -75,6 +80,8 @@ class AuthorityStore:
             CREATE TABLE IF NOT EXISTS credentials (
                 token_hash TEXT PRIMARY KEY,
                 reconnect_hash TEXT NOT NULL UNIQUE,
+                previous_reconnect_hash TEXT,
+                previous_reconnect_until REAL,
                 room_id TEXT NOT NULL,
                 member_id TEXT NOT NULL,
                 active INTEGER NOT NULL DEFAULT 1,
@@ -84,6 +91,7 @@ class AuthorityStore:
                 scope TEXT NOT NULL,
                 command_id TEXT NOT NULL,
                 response TEXT NOT NULL,
+                created_at REAL NOT NULL,
                 PRIMARY KEY(scope, command_id)
             );
             CREATE TABLE IF NOT EXISTS events (
@@ -99,6 +107,17 @@ class AuthorityStore:
             );
             """
         )
+        columns = {row[1] for row in self._db.execute("PRAGMA table_info(commands)")}
+        if "created_at" not in columns:
+            self._db.execute("ALTER TABLE commands ADD COLUMN created_at REAL NOT NULL DEFAULT 0")
+            self._db.execute("UPDATE commands SET created_at=? WHERE created_at=0", (time.time(),))
+        credential_columns = {
+            row[1] for row in self._db.execute("PRAGMA table_info(credentials)")
+        }
+        if "previous_reconnect_hash" not in credential_columns:
+            self._db.execute("ALTER TABLE credentials ADD COLUMN previous_reconnect_hash TEXT")
+        if "previous_reconnect_until" not in credential_columns:
+            self._db.execute("ALTER TABLE credentials ADD COLUMN previous_reconnect_until REAL")
 
     @contextmanager
     def _transaction(self):
@@ -143,10 +162,17 @@ class AuthorityStore:
         if row is None:
             raise AuthorityError(404, "trade room not found")
         room = json.loads(row["document"])
-        if room["state"] not in {"closed", "expired"} and room["expires_at_epoch"] <= time.time():
+        now = time.time()
+        waiting_expired = (
+            room["state"] == "waiting_for_partner" and
+            room.get("waiting_expires_at_epoch", room["expires_at_epoch"]) <= now
+        )
+        if room["state"] not in {"closed", "expired"} and (
+                room["expires_at_epoch"] <= now or waiting_expired):
             room["state"] = "expired"
             room["room_version"] += 1
             self._event(room, "room.expired", None)
+            self._db.execute("UPDATE credentials SET active=0 WHERE room_id=?", (room_id,))
             self._save(room)
         return room
 
@@ -164,7 +190,10 @@ class AuthorityStore:
 
     @staticmethod
     def _public(room: dict, local_member_id: str) -> dict:
-        value = {key: val for key, val in room.items() if key != "expires_at_epoch"}
+        value = {
+            key: val for key, val in room.items()
+            if key not in {"expires_at_epoch", "waiting_expires_at_epoch"}
+        }
         value["local_member_id"] = local_member_id
         value["members"] = [
             {**{key: item for key, item in member.items() if key != "last_seen_epoch"},
@@ -191,15 +220,24 @@ class AuthorityStore:
 
     def _remember(self, scope: str, command_id: str, response: dict) -> None:
         self._db.execute(
-            "INSERT INTO commands(scope,command_id,response) VALUES(?,?,?)",
-            (scope, command_id, json.dumps(response, separators=(",", ":"))),
+            "INSERT INTO commands(scope,command_id,response,created_at) VALUES(?,?,?,?)",
+            (scope, command_id, json.dumps(response, separators=(",", ":")), time.time()),
         )
 
     def _secret_command_response(self, scope: str, command_id: str) -> dict | None:
         if not command_id:
             raise AuthorityError(400, "Idempotency-Key is required")
+        now = time.time()
+        if len(self._ephemeral_responses) >= 4096:
+            self._ephemeral_responses = {
+                key: value for key, value in self._ephemeral_responses.items() if value[0] > now
+            }
+            if len(self._ephemeral_responses) >= 4096 and (scope, command_id) not in self._ephemeral_responses:
+                raise AuthorityError(503, "room command cache is at capacity")
         if cached := self._ephemeral_responses.get((scope, command_id)):
-            return cached
+            if cached[0] > now:
+                return cached[1]
+            self._ephemeral_responses.pop((scope, command_id), None)
         row = self._db.execute(
             "SELECT 1 FROM commands WHERE scope=? AND command_id=?", (scope, command_id)
         ).fetchone()
@@ -208,7 +246,8 @@ class AuthorityStore:
         return None
 
     def _remember_secret(self, scope: str, command_id: str, response: dict) -> None:
-        self._ephemeral_responses[(scope, command_id)] = response
+        self._ephemeral_responses[(scope, command_id)] = (
+            time.time() + SECRET_RESPONSE_SECONDS, response)
         marker = {"completed": True, "room_id": response["room"]["room_id"]}
         self._remember(scope, command_id, marker)
 
@@ -241,6 +280,7 @@ class AuthorityStore:
                 "created_at": _utc(now),
                 "expires_at": _utc(now + ROOM_TTL_SECONDS),
                 "expires_at_epoch": now + ROOM_TTL_SECONDS,
+                "waiting_expires_at_epoch": now + WAITING_TTL_SECONDS,
                 "members": [{
                     "member_id": member_id, "seat": "member_a", "display_name": display[:40],
                     "online_state": "online", "ready_state": "not_ready",
@@ -295,6 +335,7 @@ class AuthorityStore:
                 "last_seen_epoch": time.time(),
             })
             room["state"] = "ready_check"
+            room["waiting_expires_at_epoch"] = None
             room["room_version"] += 1
             self._db.execute(
                 "INSERT INTO credentials(token_hash,reconnect_hash,room_id,member_id) VALUES(?,?,?,?)",
@@ -317,12 +358,18 @@ class AuthorityStore:
             room, member_id = self._credentials(bearer)
             return self._public(room, member_id)
 
-    def member_for_code(self, room_code: str, bearer: str) -> dict | None:
+    def member_for_code(self, room_code: str, bearer: str,
+                        attempt_id: str | None = None) -> dict | None:
         with self._lock:
             row = self._db.execute("SELECT room_id FROM rooms WHERE room_code=?", (room_code,)).fetchone()
             if row is None:
                 return None
             room, member_id = self._credentials(bearer, row["room_id"])
+            if attempt_id is not None:
+                attempt = room.get("attempt") or {}
+                if (attempt.get("attempt_id") != attempt_id or not attempt.get("role_locked") or
+                        attempt.get("phase") in {"completed", "canceled", "failed"}):
+                    raise AuthorityError(409, "connection attempt is not active")
             member = next(item for item in room["members"] if item["member_id"] == member_id)
             return {"room_id": room["room_id"], "member_id": member_id, "seat": member["seat"]}
 
@@ -346,8 +393,12 @@ class AuthorityStore:
                 "ordered_events": self._db.execute("SELECT COUNT(*) FROM events").fetchone()[0],
             }
 
+    def ping(self) -> None:
+        with self._lock:
+            self._db.execute("SELECT 1").fetchone()
+
     def mutate(self, room_id: str, bearer: str, command_id: str, action: str,
-               payload: dict | None = None) -> dict:
+               payload: dict | None = None, expected_version: int | None = None) -> dict:
         payload = payload or {}
         with self._transaction():
             room, member_id = self._credentials(bearer, room_id)
@@ -356,6 +407,15 @@ class AuthorityStore:
                 return cached
             if room["state"] in {"closed", "expired"}:
                 raise AuthorityError(409, "trade room is not active")
+            if expected_version is not None and expected_version != room["room_version"]:
+                attempt = room.get("attempt") or {}
+                if (action == "claim_creator" and attempt.get("creator_member_id") and
+                        payload.get("attempt_id") == attempt.get("attempt_id")):
+                    response = self._public(room, member_id)
+                    self._remember(scope, command_id, response)
+                    return response
+                if action not in {"ready", "heartbeat"}:
+                    raise AuthorityError(409, "room version conflict")
             member = next(item for item in room["members"] if item["member_id"] == member_id)
             event = action
             if action in {"claim_creator", "transfer_creator", "lock_role", "phase"}:
@@ -372,6 +432,9 @@ class AuthorityStore:
                 member["last_seen_epoch"] = time.time()
                 event = "member.heartbeat"
             elif action == "attempt":
+                current = room.get("attempt")
+                if current and current.get("phase") not in {"completed", "canceled", "failed"}:
+                    raise AuthorityError(409, "a connection attempt is already active")
                 active = [m for m in room["members"] if m["online_state"] != "left"]
                 if len(active) != 2 or any(m["ready_state"] != "ready" for m in active):
                     raise AuthorityError(409, "both members must be ready")
@@ -431,17 +494,46 @@ class AuthorityStore:
             elif action == "leave":
                 if room["owner_member_id"] == member_id:
                     raise AuthorityError(409, "the room owner must close the room")
-                if room.get("attempt") and room["attempt"].get("role_locked"):
+                attempt = room.get("attempt") or {}
+                if (attempt.get("role_locked") and
+                        attempt.get("phase") not in {"completed", "canceled", "failed"}):
                     raise AuthorityError(409, "finish connection teardown before leaving")
                 member["online_state"] = "left"
                 member["ready_state"] = "not_ready"
                 room["attempt"] = None
                 room["state"] = "waiting_for_partner"
+                room["waiting_expires_at_epoch"] = min(
+                    time.time() + WAITING_TTL_SECONDS, room["expires_at_epoch"])
                 self._db.execute(
                     "UPDATE credentials SET active=0 WHERE room_id=? AND member_id=?",
                     (room_id, member_id),
                 )
                 event = "member.left"
+            elif action == "remove_offline":
+                if room["owner_member_id"] != member_id:
+                    raise AuthorityError(403, "only the room owner can remove an offline member")
+                attempt = room.get("attempt") or {}
+                if (attempt.get("role_locked") and
+                        attempt.get("phase") not in {"completed", "canceled", "failed"}):
+                    raise AuthorityError(409, "finish connection teardown before removing a member")
+                target = str(payload.get("target_member_id", ""))
+                target_member = next(
+                    (item for item in room["members"] if item["member_id"] == target), None)
+                if target_member is None or target_member["member_id"] == member_id:
+                    raise AuthorityError(400, "offline member is invalid")
+                if target_member["online_state"] != "offline":
+                    raise AuthorityError(409, "member reconnect grace has not expired")
+                target_member["online_state"] = "left"
+                target_member["ready_state"] = "not_ready"
+                room["attempt"] = None
+                room["state"] = "waiting_for_partner"
+                room["waiting_expires_at_epoch"] = min(
+                    time.time() + WAITING_TTL_SECONDS, room["expires_at_epoch"])
+                self._db.execute(
+                    "UPDATE credentials SET active=0 WHERE room_id=? AND member_id=?",
+                    (room_id, target),
+                )
+                event = "member.removed"
             elif action == "close":
                 if room["owner_member_id"] != member_id:
                     raise AuthorityError(403, "only the room owner can close this room")
@@ -457,11 +549,17 @@ class AuthorityStore:
             self._remember(scope, command_id, response)
             return response
 
-    def reconnect(self, room_id: str, reconnect_token: str) -> dict:
+    def reconnect(self, room_id: str, reconnect_token: str, command_id: str) -> dict:
         with self._transaction():
+            token_hash = _hash(reconnect_token)
+            scope = f"reconnect:{room_id}:{token_hash[:16]}"
+            if cached := self._secret_command_response(scope, command_id):
+                return cached
             row = self._db.execute(
-                "SELECT token_hash,member_id,active FROM credentials WHERE reconnect_hash=? AND room_id=?",
-                (_hash(reconnect_token), room_id),
+                "SELECT token_hash,reconnect_hash,member_id,active FROM credentials "
+                "WHERE room_id=? AND (reconnect_hash=? OR "
+                "(previous_reconnect_hash=? AND previous_reconnect_until>?))",
+                (room_id, token_hash, token_hash, time.time()),
             ).fetchone()
             if row is None or not row["active"]:
                 raise AuthorityError(401, "reconnect credential is invalid")
@@ -472,8 +570,10 @@ class AuthorityStore:
                 raise AuthorityError(410, "reconnect deadline expired")
             token, reconnect = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
             self._db.execute(
-                "UPDATE credentials SET token_hash=?,reconnect_hash=? WHERE reconnect_hash=?",
-                (_hash(token), _hash(reconnect), _hash(reconnect_token)),
+                "UPDATE credentials SET token_hash=?,reconnect_hash=?,previous_reconnect_hash=?,"
+                "previous_reconnect_until=? WHERE member_id=? AND room_id=?",
+                (_hash(token), _hash(reconnect), row["reconnect_hash"],
+                 time.time() + RECONNECT_SECONDS, row["member_id"], room_id),
             )
             member["online_state"] = "online"
             member["reconnect_deadline"] = None
@@ -481,8 +581,10 @@ class AuthorityStore:
             room["room_version"] += 1
             self._event(room, "member.reconnected", member["member_id"])
             self._save(room)
-            return {"room": self._public(room, member["member_id"]), "member_token": token,
-                    "reconnect_token": reconnect}
+            response = {"room": self._public(room, member["member_id"]), "member_token": token,
+                        "reconnect_token": reconnect}
+            self._remember_secret(scope, command_id, response)
+            return response
 
     def events(self, room_id: str, bearer: str, after: int = 0, limit: int = 100) -> dict:
         with self._lock:
@@ -509,12 +611,13 @@ class AuthorityStore:
         with self._transaction():
             rows = self._db.execute("SELECT room_id,document FROM rooms").fetchall()
             for row in rows:
-                room = json.loads(row["document"])
+                room = self._load(row["room_id"])
                 if room["state"] in {"closed", "expired"}:
                     continue
                 changed = False
                 for member in room["members"]:
-                    if member["online_state"] == "online" and now - member.get("last_seen_epoch", now) > 30:
+                    if (member["online_state"] == "online" and
+                            now - member.get("last_seen_epoch", now) > OFFLINE_DETECTION_SECONDS):
                         member["online_state"] = "reconnecting"
                         member["reconnect_deadline"] = _utc(now + RECONNECT_SECONDS)
                         changed = True
@@ -524,6 +627,17 @@ class AuthorityStore:
                             member["reconnect_deadline"].replace("Z", "+00:00")).timestamp()
                         if deadline <= now:
                             member["online_state"] = "offline"
+                            member["ready_state"] = "not_ready"
+                            self._db.execute(
+                                "UPDATE credentials SET active=0 WHERE room_id=? AND member_id=?",
+                                (room["room_id"], member["member_id"]),
+                            )
+                            attempt = room.get("attempt")
+                            if attempt and attempt.get("phase") not in {"completed", "canceled", "failed"}:
+                                attempt["phase"] = "failed"
+                                attempt["recoverable_error"] = "member.reconnect_expired"
+                                attempt["updated_at"] = _utc(now)
+                                room["state"] = "ready_check"
                             changed = True
                             event = "member.offline"
                         else:
@@ -534,3 +648,9 @@ class AuthorityStore:
                     self._event(room, event, member["member_id"])
                 if changed:
                     self._save(room)
+            self._db.execute("DELETE FROM commands WHERE created_at<?", (
+                now - COMMAND_RETENTION_SECONDS,))
+            self._db.execute(
+                "DELETE FROM rooms WHERE expires_at<? AND json_extract(document, '$.state') IN ('closed','expired')",
+                (now - AUTHORITY_RETENTION_SECONDS,),
+            )

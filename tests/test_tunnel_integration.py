@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from switchtrade.rfu_tunnel import Direction, Kind
+from switchtrade.relay_client import RelayClient
 from switchtrade.tunnel_client import TunnelClient
 from switchtrade.control import create_app, endpoint_command
 from relay.authority import uuid7
@@ -37,12 +38,19 @@ class TunnelIntegrationTest(unittest.TestCase):
         cls.port = _port()
         cls.base = f"http://127.0.0.1:{cls.port}"
         cls.relay_state = tempfile.TemporaryDirectory()
-        environment = dict(os.environ)
-        environment["SWITCHTRADE_AUTH_DB"] = str(Path(cls.relay_state.name) / "authority.sqlite3")
+        cls.environment = dict(os.environ)
+        cls.environment["SWITCHTRADE_AUTH_DB"] = str(
+            Path(cls.relay_state.name) / "authority.sqlite3")
+        cls.environment["SWITCHTRADE_ENABLE_LEGACY_RELAY"] = "1"
+        cls._start_relay()
+
+    @classmethod
+    def _start_relay(cls):
         cls.proc = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "relay.server:app", "--host", "127.0.0.1",
              "--port", str(cls.port), "--log-level", "warning"],
-            cwd=ROOT, env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+            cwd=ROOT, env=cls.environment, stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE, text=True,
         )
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
@@ -57,12 +65,19 @@ class TunnelIntegrationTest(unittest.TestCase):
             raise RuntimeError("relay did not start")
 
     @classmethod
-    def tearDownClass(cls):
+    def _stop_relay(cls):
         cls.proc.terminate()
         try:
             cls.proc.wait(5)
         except subprocess.TimeoutExpired:
             cls.proc.kill()
+            cls.proc.wait(5)
+        if cls.proc.stderr is not None:
+            cls.proc.stderr.close()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._stop_relay()
         cls.relay_state.cleanup()
 
     def _session(self) -> str:
@@ -75,6 +90,44 @@ class TunnelIntegrationTest(unittest.TestCase):
                           headers={"Content-Type": "application/json", **headers})
         with urlopen(request, timeout=5) as response:
             return json.load(response)
+
+    def _close_authority_room(self, room_id: str, token: str) -> None:
+        with urlopen(Request(f"{self.base}/v1/trade-rooms/{room_id}", headers={
+            "Authorization": f"Bearer {token}",
+        }), timeout=5) as response:
+            version = json.load(response)["room_version"]
+        request = Request(f"{self.base}/v1/trade-rooms/{room_id}", method="DELETE", headers={
+            "Authorization": f"Bearer {token}", "Idempotency-Key": uuid7(),
+            "If-Match": str(version),
+        })
+        with urlopen(request, timeout=5):
+            pass
+
+    def _prepare_authority_attempt(self, first: dict, second: dict) -> str:
+        relay = RelayClient(self.base)
+        room_id = first["room"]["room_id"]
+        for credential in (first, second):
+            room = relay.room(room_id, credential["member_token"])
+            relay.room_command(
+                room_id, credential["member_token"], "/ready", {"ready": True},
+                expected_version=room["room_version"],
+            )
+        room = relay.room(room_id, first["member_token"])
+        room = relay.room_command(
+            room_id, first["member_token"], "/attempts",
+            expected_version=room["room_version"],
+        )
+        attempt_id = room["attempt"]["attempt_id"]
+        room = relay.room_command(
+            room_id, first["member_token"],
+            f"/attempts/{attempt_id}:claim-creator",
+            expected_version=room["room_version"],
+        )
+        relay.room_command(
+            room_id, first["member_token"], f"/attempts/{attempt_id}:lock-role",
+            expected_version=room["room_version"],
+        )
+        return attempt_id
 
     @staticmethod
     def _wait(client: TunnelClient, kind: Kind, timeout: float = 5):
@@ -117,6 +170,33 @@ class TunnelIntegrationTest(unittest.TestCase):
             host.stop()
             guest.stop()
 
+    def test_tracked_trade_fixture_replays_byte_exactly_without_switch_hardware(self):
+        first = self._authority_request("/v1/trade-rooms", {
+            "name": "Recorded replay", "trainer_display_name": "Leaf",
+            "game": "LeafGreen", "language": "English",
+        }, {"Idempotency-Key": uuid7(), "X-SwitchTrade-Client": "replay-a"})
+        second = self._authority_request("/v1/trade-rooms:join", {
+            "room_code": first["room"]["room_code"], "trainer_display_name": "Red",
+        }, {"Idempotency-Key": uuid7(), "X-SwitchTrade-Client": "replay-b"})
+        sid = first["room"]["room_code"]
+        attempt_id = self._prepare_authority_attempt(first, second)
+        fixture = (ROOT / "archive" / "pokemon" / "fixtures" /
+                   "0373_SALAMENCE.pk3").read_bytes()
+        host = TunnelClient(self.base, sid, "host", heartbeat_interval=0.2,
+                            member_token=first["member_token"], attempt_id=attempt_id).start()
+        guest = TunnelClient(self.base, sid, "guest", heartbeat_interval=0.2,
+                             member_token=second["member_token"], attempt_id=attempt_id).start()
+        try:
+            self.assertTrue(host.wait_connected(5))
+            self.assertTrue(guest.wait_connected(5))
+            host.send(fixture)
+            self.assertEqual(self._wait(guest, Kind.RFU).payload, fixture)
+            guest.send(fixture[::-1])
+            self.assertEqual(self._wait(host, Kind.RFU).payload, fixture[::-1])
+        finally:
+            host.stop()
+            guest.stop()
+
     def test_authoritative_websocket_requires_seat_credential_and_stays_opaque(self):
         first = self._authority_request("/v1/trade-rooms", {
             "name": "Opaque Relay", "trainer_display_name": "Leaf",
@@ -126,20 +206,75 @@ class TunnelIntegrationTest(unittest.TestCase):
             "room_code": first["room"]["room_code"], "trainer_display_name": "Red",
         }, {"Idempotency-Key": uuid7(), "X-SwitchTrade-Client": "opaque-b"})
         sid = first["room"]["room_code"]
-        rejected = TunnelClient(self.base, sid, "host", heartbeat_interval=0.2).start()
+        attempt_id = self._prepare_authority_attempt(first, second)
+        rejected = TunnelClient(
+            self.base, sid, "host", heartbeat_interval=0.2,
+            attempt_id=attempt_id,
+        ).start()
+        unbound = TunnelClient(
+            self.base, sid, "host", heartbeat_interval=0.2,
+            member_token=first["member_token"],
+        ).start()
         host = TunnelClient(self.base, sid, "host", heartbeat_interval=0.2,
-                            member_token=first["member_token"]).start()
+                            member_token=first["member_token"], attempt_id=attempt_id).start()
         guest = TunnelClient(self.base, sid, "guest", heartbeat_interval=0.2,
-                             member_token=second["member_token"]).start()
+                             member_token=second["member_token"], attempt_id=attempt_id).start()
         try:
             self.assertFalse(rejected.wait_connected(0.5))
+            self.assertFalse(unbound.wait_connected(0.5))
             self.assertTrue(host.wait_connected(5))
             self.assertTrue(guest.wait_connected(5))
             arbitrary = bytes(range(256)) * 3
             host.send(arbitrary)
             self.assertEqual(self._wait(guest, Kind.RFU).payload, arbitrary)
+            self._close_authority_room(first["room"]["room_id"], first["member_token"])
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and (host.connected.is_set() or guest.connected.is_set()):
+                time.sleep(0.02)
+            self.assertFalse(host.connected.is_set())
+            self.assertFalse(guest.connected.is_set())
         finally:
             rejected.stop()
+            unbound.stop()
+            host.stop()
+            guest.stop()
+
+    def test_authoritative_clients_reconnect_after_relay_restart_without_replaying_stale_frames(self):
+        first = self._authority_request("/v1/trade-rooms", {
+            "name": "Restart Relay", "trainer_display_name": "Leaf",
+            "game": "LeafGreen", "language": "English",
+        }, {"Idempotency-Key": uuid7(), "X-SwitchTrade-Client": "restart-a"})
+        second = self._authority_request("/v1/trade-rooms:join", {
+            "room_code": first["room"]["room_code"], "trainer_display_name": "Red",
+        }, {"Idempotency-Key": uuid7(), "X-SwitchTrade-Client": "restart-b"})
+        sid = first["room"]["room_code"]
+        attempt_id = self._prepare_authority_attempt(first, second)
+        host = TunnelClient(self.base, sid, "host", heartbeat_interval=0.2,
+                            member_token=first["member_token"], attempt_id=attempt_id).start()
+        guest = TunnelClient(self.base, sid, "guest", heartbeat_interval=0.2,
+                             member_token=second["member_token"], attempt_id=attempt_id).start()
+        try:
+            self.assertTrue(host.wait_connected(5))
+            self.assertTrue(guest.wait_connected(5))
+            host.send(b"before-restart")
+            self.assertEqual(self._wait(guest, Kind.RFU).payload, b"before-restart")
+
+            self._stop_relay()
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and (host.connected.is_set() or guest.connected.is_set()):
+                time.sleep(0.02)
+            self.assertFalse(host.connected.is_set())
+            self.assertFalse(guest.connected.is_set())
+            self._start_relay()
+            self.assertTrue(host.wait_connected(8))
+            self.assertTrue(guest.wait_connected(8))
+            host.poll()
+            guest.poll()
+            guest.send(b"after-restart")
+            self.assertEqual(self._wait(host, Kind.RFU).payload, b"after-restart")
+            self.assertGreaterEqual(host.stats["reconnects"], 1)
+            self.assertGreaterEqual(guest.stats["reconnects"], 1)
+        finally:
             host.stop()
             guest.stop()
 

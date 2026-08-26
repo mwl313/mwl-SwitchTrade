@@ -1,0 +1,8 @@
+**
+!relay/
+!relay/**
+!switchtrade/
+!switchtrade/**
+**/__pycache__/
+**/*.pyc
+**/*.sqlite3*

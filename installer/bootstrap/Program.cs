@@ -13,8 +13,8 @@ internal static class Program
     private static int Main(string[] args)
     {
         ApplicationConfiguration.Initialize();
-        var action = args.FirstOrDefault(value =>
-            value is "audit" or "install" or "repair" or "update" or "resume" or "rollback" or "uninstall") ?? "audit";
+        var requestedAction = args.Select(value => value.ToLowerInvariant()).FirstOrDefault(value =>
+            value is "audit" or "install" or "repair" or "update" or "resume" or "rollback" or "uninstall");
         var allowUnsigned = args.Contains("--allow-unsigned-package", StringComparer.OrdinalIgnoreCase);
         try
         {
@@ -22,10 +22,18 @@ internal static class Program
         }
         catch (Exception error)
         {
+            if (requestedAction is not null)
+            {
+                Console.Error.WriteLine(error.Message);
+                return 3;
+            }
             MessageBox.Show($"SwitchTrade setup stopped before making changes.\n\n{error.Message}",
                 "SwitchTrade Setup", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 3;
         }
+        var choice = requestedAction is null ? SetupDialog.Show(AppContext.BaseDirectory) : null;
+        if (requestedAction is null && choice is null) return 0;
+        var action = requestedAction ?? choice!.Action.ToLowerInvariant();
         var script = Path.Combine(AppContext.BaseDirectory, "installer", "SwitchTradeSetup.ps1");
         if (!File.Exists(script))
         {
@@ -55,6 +63,7 @@ internal static class Program
             if (option == "--accept-global-kernel-change") start.ArgumentList.Add("-AcceptGlobalKernelChange");
             if (option == "--accept-prerequisite-changes") start.ArgumentList.Add("-AcceptPrerequisiteChanges");
             if (option == "--accept-vmware-release") start.ArgumentList.Add("-AcceptVmwareRelease");
+            if (option == "--defer-hardware-setup") start.ArgumentList.Add("-DeferHardwareSetup");
             if (option == "--no-shortcut") start.ArgumentList.Add("-NoShortcut");
             if (option == "--allow-unsigned-package") start.ArgumentList.Add("-AllowUnsignedPackage");
             if (option.StartsWith("--bus-id=", StringComparison.OrdinalIgnoreCase) &&
@@ -70,6 +79,21 @@ internal static class Program
                 start.ArgumentList.Add(option[9..]);
             }
         }
+        if (choice is not null)
+        {
+            if (choice.AcceptGlobalKernelChange) start.ArgumentList.Add("-AcceptGlobalKernelChange");
+            if (choice.AcceptPrerequisiteChanges) start.ArgumentList.Add("-AcceptPrerequisiteChanges");
+            if (choice.AcceptVmwareRelease) start.ArgumentList.Add("-AcceptVmwareRelease");
+            if (choice.DeferHardwareSetup) start.ArgumentList.Add("-DeferHardwareSetup");
+            if (choice.PurgeDistro) start.ArgumentList.Add("-PurgeDistro");
+            if (choice.Radio is not null)
+            {
+                start.ArgumentList.Add("-BusId");
+                start.ArgumentList.Add(choice.Radio.BusId);
+                start.ArgumentList.Add("-UsbId");
+                start.ArgumentList.Add(choice.Radio.UsbId);
+            }
+        }
 
         try
         {
@@ -81,6 +105,12 @@ internal static class Program
             var restartRequired = process.ExitCode == 3010;
             var success = process.ExitCode == 0 || restartRequired;
             var message = success ? outputTask.Result.Trim() : errorTask.Result.Trim();
+            if (requestedAction is not null)
+            {
+                if (success) Console.Out.WriteLine(message);
+                else Console.Error.WriteLine(message);
+                return process.ExitCode;
+            }
             if (string.IsNullOrWhiteSpace(message))
                 message = restartRequired
                     ? "Restart Windows to let SwitchTrade Setup continue automatically after sign-in."
@@ -91,6 +121,11 @@ internal static class Program
         }
         catch (Exception error)
         {
+            if (requestedAction is not null)
+            {
+                Console.Error.WriteLine(error.Message);
+                return 1;
+            }
             MessageBox.Show(error.Message, "SwitchTrade Setup", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }

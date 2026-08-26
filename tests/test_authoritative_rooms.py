@@ -1,12 +1,15 @@
 from concurrent.futures import ThreadPoolExecutor
+import asyncio
 from pathlib import Path
 import tempfile
 import time
 import unittest
 import uuid
 from unittest.mock import patch
+import os
 
 from fastapi.testclient import TestClient
+import httpx
 
 import relay.server as relay_server
 from relay.authority import AuthorityStore, uuid7
@@ -48,8 +51,12 @@ class AuthoritativeRoomTests(unittest.TestCase):
         return response.json()
 
     def _mutate(self, room_id: str, token: str, path: str, payload=None):
+        snapshot = self.client.get(f"/v1/trade-rooms/{room_id}", headers={
+            "Authorization": f"Bearer {token}"})
+        self.assertEqual(snapshot.status_code, 200, snapshot.text)
         return self.client.post(f"/v1/trade-rooms/{room_id}{path}", json=payload or {}, headers={
             "Authorization": f"Bearer {token}", "Idempotency-Key": _command(),
+            "If-Match": str(snapshot.json()["room_version"]),
         })
 
     def test_code_is_locator_not_authority_and_room_has_exactly_two_seats(self):
@@ -64,6 +71,36 @@ class AuthoritativeRoomTests(unittest.TestCase):
             "room_code": room["room_code"], "trainer_display_name": "Blue",
         }, headers={"Idempotency-Key": _command(), "X-SwitchTrade-Client": "client-c"})
         self.assertEqual(third.status_code, 409)
+
+    def test_production_mode_rejects_legacy_sessions_and_invalid_room_fields(self):
+        with patch.dict(os.environ, {"SWITCHTRADE_ENABLE_LEGACY_RELAY": "0"}):
+            legacy = self.client.post("/session/create")
+        self.assertEqual(legacy.status_code, 404)
+        invalid = self.client.post("/v1/trade-rooms", json={
+            "name": "Kanto", "trainer_display_name": "Leaf",
+            "game": "Emerald", "language": "English",
+        }, headers={"Idempotency-Key": _command(), "X-SwitchTrade-Client": "invalid"})
+        self.assertEqual(invalid.status_code, 422)
+        oversized = self.client.post("/v1/trade-rooms", content=b"x" * 65537, headers={
+            "Content-Length": "65537", "Idempotency-Key": _command(),
+        })
+        self.assertEqual(oversized.status_code, 413)
+        async def chunked_request():
+            async def chunks():
+                for chunk in (b'{"name":"', b"x" * 70000, b'"}'):
+                    yield chunk
+
+            async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=relay_server.app),
+                    base_url="http://testserver") as client:
+                return await client.post(
+                    "/v1/trade-rooms", content=chunks(),
+                    headers={"Idempotency-Key": _command(),
+                             "X-SwitchTrade-Client": "oversized-chunked"},
+                )
+
+        chunked = asyncio.run(chunked_request())
+        self.assertEqual(chunked.status_code, 413)
 
     def test_idempotency_and_atomic_creator_claim(self):
         first = self._create()
@@ -95,6 +132,33 @@ class AuthoritativeRoomTests(unittest.TestCase):
         self.assertEqual(one, two)
         self.assertEqual(one["room_version"], before + 1)
 
+    def test_mutations_require_version_and_parallel_attempt_creation_is_singleton(self):
+        first = self._create()
+        second = self._join(first["room"]["room_code"])
+        room_id = first["room"]["room_id"]
+        missing = self.client.post(f"/v1/trade-rooms/{room_id}/ready", json={"ready": True}, headers={
+            "Authorization": f"Bearer {first['member_token']}", "Idempotency-Key": _command(),
+        })
+        self.assertEqual(missing.status_code, 428)
+        for credential in (first, second):
+            self.assertEqual(self._mutate(
+                room_id, credential["member_token"], "/ready", {"ready": True}).status_code, 200)
+
+        version = self.client.get(f"/v1/trade-rooms/{room_id}", headers={
+            "Authorization": f"Bearer {first['member_token']}"}).json()["room_version"]
+
+        def create_attempt(credential):
+            return self.client.post(f"/v1/trade-rooms/{room_id}/attempts", json={}, headers={
+                "Authorization": f"Bearer {credential['member_token']}",
+                "Idempotency-Key": _command(), "If-Match": str(version),
+            })
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(executor.map(create_attempt, (first, second)))
+        self.assertEqual(sorted(response.status_code for response in responses), [200, 409])
+        room = relay_server.authority.snapshot(room_id, first["member_token"])
+        self.assertEqual(room["last_attempt_number"], 1)
+
     def test_hashed_credentials_and_room_state_survive_service_restart(self):
         first = self._create()
         room_id = first["room"]["room_id"]
@@ -109,9 +173,10 @@ class AuthoritativeRoomTests(unittest.TestCase):
     def test_reconnect_rotates_both_credentials(self):
         first = self._create()
         room_id = first["room"]["room_id"]
+        command = _command()
         response = self.client.post(f"/v1/trade-rooms/{room_id}:reconnect", json={
             "reconnect_token": first["reconnect_token"],
-        })
+        }, headers={"Idempotency-Key": command})
         self.assertEqual(response.status_code, 200, response.text)
         rotated = response.json()
         self.assertNotEqual(rotated["member_token"], first["member_token"])
@@ -122,19 +187,76 @@ class AuthoritativeRoomTests(unittest.TestCase):
         current = self.client.get(f"/v1/trade-rooms/{room_id}", headers={
             "Authorization": f"Bearer {rotated['member_token']}"})
         self.assertEqual(current.status_code, 200)
+        repeated = self.client.post(f"/v1/trade-rooms/{room_id}:reconnect", json={
+            "reconnect_token": first["reconnect_token"],
+        }, headers={"Idempotency-Key": command})
+        self.assertEqual(repeated.status_code, 200, repeated.text)
+        self.assertEqual(repeated.json()["member_token"], rotated["member_token"])
+        relay_server.authority.close()
+        relay_server.authority = AuthorityStore(self.database)
+        recovered = self.client.post(f"/v1/trade-rooms/{room_id}:reconnect", json={
+            "reconnect_token": first["reconnect_token"],
+        }, headers={"Idempotency-Key": _command()})
+        self.assertEqual(recovered.status_code, 200, recovered.text)
+        self.assertNotEqual(recovered.json()["member_token"], rotated["member_token"])
 
     def test_presence_moves_through_bounded_reconnect_window(self):
         first = self._create()
+        second = self._join(first["room"]["room_code"])
         room_id = first["room"]["room_id"]
         baseline = time.time()
-        with patch("relay.authority.time.time", return_value=baseline + 31):
+        with patch("relay.authority.time.time", return_value=baseline + 46):
+            relay_server.authority.mutate(
+                room_id, second["member_token"], _command(), "heartbeat")
             relay_server.authority.sweep_presence()
-        room = relay_server.authority.snapshot(room_id, first["member_token"])
+        room = relay_server.authority.snapshot(room_id, second["member_token"])
         self.assertEqual(room["members"][0]["online_state"], "reconnecting")
-        with patch("relay.authority.time.time", return_value=baseline + 122):
+        with patch("relay.authority.time.time", return_value=baseline + 137):
+            relay_server.authority.mutate(
+                room_id, second["member_token"], _command(), "heartbeat")
             relay_server.authority.sweep_presence()
-        room = relay_server.authority.snapshot(room_id, first["member_token"])
+        room = relay_server.authority.snapshot(room_id, second["member_token"])
         self.assertEqual(room["members"][0]["online_state"], "offline")
+        expired = self.client.get(f"/v1/trade-rooms/{room_id}", headers={
+            "Authorization": f"Bearer {first['member_token']}"})
+        self.assertEqual(expired.status_code, 401)
+
+    def test_owner_can_release_partner_only_after_reconnect_grace(self):
+        first = self._create()
+        second = self._join(first["room"]["room_code"])
+        room_id = first["room"]["room_id"]
+        target = second["room"]["local_member_id"]
+        for credential in (first, second):
+            ready = self._mutate(
+                room_id, credential["member_token"], "/ready", {"ready": True})
+            self.assertEqual(ready.status_code, 200, ready.text)
+        attempt = self._mutate(room_id, first["member_token"], "/attempts").json()["attempt"]
+        claimed = self._mutate(
+            room_id, first["member_token"],
+            f"/attempts/{attempt['attempt_id']}:claim-creator")
+        self.assertEqual(claimed.status_code, 200, claimed.text)
+        locked = self._mutate(
+            room_id, first["member_token"],
+            f"/attempts/{attempt['attempt_id']}:lock-role")
+        self.assertEqual(locked.status_code, 200, locked.text)
+        early = self._mutate(room_id, first["member_token"], "/members:remove-offline", {
+            "target_member_id": target,
+        })
+        self.assertEqual(early.status_code, 409)
+        baseline = time.time()
+        with patch("relay.authority.time.time", return_value=baseline + 46):
+            relay_server.authority.sweep_presence()
+        with patch("relay.authority.time.time", return_value=baseline + 137):
+            relay_server.authority.mutate(
+                room_id, first["member_token"], _command(), "heartbeat")
+            relay_server.authority.sweep_presence()
+            removed = self._mutate(room_id, first["member_token"], "/members:remove-offline", {
+                "target_member_id": target,
+            })
+        self.assertEqual(removed.status_code, 200, removed.text)
+        self.assertEqual(removed.json()["state"], "waiting_for_partner")
+        self.assertEqual([member["online_state"] for member in removed.json()["members"]],
+                         ["online", "left"])
 
 
 if __name__ == "__main__":

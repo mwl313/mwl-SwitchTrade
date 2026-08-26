@@ -205,9 +205,9 @@ public sealed class JoinPrivateRoomScreenViewModel : ScreenViewModel
     public RelayCommand PasteCommand { get; }
 
     public static string NormalizeCode(string value) =>
-        new(value.Where(char.IsLetterOrDigit).Take(8).Select(char.ToUpperInvariant).ToArray());
+        new(value.Where(char.IsLetterOrDigit).Take(6).Select(char.ToUpperInvariant).ToArray());
 
-    private bool CanJoin() => !IsBusy && IsServiceReady && RoomCode.Length is >= 4 and <= 8;
+    private bool CanJoin() => !IsBusy && IsServiceReady && RoomCode.Length == 6;
 
     private async Task JoinAsync()
     {

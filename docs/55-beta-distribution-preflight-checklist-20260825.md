@@ -1,10 +1,11 @@
 # Beta distribution preflight checklist — updated 2026-08-26
 
-> Status: On 2026-08-26 the owner explicitly deferred Gate 0 and then authorized implementation through
-> Gate 6, excluding all client privacy/consent work. This is not release approval: final owner/GPT visual,
-> asset, legal-notice, support-destination, signed-artifact, public-TLS, clean-machine, and hardware
-> qualification remain blocking. Gate 4 and the local Gate 5 authority path are internally implemented.
-> Gates 1–3 now have buildable lifecycle foundations; the current package is explicitly internal-only.
+> Status: Repository-controlled preflight implementation is complete as of 2026-08-26, excluding all
+> client privacy/consent work by explicit owner direction. This is not release approval: final owner/GPT
+> visual and asset decisions, legal notices, support destination, externally signed artifacts, public-TLS
+> relay deployment, clean-machine qualification, and two-PC/two-Switch hardware qualification remain
+> blocking. The relay is hosting-ready in this repository; deployment belongs to the separate hosting
+> operator. The current package is explicitly internal-only until those external gates pass.
 > UI baseline: `docs/56-native-ui-ux-redesign-handoff-20260825.md` and the owner overrides in
 > `docs/57-native-ui-overhaul-implementation-report-20260825.md` are the preliminary redesign source.
 > Latest UI evidence: `docs/64-second-native-ui-overhaul-implementation-report-20260825.md`.
@@ -25,7 +26,7 @@
   `.ek3` Pokémon records in fixtures and captured endpoint traffic.
 - [x] Source package includes SHA-256 verification for the rootfs and native EXE.
 - [x] Throwaway-distro install, repair, retained rollback runtime, uninstall, and explicit purge passed.
-- [x] Pinned WSL runtime suite passed 205 tests (3 skipped) without Switch hardware on 2026-08-26.
+- [x] Pinned WSL runtime suite passed 212 tests (3 skipped) without Switch hardware on 2026-08-26.
 
 ## Current gate summary and execution order
 
@@ -34,8 +35,8 @@
 | 1 | Gate 4 local integration | Internally implemented | Hardware-qualify authoritative role transition, retry, and recovery in Gate 7 |
 | 2 | Gate 0 | Owner-deferred, not approved | Approve the native build plus public icons/assets, legal notices, and real support destination before packaging/release |
 | 3 | Gates 4–5 contracts | Implemented and internally tested | Qualify the ordered room path across two production endpoints |
-| 4 | Gate 5 remote services | Deployable authority/opaque relay; not publicly deployed | Deploy behind public TLS and pass two-NAT qualification; analytics remain owner-external |
-| 5 | Gates 1–3 | Native/bootstrap/lifecycle code implemented | Supply signed rootfs, kernel/modules, usbipd, notices, and signing certificates |
+| 4 | Gate 5 remote services | Hosting-ready authority/opaque relay; deployment delegated | Hosting operator deploys behind public TLS and passes two-NAT qualification; analytics remain owner-external |
+| 5 | Gates 1–3 | Native/bootstrap/lifecycle code complete internally | Supply signed rootfs, kernel/modules, usbipd, notices, and signing certificates |
 | 6 | Gate 6 | Automated subset passed; physical lifecycle not qualified | Pass clean-machine, reboot, coexistence, Defender, signing, and destructive lifecycle matrix |
 | 7 | Gate 7 | Waiting for production stack and second RTL8192EU | Pass two-PC/two-Switch hardware, trade, decoder, teardown, reuse, and network-fault qualification |
 | 8 | Gate 8 | Not started | Sign, publish, archive, review, and approve the private beta |
@@ -66,32 +67,37 @@ authorize calling an unsigned/internal artifact a beta release.
 This preflight checklist is the release-blocking superset of the immediate tasks in
 `docs/50-current-product-demo-todo-20260825.md`. The backlog remains outside beta preflight.
 
-- [ ] Freeze and version the production-beta repository, dependencies, runtime, kernel, driver,
-  firmware, and hardware baseline. Covered by Gates 0 and 8.
+- [x] Freeze and version the application/relay production-beta repository and pinned dependencies.
+  The separately produced signed kernel/modules/firmware release remains an external Gate 3/8 input.
 - [x] Lock the RTL8192EU beta policy while preserving profile-driven driver/hardware expansion.
   Covered by Gates 0, 2, 3, and 7.
 - [x] Finish the fail-closed Windows/WSL hardware launcher. Physical qualification remains in Gate 7.
-- [ ] Finish the universal health gate, all-permitted-channel discovery, watchdog, recovery, and safe
-  teardown. Covered by Gates 2, 4, and 7.
+- [x] Finish the universal health gate, all-permitted-channel discovery, bounded watchdog, recovery,
+  and safe teardown. Physical failure/reuse qualification remains in Gate 7.
 - [x] Finish structured, redacted, rotating run logs and one-action support bundles. Covered by Gates
   4-6.
 - [ ] Certify both physical RTL8192EU adapters. Covered by Gate 7.
 - [x] Finish and harden the feature-neutral RFU tunnel, deterministic player mapping, bounded queues,
   backpressure, stale-frame rejection, counters, and reconnect behavior. Covered by Gates 4, 5, and 7.
-- [ ] Validate the tunnel without Switch hardware, including recorded replay and network-fault
-  injection. Covered by Gates 4 and 7.
+- [x] Validate the tunnel without Switch hardware, including byte-exact recorded payload replay,
+  stale/duplicate/reordered envelope rejection, relay restart/reconnect, bounded queues, and teardown.
+  Real WAN impairment qualification remains in Gate 7.
 - [x] Complete the local JSON control API for readiness, hardware, authoritative groups, sessions,
   diagnostics, recovery, and shutdown. Covered by Gates 4 and 5.
 - [x] Complete and freeze the first-demo native presentation baseline and honest UI-only previews.
-  Live authoritative room and party state remain implementation work in Gates 4–5.
+  Private-room state and passive party projections are connected to the live local/remote contracts;
+  only the explicitly labeled public-room directory remains demo data.
 - [x] Integrate the EXE with the installed WSL control service, launcher, health gate, endpoint, logs,
   authoritative lobby, decoder observer, and clean shutdown. Covered by Gates 1, 2, 4, and 5.
-- [ ] Deploy the production relay plus authoritative lobby and consented committed-trade statistics
-  services. Covered by Gate 5.
+- [x] Finish the production-hosting package for the opaque relay and authoritative lobby, including
+  a hardened container, persistent authority store, deployment runbook, and credentialed smoke test.
+- [ ] Hosting operator: deploy that relay behind public TLS and return the qualified HTTPS base URL.
+  Consented trade-statistics services remain owner-external and are not part of this client/relay.
 - [ ] Run the first real two-endpoint, two-Switch production test. Covered by Gate 7.
 - [ ] Run LAN/WAN reliability, fault, recovery, and immediate-reuse testing. Covered by Gate 7.
-- [ ] Build, sign, install, repair, update, rollback, uninstall, and qualify the private beta package.
-  Covered by Gates 1-8.
+- [x] Implement and internally test build, install, repair, update, atomic app/WSL/kernel rollback,
+  uninstall, manifest/signature verification, and guided native setup.
+- [ ] Sign and externally qualify the resulting private-beta package. Covered by Gates 1-8.
 
 ## Gate 0 — freeze the beta experience
 
@@ -135,7 +141,8 @@ This preflight checklist is the release-blocking superset of the immediate tasks
   The SwitchTrade name and Linkline direction are frozen; no Privacy tab or client analytics control
   is part of this approval.
 
-Do not begin installer implementation until Gate 0 is approved.
+Gate 0 normally precedes installer work. The owner's written exception allowed repository-side
+installer implementation to proceed, but final public packaging and release approval remain blocked.
 
 ## Gate 1 — build the one-piece Windows distribution
 
@@ -252,7 +259,8 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
 ## Gate 5 — production relay and authoritative groups; analytics owner-deferred
 
 - [ ] Deploy a reachable TLS-protected relay; the localhost relay remains internal-test-only.
-- [ ] Configure the relay URL through signed installation configuration rather than hardcoded UI state.
+- [x] Configure the relay URL through signed installation configuration rather than hardcoded UI state;
+  release builds reject loopback/non-HTTPS URLs and daily launch revalidates the signed config hash.
 - [x] Add authenticated member identities or scoped reconnect tokens so possession of a passcode alone
   cannot overwrite an occupied member, claim both roles, publish readiness, or impersonate a reconnect.
 - [x] Make the service authoritative for group metadata, exactly two member seats, membership version,
@@ -316,18 +324,19 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
 - [ ] On confirmed trading-room entry, compare both 2-by-3 UI party grids and stat popovers against known
   parties on both Switches, including empty slots and an intentionally incomplete/corrupt negative
   fixture that must not be shown as valid.
-- [ ] Verify the stored committed-trade event matches the actually exchanged Pokémon, trainers,
-  timestamp, consent state, and disclosed network/region fields, while failed or rolled-back attempts
-  create no completed-trade record.
+- [ ] Owner-external/deferred: if committed-trade analytics are later authorized, verify that the
+  stored record matches the actual exchange and that failures/rollbacks create no completed record.
+  The present client and relay collect or upload no trainer, Pokémon, IP, or location analytics.
 - [ ] Run LAN and WAN loss, delay, duplicate, reordering, endpoint restart, relay restart, and recovery
   tests with run IDs and support bundles.
 - [ ] Confirm the production path does not depend on the PC-to-Switch emulator peer.
-- [ ] Keep RTL8188EU quarantined unless it separately passes the full qualification matrix.
+- [x] Keep RTL8188EU quarantined unless it separately passes the full qualification matrix.
 
 ## Gate 8 — release approval
 
 - [ ] Sign the bootstrapper, native EXE, kernel, modules, rootfs, manifest, and update metadata.
-- [ ] Publish supported hardware, Windows/WSL versions, limitations, privacy behavior, and recovery guide.
+- [x] Publish the current hardware/Windows/WSL limitations and recovery guide in `docs/70`.
+  Final public URL/support contact and release-version values remain Gate 0/8 owner inputs.
 - [ ] Complete security/privacy review of trainer, Pokémon, source-IP, coarse-location, consent,
   retention, deletion, and aggregate-statistics behavior before enabling server-side collection.
 - [ ] Preserve one tested previous release for atomic rollback.

@@ -9,14 +9,18 @@ import string
 import threading
 import time
 import uuid
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel, ConfigDict, Field
+from starlette.responses import JSONResponse
 
 from switchtrade.rfu_tunnel import Direction, Envelope, Kind, direction_for_role
 from switchtrade.process_guard import AlreadyRunningError, SingleInstanceLock
 from relay.authority import AuthorityError, AuthorityStore
 
 HEARTBEAT_TIMEOUT = 30.0
+PEER_SEND_TIMEOUT = 2.0
 SESSION_ID_CHARS = string.ascii_uppercase + string.digits
 
 CLOSE_NOT_FOUND = 4404
@@ -24,11 +28,63 @@ CLOSE_SLOT_TAKEN = 4409
 CLOSE_HEARTBEAT_TIMEOUT = 4408
 CLOSE_PEER_OFFLINE = 4000
 CLOSE_BAD_FRAME = 4400
+CLOSE_RATE_LIMITED = 4429
 MAX_MESSAGE_BYTES = (1 << 20) + 256
 SESSION_TTL = 6 * 60 * 60
+MAX_CONTROL_BODY_BYTES = 64 * 1024
 
-app = FastAPI()
-logger = logging.getLogger("switchtrade.relay")
+app = FastAPI(title="SwitchTrade Relay", version="0.2.0-beta.1")
+logger = logging.getLogger("uvicorn.error")
+
+
+class StrictPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class CreateRoomPayload(StrictPayload):
+    name: str = Field(min_length=1, max_length=80)
+    visibility: Literal["private"] = "private"
+    trainer_display_name: str = Field(min_length=1, max_length=40)
+    game: Literal["FireRed", "LeafGreen"]
+    language: Literal["English", "Japanese", "French", "German", "Italian", "Spanish"]
+
+
+class JoinRoomPayload(StrictPayload):
+    room_code: str = Field(pattern=r"^[A-Za-z0-9]{6}$")
+    trainer_display_name: str = Field(min_length=1, max_length=40)
+
+
+class ReconnectPayload(StrictPayload):
+    reconnect_token: str = Field(min_length=32, max_length=128)
+
+
+class ReadyPayload(StrictPayload):
+    ready: bool = True
+
+
+class TransferPayload(StrictPayload):
+    target_member_id: str = Field(min_length=36, max_length=36)
+
+
+class PhasePayload(StrictPayload):
+    phase: Literal[
+        "discovering_real_room", "advertising_mirror_room", "connecting_switches",
+        "trading_room", "reconnecting", "recovering", "closing", "completed",
+        "canceled", "failed",
+    ]
+
+
+class RemoveOfflinePayload(StrictPayload):
+    target_member_id: str = Field(min_length=36, max_length=36)
+
+
+def _legacy_enabled() -> bool:
+    return os.environ.get("SWITCHTRADE_ENABLE_LEGACY_RELAY") == "1"
+
+
+def _require_legacy() -> None:
+    if not _legacy_enabled():
+        raise HTTPException(status_code=404, detail="not found")
 
 
 def _authority_path() -> str:
@@ -54,6 +110,14 @@ class RateLimiter:
     def check(self, identity: str) -> None:
         now = time.monotonic()
         with self._lock:
+            if len(self._hits) >= 4096 and identity not in self._hits:
+                self._hits = {
+                    key: [stamp for stamp in stamps if now - stamp < self.window]
+                    for key, stamps in self._hits.items()
+                    if any(now - stamp < self.window for stamp in stamps)
+                }
+                if len(self._hits) >= 4096:
+                    raise HTTPException(status_code=429, detail="rate limit capacity exceeded")
             hits = [stamp for stamp in self._hits.get(identity, []) if now - stamp < self.window]
             if len(hits) >= self.limit:
                 raise HTTPException(status_code=429, detail="rate limit exceeded")
@@ -91,6 +155,19 @@ def _client_id(request: Request) -> str:
     return request.headers.get("x-switchtrade-client", "anonymous")[:128]
 
 
+def _expected_version(request: Request) -> int:
+    value = request.headers.get("if-match", "").strip().strip('"')
+    if not value:
+        raise HTTPException(status_code=428, detail="If-Match room version is required")
+    try:
+        version = int(value)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="If-Match must be a room version") from error
+    if version < 1:
+        raise HTTPException(status_code=400, detail="If-Match must be a room version")
+    return version
+
+
 def _translate_authority(call):
     try:
         return call()
@@ -100,6 +177,7 @@ def _translate_authority(call):
 
 @app.get("/health")
 async def health() -> dict:
+    authority.ping()
     return {
         "status": "ready",
         "service": "switchtrade-relay",
@@ -117,34 +195,54 @@ async def metrics() -> dict:
 @app.middleware("http")
 async def structured_request_log(request: Request, call_next):
     started = time.monotonic()
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        body = bytearray()
+        async for chunk in request.stream():
+            if len(body) + len(chunk) > MAX_CONTROL_BODY_BYTES:
+                return JSONResponse(status_code=413, content={
+                    "detail": "request body is too large",
+                })
+            body.extend(chunk)
+        request._body = bytes(body)
     authority.sweep_presence()
-    response = await call_next(request)
+    route = request.url.path.split("?")[0]
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception(json.dumps({
+            "event": "http_request_failed", "method": request.method, "route": route,
+            "duration_ms": round((time.monotonic() - started) * 1000, 1),
+        }, separators=(",", ":")))
+        raise
     logger.info(json.dumps({
-        "event": "http_request", "method": request.method,
-        "route": request.url.path.split("?")[0], "status": response.status_code,
+        "event": "http_request", "method": request.method, "route": route,
+        "status": response.status_code,
         "duration_ms": round((time.monotonic() - started) * 1000, 1),
     }, separators=(",", ":")))
     return response
 
 
 @app.post("/v1/trade-rooms")
-async def create_trade_room(payload: dict, request: Request) -> dict:
+async def create_trade_room(payload: CreateRoomPayload, request: Request) -> dict:
+    rate_limiter.check(f"create:{_client_id(request)}")
     response = _translate_authority(
-        lambda: authority.create(payload, _command_id(request), _client_id(request)))
+        lambda: authority.create(payload.model_dump(), _command_id(request), _client_id(request)))
     sessions.setdefault(response["room"]["room_code"], Session(response["room"]["room_code"]))
     return response
 
 
 @app.post("/v1/trade-rooms:join")
-async def join_trade_room(payload: dict, request: Request) -> dict:
+async def join_trade_room(payload: JoinRoomPayload, request: Request) -> dict:
+    rate_limiter.check(f"join:{_client_id(request)}")
     return _translate_authority(
-        lambda: authority.join(payload, _command_id(request), _client_id(request)))
+        lambda: authority.join(payload.model_dump(), _command_id(request), _client_id(request)))
 
 
 @app.post("/v1/trade-rooms/{room_id}:reconnect")
-async def reconnect_trade_room(room_id: str, payload: dict) -> dict:
+async def reconnect_trade_room(room_id: str, payload: ReconnectPayload, request: Request) -> dict:
+    rate_limiter.check(f"reconnect:{room_id}")
     return _translate_authority(
-        lambda: authority.reconnect(room_id, str(payload.get("reconnect_token", ""))))
+        lambda: authority.reconnect(room_id, payload.reconnect_token, _command_id(request)))
 
 
 @app.get("/v1/trade-rooms/{room_id}")
@@ -159,12 +257,13 @@ async def get_trade_room_events(room_id: str, request: Request, after: int = 0) 
 
 async def _mutate(room_id: str, request: Request, action: str, payload: dict | None = None) -> dict:
     return _translate_authority(lambda: authority.mutate(
-        room_id, _bearer(request), _command_id(request), action, payload))
+        room_id, _bearer(request), _command_id(request), action, payload,
+        expected_version=_expected_version(request)))
 
 
 @app.post("/v1/trade-rooms/{room_id}/ready")
-async def ready_trade_room(room_id: str, payload: dict, request: Request) -> dict:
-    return await _mutate(room_id, request, "ready", payload)
+async def ready_trade_room(room_id: str, payload: ReadyPayload, request: Request) -> dict:
+    return await _mutate(room_id, request, "ready", payload.model_dump())
 
 
 @app.post("/v1/trade-rooms/{room_id}/heartbeat")
@@ -183,8 +282,10 @@ async def claim_creator(room_id: str, attempt_id: str, request: Request) -> dict
 
 
 @app.post("/v1/trade-rooms/{room_id}/attempts/{attempt_id}:transfer-creator")
-async def transfer_creator(room_id: str, attempt_id: str, payload: dict, request: Request) -> dict:
-    return await _mutate(room_id, request, "transfer_creator", {**payload, "attempt_id": attempt_id})
+async def transfer_creator(room_id: str, attempt_id: str, payload: TransferPayload,
+                           request: Request) -> dict:
+    return await _mutate(room_id, request, "transfer_creator",
+                         {**payload.model_dump(), "attempt_id": attempt_id})
 
 
 @app.post("/v1/trade-rooms/{room_id}/attempts/{attempt_id}:lock-role")
@@ -193,18 +294,35 @@ async def lock_role(room_id: str, attempt_id: str, request: Request) -> dict:
 
 
 @app.post("/v1/trade-rooms/{room_id}/attempts/{attempt_id}:phase")
-async def set_attempt_phase(room_id: str, attempt_id: str, payload: dict, request: Request) -> dict:
-    return await _mutate(room_id, request, "phase", {**payload, "attempt_id": attempt_id})
+async def set_attempt_phase(room_id: str, attempt_id: str, payload: PhasePayload,
+                            request: Request) -> dict:
+    room = await _mutate(room_id, request, "phase",
+                         {**payload.model_dump(), "attempt_id": attempt_id})
+    if payload.phase in {"completed", "canceled", "failed"}:
+        await _disconnect_session(room["room_code"], f"attempt {payload.phase}")
+    return room
+
+
+@app.post("/v1/trade-rooms/{room_id}/members:remove-offline")
+async def remove_offline_member(room_id: str, payload: RemoveOfflinePayload,
+                                request: Request) -> dict:
+    room = await _mutate(room_id, request, "remove_offline", payload.model_dump())
+    await _disconnect_session(room["room_code"], "room membership changed")
+    return room
 
 
 @app.delete("/v1/trade-rooms/{room_id}/members/me")
 async def leave_trade_room(room_id: str, request: Request) -> dict:
-    return await _mutate(room_id, request, "leave")
+    room = await _mutate(room_id, request, "leave")
+    await _disconnect_session(room["room_code"], "member left")
+    return room
 
 
 @app.delete("/v1/trade-rooms/{room_id}")
 async def close_trade_room(room_id: str, request: Request) -> dict:
-    return await _mutate(room_id, request, "close")
+    room = await _mutate(room_id, request, "close")
+    await _disconnect_session(room["room_code"], "room closed")
+    return room
 
 
 @app.post("/shutdown")
@@ -229,6 +347,21 @@ class Session:
 sessions: dict[str, Session] = {}
 
 
+async def _disconnect_session(sid: str, reason: str) -> None:
+    session = sessions.pop(sid, None)
+    if session is None:
+        return
+    async with session.lock:
+        peers = [peer for peer in (session.host, session.guest) if peer is not None]
+        session.host = session.guest = None
+        session.advertisement = None
+    for peer in peers:
+        try:
+            await peer.close(code=CLOSE_PEER_OFFLINE, reason=reason)
+        except RuntimeError:
+            pass
+
+
 def _prune_sessions() -> None:
     cutoff = time.monotonic() - SESSION_TTL
     for sid, session in list(sessions.items()):
@@ -238,6 +371,7 @@ def _prune_sessions() -> None:
 
 @app.post("/session/create")
 async def create_session() -> dict:
+    _require_legacy()
     _prune_sessions()
     while True:
         sid = "".join(secrets.choice(SESSION_ID_CHARS) for _ in range(6))
@@ -249,6 +383,7 @@ async def create_session() -> dict:
 
 @app.post("/session/{sid}/join")
 async def join_session(sid: str) -> dict:
+    _require_legacy()
     session = sessions.get(sid)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
@@ -261,9 +396,12 @@ async def join_session(sid: str) -> dict:
 
 
 @app.get("/session/{sid}")
-async def session_status(sid: str) -> dict:
+async def session_status(sid: str, request: Request) -> dict:
     if authority.has_code(sid):
+        _translate_authority(lambda: authority.member_for_code(sid, _bearer(request)))
         sessions.setdefault(sid, Session(sid))
+    else:
+        _require_legacy()
     session = sessions.get(sid)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
@@ -276,16 +414,24 @@ async def session_status(sid: str) -> dict:
 
 @app.websocket("/session/{sid}/ws")
 async def ws_session(websocket: WebSocket, sid: str, role: str = "host",
-                     protocol: str = "mwlb") -> None:
+                     protocol: str = "mwlb", attempt_id: str | None = None) -> None:
+    identity = None
     if role not in {"host", "guest"}:
         await websocket.close(code=CLOSE_NOT_FOUND, reason="invalid role")
         return
 
-    if authority.has_code(sid):
+    authoritative = authority.has_code(sid)
+    if authoritative:
         authorization = websocket.headers.get("authorization", "")
         token = authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
         try:
-            identity = authority.member_for_code(sid, token)
+            rate_limiter.check(f"ws:{token[-16:] or 'missing'}")
+            if not attempt_id:
+                raise AuthorityError(409, "connection attempt is required")
+            identity = authority.member_for_code(sid, token, attempt_id)
+        except HTTPException:
+            await websocket.close(code=CLOSE_RATE_LIMITED, reason="rate limit exceeded")
+            return
         except AuthorityError:
             await websocket.close(code=4401, reason="member credential is invalid")
             return
@@ -294,6 +440,9 @@ async def ws_session(websocket: WebSocket, sid: str, role: str = "host",
             await websocket.close(code=4403, reason="relay seat does not match member credential")
             return
         sessions.setdefault(sid, Session(sid))
+    elif not _legacy_enabled():
+        await websocket.close(code=CLOSE_NOT_FOUND, reason="session not found")
+        return
 
     session = sessions.get(sid)
     if session is None:
@@ -314,6 +463,12 @@ async def ws_session(websocket: WebSocket, sid: str, role: str = "host",
         session.last_activity = time.monotonic()
 
     await websocket.accept()
+    frames = bytes_forwarded = 0
+    disconnect_reason = "peer_disconnected"
+    logger.info(json.dumps({
+        "event": "rfu_peer_connected", "room_id": identity["room_id"] if identity else None,
+        "attempt_id": attempt_id, "role": role, "protocol": protocol,
+    }, separators=(",", ":")))
     if protocol == "rfu" and role == "guest" and session.advertisement is not None:
         await websocket.send_bytes(session.advertisement)
 
@@ -322,10 +477,12 @@ async def ws_session(websocket: WebSocket, sid: str, role: str = "host",
             try:
                 data = await asyncio.wait_for(websocket.receive_bytes(), timeout=HEARTBEAT_TIMEOUT)
             except asyncio.TimeoutError:
+                disconnect_reason = "heartbeat_timeout"
                 await websocket.close(code=CLOSE_HEARTBEAT_TIMEOUT, reason="heartbeat timeout")
                 break
 
             if not isinstance(data, bytes) or len(data) > MAX_MESSAGE_BYTES:
+                disconnect_reason = "invalid_frame_size"
                 await websocket.close(code=CLOSE_BAD_FRAME, reason="invalid frame size")
                 break
             if protocol == "rfu":
@@ -335,6 +492,7 @@ async def ws_session(websocket: WebSocket, sid: str, role: str = "host",
                     if envelope.session_id != sid or envelope.direction != expected:
                         raise ValueError("session or direction mismatch")
                 except (TypeError, ValueError):
+                    disconnect_reason = "invalid_rfu_envelope"
                     await websocket.close(code=CLOSE_BAD_FRAME, reason="invalid RFU envelope")
                     break
                 if role == "host" and envelope.kind == Kind.ADVERTISEMENT:
@@ -343,15 +501,30 @@ async def ws_session(websocket: WebSocket, sid: str, role: str = "host",
             peer = getattr(session, peer_role)
             if peer is None:
                 continue
-            await peer.send_bytes(data)
+            try:
+                await asyncio.wait_for(peer.send_bytes(data), timeout=PEER_SEND_TIMEOUT)
+            except (asyncio.TimeoutError, RuntimeError):
+                disconnect_reason = "peer_send_timeout"
+                await peer.close(code=CLOSE_PEER_OFFLINE, reason="peer send timed out")
+                continue
+            frames += 1
+            bytes_forwarded += len(data)
             session.last_activity = time.monotonic()
-    except (WebSocketDisconnect, RuntimeError):
-        pass
+    except WebSocketDisconnect as error:
+        disconnect_reason = f"websocket_{error.code}"
+    except RuntimeError:
+        disconnect_reason = "websocket_runtime_error"
     finally:
         async with session.lock:
             if getattr(session, role) is websocket:
                 setattr(session, role, None)
             session.last_activity = time.monotonic()
+        logger.info(json.dumps({
+            "event": "rfu_peer_disconnected", "room_id": identity["room_id"] if identity else None,
+            "attempt_id": attempt_id, "role": role, "protocol": protocol,
+            "reason": disconnect_reason, "frames_forwarded": frames,
+            "bytes_forwarded": bytes_forwarded,
+        }, separators=(",", ":")))
 
 
 def main() -> None:

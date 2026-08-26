@@ -1,12 +1,29 @@
 # STATUS — 진행 상태 (2026-08-26)
 
-> 마지막 갱신: 2026-08-26 — **Gate 1–6 자동화 범위 구현 · 외부/실기 qualification 대기**
+> 마지막 갱신: 2026-08-26 — **Repository-controlled preflight 완료 · 외부 배포/서명/실기 qualification 대기**
 >
 > 현재 실행 순서와 future backlog의 authoritative 문서:
 > `docs/50-current-product-demo-todo-20260825.md`.
 > 기술적 근거와 상세 beta gate는 `docs/49-production-beta-priorities-20260825.md`에 보존한다.
 
 ## 🏆 핵심 성과
+
+**2026-08-26**: `0.2.0-beta.1` repository preflight 및 relay hosting handoff 완료
+- Production relay를 authenticated two-seat authority + attempt-bound opaque RFU WebSocket으로
+  hardening했다. Legacy unauthenticated relay는 production에서 404이며, 64 KiB control body,
+  1 MiB RFU envelope, rate/idempotency/version/reconnect/retention gate가 적용된다.
+- Non-root/read-only single-worker container, persistent SQLite volume, 최소 Docker build context,
+  public TLS 운영 runbook과 credentialed bidirectional smoke를 `relay/`에 완성했다. 실제 DNS/TLS/NAT
+  배포는 별도 hosting agent의 책임이다.
+- Native Setup UI가 install/update/repair/rollback/uninstall, global kernel/prerequisite/VMware 동의,
+  bus-ID별 radio 선택, experimental 경고, hardware defer를 제공한다. 선택한 USB ID는 Windows attach와
+  WSL driver/RX gate 모두에 전달된다.
+- Signed install config, complete manifest, atomic Windows+WSL+kernel rollback, local-control origin/host
+  protection, 정확히 6자리 private room code를 고정했다.
+- Pinned WSL suite **212 pass / 3 skip**, focused authority/tunnel/installer **35 pass**, production relay
+  smoke, WPF single-file self-test, WPF/Setup zero-warning Release build, PowerShell/Bash/Python parse가
+  통과했다. 상세: `docs/69`, 복구 guide: `docs/70`, authoritative checklist: `docs/55`.
+- Privacy tab 및 Pokémon/trainer/IP/location analytics는 owner 지시대로 client/relay에 구현하지 않았다.
 
 **2026-08-26**: Gate 4/5 authoritative room 경로와 Gates 1–3 배포 lifecycle 구현
 - 2-seat SQLite authority, hash-only scoped/reconnect credentials, UUIDv7/idempotency, atomic creator
@@ -15,7 +32,7 @@
   production path에서 제거했다. privacy/analytics client/server 기능은 owner 지시대로 미구현이다.
 - Native `SwitchTradeSetup.exe`, isolated distro provisioning, prerequisite/VMware/USB health gate,
   atomic update/rollback/uninstall, reversible `.wslconfig` kernel lifecycle을 구현했다.
-- WSL 전체 196 tests(+Windows-only 2 skips), focused Windows 33 tests, WPF/Setup Release build와 kernel rollback simulation이
+- 이 시점 WSL 전체 196 tests(+Windows-only 2 skips), focused Windows 33 tests, WPF/Setup Release build와 kernel rollback simulation이
   통과했다. 상세와 남은 external Gate 6 항목: `docs/66-gates1-6-authority-distribution-report-20260826.md`.
 
 **2026-08-21**: 트레이드 2세션 연속 성공 — 마일스톤 M0 달성 (워크플로우 v1 재현)

@@ -32,6 +32,13 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 self.assertEqual(body["states"]["control"]["status"], "ready")
                 self.assertNotIn("passcode", str(body).lower())
 
+    def test_local_control_rejects_cross_origin_browser_mutations(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                response = client.post(
+                    "/api/v1/session/stop", headers={"Origin": "https://untrusted.example"})
+                self.assertEqual(response.status_code, 403)
+
     def test_party_api_fails_neutral_when_session_is_inactive(self):
         with tempfile.TemporaryDirectory() as temporary:
             with TestClient(create_app(runs_root=temporary)) as client:

@@ -1,4 +1,31 @@
-# Private-beta relay deployment
+# Private-beta relay deployment handoff
+
+The repository contains the complete beta relay/room-authority service. The hosting operator owns the
+machine, DNS, TLS certificate, backups, alerts, and final public URL; those credentials never belong in
+this repository.
+
+## Start a staging instance
+
+From a clean checkout at the committed beta revision:
+
+```bash
+docker compose -f relay/compose.yaml build --pull
+docker compose -f relay/compose.yaml up -d
+curl --fail http://127.0.0.1:8788/health
+```
+
+The Compose file binds only host loopback. Put a TLS ingress on the same host in front of it, proxy
+HTTP and WebSocket upgrades to `127.0.0.1:8788`, and expose only the ingress. Keep exactly one relay
+container/worker for this beta: authoritative room state is persisted in SQLite, while live RFU
+WebSocket peers are deliberately process-local. Horizontal replicas require a later shared live-peer
+router and are not safe merely by mounting the same database.
+
+Production mode sets `SWITCHTRADE_ENABLE_LEGACY_RELAY=0`. This is security-critical: the old
+unauthenticated `/session/create` development API then returns 404, while the authenticated
+`/v1/trade-rooms*` authority and credentialed RFU WebSockets remain enabled. Do not override it on a
+public host.
+
+## Hosting boundary
 
 The relay container exposes HTTP on port 8788 only to a trusted TLS reverse proxy or managed
 container ingress. The public URL must be `https://`; WebSocket upgrades must be enabled. Do not
@@ -17,6 +44,33 @@ Required production controls:
 - preserve the SQLite volume across ordinary relay restarts so room seats and ordered events survive;
 - deploy at least one staging instance and run the two-NAT qualification before promoting its signed
   `https://` URL into `payload/release-config.json`.
+- apply ingress rate limits to room creation/join, reconnect, and WebSocket handshakes in addition to
+  the service's per-client/member limits;
+- use one worker and one replica for beta, mount the named `authority` volume, and test restore from a
+  backup before promotion;
+- restrict `/metrics` at the ingress. `/health` may be used by the platform probe but should not be
+  treated as authentication.
+
+The production endpoints are:
+
+- `GET /health` — readiness and contract identity;
+- `GET /metrics` — private operational counters;
+- `/v1/trade-rooms*` — authenticated authoritative room control;
+- `/session/{room_code}/ws?role=host|guest&protocol=rfu&attempt_id={uuid}` — credentialed,
+  attempt-bound opaque RFU transport. The caller must send its member bearer token.
+
+Before handing the URL to the packaging agent, run the repository test suite and the credentialed
+hosting smoke:
+
+```bash
+python -m relay.smoke https://relay.example.invalid
+```
+
+The smoke verifies that `POST /session/create` returns 404, creates and joins an authoritative room,
+locks a connection attempt, relays opaque bytes in both directions, and closes the room. Separately
+restart the container during a staged connection and confirm both clients reconnect. Then provide only the public
+`https://` base URL; `installer/Build-Package.ps1 -Release` writes it into the signed configuration and
+rejects HTTP or loopback release URLs.
 
 The relay forwards validated RFU envelopes as opaque bytes. It does not import the decoder, retain RFU
 payloads, or expose a committed-trade/analytics endpoint. Privacy, consent, and analytics services are

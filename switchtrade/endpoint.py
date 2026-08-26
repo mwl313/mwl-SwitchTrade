@@ -181,7 +181,7 @@ def run_endpoint(args) -> int:
             raise ValueError("member credential file is invalid")
     tunnel = TunnelClient(
         args.relay_url, args.session_id, plan["tunnel_role"], log=log,
-        member_token=member_token,
+        member_token=member_token, attempt_id=args.attempt_id,
     ).start()
     transport = sim = observer = None
     outcome = "failed"

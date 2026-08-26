@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>SwitchTradeSetup</AssemblyName>
-    <Version>0.2.0</Version>
+    <Version>0.2.0-beta.1</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>

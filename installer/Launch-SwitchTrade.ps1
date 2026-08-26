@@ -13,7 +13,32 @@ $AppRoot = Join-Path $InstallRoot "app"
 $ProfileFile = Join-Path $AppRoot "config\wsl-radio-hardware.tsv"
 $Preflight = Join-Path $AppRoot "scripts\windows\wsl-radio-preflight.ps1"
 $ConfigFile = Join-Path $InstallRoot "config.json"
+$ManifestFile = Join-Path $InstallRoot "manifest.json"
+$ManifestSignature = Join-Path $InstallRoot "manifest.json.p7s"
 $ExpectedReadinessContract = "app-readiness.v1"
+
+function Test-InstalledConfiguration {
+    if (-not (Test-Path -LiteralPath $ManifestFile -PathType Leaf)) {
+        throw 'SwitchTrade installation manifest is missing. Run Setup Repair.'
+    }
+    $manifest = Get-Content -Raw -LiteralPath $ManifestFile | ConvertFrom-Json
+    if ([int]$manifest.schema -ne 2) { throw 'SwitchTrade installation manifest is unsupported. Run Setup Update.' }
+    if ([bool]$manifest.signature_required) {
+        if (-not (Test-Path -LiteralPath $ManifestSignature -PathType Leaf)) {
+            throw 'SwitchTrade installation signature is missing. Run Setup Repair.'
+        }
+        . (Join-Path $PSScriptRoot 'PackageIntegrity.ps1')
+        Test-DetachedCmsSignature -ContentPath $ManifestFile -SignaturePath $ManifestSignature | Out-Null
+    }
+    $property = $manifest.artifact_hashes.PSObject.Properties['payload/release-config.json']
+    if (-not $property -or -not (Test-Path -LiteralPath $ConfigFile -PathType Leaf)) {
+        throw 'SwitchTrade signed relay configuration is missing. Run Setup Repair.'
+    }
+    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $ConfigFile).Hash.ToLowerInvariant()
+    if ($actual -ne ([string]$property.Value).ToLowerInvariant()) {
+        throw 'SwitchTrade relay configuration failed integrity verification. Run Setup Repair.'
+    }
+}
 
 function Get-ControlReadiness {
     try {
@@ -23,6 +48,7 @@ function Get-ControlReadiness {
     }
 }
 
+Test-InstalledConfiguration
 $existing = Get-ControlReadiness
 if ($existing -and $existing.contract_version -eq $ExpectedReadinessContract) {
     if (-not $NoBrowser) { Start-Process "http://127.0.0.1:8787/" }
