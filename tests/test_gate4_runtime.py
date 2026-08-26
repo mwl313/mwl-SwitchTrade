@@ -430,6 +430,53 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 self.assertEqual(response.headers["X-Correlation-ID"], "relay-correlation")
                 self.assertFalse(runtime.authority_state.exists())
 
+    def test_reconnect_deadline_preserves_exact_envelope_and_clears_terminal_authority(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                runtime = client.app.state.runtime
+                runtime.save_authority({
+                    "room": {"contract_version": "room-control.v1",
+                             "room_id": "room-1", "room_code": "ABC123"},
+                    "member_token": "expired-member", "reconnect_token": "expired-reconnect",
+                })
+                with patch.object(runtime.relay, "room", side_effect=RelayError(
+                        "member credential is invalid", status=401,
+                        code="member_credential_invalid", stage="authentication",
+                        primary_action="reconnect")), patch.object(
+                        runtime.relay, "reconnect_trade_room", side_effect=RelayError(
+                            "reconnect deadline expired", status=410,
+                            code="reconnect_deadline_expired", stage="authentication",
+                            recoverable=False, primary_action="rejoin_room",
+                            correlation_id="deadline-correlation")):
+                    response = client.get("/api/v1/trade-room")
+                self.assertEqual(response.status_code, 410, response.text)
+                self.assertEqual(response.json(), {
+                    "code": "reconnect_deadline_expired",
+                    "message": "reconnect deadline expired",
+                    "detail": "reconnect deadline expired",
+                    "stage": "authentication", "recoverable": False,
+                    "primary_action": "rejoin_room",
+                    "correlation_id": "deadline-correlation",
+                })
+                self.assertFalse(runtime.authority_state.exists())
+
+    def test_explicit_local_authority_abandon_stops_endpoint_and_clears_credentials(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                runtime = client.app.state.runtime
+                runtime.save_authority({
+                    "room": {"contract_version": "room-control.v1",
+                             "room_id": "room-1", "room_code": "ABC123"},
+                    "member_token": "unmatched-member", "reconnect_token": "unmatched-reconnect",
+                })
+                with patch.object(runtime, "stop_endpoint") as stop_endpoint:
+                    response = client.delete("/api/v1/trade-room/local-authority")
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["status"], "abandoned")
+                stop_endpoint.assert_called_once_with()
+                self.assertFalse(runtime.authority_state.exists())
+                self.assertFalse(runtime.member_token_file.exists())
+
     def test_end_connection_succeeds_when_relay_teardown_sync_is_unavailable(self):
         with tempfile.TemporaryDirectory() as temporary:
             with TestClient(create_app(runs_root=temporary)) as client:

@@ -36,6 +36,7 @@ public interface IControlGateway : IDisposable
         string roomCode, CancellationToken cancellationToken = default);
     Task StopConnectionAsync(CancellationToken cancellationToken = default);
     Task ReleaseTradeRoomAsync(string roomCode, RoomMembershipRole role, CancellationToken cancellationToken = default);
+    Task AbandonLocalAuthorityAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<AdapterProfileViewData>> GetAdapterProfilesAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<HardwareDeviceViewData>> GetHardwareDevicesAsync(CancellationToken cancellationToken = default);
     Task SelectHardwareDeviceAsync(
@@ -257,6 +258,8 @@ public sealed class ControlApiClient : IControlGateway
                     if (problem?.Code is "room_not_active" or "room_not_found")
                         return new(0, 0, "closed", RoomMembershipRole.Member,
                             SwitchRoomRole.Unassigned, false, false, "none", false);
+                    if (problem?.Code is "reconnect_credential_invalid" or "reconnect_deadline_expired")
+                        throw ProblemException(problem);
                 }
                 catch (JsonException) { }
                 catch (NotSupportedException) { }
@@ -311,6 +314,26 @@ public sealed class ControlApiClient : IControlGateway
         catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             throw new UserFacingException("SwitchTrade took too long to respond. Try again.", "request_timeout");
+        }
+    }
+
+    public async Task AbandonLocalAuthorityAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            using var response = await _http.DeleteAsync(
+                "/api/v1/trade-room/local-authority", cancellationToken);
+            await EnsureSuccess(response, cancellationToken);
+        }
+        catch (HttpRequestException)
+        {
+            throw new UserFacingException(
+                "SwitchTrade’s local service is not available.", "local_service_unavailable");
+        }
+        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new UserFacingException(
+                "SwitchTrade took too long to respond. Try again.", "request_timeout");
         }
     }
 
@@ -630,6 +653,11 @@ public sealed class ControlApiClient : IControlGateway
         catch (JsonException) { }
         catch (NotSupportedException) { }
 
+        throw ProblemException(problem);
+    }
+
+    private static UserFacingException ProblemException(ProblemDto? problem)
+    {
         var message = problem?.Code switch
         {
             "adapter_disconnected" => "The selected adapter is no longer connected.",
@@ -642,6 +670,10 @@ public sealed class ControlApiClient : IControlGateway
             "room_full" => "This Trade Room already has two players.",
             "room_not_found" or "not_found" => "We couldn’t find that Trade Room. Check the code and try again.",
             "room_not_active" => "This Trade Room is no longer active.",
+            "reconnect_credential_invalid" =>
+                "SwitchTrade can no longer verify the saved Trade Room access.",
+            "reconnect_deadline_expired" =>
+                "The saved Trade Room reconnect window expired.",
             "room_already_active" =>
                 "An existing Trade Room is still active. Resume or leave it before opening another.",
             "relay_contract_incompatible" or "relay_capability_missing" =>
@@ -651,7 +683,7 @@ public sealed class ControlApiClient : IControlGateway
             "room_version_conflict" or "state_conflict" => "The Trade Room changed. Refresh it and try again.",
             _ => "SwitchTrade couldn’t complete that action. Try again.",
         };
-        throw new UserFacingException(
+        return new UserFacingException(
             message, problem?.Code ?? "unknown_error", problem?.Stage,
             problem?.Recoverable ?? false, problem?.PrimaryAction, problem?.CorrelationId);
     }

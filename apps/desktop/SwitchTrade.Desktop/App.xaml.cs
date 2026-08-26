@@ -106,6 +106,38 @@ public partial class App : Application
                 FailureCode: "relay.restart", FailureStage: "relay",
                 FailureRecoverable: true, FailureAction: "retry", Room.RoomCode: "ABC123",
             };
+            UserFacingException? deadlineFailure = null;
+            using (var deadlineClient = new ControlApiClient(new SelfTestHttpHandler(_ =>
+                       Task.FromResult(JsonResponse("""
+                           {"code":"reconnect_deadline_expired","message":"reconnect deadline expired",
+                           "stage":"authentication","recoverable":false,"primary_action":"rejoin_room",
+                           "correlation_id":"deadline-correlation"}
+                           """, System.Net.HttpStatusCode.Gone)))))
+            {
+                try { deadlineClient.TryGetTradeRoomAsync().GetAwaiter().GetResult(); }
+                catch (UserFacingException error) { deadlineFailure = error; }
+            }
+            var deadlineEnvelopeSurvives = deadlineFailure is
+            {
+                TechnicalCode: "reconnect_deadline_expired", Stage: "authentication",
+                Recoverable: false, PrimaryAction: "rejoin_room", CorrelationId: "deadline-correlation",
+            };
+            UserFacingException? unmatchedFailure = null;
+            using (var unmatchedClient = new ControlApiClient(new SelfTestHttpHandler(_ =>
+                       Task.FromResult(JsonResponse("""
+                           {"code":"reconnect_credential_invalid","message":"reconnect credential is invalid",
+                           "stage":"authentication","recoverable":false,"primary_action":"rejoin_room",
+                           "correlation_id":"unmatched-correlation"}
+                           """, System.Net.HttpStatusCode.Unauthorized)))))
+            {
+                try { unmatchedClient.TryGetTradeRoomAsync().GetAwaiter().GetResult(); }
+                catch (UserFacingException error) { unmatchedFailure = error; }
+            }
+            var unmatchedEnvelopeSurvives = unmatchedFailure is
+            {
+                TechnicalCode: "reconnect_credential_invalid", Stage: "authentication",
+                Recoverable: false, PrimaryAction: "rejoin_room", CorrelationId: "unmatched-correlation",
+            };
             var malformedInventoryContained = InventoryFailureCode(
                 new SelfTestHttpHandler(_ => Task.FromResult(JsonResponse("{")))) ==
                 "usb_inventory_invalid";
@@ -192,11 +224,35 @@ public partial class App : Application
             var startupResumeWorks = resumeGateway.RoomProbeCount == 1 &&
                                      resumeShell.CurrentScreen is TradeRoomScreenViewModel &&
                                      resumeShell.RoomCoordinator.Context?.Room.RoomCode == "ABC123";
+            var unmatchedGateway = new SelfTestGateway
+            {
+                Status = ReadyStatus(),
+                RoomFailure = new UserFacingException(
+                    "SwitchTrade can no longer verify the saved Trade Room access.",
+                    "reconnect_credential_invalid", "authentication", false, "rejoin_room",
+                    "unmatched-correlation"),
+            };
+            var confirmAbandon = new SelfTestDialogService(DialogChoice.Primary);
+            using var unmatchedShell = new MainViewModel(
+                unmatchedGateway, new BackendLauncher(), confirmAbandon,
+                new WindowsClipboardService());
+            unmatchedShell.InitializeAsync().GetAwaiter().GetResult();
+            var unmatchedRecoveryVisible = unmatchedShell.CurrentScreen is RecoveryScreenViewModel &&
+                                           unmatchedShell.CanAbandonLocalAuthority &&
+                                           unmatchedShell.RecoveryStage == "authentication" &&
+                                           unmatchedShell.RecoveryTechnicalDetails.Contains(
+                                               "reconnect_credential_invalid", StringComparison.Ordinal);
+            unmatchedShell.AbandonLocalAuthorityAsync().GetAwaiter().GetResult();
+            var confirmedAbandonWorks = unmatchedGateway.AbandonCount == 1 &&
+                                        confirmAbandon.LastRequest?.IsDestructive == true &&
+                                        unmatchedShell.CurrentScreen is HomeScreenViewModel;
             Shutdown(apiIsLocal && codeNormalizes && requiredRoomFieldsWork &&
                       highContrastResourcesLoad && capabilityGateWorks && exactReleaseGateWorks &&
                       coordinatorWorks && memberReleaseWorks && authoritativeProjectionWorks &&
                       attemptFailureContractWorks && attemptFailureMapsToRecovery &&
-                      remoteCloseClearsRoom && startupResumeWorks && hardwareContractWorks &&
+                      remoteCloseClearsRoom && startupResumeWorks && deadlineEnvelopeSurvives &&
+                      unmatchedEnvelopeSurvives &&
+                      unmatchedRecoveryVisible && confirmedAbandonWorks && hardwareContractWorks &&
                       malformedInventoryContained && timedOutInventoryContained &&
                       lastGoodInventorySurvives ? 0 : 1);
             return;
@@ -244,8 +300,10 @@ public partial class App : Application
         public IReadOnlyList<AdapterProfileViewData> AdapterProfiles { get; init; } = [];
         public IReadOnlyList<HardwareDeviceViewData> HardwareDevices { get; init; } = [];
         public UserFacingException? HardwareFailure { get; set; }
+        public UserFacingException? RoomFailure { get; init; }
         public AuthoritativeRoomProjection? ActiveRoom { get; init; }
         public int RoomProbeCount { get; private set; }
+        public int AbandonCount { get; private set; }
         public SwitchRoomRole? LastSwitchRole { get; private set; }
         public RoomMembershipRole? LastMembershipRole { get; private set; }
         public Task<ControlStatus?> TryGetStatusAsync(CancellationToken cancellationToken = default) =>
@@ -263,7 +321,9 @@ public partial class App : Application
         public Task<AuthoritativeRoomProjection?> TryGetTradeRoomAsync(CancellationToken cancellationToken = default)
         {
             RoomProbeCount++;
-            return Task.FromResult(ActiveRoom);
+            return RoomFailure is null
+                ? Task.FromResult(ActiveRoom)
+                : Task.FromException<AuthoritativeRoomProjection?>(RoomFailure);
         }
         public Task StartConnectionAsync(SwitchRoomRole role, RoomMembershipRole membershipRole,
             string roomCode, CancellationToken cancellationToken = default)
@@ -275,6 +335,11 @@ public partial class App : Application
         public Task ReleaseTradeRoomAsync(string roomCode, RoomMembershipRole role, CancellationToken cancellationToken = default)
         {
             LastMembershipRole = role;
+            return Task.CompletedTask;
+        }
+        public Task AbandonLocalAuthorityAsync(CancellationToken cancellationToken = default)
+        {
+            AbandonCount++;
             return Task.CompletedTask;
         }
         public Task<IReadOnlyList<AdapterProfileViewData>> GetAdapterProfilesAsync(CancellationToken cancellationToken = default) =>
@@ -304,7 +369,18 @@ public partial class App : Application
             HttpRequestMessage request, CancellationToken cancellationToken) => send(request);
     }
 
-    private static HttpResponseMessage JsonResponse(string json) => new(System.Net.HttpStatusCode.OK)
+    private sealed class SelfTestDialogService(DialogChoice choice) : IDialogService
+    {
+        public DialogRequest? LastRequest { get; private set; }
+        public DialogChoice Show(DialogRequest request)
+        {
+            LastRequest = request;
+            return choice;
+        }
+    }
+
+    private static HttpResponseMessage JsonResponse(
+        string json, System.Net.HttpStatusCode status = System.Net.HttpStatusCode.OK) => new(status)
     {
         Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
     };

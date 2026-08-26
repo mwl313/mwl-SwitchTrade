@@ -28,6 +28,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private string _recoveryInstructions = "Close SwitchTrade, run the latest SwitchTradeSetup.exe, and choose Repair. Do not reset or unregister WSL.";
     private string _recoveryStage = "control";
     private string _recoveryTechnicalDetails = "Local setup · The desktop app could not reach 127.0.0.1:8787.";
+    private string? _authorityRecoveryCode;
 
     internal IControlGateway Gateway { get; }
     internal ActiveTradeRoomCoordinator RoomCoordinator { get; }
@@ -113,6 +114,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         get => _recoveryTechnicalDetails;
         private set => Set(ref _recoveryTechnicalDetails, value);
     }
+    public bool CanAbandonLocalAuthority => _authorityRecoveryCode == "reconnect_credential_invalid";
 
     public bool CanGoBack => _history.Count > 0 && CurrentScreen is not HomeScreenViewModel;
     public AsyncCommand BackCommand { get; }
@@ -167,7 +169,16 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             ApplyStatus(status);
             if (IsServiceReady)
             {
-                var activeRoom = await Gateway.TryGetTradeRoomAsync(cancellationToken);
+                AuthoritativeRoomProjection? activeRoom;
+                try
+                {
+                    activeRoom = await Gateway.TryGetTradeRoomAsync(cancellationToken);
+                }
+                catch (UserFacingException error) when (IsAuthorityRecovery(error))
+                {
+                    ShowAuthorityRecovery(error);
+                    return;
+                }
                 if (activeRoom is { Room: not null } &&
                     activeRoom.State is not ("closed" or "expired"))
                 {
@@ -221,7 +232,16 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             ApplyStatus(status);
             if (_activeTradeRoom is not null)
             {
-                var room = await Gateway.TryGetTradeRoomAsync();
+                AuthoritativeRoomProjection? room;
+                try
+                {
+                    room = await Gateway.TryGetTradeRoomAsync();
+                }
+                catch (UserFacingException error) when (IsAuthorityRecovery(error))
+                {
+                    ShowAuthorityRecovery(error);
+                    return;
+                }
                 if (room?.State is "closed" or "expired")
                 {
                     RoomCoordinator.ForceClear();
@@ -292,6 +312,49 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         _history.Clear();
         CurrentScreen = new HomeScreenViewModel(this);
+    }
+
+    internal async Task AbandonLocalAuthorityAsync()
+    {
+        if (!CanAbandonLocalAuthority) return;
+        if (_dialogs.Show(new DialogRequest(
+                "Forget saved Trade Room?",
+                "SwitchTrade could not verify this saved membership. Forget it on this PC only? " +
+                "This does not close a room that may still exist online.",
+                "Forget saved room", IsDestructive: true)) != DialogChoice.Primary) return;
+        try
+        {
+            await Gateway.AbandonLocalAuthorityAsync();
+        }
+        catch (UserFacingException error)
+        {
+            ShowAuthorityRecovery(error);
+            return;
+        }
+        _authorityRecoveryCode = null;
+        ShowHome();
+        Announce("Saved Trade Room access was cleared. You can rejoin with the room code.");
+    }
+
+    private static bool IsAuthorityRecovery(UserFacingException error) =>
+        error.TechnicalCode is "reconnect_credential_invalid" or "reconnect_deadline_expired";
+
+    private void ShowAuthorityRecovery(UserFacingException error)
+    {
+        _authorityRecoveryCode = error.TechnicalCode;
+        RecoverySummary = error.UserMessage;
+        RecoveryStage = error.Stage ?? "authentication";
+        RecoveryInstructions = error.TechnicalCode == "reconnect_credential_invalid"
+            ? "Keep the saved membership while you check the room code, or explicitly forget it on this PC and rejoin."
+            : "Return home and rejoin the room if the owner still has a place available.";
+        RecoveryTechnicalDetails =
+            $"{error.TechnicalCode ?? "authority_error"} · stage {RecoveryStage} · " +
+            $"action {error.PrimaryAction ?? "rejoin_room"}" +
+            (string.IsNullOrWhiteSpace(error.CorrelationId) ? "" : $" · correlation {error.CorrelationId}");
+        RoomCoordinator.ForceClear();
+        _activeTradeRoom?.Dispose();
+        _activeTradeRoom = null;
+        CurrentScreen = new RecoveryScreenViewModel(this);
     }
 
     public void OpenCreate() => Navigate(new CreateTradeRoomScreenViewModel(this));

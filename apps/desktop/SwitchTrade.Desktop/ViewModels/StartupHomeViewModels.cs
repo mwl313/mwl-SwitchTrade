@@ -10,15 +10,18 @@ public sealed class RecoveryScreenViewModel : ScreenViewModel
     public RecoveryScreenViewModel(MainViewModel shell) : base(shell)
     {
         RetryCommand = new AsyncCommand(shell.InitializeAsync);
+        AbandonLocalAuthorityCommand = new AsyncCommand(shell.AbandonLocalAuthorityAsync);
         SettingsCommand = new RelayCommand(shell.OpenSettings);
     }
 
-    public override string Title => "SwitchTrade couldn’t start";
+    public override string Title => "SwitchTrade needs attention";
     public string RecoverySummary => Shell.RecoverySummary;
     public string RecoveryInstructions => Shell.RecoveryInstructions;
     public string RecoveryTechnicalDetails => Shell.RecoveryTechnicalDetails;
     public bool ShowConnectionSettings => Shell.RecoveryStage == "radio";
+    public bool ShowAbandonLocalAuthority => Shell.CanAbandonLocalAuthority;
     public AsyncCommand RetryCommand { get; }
+    public AsyncCommand AbandonLocalAuthorityCommand { get; }
     public RelayCommand SettingsCommand { get; }
 
     public void NotifyRecoveryChanged()
@@ -27,6 +30,7 @@ public sealed class RecoveryScreenViewModel : ScreenViewModel
         OnPropertyChanged(nameof(RecoveryInstructions));
         OnPropertyChanged(nameof(RecoveryTechnicalDetails));
         OnPropertyChanged(nameof(ShowConnectionSettings));
+        OnPropertyChanged(nameof(ShowAbandonLocalAuthority));
     }
 }
 

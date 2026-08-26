@@ -344,6 +344,8 @@ class Runtime:
                 if reconnect_error.status not in {404, 410}:
                     raise
                 self.clear_authority()
+                if reconnect_error.code == "reconnect_deadline_expired":
+                    raise
                 raise RelayError(
                     "trade room is no longer active",
                     status=410,
@@ -1187,6 +1189,14 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         state.clear_authority()
         return {"status": "closed", "room_version": room.get("room_version"),
                 "run_id": state.log.run_id}
+
+    @app.delete("/api/v1/trade-room/local-authority")
+    def abandon_local_authority(request: Request) -> dict:
+        state = runtime(request)
+        with state.lock:
+            state.stop_endpoint()
+            state.clear_authority()
+        return {"status": "abandoned", "run_id": state.log.run_id}
 
     @app.get("/api/hardware/profiles")
     def hardware_profiles(request: Request) -> dict:

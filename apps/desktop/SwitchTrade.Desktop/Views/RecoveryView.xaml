@@ -6,9 +6,9 @@
     <StackPanel MaxWidth="640" HorizontalAlignment="Left" Margin="0,36,0,32">
       <Path Data="{StaticResource Icon.Warning}" Width="32" Height="32" Stretch="Uniform"
             Stroke="{DynamicResource DangerBrush}" StrokeThickness="1.8" HorizontalAlignment="Left" Margin="0,0,0,16" />
-      <TextBlock Text="SwitchTrade couldn’t start" Style="{StaticResource ScreenTitle}"
+      <TextBlock Text="SwitchTrade needs attention" Style="{StaticResource ScreenTitle}"
                  automation:AutomationProperties.HeadingLevel="Level1" />
-      <TextBlock Text="SwitchTrade stopped before opening an online room or a Switch connection."
+      <TextBlock Text="SwitchTrade found a problem that needs a clear recovery choice."
                  FontSize="16" LineHeight="24" Margin="0,0,0,24" />
       <Border Style="{StaticResource ErrorNotice}">
         <StackPanel>
@@ -20,6 +20,10 @@
         <Button Content="Try again" Command="{Binding RetryCommand}" Style="{StaticResource PrimaryButton}" Margin="0,0,8,8" />
         <Button Content="Connection settings" Command="{Binding SettingsCommand}" Style="{StaticResource SecondaryButton}"
                 Visibility="{Binding ShowConnectionSettings, Converter={StaticResource BooleanToVisibility}}" Margin="0,0,8,8" />
+        <Button Content="Forget saved room" Command="{Binding AbandonLocalAuthorityCommand}"
+                Style="{StaticResource DangerButton}"
+                Visibility="{Binding ShowAbandonLocalAuthority, Converter={StaticResource BooleanToVisibility}}"
+                Margin="0,0,8,8" />
       </WrapPanel>
       <Expander Header="Technical details" Margin="0,20,0,0">
         <TextBlock Text="{Binding RecoveryTechnicalDetails}"
