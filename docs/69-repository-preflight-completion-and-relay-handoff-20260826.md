@@ -1,8 +1,9 @@
 # Repository preflight completion and relay handoff — 2026-08-26
 
-Status: the public relay is live and repository-controlled client integration is complete. Clean-machine,
-kernel/hardware, relay-operations, and two-Switch qualification remain. The owner explicitly selected an
-unsigned private beta, so this is not publisher-verified release approval.
+Status: the public relay is live, repository-controlled integration is complete, and a checksummed
+unsigned candidate has been built from the verified kernel/rootfs/input set. Clean-machine and hardware,
+relay-operations, and two-Switch qualification remain. The owner explicitly selected an unsigned private
+beta, so this is not publisher-verified release approval.
 
 ## Completed product path
 
@@ -71,13 +72,20 @@ SwitchTrade-owned files and unregisters only the named SwitchTrade distro when e
 
 ## Internal evidence
 
-- pinned Linux/WSL suite: 212 passed, 3 skipped;
+- clean pinned Linux/WSL suite: 221 passed, 3 skipped;
+- Windows-local suite: 81 passed;
 - focused authority/tunnel/installer/runtime suite: 35 passed;
-- production-mode credentialed relay hosting smoke: passed;
+- production-mode credentialed relay hosting smoke: passed again against the public deployment;
 - native WPF Release build, single-file publish, and built-in self-test: passed with zero warnings/errors;
 - native setup Release build: passed with zero warnings/errors;
 - PowerShell parser, Bash parser, Python compilation, package-manifest tamper rejection, and kernel
   lifecycle simulation: passed;
+- web production dependency audit: no known vulnerabilities; lint and desktop bundle passed;
+- kernel mirror Actions run `32929972152`: passed; the independent verifier accepted the kernel,
+  module/firmware hashes, required modules, and default vendor-8188 exclusion;
+- candidate `SwitchTrade-unsigned-private-beta-91f5a3e.zip`: staged and ZIP round-trip integrity passed,
+  Setup audit returned 0, archive SHA-256
+  `88706f57c12efc360d9067b3d2971c2ea68b91b8c61d802a82e0265eceb66667`;
 - Docker Compose YAML parsed successfully; Docker image execution was not available on this workstation,
   so the hosting operator must perform the documented container build and health check.
 
@@ -89,17 +97,16 @@ substitute for real WAN/radio qualification.
 
 1. Owner-deferred final visual and legal-notice approval. Icon wiring, the factual notice inventory, and
    the real GitHub Issues support destination are complete.
-2. Final versioned kernel/modules/firmware/checksum artifacts from the kernel build mirror and a minimal
-   rootfs/package input set.
-3. Reproducible unsigned private-beta archive/checksum retention. Windows code signing is waived by the
-   owner for this beta and remains a future public-release feature.
-4. Relay backup/restore, staged restart/reconnect, and two-NAT qualification. Public metrics denial is
+2. External retention of the exact unsigned private-beta archive/checksum and one tested rollback
+   release. Windows code signing is waived by the owner for this beta and remains a future public-release
+   feature.
+3. Relay backup/restore, staged restart/reconnect, and two-NAT qualification. Public metrics denial is
    already verified.
-5. Clean Windows 11 24H2 install/reboot/coexistence/Defender/SmartScreen/lifecycle qualification,
+4. Clean Windows 11 24H2 install/reboot/coexistence/Defender/SmartScreen/lifecycle qualification,
    including the expected unknown-publisher behavior.
-6. Both RTL8192EU adapters and two-PC/two-WSL/two-Switch discovery, full trade, teardown, immediate reuse,
+5. Both RTL8192EU adapters and two-PC/two-WSL/two-Switch discovery, full trade, teardown, immediate reuse,
    decoder comparison, and WAN impairment qualification.
-7. Written Gate 8 approval after the accepted Gate 0 exception and every remaining external result are
+6. Written Gate 8 approval after the accepted Gate 0 exception and every remaining external result are
    recorded in `docs/55`.
 
 Privacy/consent/analytics remain owner-external. The present client and relay expose no Privacy tab,

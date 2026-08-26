@@ -1,12 +1,27 @@
 # STATUS — 진행 상태 (2026-08-26)
 
-> 마지막 갱신: 2026-08-26 — **공개 relay live smoke PASS · unsigned private-beta 통합/실기 qualification 진행**
+> 마지막 갱신: 2026-08-26 — **재현 가능한 unsigned private-beta candidate 빌드 완료 · 외부 qualification 대기**
 >
 > 현재 실행 순서와 future backlog의 authoritative 문서:
 > `docs/50-current-product-demo-todo-20260825.md`.
 > 기술적 근거와 상세 beta gate는 `docs/49-production-beta-priorities-20260825.md`에 보존한다.
 
 ## 🏆 핵심 성과
+
+**2026-08-26**: 재현 가능한 unsigned private-beta candidate 빌드 완료
+- 커널 mirror commit `f8e38eb`의 Actions run `32929972152`가 성공했고, 앱 저장소 verifier가
+  `6.18.35.2-microsoft-standard-WSL2+`의 kernel/modules/firmware 해시와 필수
+  `rtl8xxxu/vhci/tun/tap/ccm/cmac` 모듈을 검증했다. 기본 산출물에는 격리된 vendor 8188EU가 없다.
+- 검증된 kernel, rootfs, native EXE, 공식 usbipd MSI, public relay config, notices를 묶은
+  `SwitchTrade-unsigned-private-beta-91f5a3e.zip`을 생성했다. schema-2 manifest 129개 파일,
+  staging 및 ZIP round-trip 무결성, Setup audit가 통과했다. ZIP SHA-256은
+  `88706f57c12efc360d9067b3d2971c2ea68b91b8c61d802a82e0265eceb66667`이다.
+- 최종 자동 검증은 Windows 81 tests, clean WSL 221 tests/3 skips, WPF/Setup zero-warning build,
+  public relay live smoke, web/Python/.NET dependency audit를 통과했다. 웹 production audit는
+  Next/Sharp/PostCSS patch와 pnpm 11 설정 교정 후 알려진 취약점 0건이다.
+- 남은 항목은 owner 시각/notice 승인, relay 운영자 backup/restart/two-NAT, clean Windows lifecycle,
+  두 RTL8192EU·두 PC·두 Switch 실기, 외부 archive/rollback 보존 및 서면 release 승인뿐이다.
+  상세 증거와 exact hashes: `docs/72`.
 
 **2026-08-26**: 공개 relay/client 통합 및 owner unsigned-beta 예외 반영
 - `https://relay.pangyostonefist.org`에서 health, legacy 404, authenticated two-seat room lifecycle,
@@ -20,7 +35,7 @@
 - 커널 SSOT에 기존 `gptsolreview`의 확장형 빌드 입력, 실험용 pinned RTL8188EU patch, LDN 필수
   TUN/TAP·CCM·CMAC 설정을 복원하고, 실기 검증 기준 6.18.35.2와 산출물 SHA-256 manifest를 고정했다.
   별도 커널 repo에는 이 소스를 그대로 미러하고 새 Actions 산출물을 검증한다.
-- WSL Python 직접·전이 의존성을 clean runtime의 정확한 버전으로 잠갔고 전체 219 tests/3 skips가
+- WSL Python 직접·전이 의존성을 clean runtime의 정확한 버전으로 잠갔고 당시 전체 219 tests/3 skips가
   통과했다. native Support 탭은 실제 GitHub Issues로 연결되며, third-party/source-offer inventory를
   패키지 기본 입력으로 추가했다. 공개 relay `/metrics`는 HTTP 403으로 차단됨을 확인했다.
 - hardware quick 진단은 이제 대상 USB topology와 현재 bound driver만의 dmesg를 판정하며,

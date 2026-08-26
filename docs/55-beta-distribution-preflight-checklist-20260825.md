@@ -2,7 +2,7 @@
 
 > Status: Repository-controlled preflight implementation is complete as of 2026-08-26, excluding all
 > client privacy/consent work by explicit owner direction. This is not release approval: final owner/GPT
-> visual/legal approval, final kernel/package inputs, relay operational
+> visual/legal approval, relay operational
 > qualification, clean-machine qualification, and two-PC/two-Switch hardware qualification remain.
 > The relay is live at `https://relay.pangyostonefist.org` and its credentialed opaque smoke passes;
 > backup/restore, staged restart, and two-NAT tests remain. The owner explicitly waived Windows code
@@ -27,7 +27,7 @@
   `.ek3` Pokémon records in fixtures and captured endpoint traffic.
 - [x] Source package includes SHA-256 verification for the rootfs and native EXE.
 - [x] Throwaway-distro install, repair, retained rollback runtime, uninstall, and explicit purge passed.
-- [x] Fully pinned WSL runtime suite passed 219 tests (3 skipped) without Switch hardware on 2026-08-26.
+- [x] Fully pinned WSL runtime suite passed 221 tests (3 skipped) without Switch hardware on 2026-08-26.
 
 ## Current gate summary and execution order
 
@@ -37,15 +37,15 @@
 | 2 | Gate 0 | Visual overhaul owner-deferred; icon wiring, real GitHub Issues support link, and factual third-party notice inventory complete | Approve the notice inventory and record final visual acceptance later |
 | 3 | Gates 4–5 contracts | Implemented and internally tested | Qualify the ordered room path across two production endpoints |
 | 4 | Gate 5 remote services | Public TLS deployment, credentialed smoke, and public metrics denial passed | Pass backup/restore, staged restart/reconnect, and two-NAT qualification |
-| 5 | Gates 1–3 | Native/bootstrap/lifecycle and unsigned-beta path complete internally | Supply final rootfs, kernel/modules, usbipd, and approved notices |
+| 5 | Gates 1–3 | Complete candidate built from final rootfs, kernel/modules, usbipd, notices, and public-relay config | Approve notices and qualify install/runtime on clean hardware |
 | 6 | Gate 6 | Automated subset passed; physical lifecycle not qualified | Pass clean-machine, reboot, coexistence, unsigned-publisher warning, and destructive lifecycle matrix |
 | 7 | Gate 7 | Waiting for production stack and second RTL8192EU | Pass two-PC/two-Switch hardware, trade, decoder, teardown, reuse, and network-fault qualification |
-| 8 | Gate 8 | Windows signing waived by owner | Build the labeled unsigned package, publish privately, archive, review, and approve |
+| 8 | Gate 8 | Windows signing waived; labeled unsigned candidate and sibling checksum built | Retain externally, publish privately, review, and approve |
 
 The owner explicitly authorized an unsigned private beta. It must never be described as signed or
 publisher-verified, and the signed release path remains preserved for a future public release.
 
-## Next implementation tranche — do this before packaging
+## Remaining qualification tranche — candidate packaging is complete
 
 1. [x] Give GPT the final handoff/audit and implement its contract-grounded WPF overhaul without
    reintroducing the removed Privacy tab. Evidence is in `docs/64`.
@@ -153,10 +153,10 @@ installer implementation to proceed, but final public packaging and release appr
 - [x] Implement one ordinary double-click `SwitchTradeSetup.exe` path for an explicitly labeled unsigned
   private beta. The setup warns that Windows cannot verify the publisher. The signed Authenticode/CMS
   path remains available for a future public release.
-- [ ] Embed or checksummably bundle `SwitchTrade.exe`, the minimal rootfs, application runtime,
+- [x] Embed or checksummably bundle `SwitchTrade.exe`, the minimal rootfs, application runtime,
   hardware profiles, license notices, and release manifest.
-  The schema-2 bundle and complete-file checksum path are implemented; final rootfs and approved notice
-  inputs remain outstanding.
+  Candidate `beta-91f5a3e` contains all inputs in a 129-file schema-2 manifest and passed both staged and
+  post-ZIP integrity verification. Owner approval of the tracked notice text remains Gate 0.
 - [x] Bundle and install the local Python control API and endpoint runtime with the isolated WSL distro;
   the daily EXE must not depend on a developer checkout, terminal command, browser, or separately
   installed Python environment.
@@ -200,9 +200,10 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
   qualified 6.18.35.2 ref, retain validated extra driver/firmware inputs, require the LDN runtime modules,
   preserve the opt-in pinned RTL8188EU experiment, and emit a checksum manifest. The execution mirror and
   fresh artifact are handled by the next item.
-- [ ] Consume a versioned kernel/modules/firmware artifact and checksum manifest from the separate kernel
-  build mirror. Detached signing is waived only for the unsigned private beta; the final artifact pair
-  has not yet been produced and hardware-qualified.
+- [x] Consume a versioned kernel/modules/firmware artifact and checksum manifest from the separate kernel
+  build mirror. Actions run `32929972152` produced release `6.18.35.2-microsoft-standard-WSL2+`; the
+  independent verifier confirmed every declared hash, required module, firmware identity, and the
+  intentional absence of the quarantined vendor RTL8188EU module. Hardware qualification remains Gate 7.
 - [x] Warn before installation that WSL custom-kernel selection is global to all WSL 2 distributions.
 - [x] Back up the user's complete existing `.wslconfig` before making any change.
 - [x] Merge only the required `kernel` and `kernelModules` values; preserve unrelated settings.
@@ -229,8 +230,10 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
 - [x] Add version mismatch handling, retained failure stage, and allowlisted recovery-action metadata.
 - [x] Implement retained-session `/api/v1/app/retry`, an allowlisted adapter health-gate repair, and
   bind radio-stage failures to the native repair action without accepting free-form commands.
-- [ ] Publish and qualify the first labeled unsigned private-beta update package. The signed update path
-  remains implemented for a future public release.
+- [ ] Publish and qualify the first labeled unsigned private-beta update package. Candidate
+  `SwitchTrade-unsigned-private-beta-91f5a3e.zip` is built and integrity-qualified internally; external
+  retention, clean-machine/hardware qualification, private publication, and approval remain. The signed
+  update path remains implemented for a future public release.
 - [x] Finish stage-specific native routing for control, version, relay, session, decoder, and radio
   failures with exact recovery guidance and no unsafe free-form repair command.
 - [x] Prevent duplicate control, endpoint, or development-relay processes.
