@@ -48,6 +48,7 @@
 | [docs/69-repository-preflight-completion-and-relay-handoff-20260826.md](docs/69-repository-preflight-completion-and-relay-handoff-20260826.md) | Repository preflight 완료 범위, relay hosting 인계, 남은 외부 gate |
 | [docs/70-private-beta-support-and-recovery-guide-20260826.md](docs/70-private-beta-support-and-recovery-guide-20260826.md) | Private-beta 지원 범위와 안전한 복구 가이드 |
 | [docs/75-visual-overhaul-3-installer-candidate-20260826.md](docs/75-visual-overhaul-3-installer-candidate-20260826.md) | Visual Overhaul 3가 포함된 최신 unsigned 설치 후보와 검증 기록 |
+| [docs/76-wsl-custom-kernel-unicode-path-fix-20260826.md](docs/76-wsl-custom-kernel-unicode-path-fix-20260826.md) | 한글 Windows 사용자 경로의 WSL 커스텀 커널 시작 실패와 설치기 수정 |
 | [relay/DEPLOYMENT.md](relay/DEPLOYMENT.md) | 별도 hosting agent용 production relay 배포·smoke runbook |
 | [docs/30-native-fixed-handshake-20260824.md](docs/30-native-fixed-handshake-20260824.md) | Native two-Switch fixed-channel gold, PC-host root cause, and byte-verified Session fix |
 | [handoff/HANDOFF-20260824-wsl-dual-radio.md](handoff/HANDOFF-20260824-wsl-dual-radio.md) | WSL 두 카드 최종 상태, 확장 구조, 다음 G5/G6 절차 |

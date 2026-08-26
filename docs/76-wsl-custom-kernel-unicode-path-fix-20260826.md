@@ -1,0 +1,40 @@
+# WSL custom-kernel Unicode path fix — 2026-08-26
+
+## Symptom
+
+The unsigned Visual Overhaul 3 setup candidate stopped with:
+
+`CUSTOM_KERNEL_START_FAILED: restored the previous WSL configuration; expected 6.18.35.2-microsoft-standard-WSL2+`
+
+Setup had already imported the isolated `SwitchTrade` distro, but it correctly stopped before
+provisioning `/opt/switchtrade`, restored the previous `.wslconfig`, and left unrelated WSL data intact.
+
+## Root cause and proof
+
+`Install-SwitchTradeKernel` copied the verified kernel below `%LOCALAPPDATA%\SwitchTrade\kernel`. On the
+affected PC this expanded through a Korean Windows account name. WSL 2.7.12 could not start the custom
+kernel through that path.
+
+The exact failed kernel file was copied without modification to an ASCII-only path under
+`%ProgramData%`. After a bounded WSL shutdown, the same file booted successfully and returned exactly
+`6.18.35.2-microsoft-standard-WSL2+`. The pre-probe `.wslconfig` was restored byte-for-byte afterward.
+This separates the path failure from the kernel binary, kernel ABI, distro, and custom-kernel build.
+
+## Installer correction
+
+- Per-user state and rollback metadata remain under `%LOCALAPPDATA%\SwitchTrade`.
+- WSL-facing kernel and module artifacts now install under `%ProgramData%\SwitchTrade\kernel`.
+- `KernelStorageRoot` is explicit at the lifecycle boundary and recorded in `kernel-state.json`.
+- Existing application/kernel rollback behavior is unchanged.
+- The lifecycle simulation asserts that the installed kernel comes from the dedicated storage root.
+
+## Verification
+
+- ASCII-path real WSL kernel boot probe: PASS
+- `.wslconfig` exact restoration after probe: PASS
+- Installer lifecycle tests: 7 passed
+- Product/installer regression suite: 86 passed
+
+The earlier `77dd538` package retains the defective user-profile kernel path and must not be used for
+installation on a Windows account whose physical profile path contains non-ASCII characters. A
+replacement package must be built from the fix commit.

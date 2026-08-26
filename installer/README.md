@@ -3,6 +3,9 @@
 The bootstrap installs and provisions only the named `SwitchTrade` distribution. When a verified
 custom-kernel bundle is supplied and the user accepts the global warning, it merges only SwitchTrade's
 kernel settings into the user's global `.wslconfig` and retains the complete prior file for rollback.
+WSL-facing kernel and module files are stored under `%ProgramData%\SwitchTrade\kernel`, whose physical
+path is independent of the Windows account name. Per-user state, logs, backups, distro data, and the
+daily application remain in their existing `%LOCALAPPDATA%` locations.
 
 ## Build
 

@@ -77,6 +77,7 @@ function Install-SwitchTradeKernel {
         [string]$KernelModules = '',
         [Parameter(Mandatory)][string]$Manifest,
         [Parameter(Mandatory)][string]$StateRoot,
+        [Parameter(Mandatory)][string]$KernelStorageRoot,
         [switch]$AcceptGlobalKernelChange
     )
     if (-not $AcceptGlobalKernelChange) {
@@ -96,7 +97,7 @@ function Install-SwitchTradeKernel {
         }
     }
 
-    $kernelRoot = Join-Path $StateRoot 'kernel'
+    $kernelRoot = [IO.Path]::GetFullPath($KernelStorageRoot)
     $backupRoot = Join-Path $StateRoot 'backups'
     New-Item -ItemType Directory -Force -Path $kernelRoot, $backupRoot | Out-Null
     $safeRelease = ([string]$metadata.kernel_release) -replace '[^A-Za-z0-9._-]', '_'

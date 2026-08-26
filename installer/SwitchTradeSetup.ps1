@@ -32,6 +32,7 @@ $KernelModules = @($KernelModulesVhdx, $KernelModulesVhd, $KernelModulesArchive)
     Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
 $KernelManifest = Join-Path $PackageRoot 'payload\kernel\manifest.json'
 $StateRoot = Join-Path $env:LOCALAPPDATA 'SwitchTrade'
+$KernelStorageRoot = Join-Path $env:ProgramData 'SwitchTrade\kernel'
 $UsbipdMsi = Join-Path $PackageRoot 'payload\prerequisites\usbipd-win.msi'
 $UsbipdManifest = Join-Path $PackageRoot 'payload\prerequisites\usbipd-win.json'
 $PreviousInstall = "$InstallRoot.previous"
@@ -302,6 +303,7 @@ if ((Test-Path -LiteralPath $Kernel -PathType Leaf) -and
     (Test-Path -LiteralPath $KernelManifest -PathType Leaf)) {
     $kernelArguments = @{
         Kernel = $Kernel; Manifest = $KernelManifest; StateRoot = $StateRoot
+        KernelStorageRoot = $KernelStorageRoot
         AcceptGlobalKernelChange = $AcceptGlobalKernelChange
     }
     if ($KernelModules -and (Test-Path -LiteralPath $KernelModules -PathType Leaf)) {

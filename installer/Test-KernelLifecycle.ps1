@@ -16,6 +16,7 @@ try {
     function Invoke-BoundedWslShutdown { }
 
     $stateRoot = Join-Path $TestRoot 'state'
+    $kernelStorageRoot = Join-Path $TestRoot 'kernel-storage'
     $releaseOne = Join-Path $TestRoot 'release-one'
     $releaseTwo = Join-Path $TestRoot 'release-two'
     New-Item -ItemType Directory -Force -Path $releaseOne, $releaseTwo | Out-Null
@@ -34,7 +35,7 @@ try {
         ConvertTo-Json | Set-Content -LiteralPath $manifestTwo -Encoding UTF8
 
     Install-SwitchTradeKernel -Kernel $kernelOne -KernelModules $modulesOne `
-        -Manifest $manifestOne -StateRoot $stateRoot `
+        -Manifest $manifestOne -StateRoot $stateRoot -KernelStorageRoot $kernelStorageRoot `
         -AcceptGlobalKernelChange | Out-Null
     $merged = Get-Content -Raw -LiteralPath (Join-Path $env:USERPROFILE '.wslconfig')
     if ($merged -notmatch 'instanceIdleTimeout=-1' -or $merged -notmatch 'vmIdleTimeout=-1') {
@@ -43,7 +44,13 @@ try {
     if ($merged -match '(?m)^kernelModules=') {
         throw 'a modules tar archive was incorrectly configured as a WSL modules VHD'
     }
+    $installedState = Get-Content -Raw -LiteralPath (Join-Path $stateRoot 'kernel-state.json') | ConvertFrom-Json
+    if (-not ([string]$installedState.kernel_path).StartsWith(
+            [IO.Path]::GetFullPath($kernelStorageRoot), [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'kernel was not copied to the dedicated WSL-safe storage root'
+    }
     Install-SwitchTradeKernel -Kernel $kernelTwo -Manifest $manifestTwo -StateRoot $stateRoot `
+        -KernelStorageRoot $kernelStorageRoot `
         -AcceptGlobalKernelChange | Out-Null
     $beforeRollback = Get-Content -Raw -LiteralPath (Join-Path $stateRoot 'kernel-state.json') | ConvertFrom-Json
     if ($beforeRollback.kernel_path -eq $beforeRollback.rollback_kernel_path -or

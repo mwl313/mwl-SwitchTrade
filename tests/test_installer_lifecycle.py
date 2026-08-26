@@ -29,6 +29,8 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertIn("global WSL 2 kernel selection", dialog)
         self.assertIn("$UsbId.ToLowerInvariant()", setup)
         self.assertIn("wslHealthArguments", setup)
+        self.assertIn("$KernelStorageRoot = Join-Path $env:ProgramData 'SwitchTrade\\kernel'", setup)
+        self.assertIn("KernelStorageRoot = $KernelStorageRoot", setup)
 
     def test_package_accepts_versioned_external_release_inputs(self):
         builder = (ROOT / "installer" / "Build-Package.ps1").read_text(encoding="utf-8")
