@@ -72,9 +72,9 @@ internal static class SetupDialog
         var actionLabel = Heading("Setup action");
         var action = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 280 };
         action.Items.Add(installed ? "Update" : "Install");
-        if (installed) action.Items.Add("Repair");
+        action.Items.Add("Repair");
         if (rollbackPresent) action.Items.Add("Rollback");
-        if (installed) action.Items.Add("Uninstall");
+        action.Items.Add("Uninstall");
         action.SelectedIndex = 0;
 
         var prerequisites = new CheckBox
