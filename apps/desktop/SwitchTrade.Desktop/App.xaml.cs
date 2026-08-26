@@ -1,5 +1,9 @@
 using System.ComponentModel;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Media3D;
 using SwitchTrade.Desktop.Models;
 using SwitchTrade.Desktop.Services;
 using SwitchTrade.Desktop.State;
@@ -18,6 +22,11 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        EventManager.RegisterClassHandler(
+            typeof(ComboBox),
+            UIElement.PreviewMouseLeftButtonDownEvent,
+            new MouseButtonEventHandler(ComboBoxPreviewMouseLeftButtonDown),
+            true);
         SystemParameters.StaticPropertyChanged += SystemSettingChanged;
         UpdateHighContrastResources();
         if (e.Args.Contains("--self-test"))
@@ -80,6 +89,34 @@ public partial class App : Application
         }
         new MainWindow().Show();
     }
+
+    private static void ComboBoxPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not ComboBox comboBox || !comboBox.IsEnabled || comboBox.IsEditable ||
+            e.ChangedButton != MouseButton.Left || e.OriginalSource is not DependencyObject source ||
+            !IsInsideComboBoxSurface(source, comboBox))
+        {
+            return;
+        }
+
+        comboBox.Focus();
+        comboBox.IsDropDownOpen = !comboBox.IsDropDownOpen;
+        e.Handled = true;
+    }
+
+    private static bool IsInsideComboBoxSurface(DependencyObject source, ComboBox comboBox)
+    {
+        for (DependencyObject? current = source; current is not null; current = GetParent(current))
+        {
+            if (ReferenceEquals(current, comboBox)) return true;
+        }
+        return false;
+    }
+
+    private static DependencyObject? GetParent(DependencyObject element) =>
+        element is Visual or Visual3D
+            ? VisualTreeHelper.GetParent(element)
+            : LogicalTreeHelper.GetParent(element);
 
     private sealed class SelfTestGateway : IControlGateway
     {

@@ -75,7 +75,7 @@
         <Button Grid.Column="4" Command="{Binding RefreshCommand}" Style="{StaticResource IconButton}"
                 ToolTip="Refresh public rooms" automation:AutomationProperties.Name="Refresh public rooms">
           <Path Data="{StaticResource Icon.Refresh}" Width="18" Height="18" Stretch="Uniform"
-                Stroke="{DynamicResource SecondaryTextBrush}" StrokeThickness="1.8" />
+                Fill="{DynamicResource SecondaryTextBrush}" />
         </Button>
       </Grid>
       <Grid>
@@ -144,12 +144,13 @@
 
       <Border x:Name="WideDetails" Grid.Column="2" Style="{StaticResource SurfaceCard}">
         <Grid>
-          <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+          <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                        Visibility="{Binding HasSelection, Converter={StaticResource BooleanToVisibility}}">
             <ContentControl Content="{Binding SelectedRoom}" ContentTemplate="{StaticResource RoomDetailsTemplate}"
                             Margin="0,0,8,0" />
           </ScrollViewer>
-          <TextBlock Text="Select a room to see its details."
-                     HorizontalAlignment="Center" VerticalAlignment="Center">
+          <TextBlock Text="Select a Room to See Details"
+                     HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center">
             <TextBlock.Style>
               <Style TargetType="TextBlock" BasedOn="{StaticResource SecondaryText}">
                 <Setter Property="Visibility" Value="Visible" />

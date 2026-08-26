@@ -91,7 +91,8 @@
                 automation:AutomationProperties.Name="Open settings">
           <StackPanel Orientation="Horizontal">
             <Path Data="{StaticResource Icon.Settings}" Width="17" Height="17" Stretch="Uniform"
-                  Stroke="{DynamicResource SecondaryTextBrush}" StrokeThickness="1.6" Margin="0,0,7,0" />
+                  Stroke="{DynamicResource SecondaryTextBrush}" StrokeThickness="1.6" Margin="0,0,7,0"
+                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
             <TextBlock Text="Settings" />
           </StackPanel>
         </Button>

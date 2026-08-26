@@ -61,7 +61,7 @@ flowchart TD
 | Home | One full-width Create action plus equal Browse Public Rooms and Join Private Room actions | Public browsing is enabled only when relay health advertises `public-directory.v1` |
 | Create a Trade Room | Always-visible required room/trainer/game/language fields, Private/Public radio selection, optional offering/wanted/note fields, 7/5 wide layout, sticky create action | `None` is not a valid required game/language; both visibility choices call the real authoritative service |
 | Join a Private Room | One accessible logical code control, paste support, uppercase normalization, removal of spaces/hyphens, exactly six ASCII alphanumeric characters | One atomic join call; no token or authority credential enters WPF |
-| Browse Public Rooms | Real server directory, search, availability/game/language filters, sorting, master/detail layout, required local trainer name, refresh, empty/busy/error/full/stale states | Listings expose only sanitized metadata and opaque listing IDs; room code, credentials, IP, relay internals, and precise location are absent |
+| Browse Public Rooms | Real server directory, search, availability/game/language filters, sorting, master/detail layout, required local trainer name, refresh, empty/busy/error/full/stale states; the unselected details pane hides room fields and centers one selection prompt | Listings expose only sanitized metadata and opaque listing IDs; room code, credentials, IP, relay internals, and precise location are absent |
 | Trade Room | Persistent room name/code/membership, partner presence, shared readiness, server-assigned creator/finder instructions, start/end, owner-close/member-leave, reconnect/recovery status, You/Partner party panels | Roles come from the authoritative attempt; UI never infers them from host/guest ownership |
 | Party panels | You left and Partner right at wide sizes; Partner above You in compact mode; six explicit slots, keyboard/click selection, hover details, IV/EV/stats/moves/trainer provenance | Only complete checksum-valid observer snapshots are factual; unavailable data stays unavailable |
 | Trade success | Announces a verified trade from an idempotent commit event | An offer, animation, save attempt, disconnect, error, or rollback never becomes “Trade verified” |
@@ -82,6 +82,8 @@ flowchart TD
 - Combo boxes have a native dark template for both the closed value and popup items. Normal, hover,
   focus, selected, and disabled states keep explicit foreground/background contrast. Long adapter
   names put the USB bus first and ellipsize instead of leaking record text outside the control.
+  Pointer clicks use one application-wide native input handler, while keyboard and automation retain
+  normal WPF expansion and selection behavior.
 - Windows High Contrast swaps to `Themes/HighContrast.xaml`. Keyboard focus is visible, required
   information is not hover-only, and scene transitions are disabled when Windows client-area
   animation is disabled or High Contrast is active.
