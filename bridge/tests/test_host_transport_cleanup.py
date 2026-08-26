@@ -1,5 +1,6 @@
 """HostTransport must not race its radio thread or leak udev-renamed vifs."""
 
+import os
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -67,6 +68,7 @@ class LiveTransportCleanupTest(unittest.TestCase):
         cleanup.assert_not_called()
 
 
+@unittest.skipIf(os.name == "nt", "ldn uses Linux fcntl/nl80211; covered by Ubuntu CI")
 class LdnDestroyCompatTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

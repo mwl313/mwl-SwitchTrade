@@ -31,6 +31,8 @@ jobs:
         run: python -m pytest
       - name: Build desktop
         run: dotnet build apps/desktop/SwitchTrade.Desktop/SwitchTrade.Desktop.csproj --configuration Release
+      - name: Run desktop self-test
+        run: dotnet run --no-build --configuration Release --project apps/desktop/SwitchTrade.Desktop/SwitchTrade.Desktop.csproj -- --self-test
       - name: Build setup
         run: dotnet build installer/bootstrap/SwitchTrade.Setup.csproj --configuration Release
       - name: Parse PowerShell with Windows PowerShell 5.1
