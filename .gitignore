@@ -6,3 +6,8 @@ __pycache__/
 /artifacts/
 **/bin/
 **/obj/
+relay/data/
+tools/oraclegrab/relay_ssh
+tools/oraclegrab/relay_ssh.pub
+tools/oraclegrab/state.json
+tools/oraclegrab/*.log
