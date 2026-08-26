@@ -484,11 +484,28 @@ class Gate4RuntimeContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             with TestClient(create_app(runs_root=temporary)) as client:
                 runtime = client.app.state.runtime
+                runtime.endpoint_state.write_text(json.dumps({
+                    "state": "trading_room", "pid": 4321,
+                    "process_kind": "rfu-endpoint", "session_id": "ABC123",
+                }), encoding="utf-8")
                 runtime.save_authority({
                     "room": {"contract_version": "room-control.v1",
                              "room_id": "room-1", "room_code": "ABC123"},
                     "member_token": "expired-member", "reconnect_token": "expired-reconnect",
                 })
+                transitions = []
+                clear_authority = runtime.clear_authority
+
+                def stop_endpoint():
+                    transitions.append(("stop", runtime.endpoint_session))
+                    runtime.endpoint_state.unlink(missing_ok=True)
+                    runtime.endpoint = None
+                    runtime.endpoint_session = None
+
+                def clear_terminal_authority():
+                    transitions.append(("clear", runtime.endpoint_session))
+                    clear_authority()
+
                 with patch.object(runtime.relay, "room", side_effect=RelayError(
                         "member credential is invalid", status=401,
                         code="member_credential_invalid", stage="authentication",
@@ -497,7 +514,10 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                             "reconnect deadline expired", status=410,
                             code="reconnect_deadline_expired", stage="authentication",
                             recoverable=False, primary_action="rejoin_room",
-                            correlation_id="deadline-correlation")):
+                            correlation_id="deadline-correlation")), patch.object(
+                        runtime, "_verified_endpoint_pid", return_value=4321), patch.object(
+                        runtime, "stop_endpoint", side_effect=stop_endpoint), patch.object(
+                        runtime, "clear_authority", side_effect=clear_terminal_authority):
                     response = client.get("/api/v1/trade-room")
                 self.assertEqual(response.status_code, 410, response.text)
                 self.assertEqual(response.json(), {
@@ -508,7 +528,112 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                     "primary_action": "rejoin_room",
                     "correlation_id": "deadline-correlation",
                 })
+                self.assertEqual(transitions, [("stop", "ABC123"), ("clear", None)])
                 self.assertFalse(runtime.authority_state.exists())
+                self.assertFalse(runtime.endpoint_state.exists())
+
+                process = MagicMock(pid=8765)
+                process.poll.return_value = None
+
+                def acknowledge_relaunch(command, **_kwargs):
+                    nonce = command[command.index("--launch-nonce") + 1]
+                    runtime.endpoint_launch_ack.write_text(json.dumps({
+                        "schema": 1, "launch_nonce": nonce, "launcher_pid": 8765,
+                    }), encoding="utf-8")
+                    return process
+
+                with patch.object(runtime.relay, "status", return_value={"status": "waiting"}), patch(
+                        "switchtrade.control.subprocess.Popen", side_effect=acknowledge_relaunch):
+                    relaunched = client.post("/api/session/start", json={
+                        "role": "host", "passcode": "XYZ789", "usb_id": "0bda:818b",
+                    })
+                self.assertEqual(relaunched.status_code, 200, relaunched.text)
+                self.assertEqual(runtime.endpoint_session, "XYZ789")
+
+    def test_readiness_does_not_consume_terminal_reconnect_before_room_probe(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                runtime = client.app.state.runtime
+                runtime.endpoint_state.write_text(json.dumps({
+                    "state": "completed", "pid": 4321,
+                    "process_kind": "rfu-endpoint", "session_id": "ABC123",
+                }), encoding="utf-8")
+                runtime.save_authority({
+                    "room": {"contract_version": "room-control.v1",
+                             "room_id": "room-1", "room_code": "ABC123"},
+                    "member_token": "expired-member", "reconnect_token": "expired-reconnect",
+                })
+                transitions = []
+                clear_authority = runtime.clear_authority
+
+                def stop_endpoint():
+                    transitions.append("stop")
+                    runtime.endpoint_state.unlink(missing_ok=True)
+                    runtime.endpoint = None
+                    runtime.endpoint_session = None
+
+                def clear_terminal_authority():
+                    transitions.append("clear")
+                    clear_authority()
+
+                terminal = RelayError(
+                    "reconnect deadline expired", status=410,
+                    code="reconnect_deadline_expired", stage="authentication",
+                    recoverable=False, primary_action="rejoin_room",
+                    correlation_id="deadline-correlation")
+                with patch.object(runtime.relay, "room", side_effect=RelayError(
+                        "member credential is invalid", status=401,
+                        code="member_credential_invalid", stage="authentication",
+                        primary_action="reconnect")), patch.object(
+                        runtime.relay, "reconnect_trade_room", side_effect=terminal), patch.object(
+                        runtime, "_verified_endpoint_pid", return_value=4321), patch.object(
+                        runtime, "stop_endpoint", side_effect=stop_endpoint) as stop, patch.object(
+                        runtime, "clear_authority", side_effect=clear_terminal_authority):
+                    readiness = client.get("/api/v1/app/readiness")
+                    self.assertEqual(readiness.status_code, 200, readiness.text)
+                    self.assertTrue(runtime.authority_state.exists())
+                    self.assertEqual(runtime.endpoint_session, "ABC123")
+                    stop.assert_not_called()
+
+                    room = client.get("/api/v1/trade-room")
+                self.assertEqual(room.status_code, 410, room.text)
+                self.assertEqual(room.json()["code"], "reconnect_deadline_expired")
+                self.assertEqual(room.json()["stage"], "authentication")
+                self.assertEqual(room.json()["primary_action"], "rejoin_room")
+                self.assertEqual(room.json()["correlation_id"], "deadline-correlation")
+                self.assertEqual(transitions, ["stop", "clear"])
+                self.assertFalse(runtime.authority_state.exists())
+                self.assertFalse(runtime.endpoint_state.exists())
+
+    def test_terminal_credentials_do_not_stop_reconciled_endpoint_for_another_session(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                runtime = client.app.state.runtime
+                runtime.endpoint_state.write_text(json.dumps({
+                    "state": "trading_room", "pid": 4321,
+                    "process_kind": "rfu-endpoint", "session_id": "XYZ789",
+                }), encoding="utf-8")
+                runtime.save_authority({
+                    "room": {"contract_version": "room-control.v1",
+                             "room_id": "room-1", "room_code": "ABC123"},
+                    "member_token": "expired-member", "reconnect_token": "expired-reconnect",
+                })
+                with patch.object(runtime.relay, "room", side_effect=RelayError(
+                        "member credential is invalid", status=401)), patch.object(
+                        runtime.relay, "reconnect_trade_room", side_effect=RelayError(
+                            "reconnect deadline expired", status=410,
+                            code="reconnect_deadline_expired", stage="authentication",
+                            recoverable=False, primary_action="rejoin_room")), patch.object(
+                        runtime, "_verified_endpoint_pid", return_value=4321), patch.object(
+                        runtime, "stop_endpoint") as stop:
+                    response = client.get("/api/v1/trade-room")
+                    self.assertEqual(response.status_code, 410, response.text)
+                    stop.assert_not_called()
+                    self.assertEqual(runtime.endpoint_session, "XYZ789")
+                    self.assertTrue(runtime.endpoint_state.exists())
+                    self.assertFalse(runtime.authority_state.exists())
+                    runtime.endpoint_state.unlink()
+                    runtime.endpoint_session = None
 
     def test_explicit_local_authority_abandon_stops_endpoint_and_clears_credentials(self):
         with tempfile.TemporaryDirectory() as temporary:

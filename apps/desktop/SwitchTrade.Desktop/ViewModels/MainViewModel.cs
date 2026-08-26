@@ -115,6 +115,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         private set => Set(ref _recoveryTechnicalDetails, value);
     }
     public bool CanAbandonLocalAuthority => _authorityRecoveryCode == "reconnect_credential_invalid";
+    public bool CanReturnHomeFromAuthorityRecovery => _authorityRecoveryCode == "reconnect_deadline_expired";
 
     public bool CanGoBack => _history.Count > 0 && CurrentScreen is not HomeScreenViewModel;
     public AsyncCommand BackCommand { get; }
@@ -310,8 +311,16 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public void ShowHome()
     {
+        _authorityRecoveryCode = null;
         _history.Clear();
         CurrentScreen = new HomeScreenViewModel(this);
+    }
+
+    internal void ReturnHomeFromAuthorityRecovery()
+    {
+        if (!CanReturnHomeFromAuthorityRecovery) return;
+        ShowHome();
+        Announce("The saved reconnect window expired. You can rejoin with the room code.");
     }
 
     internal async Task AbandonLocalAuthorityAsync()
@@ -331,7 +340,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             ShowAuthorityRecovery(error);
             return;
         }
-        _authorityRecoveryCode = null;
         ShowHome();
         Announce("Saved Trade Room access was cleared. You can rejoin with the room code.");
     }

@@ -195,7 +195,7 @@ class Runtime:
     def __init__(self, profile_path: Path, runs_root: Path | None, relay_url: str):
         self.profiles = load_profiles(profile_path)
         self.groups: dict[str, Group] = {}
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.log = RunLogger("control-api", runs_root, {"profile_path": str(profile_path)})
         self.relay_url = relay_url
         self.relay = RelayClient(relay_url)
@@ -313,21 +313,38 @@ class Runtime:
             "member_token": response.get("member_token"),
             "reconnect_token": response.get("reconnect_token"),
         }
-        temporary = self.authority_state.with_suffix(".tmp")
-        temporary.write_text(json.dumps(value), encoding="utf-8")
-        os.chmod(temporary, 0o600)
-        temporary.replace(self.authority_state)
-        token = response.get("member_token")
-        if token:
-            self.member_token_file.write_text(str(token), encoding="utf-8")
-            os.chmod(self.member_token_file, 0o600)
+        with self.lock:
+            temporary = self.authority_state.with_suffix(".tmp")
+            temporary.write_text(json.dumps(value), encoding="utf-8")
+            os.chmod(temporary, 0o600)
+            temporary.replace(self.authority_state)
+            token = response.get("member_token")
+            if token:
+                self.member_token_file.write_text(str(token), encoding="utf-8")
+                os.chmod(self.member_token_file, 0o600)
         return control_room(room)
 
     def clear_authority(self) -> None:
-        self.authority_state.unlink(missing_ok=True)
-        self.member_token_file.unlink(missing_ok=True)
+        with self.lock:
+            self.authority_state.unlink(missing_ok=True)
+            self.member_token_file.unlink(missing_ok=True)
 
-    def authoritative_room(self) -> dict:
+    def transition_terminal_authority(self, credentials: dict) -> None:
+        with self.lock:
+            current = self.read_authority()
+            if any(current.get(key) != credentials.get(key) for key in (
+                    "room_id", "member_token", "reconnect_token")):
+                raise RelayError(
+                    "saved room authority changed while reconnecting",
+                    status=409, code="state_conflict", stage="authentication",
+                    recoverable=True, primary_action="retry",
+                )
+            self.endpoint_running()
+            if self.endpoint_session == credentials.get("room_code"):
+                self.stop_endpoint()
+            self.clear_authority()
+
+    def authoritative_room(self, *, terminal_cleanup: bool = True) -> dict:
         credentials = self.read_authority()
         if not credentials.get("room_id") or not credentials.get("member_token"):
             raise RelayError("no active trade room")
@@ -343,7 +360,8 @@ class Runtime:
             except RelayError as reconnect_error:
                 if reconnect_error.status not in {404, 410}:
                     raise
-                self.clear_authority()
+                if terminal_cleanup:
+                    self.transition_terminal_authority(credentials)
                 if reconnect_error.code == "reconnect_deadline_expired":
                     raise
                 raise RelayError(
@@ -366,7 +384,7 @@ class Runtime:
         if phase is None or phase == self.last_published_phase:
             return
         try:
-            room = self.authoritative_room()
+            room = self.authoritative_room(terminal_cleanup=False)
             credentials = self.read_authority()
             attempt = room.get("attempt")
             if not attempt or attempt.get("phase") == phase:

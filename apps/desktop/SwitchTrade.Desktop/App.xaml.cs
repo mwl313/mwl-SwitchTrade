@@ -224,6 +224,26 @@ public partial class App : Application
             var startupResumeWorks = resumeGateway.RoomProbeCount == 1 &&
                                      resumeShell.CurrentScreen is TradeRoomScreenViewModel &&
                                      resumeShell.RoomCoordinator.Context?.Room.RoomCode == "ABC123";
+            var deadlineGateway = new SelfTestGateway
+            {
+                Status = ReadyStatus(),
+                RoomFailure = new UserFacingException(
+                    "The saved Trade Room reconnect window expired.",
+                    "reconnect_deadline_expired", "authentication", false, "rejoin_room",
+                    "deadline-correlation"),
+            };
+            using var deadlineShell = new MainViewModel(
+                deadlineGateway, new BackendLauncher(),
+                new SelfTestDialogService(DialogChoice.Cancel), new WindowsClipboardService());
+            deadlineShell.InitializeAsync().GetAwaiter().GetResult();
+            var deadlineRecoveryVisible = deadlineShell.CurrentScreen is RecoveryScreenViewModel &&
+                                          deadlineShell.CanReturnHomeFromAuthorityRecovery &&
+                                          !deadlineShell.CanAbandonLocalAuthority &&
+                                          deadlineShell.RecoveryTechnicalDetails.Contains(
+                                              "deadline-correlation", StringComparison.Ordinal);
+            deadlineShell.ReturnHomeFromAuthorityRecovery();
+            var deadlineReturnHomeWorks = deadlineShell.CurrentScreen is HomeScreenViewModel &&
+                                          !deadlineShell.CanReturnHomeFromAuthorityRecovery;
             var unmatchedGateway = new SelfTestGateway
             {
                 Status = ReadyStatus(),
@@ -246,13 +266,32 @@ public partial class App : Application
             var confirmedAbandonWorks = unmatchedGateway.AbandonCount == 1 &&
                                         confirmAbandon.LastRequest?.IsDestructive == true &&
                                         unmatchedShell.CurrentScreen is HomeScreenViewModel;
+            var canceledGateway = new SelfTestGateway
+            {
+                Status = ReadyStatus(),
+                RoomFailure = new UserFacingException(
+                    "SwitchTrade can no longer verify the saved Trade Room access.",
+                    "reconnect_credential_invalid", "authentication", false, "rejoin_room"),
+            };
+            var cancelAbandon = new SelfTestDialogService(DialogChoice.Cancel);
+            using var canceledShell = new MainViewModel(
+                canceledGateway, new BackendLauncher(), cancelAbandon,
+                new WindowsClipboardService());
+            canceledShell.InitializeAsync().GetAwaiter().GetResult();
+            canceledShell.AbandonLocalAuthorityAsync().GetAwaiter().GetResult();
+            var canceledAbandonPreservesAuthority = canceledGateway.AbandonCount == 0 &&
+                                                    cancelAbandon.LastRequest?.IsDestructive == true &&
+                                                    canceledShell.CurrentScreen is RecoveryScreenViewModel &&
+                                                    canceledShell.CanAbandonLocalAuthority;
             Shutdown(apiIsLocal && codeNormalizes && requiredRoomFieldsWork &&
                       highContrastResourcesLoad && capabilityGateWorks && exactReleaseGateWorks &&
                       coordinatorWorks && memberReleaseWorks && authoritativeProjectionWorks &&
                       attemptFailureContractWorks && attemptFailureMapsToRecovery &&
                       remoteCloseClearsRoom && startupResumeWorks && deadlineEnvelopeSurvives &&
+                      deadlineRecoveryVisible && deadlineReturnHomeWorks &&
                       unmatchedEnvelopeSurvives &&
-                      unmatchedRecoveryVisible && confirmedAbandonWorks && hardwareContractWorks &&
+                      unmatchedRecoveryVisible && confirmedAbandonWorks &&
+                      canceledAbandonPreservesAuthority && hardwareContractWorks &&
                       malformedInventoryContained && timedOutInventoryContained &&
                       lastGoodInventorySurvives ? 0 : 1);
             return;

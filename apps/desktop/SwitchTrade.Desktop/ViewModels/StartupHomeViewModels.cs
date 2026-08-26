@@ -11,6 +11,7 @@ public sealed class RecoveryScreenViewModel : ScreenViewModel
     {
         RetryCommand = new AsyncCommand(shell.InitializeAsync);
         AbandonLocalAuthorityCommand = new AsyncCommand(shell.AbandonLocalAuthorityAsync);
+        ReturnHomeCommand = new RelayCommand(shell.ReturnHomeFromAuthorityRecovery);
         SettingsCommand = new RelayCommand(shell.OpenSettings);
     }
 
@@ -20,8 +21,10 @@ public sealed class RecoveryScreenViewModel : ScreenViewModel
     public string RecoveryTechnicalDetails => Shell.RecoveryTechnicalDetails;
     public bool ShowConnectionSettings => Shell.RecoveryStage == "radio";
     public bool ShowAbandonLocalAuthority => Shell.CanAbandonLocalAuthority;
+    public bool ShowReturnHome => Shell.CanReturnHomeFromAuthorityRecovery;
     public AsyncCommand RetryCommand { get; }
     public AsyncCommand AbandonLocalAuthorityCommand { get; }
+    public RelayCommand ReturnHomeCommand { get; }
     public RelayCommand SettingsCommand { get; }
 
     public void NotifyRecoveryChanged()
@@ -31,6 +34,7 @@ public sealed class RecoveryScreenViewModel : ScreenViewModel
         OnPropertyChanged(nameof(RecoveryTechnicalDetails));
         OnPropertyChanged(nameof(ShowConnectionSettings));
         OnPropertyChanged(nameof(ShowAbandonLocalAuthority));
+        OnPropertyChanged(nameof(ShowReturnHome));
     }
 }
 

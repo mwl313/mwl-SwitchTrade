@@ -24,6 +24,10 @@
                 Style="{StaticResource DangerButton}"
                 Visibility="{Binding ShowAbandonLocalAuthority, Converter={StaticResource BooleanToVisibility}}"
                 Margin="0,0,8,8" />
+        <Button Content="Return home" Command="{Binding ReturnHomeCommand}"
+                Style="{StaticResource PrimaryButton}"
+                Visibility="{Binding ShowReturnHome, Converter={StaticResource BooleanToVisibility}}"
+                Margin="0,0,8,8" />
       </WrapPanel>
       <Expander Header="Technical details" Margin="0,20,0,0">
         <TextBlock Text="{Binding RecoveryTechnicalDetails}"
