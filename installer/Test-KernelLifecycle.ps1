@@ -16,8 +16,11 @@ try {
     function Invoke-BoundedWslShutdown { }
 
     $stateRoot = Join-Path $TestRoot 'state'
-    $kernelOne = Join-Path $TestRoot 'kernel-one'
-    $kernelTwo = Join-Path $TestRoot 'kernel-two'
+    $releaseOne = Join-Path $TestRoot 'release-one'
+    $releaseTwo = Join-Path $TestRoot 'release-two'
+    New-Item -ItemType Directory -Force -Path $releaseOne, $releaseTwo | Out-Null
+    $kernelOne = Join-Path $releaseOne 'kernel'
+    $kernelTwo = Join-Path $releaseTwo 'kernel'
     $modulesOne = Join-Path $TestRoot 'modules-one.tar.gz'
     [IO.File]::WriteAllText($kernelOne, 'kernel one')
     [IO.File]::WriteAllText($kernelTwo, 'kernel two')
@@ -42,6 +45,11 @@ try {
     }
     Install-SwitchTradeKernel -Kernel $kernelTwo -Manifest $manifestTwo -StateRoot $stateRoot `
         -AcceptGlobalKernelChange | Out-Null
+    $beforeRollback = Get-Content -Raw -LiteralPath (Join-Path $stateRoot 'kernel-state.json') | ConvertFrom-Json
+    if ($beforeRollback.kernel_path -eq $beforeRollback.rollback_kernel_path -or
+        -not (Test-Path -LiteralPath $beforeRollback.rollback_kernel_path -PathType Leaf)) {
+        throw 'versioned kernel update overwrote the retained rollback artifact'
+    }
     if (-not (Switch-SwitchTradeKernelRollback -StateRoot $stateRoot)) {
         throw 'release kernel rollback was not available'
     }

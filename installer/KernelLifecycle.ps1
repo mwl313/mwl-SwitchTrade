@@ -99,12 +99,18 @@ function Install-SwitchTradeKernel {
     $kernelRoot = Join-Path $StateRoot 'kernel'
     $backupRoot = Join-Path $StateRoot 'backups'
     New-Item -ItemType Directory -Force -Path $kernelRoot, $backupRoot | Out-Null
-    $installedKernel = Join-Path $kernelRoot ([IO.Path]::GetFileName($Kernel))
+    $safeRelease = ([string]$metadata.kernel_release) -replace '[^A-Za-z0-9._-]', '_'
+    $kernelIdentity = (Get-FileSha256 $Kernel).Substring(0, 12)
+    $installedKernel = Join-Path $kernelRoot "kernel-$safeRelease-$kernelIdentity"
     Copy-Item -LiteralPath $Kernel -Destination $installedKernel -Force
     $installedModules = ''
     $modulesFormat = 'none'
     if ($KernelModules) {
-        $installedModules = Join-Path $kernelRoot ([IO.Path]::GetFileName($KernelModules))
+        $moduleIdentity = (Get-FileSha256 $KernelModules).Substring(0, 12)
+        $moduleExtension = if ([IO.Path]::GetExtension($KernelModules).ToLowerInvariant() -in @('.vhd', '.vhdx')) {
+            [IO.Path]::GetExtension($KernelModules).ToLowerInvariant()
+        } else { '.tar.gz' }
+        $installedModules = Join-Path $kernelRoot "modules-$safeRelease-$moduleIdentity$moduleExtension"
         Copy-Item -LiteralPath $KernelModules -Destination $installedModules -Force
         $modulesFormat = if ([IO.Path]::GetExtension($KernelModules).ToLowerInvariant() -in @('.vhd', '.vhdx')) {
             'vhd'

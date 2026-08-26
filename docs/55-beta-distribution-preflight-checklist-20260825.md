@@ -25,7 +25,7 @@
   `.ek3` Pokémon records in fixtures and captured endpoint traffic.
 - [x] Source package includes SHA-256 verification for the rootfs and native EXE.
 - [x] Throwaway-distro install, repair, retained rollback runtime, uninstall, and explicit purge passed.
-- [x] Pinned WSL runtime suite passed 174 tests without Switch hardware.
+- [x] Pinned WSL runtime suite passed 204 tests (3 skipped) without Switch hardware on 2026-08-26.
 
 ## Current gate summary and execution order
 
@@ -140,9 +140,12 @@ Do not begin installer implementation until Gate 0 is approved.
 ## Gate 1 — build the one-piece Windows distribution
 
 - [ ] Produce one signed `SwitchTradeSetup.exe` bootstrapper.
-  An unsigned native bootstrapper is built internally; release signing remains Gate 8 work.
+  The fail-closed Authenticode/CMS signing path is implemented; the real certificate and signed release
+  artifact remain external Gate 8 inputs.
 - [ ] Embed or checksummably bundle `SwitchTrade.exe`, the minimal rootfs, application runtime,
   hardware profiles, license notices, and release manifest.
+  The schema-2 bundle and complete-file checksum path are implemented; final rootfs and approved notice
+  inputs remain outstanding.
 - [x] Bundle and install the local Python control API and endpoint runtime with the isolated WSL distro;
   the daily EXE must not depend on a developer checkout, terminal command, browser, or separately
   installed Python environment.
@@ -151,8 +154,10 @@ Do not begin installer implementation until Gate 0 is approved.
   normal SwitchTrade shortcut.
 - [x] Hide PowerShell, WSL consoles, and implementation details during ordinary use.
 - [x] Support detect, install, repair, update, rollback, and uninstall modes.
-- [ ] Persist installer state and resume safely after a required Windows reboot.
-- [ ] Refuse partial or mismatched artifacts using signatures and SHA-256 manifests.
+- [x] Persist non-secret installer state and resume safely through per-user RunOnce after a required
+  Windows reboot; reverify the original package before resumed mutation.
+- [x] Refuse missing, unexpected, or mismatched artifacts using a complete SHA-256 manifest; require a
+  trusted detached code-signing signature for release packages and an explicit flag for internal QA.
 
 ## Gate 2 — prerequisites and first-run setup
 
@@ -168,13 +173,16 @@ Do not begin installer implementation until Gate 0 is approved.
   exactly 1/6/11—not generic Wi-Fi channels 1–13—and surface the likely-5-GHz recreation case.
 - [x] Put the health gate in front of every production session/room endpoint and its decoder observer;
   standalone capture tools must use the same prepare wrapper.
-- [ ] Offer exact repair guidance when automatic recovery is unsafe.
+- [x] Offer exact stage-specific repair guidance when automatic recovery is unsafe, including explicit
+  Update, relay, radio, session, decoder, and local-control routes without advising a WSL reset.
 
 ## Gate 3 — SwitchTrade custom WSL kernel
 
 Decision: the beta uses the project-maintained custom WSL kernel because it is the qualified runtime.
 
 - [ ] Consume a signed, versioned kernel and modules artifact from the separate kernel repository.
+  The app-side detached-signature and checksum consumer is implemented, but the separate repository has
+  not yet published the final signed release pair.
 - [x] Warn before installation that WSL custom-kernel selection is global to all WSL 2 distributions.
 - [x] Back up the user's complete existing `.wslconfig` before making any change.
 - [x] Merge only the required `kernel` and `kernelModules` values; preserve unrelated settings.
@@ -182,8 +190,11 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
 - [x] Use a bounded `wsl --shutdown` when applying or removing the kernel; never unregister unrelated
   distributions.
 - [ ] Verify the running kernel, module ABI, firmware, RTL8192EU driver binding, and actual packet RX.
+  Setup now performs all five checks and correctly installs tar modules under `/lib/modules` instead of
+  treating them as a `kernelModules` VHD; final signed-artifact/hardware qualification remains Gate 7.
 - [x] Restore the prior configuration during rollback/uninstall when SwitchTrade owns the change.
-- [ ] Treat corporate policy that blocks custom WSL kernels as an explicit unsupported condition.
+- [x] Treat corporate policy that blocks custom WSL kernels as an explicit unsupported condition,
+  restore the previous WSL configuration, and report `CUSTOM_KERNEL_BLOCKED_BY_POLICY`.
 
 ## Gate 4 — make the EXE and WSL behave as one app
 
@@ -198,7 +209,10 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
 - [x] Add version mismatch handling, retained failure stage, and allowlisted recovery-action metadata.
 - [x] Implement retained-session `/api/v1/app/retry`, an allowlisted adapter health-gate repair, and
   bind radio-stage failures to the native repair action without accepting free-form commands.
-- [ ] Add the signed update path and finish stage-specific native routing for non-radio failures.
+- [ ] Publish and qualify the first signed update package. The fail-closed Update mechanism is
+  implemented, but no production signing certificate/artifact has been supplied.
+- [x] Finish stage-specific native routing for control, version, relay, session, decoder, and radio
+  failures with exact recovery guidance and no unsafe free-form repair command.
 - [x] Prevent duplicate control, endpoint, or development-relay processes.
 - [x] Split endpoint configuration into two independent axes: a stable member/tunnel identity and a
   per-attempt room creator/joiner radio role. Do not derive local radio
