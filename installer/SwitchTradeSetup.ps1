@@ -695,6 +695,10 @@ if ($DeferHardwareSetup) {
     $wslHealthArguments += @('--', 'true')
     Invoke-LoggedWsl -Arguments $wslHealthArguments -FailureCode 'RADIO_RX_HEALTH_FAILED' `
         -Stage $SetupStage | Out-Null
+    if ($UsbInstanceId -and $UsbId -and $BusId) {
+        Write-SwitchTradeHardwareSelection -StateRoot $StateRoot -UsbId $UsbId `
+            -InstanceId $UsbInstanceId -BusId $BusId | Out-Null
+    }
 }
 
 if (-not $NoShortcut) {

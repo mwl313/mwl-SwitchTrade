@@ -269,3 +269,24 @@ function Resolve-SwitchTradeUsbDeviceFromState {
     }
     return $device
 }
+
+function Write-SwitchTradeHardwareSelection {
+    param(
+        [Parameter(Mandatory)][string]$StateRoot,
+        [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$')]
+        [string]$UsbId,
+        [Parameter(Mandatory)][ValidateLength(1, 512)][string]$InstanceId,
+        [Parameter(Mandatory)][ValidatePattern('^\d+-\d+$')][string]$BusId
+    )
+    if ($InstanceId.ToCharArray() | Where-Object { [char]::IsControl($_) }) {
+        throw 'USB_STABLE_ID_INVALID: the adapter instance identity contains invalid characters'
+    }
+    $path = Join-Path $StateRoot 'runtime\hardware-selection.json'
+    Write-AtomicJson -Path $path -Value ([ordered]@{
+        schema = 1
+        usb_id = $UsbId.ToLowerInvariant()
+        instance_id = $InstanceId
+        bus_id = $BusId
+    })
+    return $path
+}

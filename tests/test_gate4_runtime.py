@@ -89,9 +89,35 @@ class Gate4RuntimeContractTests(unittest.TestCase):
     def test_local_control_rejects_cross_origin_browser_mutations(self):
         with tempfile.TemporaryDirectory() as temporary:
             with TestClient(create_app(runs_root=temporary)) as client:
-                response = client.post(
-                    "/api/v1/session/stop", headers={"Origin": "https://untrusted.example"})
-                self.assertEqual(response.status_code, 403)
+                for origin in (
+                        "https://untrusted.example", "http://127.0.0.1:3000",
+                        "http://localhost:49152", "null"):
+                    response = client.post(
+                        "/api/v1/session/stop", headers={"Origin": origin})
+                    self.assertEqual(response.status_code, 403, origin)
+                    self.assertEqual(response.json()["code"], "cross_origin_blocked")
+                self.assertEqual(client.post("/api/v1/session/stop").status_code, 200)
+
+    def test_unhandled_control_error_is_a_redacted_structured_envelope(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary), raise_server_exceptions=False) as client:
+                with patch("switchtrade.control.subprocess.run",
+                           side_effect=RuntimeError("CANARY_INTERNAL_DETAIL")):
+                    response = client.get(
+                        "/api/v1/hardware/devices",
+                        headers={"X-Correlation-ID": "cca-generic-handler"})
+                self.assertEqual(response.status_code, 500, response.text)
+                body = response.json()
+                self.assertEqual(body["code"], "control_internal_error")
+                self.assertEqual(body["stage"], "control")
+                self.assertTrue(body["recoverable"])
+                self.assertEqual(body["primary_action"], "export_support_bundle")
+                self.assertEqual(body["correlation_id"], "cca-generic-handler")
+                self.assertEqual(response.headers["X-Correlation-ID"], "cca-generic-handler")
+                self.assertNotIn("CANARY_INTERNAL_DETAIL", response.text)
+                events = client.app.state.runtime.log._events.read_text(encoding="utf-8")
+                self.assertIn('"error_type":"RuntimeError"', events)
+                self.assertNotIn("CANARY_INTERNAL_DETAIL", events)
 
     def test_party_api_fails_neutral_when_session_is_inactive(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -362,8 +388,56 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                     self.assertFalse(by_id["0bda:8179"]["selectable"])
                     selected = client.post("/api/v1/hardware/selection", json={
                         "usb_id": "0e8d:7610", "bus_id": "4-20",
+                        "instance_id": r"USB\VID_0E8D&PID_7610\TEST",
                     })
                     self.assertEqual(selected.status_code, 200, selected.text)
+                    persisted = client.app.state.runtime.read_hardware_selection()
+                    self.assertEqual(persisted["instance_id"],
+                                     r"USB\VID_0E8D&PID_7610\TEST")
+
+    def test_selected_instance_resolves_a_changed_bus_id_before_attach(self):
+        instance_id = r"USB\VID_0BDA&PID_818B\RADIO-A"
+        current_bus = ["4-20"]
+        commands = []
+
+        def run(command, **_kwargs):
+            commands.append(command)
+            result = MagicMock(returncode=0, stdout="", stderr="")
+            if command[:2] == ["usbipd.exe", "state"]:
+                result.stdout = json.dumps({"Devices": [{
+                    "BusId": current_bus[0], "ClientIPAddress": None,
+                    "Description": "Realtek RTL8192EU", "InstanceId": instance_id,
+                }]})
+            return result
+
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                with patch("switchtrade.control.subprocess.run", side_effect=run):
+                    selected = client.post("/api/v1/hardware/selection", json={
+                        "usb_id": "0bda:818b", "bus_id": current_bus[0],
+                        "instance_id": instance_id,
+                    })
+                    self.assertEqual(selected.status_code, 200, selected.text)
+                    current_bus[0] = "9-7"
+                    repaired = client.post(
+                        "/api/v1/app/repair", json={"action": "recheck_adapter"})
+                    self.assertEqual(repaired.status_code, 200, repaired.text)
+                    self.assertTrue(any(command[:2] == ["usbipd.exe", "attach"] and
+                                        command[-1] == "9-7" for command in commands))
+                    persisted = client.app.state.runtime.read_hardware_selection()
+                    self.assertEqual(persisted["instance_id"], instance_id)
+                    self.assertEqual(persisted["bus_id"], "9-7")
+
+    def test_control_reads_powershell_51_bom_hardware_selection(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                runtime = client.app.state.runtime
+                runtime.hardware_selection_file.write_bytes(
+                    b"\xef\xbb\xbf" + json.dumps({
+                        "schema": 1, "usb_id": "0bda:818b", "bus_id": "9-7",
+                        "instance_id": r"USB\VID_0BDA&PID_818B\RADIO-A",
+                    }).encode("utf-8"))
+                self.assertEqual(runtime.read_hardware_selection()["bus_id"], "9-7")
 
 
 if __name__ == "__main__":

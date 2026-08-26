@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Net.Http;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -49,6 +50,29 @@ public partial class App : Application
             var capabilityGateWorks = new ControlStatus(
                 "idle", "0.2.0", "self-test", false, false, false, null, null,
                 Capabilities: ["public-directory.v1"]).HasCapability("public-directory.v1");
+            var selectionBody = "";
+            using var contractClient = new ControlApiClient(new SelfTestHttpHandler(async request =>
+            {
+                if (request.Method == HttpMethod.Get)
+                    return JsonResponse("""
+                        {"devices":[{"bus_id":"9-7","instance_id":"USB\\VID_0BDA&PID_818B\\RADIO-A",
+                        "usb_id":"0bda:818b","description":"RTL8192EU","status":"beta-candidate",
+                        "selectable":true,"experimental":false,"attached":false,"selected":true}]}
+                        """);
+                selectionBody = await request.Content!.ReadAsStringAsync();
+                return JsonResponse("{}");
+            }));
+            var hardware = contractClient.GetHardwareDevicesAsync().GetAwaiter().GetResult().Single();
+            contractClient.SelectHardwareDeviceAsync(
+                hardware.UsbId, hardware.InstanceId, hardware.BusId).GetAwaiter().GetResult();
+            var hardwareContractWorks = hardware.InstanceId.EndsWith("RADIO-A", StringComparison.Ordinal) &&
+                                        selectionBody.Contains("instance_id", StringComparison.Ordinal);
+            var malformedInventoryContained = InventoryFailureCode(
+                new SelfTestHttpHandler(_ => Task.FromResult(JsonResponse("{")))) ==
+                "usb_inventory_invalid";
+            var timedOutInventoryContained = InventoryFailureCode(
+                new SelfTestHttpHandler(_ => Task.FromException<HttpResponseMessage>(
+                    new TaskCanceledException("self-test timeout")))) == "usb_inventory_timeout";
             var fakeGateway = new SelfTestGateway();
             var coordinator = new ActiveTradeRoomCoordinator(fakeGateway);
             coordinator.Open(
@@ -81,10 +105,36 @@ public partial class App : Application
                 5, 0, "closed", RoomMembershipRole.Member,
                 SwitchRoomRole.Unassigned, false, false, "none", false));
             var remoteCloseClearsRoom = !memberCoordinator.HasRoom;
+            var inventoryGateway = new SelfTestGateway
+            {
+                Status = ReadyStatus(),
+                AdapterProfiles = [new AdapterProfileViewData(
+                    "0bda:818b", "RTL8192EU", "Beta candidate", "", "", true, false, "ldn")],
+                HardwareDevices = [new HardwareDeviceViewData(
+                    "9-7", "USB\\VID_0BDA&PID_818B\\RADIO-A", "0bda:818b", "RTL8192EU",
+                    "Beta candidate", true, false, false, true)],
+            };
+            using var inventoryShell = new MainViewModel(
+                inventoryGateway, new BackendLauncher(), new WindowsDialogService(),
+                new WindowsClipboardService());
+            inventoryShell.InitializeAsync().GetAwaiter().GetResult();
+            var settings = new SettingsScreenViewModel(inventoryShell);
+            settings.LoadAsync().GetAwaiter().GetResult();
+            inventoryGateway.HardwareFailure = new UserFacingException(
+                "Inventory failed.", "usb_inventory_timeout", "hardware", true,
+                "run_hardware_diagnostics");
+            settings.LoadAsync().GetAwaiter().GetResult();
+            var lastGoodInventorySurvives = settings.Devices.Count == 1 &&
+                                            settings.SelectedDevice?.InstanceId.EndsWith(
+                                                "RADIO-A", StringComparison.Ordinal) == true &&
+                                            settings.InventoryErrorCode == "usb_inventory_timeout" &&
+                                            settings.InventoryRecoveryAction == "run_hardware_diagnostics";
             Shutdown(apiIsLocal && codeNormalizes && requiredRoomFieldsWork &&
                       highContrastResourcesLoad && capabilityGateWorks &&
                       coordinatorWorks && memberReleaseWorks && authoritativeProjectionWorks &&
-                      remoteCloseClearsRoom ? 0 : 1);
+                      remoteCloseClearsRoom && hardwareContractWorks &&
+                      malformedInventoryContained && timedOutInventoryContained &&
+                      lastGoodInventorySurvives ? 0 : 1);
             return;
         }
         _singleInstance = new Mutex(true, "Local\\SwitchTrade.Desktop", out var createdNew);
@@ -126,10 +176,14 @@ public partial class App : Application
 
     private sealed class SelfTestGateway : IControlGateway
     {
+        public ControlStatus? Status { get; init; }
+        public IReadOnlyList<AdapterProfileViewData> AdapterProfiles { get; init; } = [];
+        public IReadOnlyList<HardwareDeviceViewData> HardwareDevices { get; init; } = [];
+        public UserFacingException? HardwareFailure { get; set; }
         public SwitchRoomRole? LastSwitchRole { get; private set; }
         public RoomMembershipRole? LastMembershipRole { get; private set; }
         public Task<ControlStatus?> TryGetStatusAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<ControlStatus?>(null);
+            Task.FromResult(Status);
         public Task<TradeRoomInfo> CreateTradeRoomAsync(TradeRoomCreateRequest request, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
         public Task<TradeRoomInfo> JoinTradeRoomAsync(string roomCode, CancellationToken cancellationToken = default) =>
@@ -155,11 +209,14 @@ public partial class App : Application
             return Task.CompletedTask;
         }
         public Task<IReadOnlyList<AdapterProfileViewData>> GetAdapterProfilesAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<AdapterProfileViewData>>([]);
+            Task.FromResult(AdapterProfiles);
         public Task<IReadOnlyList<HardwareDeviceViewData>> GetHardwareDevicesAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<HardwareDeviceViewData>>([]);
+            HardwareFailure is null
+                ? Task.FromResult(HardwareDevices)
+                : Task.FromException<IReadOnlyList<HardwareDeviceViewData>>(HardwareFailure);
         public Task SelectHardwareDeviceAsync(
-            string usbId, string busId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+            string usbId, string instanceId, string busId,
+            CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<HardwareDiagnosticViewData> RunHardwareDiagnosticsAsync(
             string usbId, CancellationToken cancellationToken = default) =>
             Task.FromResult(new HardwareDiagnosticViewData("self-test", "partial", "Self-test", ""));
@@ -170,6 +227,40 @@ public partial class App : Application
             Task.FromResult("");
         public void Dispose() { }
     }
+
+    private sealed class SelfTestHttpHandler(
+        Func<HttpRequestMessage, Task<HttpResponseMessage>> send) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken) => send(request);
+    }
+
+    private static HttpResponseMessage JsonResponse(string json) => new(System.Net.HttpStatusCode.OK)
+    {
+        Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
+    };
+
+    private static string InventoryFailureCode(HttpMessageHandler handler)
+    {
+        using var client = new ControlApiClient(handler);
+        try
+        {
+            _ = client.GetHardwareDevicesAsync().GetAwaiter().GetResult();
+            return "";
+        }
+        catch (UserFacingException error)
+        {
+            return error.PrimaryAction == "run_hardware_diagnostics" ? error.TechnicalCode ?? "" : "";
+        }
+    }
+
+    private static ControlStatus ReadyStatus() => new(
+        "idle", "0.2.0", "self-test", false, false, false, null, null,
+        ControlApiClient.ReadinessContract, true,
+        new Dictionary<string, ReadinessAxis>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["control"] = new("ready", "Ready", "control.ready", null),
+        });
 
     protected override void OnExit(ExitEventArgs e)
     {

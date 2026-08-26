@@ -81,4 +81,9 @@ $usbState = '{"Devices":[{"BusId":"9-4","InstanceId":"USB\\VID_0BDA&PID_818B\\RA
 $resolved = Resolve-SwitchTradeUsbDeviceFromState -State $usbState `
     -InstanceId 'USB\VID_0BDA&PID_818B\RADIO-A' -UsbId '0bda:818b'
 if ([string]$resolved.BusId -ne '9-4') { throw 'stable USB identity did not survive a bus-ID change' }
+$selection = Write-SwitchTradeHardwareSelection -StateRoot $TestRoot -UsbId '0bda:818b' `
+    -InstanceId 'USB\VID_0BDA&PID_818B\RADIO-A' -BusId '9-4'
+$savedSelection = Get-Content -Raw -LiteralPath $selection | ConvertFrom-Json
+if ([string]$savedSelection.instance_id -ne 'USB\VID_0BDA&PID_818B\RADIO-A' -or
+    [string]$savedSelection.bus_id -ne '9-4') { throw 'stable USB selection was not persisted' }
 Write-Host 'Setup lifecycle simulation PASS'

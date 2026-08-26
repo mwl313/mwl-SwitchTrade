@@ -104,6 +104,7 @@ public sealed record HardwareDiagnosticViewData(
 
 public sealed record HardwareDeviceViewData(
     string BusId,
+    string InstanceId,
     string UsbId,
     string FriendlyName,
     string SupportLabel,

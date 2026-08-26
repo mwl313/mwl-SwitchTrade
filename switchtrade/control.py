@@ -17,7 +17,6 @@ import sys
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
@@ -149,6 +148,7 @@ class HardwareDiagnosticRequest(BaseModel):
 class HardwareSelectionRequest(BaseModel):
     usb_id: str = Field(pattern="^[0-9A-Fa-f]{4}:[0-9A-Fa-f]{4}$")
     bus_id: str = Field(pattern=r"^\d+-\d+$")
+    instance_id: str = Field(min_length=1, max_length=512, pattern=r"^[^\x00-\x1f\x7f]+$")
 
 
 @dataclass
@@ -243,14 +243,19 @@ class Runtime:
 
     def read_hardware_selection(self) -> dict:
         try:
-            value = json.loads(self.hardware_selection_file.read_text(encoding="utf-8"))
+            # Windows PowerShell 5.1 writes -Encoding UTF8 with a BOM; accept both setup and
+            # Python-authored state without weakening JSON validation.
+            value = json.loads(self.hardware_selection_file.read_text(encoding="utf-8-sig"))
             return value if isinstance(value, dict) else {}
         except (OSError, ValueError):
             return {}
 
-    def write_hardware_selection(self, usb_id: str, bus_id: str) -> None:
+    def write_hardware_selection(self, usb_id: str, instance_id: str, bus_id: str) -> None:
         self.hardware_selection_file.write_text(
-            json.dumps({"usb_id": usb_id.lower(), "bus_id": bus_id}) + "\n", encoding="utf-8")
+            json.dumps({
+                "schema": 1, "usb_id": usb_id.lower(),
+                "instance_id": instance_id, "bus_id": bus_id,
+            }) + "\n", encoding="utf-8")
 
     def read_endpoint(self) -> dict:
         try:
@@ -506,13 +511,21 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             request, 422, "request validation failed", code="validation_failed",
             stage="control", recoverable=False, primary_action="check_request",
         )
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["http://127.0.0.1:3000", "http://localhost:3000"],
-        allow_origin_regex=r"http://(127\.0\.0\.1|localhost):\d+",
-        allow_methods=["GET", "POST", "DELETE"],
-        allow_headers=["Content-Type"],
-    )
+
+    @app.exception_handler(Exception)
+    async def unexpected_error(request: Request, error: Exception) -> JSONResponse:
+        correlation_id = getattr(request.state, "correlation_id", secrets.token_hex(16))
+        try:
+            app.state.runtime.log.event(
+                "control_internal_error", level="error", error_type=type(error).__name__,
+                correlation_id=correlation_id)
+        except Exception:
+            pass
+        return error_response(
+            request, 500, "SwitchTrade’s local service could not complete the request.",
+            code="control_internal_error", stage="control", recoverable=True,
+            primary_action="export_support_bundle", correlation_id=correlation_id,
+        )
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=["127.0.0.1", "localhost", "testserver"],
@@ -523,7 +536,9 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         request.state.correlation_id = (
             request.headers.get("x-correlation-id", "").strip() or secrets.token_hex(16))
         origin = request.headers.get("origin")
-        if origin and not re.fullmatch(r"http://(127\.0\.0\.1|localhost):\d+", origin):
+        # The supported native WPF client sends no Origin header. Browser origins, including
+        # arbitrary loopback pages, are never trusted to mutate the local control service.
+        if origin:
             return error_response(
                 request, 403, "cross-origin control is blocked", code="cross_origin_blocked",
                 stage="control", recoverable=False, primary_action="use_desktop_app")
@@ -638,10 +653,14 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             devices = json.loads(result.stdout).get("Devices", [])
         except (AttributeError, ValueError) as error:
             raise HTTPException(status_code=503, detail="Windows USB inventory is invalid") from error
+        if not isinstance(devices, list):
+            raise HTTPException(status_code=503, detail="Windows USB inventory is invalid")
         profiles = {profile.usb_id: profile for profile in state.profiles}
         selected = state.read_hardware_selection()
         inventory = []
         for device in devices:
+            if not isinstance(device, dict):
+                continue
             match = re.search(r"VID_([0-9A-F]{4})&PID_([0-9A-F]{4})", device.get("InstanceId", ""), re.I)
             if not match or not device.get("BusId"):
                 continue
@@ -650,14 +669,20 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             if profile is None:
                 continue
             public = profile.public()
+            instance_id = str(device["InstanceId"])
+            selected_instance = str(selected.get("instance_id", ""))
+            is_selected = (
+                selected.get("usb_id") == usb_id and
+                (selected_instance.casefold() == instance_id.casefold() if selected_instance else
+                 selected.get("bus_id") == device["BusId"])
+            )
             inventory.append({
-                "bus_id": device["BusId"], "usb_id": usb_id,
+                "bus_id": device["BusId"], "instance_id": instance_id, "usb_id": usb_id,
                 "description": device.get("Description") or profile.model,
                 "model": profile.model, "status": profile.status,
                 "selectable": public["selectable"], "experimental": public["experimental"],
                 "attached": bool(device.get("ClientIPAddress")),
-                "selected": selected.get("bus_id") == device["BusId"] and
-                            selected.get("usb_id") == usb_id,
+                "selected": is_selected,
             })
         if not any(device["selected"] for device in inventory):
             automatic = [device for device in inventory if profiles[device["usb_id"]].auto_select]
@@ -670,11 +695,15 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         if not selected:
             return None
         inventory = usbipd_inventory(state)
-        device = next((item for item in inventory
-                       if item["bus_id"] == selected.get("bus_id") and
-                       item["usb_id"] == selected.get("usb_id")), None)
+        selected_instance = str(selected.get("instance_id", ""))
+        device = next((item for item in inventory if item["usb_id"] == selected.get("usb_id") and (
+            item["instance_id"].casefold() == selected_instance.casefold() if selected_instance
+            else item["bus_id"] == selected.get("bus_id"))), None)
         if device is None or not device["selectable"]:
             raise HTTPException(status_code=409, detail="Select an available Wi-Fi adapter in Settings")
+        if device["bus_id"] != selected.get("bus_id") or not selected_instance:
+            state.write_hardware_selection(
+                device["usb_id"], device["instance_id"], device["bus_id"])
         if any(item["attached"] and item["usb_id"] == device["usb_id"] and
                item["bus_id"] != device["bus_id"] for item in inventory):
             raise HTTPException(
@@ -1021,12 +1050,13 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             raise HTTPException(status_code=409, detail="End the current connection before changing adapters")
         usb_id = payload.usb_id.lower()
         device = next((item for item in usbipd_inventory(state)
-                       if item["bus_id"] == payload.bus_id and item["usb_id"] == usb_id), None)
+                       if item["bus_id"] == payload.bus_id and item["usb_id"] == usb_id and
+                       item["instance_id"].casefold() == payload.instance_id.casefold()), None)
         if device is None:
             raise HTTPException(status_code=404, detail="The selected adapter is no longer connected")
         if not device["selectable"]:
             raise HTTPException(status_code=409, detail="This adapter is quarantined and cannot trade")
-        state.write_hardware_selection(usb_id, payload.bus_id)
+        state.write_hardware_selection(usb_id, device["instance_id"], device["bus_id"])
         state.log.event("hardware_selected", usb_id=usb_id, bus_id=payload.bus_id,
                         experimental=device["experimental"])
         return {"device": {**device, "selected": True}, "run_id": state.log.run_id}

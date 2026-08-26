@@ -12,6 +12,8 @@ public sealed class SettingsScreenViewModel : ScreenViewModel
     private string _statusMessage = "";
     private string _supportFilePath = "";
     private string _diagnosticFilePath = "";
+    private string _inventoryErrorCode = "";
+    private string _inventoryRecoveryAction = "";
     private AdapterProfileViewData? _selectedAdapter;
     private HardwareDeviceViewData? _selectedDevice;
     private SettingsSection _selectedSection;
@@ -73,6 +75,16 @@ public sealed class SettingsScreenViewModel : ScreenViewModel
         }
     }
     public bool HasSupportFile => !string.IsNullOrWhiteSpace(SupportFilePath);
+    public string InventoryErrorCode
+    {
+        get => _inventoryErrorCode;
+        private set => Set(ref _inventoryErrorCode, value);
+    }
+    public string InventoryRecoveryAction
+    {
+        get => _inventoryRecoveryAction;
+        private set => Set(ref _inventoryRecoveryAction, value);
+    }
     public string DiagnosticFilePath
     {
         get => _diagnosticFilePath;
@@ -88,10 +100,6 @@ public sealed class SettingsScreenViewModel : ScreenViewModel
 
     public async Task LoadAsync()
     {
-        SelectedDevice = null;
-        SelectedAdapter = null;
-        Adapters.Clear();
-        Devices.Clear();
         if (!IsServiceReady)
         {
             StatusMessage = "Connect the installed SwitchTrade runtime to check Wi-Fi adapters.";
@@ -99,15 +107,34 @@ public sealed class SettingsScreenViewModel : ScreenViewModel
         }
         try
         {
-            foreach (var adapter in await Shell.Gateway.GetAdapterProfilesAsync()) Adapters.Add(adapter);
-            foreach (var device in await Shell.Gateway.GetHardwareDevicesAsync()) Devices.Add(device);
-            SelectedDevice = Devices.FirstOrDefault(device => device.IsSelected) ?? Devices.FirstOrDefault();
-            SelectedAdapter ??= Adapters.FirstOrDefault();
+            var previousInstance = SelectedDevice?.InstanceId;
+            var previousUsbId = SelectedAdapter?.UsbId;
+            var adapters = await Shell.Gateway.GetAdapterProfilesAsync();
+            var devices = await Shell.Gateway.GetHardwareDevicesAsync();
+            Adapters.Clear();
+            foreach (var adapter in adapters) Adapters.Add(adapter);
+            Devices.Clear();
+            foreach (var device in devices) Devices.Add(device);
+            SelectedDevice = Devices.FirstOrDefault(device => device.IsSelected) ??
+                             Devices.FirstOrDefault(device => string.Equals(
+                                 device.InstanceId, previousInstance, StringComparison.OrdinalIgnoreCase)) ??
+                             Devices.FirstOrDefault();
+            SelectedAdapter = Adapters.FirstOrDefault(adapter =>
+                                  adapter.UsbId == (SelectedDevice?.UsbId ?? previousUsbId)) ??
+                              Adapters.FirstOrDefault();
+            InventoryErrorCode = "";
+            InventoryRecoveryAction = "";
             StatusMessage = Devices.Count == 0
                 ? "No profiled USB Wi-Fi adapter is currently visible to Windows."
                 : "Choose the adapter SwitchTrade should use. Experimental adapters are untested and may not work.";
         }
-        catch (UserFacingException error) { StatusMessage = error.UserMessage; }
+        catch (UserFacingException error)
+        {
+            InventoryErrorCode = error.TechnicalCode ?? "usb_inventory_unavailable";
+            InventoryRecoveryAction = error.PrimaryAction ?? "recheck_adapter";
+            StatusMessage = error.UserMessage;
+            Shell.Announce(StatusMessage);
+        }
     }
 
     private async Task SelectDeviceAsync()
@@ -115,7 +142,8 @@ public sealed class SettingsScreenViewModel : ScreenViewModel
         if (SelectedDevice is null) return;
         try
         {
-            await Shell.Gateway.SelectHardwareDeviceAsync(SelectedDevice.UsbId, SelectedDevice.BusId);
+            await Shell.Gateway.SelectHardwareDeviceAsync(
+                SelectedDevice.UsbId, SelectedDevice.InstanceId, SelectedDevice.BusId);
             StatusMessage = $"{SelectedDevice.FriendlyName} will be used for the next connection.";
             Shell.Announce(StatusMessage);
         }

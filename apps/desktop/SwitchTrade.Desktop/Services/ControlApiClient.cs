@@ -36,7 +36,8 @@ public interface IControlGateway : IDisposable
     Task ReleaseTradeRoomAsync(string roomCode, RoomMembershipRole role, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<AdapterProfileViewData>> GetAdapterProfilesAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<HardwareDeviceViewData>> GetHardwareDevicesAsync(CancellationToken cancellationToken = default);
-    Task SelectHardwareDeviceAsync(string usbId, string busId, CancellationToken cancellationToken = default);
+    Task SelectHardwareDeviceAsync(
+        string usbId, string instanceId, string busId, CancellationToken cancellationToken = default);
     Task<HardwareDiagnosticViewData> RunHardwareDiagnosticsAsync(
         string usbId, CancellationToken cancellationToken = default);
     Task<LivePartyProjection?> TryGetPartiesAsync(CancellationToken cancellationToken = default);
@@ -357,8 +358,14 @@ public sealed class ControlApiClient : IControlGateway
             using var response = await _http.GetAsync("/api/v1/hardware/devices", cancellationToken);
             await EnsureSuccess(response, cancellationToken);
             var result = await response.Content.ReadFromJsonAsync<HardwareDevicesResponse>(JsonOptions, cancellationToken);
-            return (result?.Devices ?? []).Select(device => new HardwareDeviceViewData(
-                device.BusId ?? "unknown", device.UsbId ?? "unknown",
+            if (result?.Devices is null || result.Devices.Any(device => device is null ||
+                    string.IsNullOrWhiteSpace(device.BusId) ||
+                    string.IsNullOrWhiteSpace(device.InstanceId) ||
+                    string.IsNullOrWhiteSpace(device.UsbId)))
+                throw InventoryFailure(
+                    "Windows USB inventory returned an incomplete response.", "usb_inventory_invalid");
+            return result.Devices.Select(device => new HardwareDeviceViewData(
+                device.BusId!, device.InstanceId!, device.UsbId!,
                 device.Description ?? device.Model ?? "USB Wi-Fi adapter",
                 device.Status switch
                 {
@@ -371,14 +378,32 @@ public sealed class ControlApiClient : IControlGateway
         }
         catch (HttpRequestException)
         {
-            throw new UserFacingException("Windows USB inventory is unavailable.", "usb_inventory_unavailable");
+            throw InventoryFailure("Windows USB inventory is unavailable.", "usb_inventory_unavailable");
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw InventoryFailure("Windows USB inventory took too long to respond.", "usb_inventory_timeout");
+        }
+        catch (JsonException)
+        {
+            throw InventoryFailure(
+                "Windows USB inventory returned an incomplete response.", "usb_inventory_invalid");
+        }
+        catch (NotSupportedException)
+        {
+            throw InventoryFailure(
+                "Windows USB inventory returned an incompatible response.", "usb_inventory_invalid");
         }
     }
 
     public async Task SelectHardwareDeviceAsync(
-        string usbId, string busId, CancellationToken cancellationToken = default) =>
+        string usbId, string instanceId, string busId, CancellationToken cancellationToken = default) =>
         _ = await PostAsync<JsonElement>("/api/v1/hardware/selection",
-            new { usb_id = usbId, bus_id = busId }, cancellationToken);
+            new { usb_id = usbId, instance_id = instanceId, bus_id = busId }, cancellationToken);
+
+    private static UserFacingException InventoryFailure(string message, string code) =>
+        new(message + " The last known adapter list is retained; run read-only diagnostics or check again.",
+            code, "hardware", recoverable: true, primaryAction: "run_hardware_diagnostics");
 
     public async Task<string> CreateSupportBundleAsync(CancellationToken cancellationToken = default)
     {
@@ -742,6 +767,7 @@ public sealed class ControlApiClient : IControlGateway
     private sealed record HardwareDevicesResponse(IReadOnlyList<HardwareDeviceDto>? Devices);
     private sealed record HardwareDeviceDto(
         [property: JsonPropertyName("bus_id")] string? BusId,
+        [property: JsonPropertyName("instance_id")] string? InstanceId,
         [property: JsonPropertyName("usb_id")] string? UsbId,
         string? Description,
         string? Model,
