@@ -46,6 +46,10 @@ class TunnelSim(Sim):
             self.observer.submit(self.local_seat, sender_role, payload)
 
     def _drain_tunnel(self):
+        connected = getattr(self.tunnel, "connected", None)
+        if connected is not None and not connected.is_set():
+            self._pending_remote.clear()
+            return
         generation = getattr(self.tunnel, "connection_generation", None)
         if generation != self._tunnel_generation:
             self._pending_remote.clear()

@@ -56,6 +56,8 @@ def _redact(value: Any, name: str = "") -> Any:
         return {"length": len(value), "sha256": hashlib.sha256(value).hexdigest()}
     if isinstance(value, Path):
         return str(value)
+    if isinstance(value, str):
+        return redact_text(value)
     return value
 
 
@@ -153,7 +155,7 @@ class RunLogger:
             for name in manifest["contents"]:
                 path = self.run_dir / name
                 if path.is_file():
-                    bundle.write(path, name)
+                    bundle.writestr(name, redact_text(path.read_text(encoding="utf-8", errors="replace")))
             bundle.writestr("privacy-manifest.json", json.dumps(manifest, indent=2) + "\n")
             if summary is not None:
                 bundle.writestr(

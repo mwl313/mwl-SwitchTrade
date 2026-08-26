@@ -24,6 +24,29 @@ class BoundedDedupTest(unittest.TestCase):
         self.assertEqual(accepted, 70_000)
         self.assertEqual(len(recent), 4096)
 
+    @staticmethod
+    def _sequence_sim():
+        sim = Sim.__new__(Sim)
+        sim._seen_in = OrderedDict()
+        sim.last_in_seq = 0
+        sim._in_seq_initialized = False
+        return sim
+
+    def test_sliding_window_rejects_evicted_stale_duplicate(self):
+        sim = self._sequence_sim()
+        self.assertTrue(sim._note_in_seq(0))
+        for sequence in range(1, 4097):
+            self.assertTrue(sim._note_in_seq(sequence))
+        self.assertFalse(sim._note_in_seq(0))
+
+    def test_sliding_window_accepts_wrap_and_one_bounded_out_of_order_frame(self):
+        sim = self._sequence_sim()
+        self.assertTrue(sim._note_in_seq(0xFFFF))
+        self.assertTrue(sim._note_in_seq(0))
+        self.assertFalse(sim._note_in_seq(0xFFFF))
+        self.assertTrue(sim._note_in_seq(0xFFFE))
+        self.assertFalse(sim._note_in_seq(0xFFFE))
+
     def test_full_k_backlog_does_not_mark_an_unsent_ack_as_complete(self):
         sim = Sim.__new__(Sim)
         sim._acked_ts = OrderedDict()

@@ -313,9 +313,16 @@ def run_endpoint(args) -> int:
             except Exception as error:  # cleanup must continue across subsystem failures
                 cleanup_errors.append(f"{name}: {error}")
                 logger.event("cleanup_failed", level="error", subsystem=name, error=str(error))
-        logger.close("failed" if cleanup_errors else outcome)
         if cleanup_errors:
-            raise RuntimeError("endpoint cleanup failed: " + "; ".join(cleanup_errors))
+            message = "; ".join(cleanup_errors)
+            state.write(
+                "failed", radio_checked=transport is not None, tunnel_connected=False,
+                error_code="ENDPOINT_CLEANUP_FAILED", error=message,
+                failure_stage="cleanup", recovery_action="restart_backend", **plan,
+            )
+            logger.close("failed")
+            return 1
+        logger.close(outcome)
 
 
 def build_parser() -> argparse.ArgumentParser:

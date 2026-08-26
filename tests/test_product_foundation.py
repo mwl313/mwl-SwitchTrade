@@ -174,8 +174,11 @@ class DiagnosticsTests(unittest.TestCase):
     def test_redaction_and_support_bundle(self):
         with tempfile.TemporaryDirectory() as temporary:
             logger = RunLogger("test", temporary)
+            logger.event("request_failed", detail="Authorization: Bearer hidden-event-token")
             logger.event("credentials", passcode="ABC123", session_id="ABC123",
-                         member_token="MEMBER-SECRET", reconnect_token="RECONNECT-SECRET", packets=4)
+                          member_token="MEMBER-SECRET", reconnect_token="RECONNECT-SECRET", packets=4)
+            (logger.run_dir / "diagnostic-leak.txt").write_text(
+                "reconnect_token=hidden-file-token\n", encoding="utf-8")
             event = json.loads(logger._events.read_text(encoding="utf-8").splitlines()[-1])
             self.assertEqual(event["passcode"], "<redacted>")
             self.assertEqual(event["session_id"], "<redacted>")
@@ -187,6 +190,9 @@ class DiagnosticsTests(unittest.TestCase):
                 self.assertIn("privacy-manifest.json", archive.namelist())
                 summary = json.loads(archive.read("runtime-summary.json"))
                 self.assertEqual(summary["session_id"], "<redacted>")
+                combined = b"\n".join(archive.read(name) for name in archive.namelist())
+                self.assertNotIn(b"hidden-event-token", combined)
+                self.assertNotIn(b"hidden-file-token", combined)
 
     def test_support_bundle_includes_safe_nested_hardware_diagnostics(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -323,6 +329,33 @@ class PassiveObserverTests(unittest.TestCase):
             self._publish(observer, "member_a", a)
             self._publish(observer, "member_b", b)
             self.assertEqual(observer.snapshot()["commits"], [])
+
+    def test_corrupt_party_invalidates_pending_trade_evidence(self):
+        fixtures = Path(__file__).resolve().parent / "fixtures" / "pokemon"
+        a = [(fixtures / "0001_BULBASAUR_user_20260824.pk3").read_bytes()] * 6
+        b = [(fixtures / "0373_SALAMENCE.pk3").read_bytes()] * 6
+        corrupt = bytearray(a[0])
+        corrupt[32] ^= 0xFF
+        with tempfile.TemporaryDirectory() as temporary:
+            observer = PassivePartyObserver(
+                Path(temporary) / "party.json", "attempt", "member_a")
+            self._publish(observer, "member_a", a)
+            self._publish(observer, "member_b", b)
+            observer._observe_link_command("member_b", READY_TO_TRADE, 0)
+            observer._observe_link_command("member_a", SET_MONS_TO_TRADE, 0)
+            observer._observe_link_command("member_a", START_TRADE)
+            observer._observe_link_command("member_b", READY_FINISH_TRADE)
+            observer._observe_link_command("member_a", CONFIRM_FINISH_TRADE)
+
+            observer._consume_party_block(
+                "member_a", SimpleNamespace(payload=bytes(corrupt) + a[1], ordinal=9))
+            for count in range(5, 11):
+                observer._observe_save_count("member_a", count)
+                observer._observe_save_count("member_b", count)
+
+            self.assertEqual(observer.snapshot()["commits"], [])
+            self.assertEqual(observer.snapshot()["parties"]["member_a"]["reason"],
+                             "invalid_pokemon_checksum")
 
 
 class RfuTunnelTests(unittest.TestCase):

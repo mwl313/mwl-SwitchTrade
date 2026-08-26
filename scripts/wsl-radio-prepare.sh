@@ -303,6 +303,7 @@ if [[ -z $iface && -n $driver ]]; then
 fi
 
 if [[ -z $iface ]]; then
+    before="$(dmesg | wc -l)"
     if [[ $strategy == vanilla ]]; then
         module_name="${allowed_drivers%%,*}"
         msg "[driver] cold-loading in-tree module $module_name for $USB_ID"
@@ -313,7 +314,6 @@ if [[ -z $iface ]]; then
         verify_module "$module"
         module_name="$(modinfo -F name "$module")"
     fi
-    before="$(dmesg | wc -l)"
     if [[ $strategy == vanilla-then-module ]] && ! lsmod | awk '{print $1}' | grep -qx "$module_name"; then
         msg "[driver] loading $module_name for $USB_ID from $module"
         insmod "$module"

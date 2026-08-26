@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+import threading
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,6 +20,8 @@ class FakeTunnel:
         self.sent = []
         self.inbound = []
         self.connection_generation = 1
+        self.connected = threading.Event()
+        self.connected.set()
 
     def send(self, payload, **fields):
         self.sent.append((bytes(payload), fields))
@@ -105,6 +108,19 @@ class RfuEndpointTest(unittest.TestCase):
             b"stale", kind=Kind.RFU, flags=0x01,
         ))
         tunnel.connection_generation += 1
+
+        sim._drive_tunnel_reliable()
+
+        self.assertEqual(batches, [])
+        self.assertEqual(list(sim._pending_remote), [])
+
+    def test_disconnected_tunnel_cannot_deliver_queued_old_epoch_frames(self):
+        sim, tunnel, batches = self._sim()
+        tunnel.inbound.append(Envelope(
+            "ABC123", Direction.HOST_TO_GUEST, 0, 1, 0, 1,
+            b"stale", kind=Kind.RFU, flags=0x01,
+        ))
+        tunnel.connected.clear()
 
         sim._drive_tunnel_reliable()
 

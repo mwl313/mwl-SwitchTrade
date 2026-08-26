@@ -190,11 +190,11 @@ class TunnelClient:
                     connect_args[header_name] = {"Authorization": f"Bearer {self.member_token}"}
                 async with websockets.connect(self.url, **connect_args) as websocket:
                     self._epoch = (self._epoch + 1) & 0xFFFFFFFF
-                    self.connection_generation += 1
                     self._sequence = 0
                     self._clear_outbox()
                     self._clear_inbox()
                     self._gate = SequenceGate()
+                    self.connection_generation += 1
                     if not first:
                         self.stats["reconnects"] += 1
                     first = False

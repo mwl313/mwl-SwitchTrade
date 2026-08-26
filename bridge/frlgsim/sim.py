@@ -267,6 +267,7 @@ class Sim:
         # BufferIsFull. Each channel starts at 1 and skips 0 on rollover; establishing frames force 0.
         self._pktid_by_dst = {}
         self.last_in_seq = 0
+        self._in_seq_initialized = False
         self._recv_hi = None              # highest host reliable seq seen (wrap-aware) for the cumulative ack
         # Pia RELIABLE sliding-window connection. The peer ignores reliable DATA until we OPEN the stream
         # with an Initialized frame (the metadata/title frame); the two sides then bulk-ACK each other.
@@ -460,8 +461,8 @@ class Sim:
                 if rl is None:
                     continue
                 if self.conn is None:                 # offline replay: feed frames as they arrive
-                    self._note_in_seq(rl.seq)
-                    if rl.flagsA & 0x01:
+                    fresh = self._note_in_seq(rl.seq)
+                    if fresh and rl.flagsA & 0x01:
                         self._on_reliable_app(rl.flagsA, rl.payload)
                 elif rl.flagsA & 0x01:                # live AppData: PROCESS AS IT ARRIVES (the emulator
                     # is order-tolerant - it reassembles blocks by fragment index and re-pulls), so we
@@ -470,8 +471,7 @@ class Sim:
                     # the contiguous recv_next + the out-of-order set, and ack_payload carries a selective
                     # MASK so the peer fast-retransmits exactly its drops.
                     self._ack_owed = True
-                    if rl.seq not in self._seen_in:
-                        self._note_in_seq(rl.seq)
+                    if self._note_in_seq(rl.seq):
                         self._on_reliable_app(rl.flagsA, rl.payload)
                     self.rel.note_received(rl.seq)       # contiguous recv_next + recv_ooo for the selective ack
                 else:                                 # live FLAGSA_CTRL: peer's bulk-ack of OUR sends
@@ -670,10 +670,19 @@ class Sim:
         self.engine.feed_in_frame(rec)
 
     def _note_in_seq(self, seq):
-        if not _remember_recent(self._seen_in, seq, 4096):
-            return
-        if ((seq - self.last_in_seq) & 0xFFFF) < 0x8000:
+        if seq in self._seen_in:
+            return False
+        if self._in_seq_initialized:
+            forward = (seq - self.last_in_seq) & 0xFFFF
+            if forward >= 0x8000 and ((self.last_in_seq - seq) & 0xFFFF) >= 4096:
+                return False
+        else:
+            forward = 1
+            self._in_seq_initialized = True
+        _remember_recent(self._seen_in, seq, 4096)
+        if forward < 0x8000:
             self.last_in_seq = seq
+        return True
 
     def _queue_k_ack(self, ts):
         """Queue one emulator K without forgetting an acknowledgement that never reached the wire."""

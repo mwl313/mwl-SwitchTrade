@@ -365,6 +365,8 @@ class PassivePartyObserver:
             return
         with self._write_lock:
             self._party_chunks[seat] = []
+            self._latest_hashes.pop(seat, None)
+            self._reset_trade_evidence()
             self._parties[seat] = {"status": "unavailable", "reason": reason, "snapshot": None}
             self._write("degraded")
 
