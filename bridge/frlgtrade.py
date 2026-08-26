@@ -132,7 +132,7 @@ def _phy_usb_id(dev_path):
     points at the USB *interface*; idVendor/idProduct live on the parent USB device, so
     walk up until they appear. None when there is no USB identity (PCI / soft mac)."""
     p = os.path.realpath(dev_path)
-    while p.count("/") > 2:                      # stop short of the filesystem root
+    while True:
         try:
             with open(f"{p}/idVendor") as f:
                 vid = f.read().strip()
@@ -140,7 +140,10 @@ def _phy_usb_id(dev_path):
                 pid = f.read().strip()
             return f"{vid}:{pid}"
         except OSError:
-            p = os.path.dirname(p)
+            parent = os.path.dirname(p)
+            if parent == p:
+                break
+            p = parent
     return None
 
 

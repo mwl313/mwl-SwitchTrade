@@ -46,11 +46,25 @@ def _mk_usb_radio(root, phy, vid, pid, iface=True):
         f.write(pid + "\n")
     target = usbdev
     if iface:
-        target = os.path.join(usbdev, f"{usb_name}:1.0")
+        interface_name = f"{usb_name}:1.0" if os.name != "nt" else f"{usb_name}-interface"
+        target = os.path.join(usbdev, interface_name)
         os.makedirs(target, exist_ok=True)
     phydir = os.path.join(root, "ieee80211", phy)
     os.makedirs(phydir, exist_ok=True)
-    os.symlink(os.path.relpath(target, phydir), os.path.join(phydir, "device"))
+    device = os.path.join(phydir, "device")
+    try:
+        os.symlink(os.path.relpath(target, phydir), device)
+    except OSError:
+        if os.name != "nt":
+            raise
+        # Standard Windows runners cannot create symlinks. Preserve the same parent-walk
+        # shape with ordinary directories; POSIX still exercises the real sysfs symlink.
+        os.makedirs(device)
+        identity = phydir if iface else device
+        with open(os.path.join(identity, "idVendor"), "w") as f:
+            f.write(vid + "\n")
+        with open(os.path.join(identity, "idProduct"), "w") as f:
+            f.write(pid + "\n")
 
 
 class DetectPhyTest(unittest.TestCase):
@@ -102,7 +116,11 @@ class DetectPhyTest(unittest.TestCase):
     # -- 4. USB interface -> parent device walk --------------------------------------
     def test_usb_interface_symlink_walks_up_to_parent_device(self):
         _mk_usb_radio(self.sysfs, "phy7", "0bda", "8179", iface=True)
-        iface_dir = os.path.join(self.sysfs, "devices", "usb1", "1-7", "1-7:1.0")
+        if os.name != "nt":
+            self.assertTrue(os.path.islink(os.path.join(
+                self.sysfs, "ieee80211", "phy7", "device")))
+        interface_name = "1-7:1.0" if os.name != "nt" else "1-7-interface"
+        iface_dir = os.path.join(self.sysfs, "devices", "usb1", "1-7", interface_name)
         self.assertFalse(os.path.exists(os.path.join(iface_dir, "idVendor")),
                          "precondition: the interface dir itself carries NO USB identity")
 

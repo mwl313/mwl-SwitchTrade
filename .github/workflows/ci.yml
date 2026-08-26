@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            test-requirements.txt
+            bridge/requirements.txt
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.302
+      - name: Verify .NET SDK
+        shell: pwsh
+        run: if ((dotnet --version) -ne '10.0.302') { throw 'Expected .NET SDK 10.0.302' }
+      - name: Install locked test dependencies
+        run: python -m pip install --disable-pip-version-check --requirement test-requirements.txt
+      - name: Full pytest, including package manifest and integrity checks
+        run: python -m pytest
+      - name: Build desktop
+        run: dotnet build apps/desktop/SwitchTrade.Desktop/SwitchTrade.Desktop.csproj --configuration Release
+      - name: Build setup
+        run: dotnet build installer/bootstrap/SwitchTrade.Setup.csproj --configuration Release
+      - name: Parse PowerShell with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count) { throw "$($_.FullName): $($errors -join '; ')" }
+          }
+      - name: Parse PowerShell with PowerShell 7
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count) { throw "$($_.FullName): $($errors -join '; ')" }
+          }
+      - name: Run PowerShell 7 kernel lifecycle simulation
+        shell: pwsh
+        run: ./installer/Test-KernelLifecycle.ps1 -TestRoot "$env:RUNNER_TEMP/kernel-lifecycle-pwsh"
+
+  ubuntu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            test-requirements.txt
+            bridge/requirements.txt
+      - name: Install locked test dependencies
+        run: python -m pip install --disable-pip-version-check --requirement test-requirements.txt
+      - name: Full pytest
+        run: python -m pytest
+      - name: Check shell syntax
+        run: |
+          while IFS= read -r file; do
+            bash -n "$file"
+          done < <(git ls-files '*.sh')
+      - name: Run ShellCheck
+        run: shellcheck $(git ls-files '*.sh')
+      - name: Install dependency auditor
+        run: python -m pip install --disable-pip-version-check pip-audit==2.9.0
+      - name: Audit locked Python dependencies with reviewed exceptions
+        run: python scripts/run-pip-audit.py

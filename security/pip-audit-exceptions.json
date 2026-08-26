@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "exceptions": [
+    {
+      "id": "GHSA-86qp-5c8j-p5mr",
+      "package": "starlette",
+      "version": "0.47.3",
+      "expires": "2026-09-30",
+      "reason": "Malformed Host can alter request.url.path, but SwitchTrade uses it only for structured logging; authorization and routing do not depend on the reconstructed URL."
+    },
+    {
+      "id": "GHSA-82w8-qh3p-5jfq",
+      "package": "starlette",
+      "version": "0.47.3",
+      "expires": "2026-09-30",
+      "reason": "Neither the relay nor localhost control API parses request.form() or application/x-www-form-urlencoded bodies."
+    },
+    {
+      "id": "GHSA-jp82-jpqv-5vv3",
+      "package": "starlette",
+      "version": "0.47.3",
+      "expires": "2026-09-30",
+      "reason": "SwitchTrade does not make trust or authorization decisions from request.url.hostname or request.url.netloc."
+    },
+    {
+      "id": "GHSA-7f5h-v6xp-fcq8",
+      "package": "starlette",
+      "version": "0.47.3",
+      "expires": "2026-09-30",
+      "reason": "SwitchTrade has no FileResponse or StaticFiles routes, so the vulnerable Range parsing path is unreachable."
+    },
+    {
+      "id": "GHSA-wqp7-x3pw-xc5r",
+      "package": "starlette",
+      "version": "0.47.3",
+      "expires": "2026-09-30",
+      "reason": "SwitchTrade has no StaticFiles mount; the hosted relay also runs in the Linux container defined by relay/Dockerfile."
+    },
+    {
+      "id": "GHSA-x746-7m8f-x49c",
+      "package": "starlette",
+      "version": "0.47.3",
+      "expires": "2026-09-30",
+      "reason": "SwitchTrade registers FastAPI function routes and has no HTTPEndpoint subclasses."
+    },
+    {
+      "id": "GHSA-6w46-j5rx-g56g",
+      "package": "pytest",
+      "version": "8.3.5",
+      "expires": "2026-09-30",
+      "reason": "The affected shared-UNIX-host /tmp scenario is absent: tests run on isolated developer machines and ephemeral single-job GitHub-hosted runners, never a shared test service."
+    }
+  ]
+}
