@@ -214,6 +214,7 @@ class Runtime:
         self.member_token_file = runtime_root / "member-token"
         self.client_id_file = runtime_root / "client-id"
         self.hardware_selection_file = runtime_root / "hardware-selection.json"
+        self.endpoint_launch_ack = runtime_root / "endpoint-launch-ack.json"
         try:
             self.client_id = self.client_id_file.read_text(encoding="utf-8").strip()
         except OSError:
@@ -448,19 +449,23 @@ class Runtime:
 
     @staticmethod
     def _signal_endpoint_pid(pid: int, signal_name: str, endpoint: dict) -> None:
-        if Runtime._verified_endpoint_pid(endpoint) != pid:
-            raise RuntimeError("endpoint process identity changed before shutdown")
         if os.name != "nt":
             selected_signal = signal.SIGTERM if signal_name == "TERM" else signal.SIGKILL
             if hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"):
                 descriptor = os.pidfd_open(pid)
                 try:
+                    if Runtime._verified_endpoint_pid(endpoint) != pid:
+                        raise RuntimeError("endpoint process identity changed before shutdown")
                     signal.pidfd_send_signal(descriptor, selected_signal)
                 finally:
                     os.close(descriptor)
             else:
+                if Runtime._verified_endpoint_pid(endpoint) != pid:
+                    raise RuntimeError("endpoint process identity changed before shutdown")
                 os.kill(pid, selected_signal)
             return
+        if Runtime._verified_endpoint_pid(endpoint) != pid:
+            raise RuntimeError("endpoint process identity changed before shutdown")
         distro = os.environ.get("SWITCHTRADE_WSL_DISTRO", "SwitchTrade")
         if endpoint.get("wsl_distro") != distro:
             raise RuntimeError("endpoint WSL identity is not verified")
@@ -504,13 +509,17 @@ def endpoint_command(identity: str, passcode: str, relay_url: str,
                      attempt_id: str | None = None,
                      member_token_file: Path | None = None,
                      allow_experimental_hardware: bool = False,
-                     launch_nonce: str | None = None) -> list[str]:
+                     launch_nonce: str | None = None,
+                     launch_ack_file: Path | None = None) -> list[str]:
     if identity in {"host", "guest"} and switch_room_role is None:
         args = ["--role", identity]
     else:
         args = ["--tunnel-seat", identity, "--switch-room-role", switch_room_role or ""]
     args += ["--session-id", passcode, "--relay-url", relay_url,
              "--launch-nonce", launch_nonce or secrets.token_hex(16)]
+    if launch_ack_file:
+        args += ["--launch-ack-file", _wsl_path(launch_ack_file)
+                 if os.name == "nt" else str(launch_ack_file)]
     if usb_id:
         args += ["--usb-id", usb_id.lower()]
     if allow_experimental_hardware:
@@ -837,6 +846,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             state.endpoint_state.unlink(missing_ok=True)
             state.party_state.unlink(missing_ok=True)
             launch_nonce = secrets.token_hex(16)
+            state.endpoint_launch_ack.unlink(missing_ok=True)
             command = endpoint_command(
                 plan["tunnel_seat"], code, state.relay_url, plan["usb_id"],
                 state.endpoint_state, switch_room_role=plan["switch_room_role"],
@@ -844,18 +854,42 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 member_token_file=member_token_file,
                 allow_experimental_hardware=allow_experimental_hardware,
                 launch_nonce=launch_nonce,
+                launch_ack_file=state.endpoint_launch_ack,
             )
             try:
                 state.endpoint = subprocess.Popen(command, cwd=Path(__file__).resolve().parents[1])
             except OSError as error:
                 raise HTTPException(status_code=503, detail=f"endpoint launch failed: {error}") from error
-            deadline = time.monotonic() + 0.25
-            while time.monotonic() < deadline and state.endpoint.poll() is None:
+            deadline = time.monotonic() + 2
+            acknowledged = False
+            while time.monotonic() < deadline:
+                if state.endpoint.poll() is not None:
+                    break
+                try:
+                    acknowledgement = json.loads(
+                        state.endpoint_launch_ack.read_text(encoding="utf-8-sig"))
+                    acknowledged = (
+                        acknowledgement.get("schema") == 1 and
+                        acknowledgement.get("launch_nonce") == launch_nonce and
+                        isinstance(acknowledgement.get("launcher_pid"), int)
+                    )
+                except (OSError, json.JSONDecodeError):
+                    pass
+                if acknowledged:
+                    break
                 time.sleep(0.025)
-            if state.endpoint.poll() is not None:
+            state.endpoint_launch_ack.unlink(missing_ok=True)
+            if not acknowledged:
+                if state.endpoint.poll() is None:
+                    state.endpoint.terminate()
+                    try:
+                        state.endpoint.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        state.endpoint.kill()
+                        state.endpoint.wait(timeout=2)
                 state.endpoint = None
                 raise ControlApiError(
-                    503, "endpoint_start_failed", "the Switch endpoint stopped during startup",
+                    503, "endpoint_start_failed", "the Switch endpoint could not acquire its launch lock",
                     stage="endpoint", recoverable=True, primary_action="retry",
                 )
             state.endpoint_session = code

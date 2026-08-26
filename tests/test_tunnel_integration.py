@@ -456,10 +456,19 @@ class TunnelIntegrationTest(unittest.TestCase):
                 self.assertNotIn("token", joined.text.lower())
 
                 processes = []
-                def process(*_args, **_kwargs):
+                def process(command, **_kwargs):
                     value = MagicMock()
                     value.pid = 1000 + len(processes)
                     value.poll.return_value = None
+                    nonce = command[command.index("--launch-nonce") + 1]
+                    ack_value = command[command.index("--launch-ack-file") + 1]
+                    if ack_value.startswith("/mnt/"):
+                        ack_value = f"{ack_value[5].upper()}:\\" + ack_value[7:].replace("/", "\\")
+                    ack_path = Path(ack_value)
+                    ack_path.parent.mkdir(parents=True, exist_ok=True)
+                    ack_path.write_text(json.dumps({
+                        "schema": 1, "launch_nonce": nonce, "launcher_pid": value.pid,
+                    }), encoding="utf-8")
                     processes.append(value)
                     return value
 

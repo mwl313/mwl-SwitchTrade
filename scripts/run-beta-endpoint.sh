@@ -14,6 +14,8 @@ switch_room_role=""
 usb_id=""
 channel=6
 allow_experimental=false
+launch_nonce=""
+launch_ack_file=""
 args=("$@")
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -26,6 +28,10 @@ while [[ $# -gt 0 ]]; do
         --channel) [[ $# -ge 2 ]] || die "--channel requires 1..13"; channel=$2; shift ;;
         --channel=*) channel=${1#*=} ;;
         --allow-experimental-hardware) allow_experimental=true ;;
+        --launch-nonce) [[ $# -ge 2 ]] || die "--launch-nonce requires a value"; launch_nonce=$2; shift ;;
+        --launch-nonce=*) launch_nonce=${1#*=} ;;
+        --launch-ack-file) [[ $# -ge 2 ]] || die "--launch-ack-file requires a path"; launch_ack_file=$2; shift ;;
+        --launch-ack-file=*) launch_ack_file=${1#*=} ;;
     esac
     shift
 done
@@ -37,10 +43,23 @@ if [[ -z $switch_room_role ]]; then
 fi
 [[ $switch_room_role == creator || $switch_room_role == finder ]] || die "invalid Switch room role"
 [[ $channel =~ ^([1-9]|1[0-3])$ ]] || die "channel must be 1..13"
+[[ $launch_nonce =~ ^[0-9a-f]{32}$ ]] || die "invalid endpoint launch nonce"
+[[ -n $launch_ack_file ]] || die "endpoint launch acknowledgement path is required"
 [[ -x $PREP ]] || die "radio selector missing: $PREP"
 [[ -x $PYTHON_BIN ]] || PYTHON_BIN=$(command -v python3 || true)
 [[ -n $PYTHON_BIN ]] || die "Python runtime not found"
 command -v timeout >/dev/null 2>&1 || die "GNU timeout is required"
+command -v flock >/dev/null 2>&1 || die "flock is required"
+
+runtime_dir=${SWITCHTRADE_RUNTIME_DIR:-${TMPDIR:-/tmp}}
+mkdir -p -- "$runtime_dir" "$(dirname -- "$launch_ack_file")"
+exec {endpoint_lock_fd}>"$runtime_dir/switchtrade-endpoint.lock"
+flock -n "$endpoint_lock_fd" || die "SwitchTrade endpoint is already running"
+export SWITCHTRADE_ENDPOINT_LOCK_HELD=1
+ack_tmp="$launch_ack_file.$$.tmp"
+umask 077
+printf '{"schema":1,"launch_nonce":"%s","launcher_pid":%d}\n' "$launch_nonce" "$$" >"$ack_tmp"
+mv -f -- "$ack_tmp" "$launch_ack_file"
 
 # Online host sits beside the leader Switch and joins its room; online guest
 # hosts the mirrored room beside the joining Switch.

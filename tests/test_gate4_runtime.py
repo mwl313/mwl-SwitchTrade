@@ -398,9 +398,16 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                     verification_calls += 1
                     return 1234 if verification_calls >= 4 else None
 
+                def acknowledge_launch(command, **_kwargs):
+                    nonce = command[command.index("--launch-nonce") + 1]
+                    runtime.endpoint_launch_ack.write_text(json.dumps({
+                        "schema": 1, "launch_nonce": nonce, "launcher_pid": 1234,
+                    }), encoding="utf-8")
+                    return process
+
                 with patch.object(runtime, "authoritative_room", return_value=room), patch.object(
                         runtime, "_verified_endpoint_pid", side_effect=verify_after_launch), patch(
-                        "switchtrade.control.subprocess.Popen", return_value=process) as popen:
+                        "switchtrade.control.subprocess.Popen", side_effect=acknowledge_launch) as popen:
                     response = client.post("/api/v1/app/retry")
                 self.assertEqual(response.status_code, 200, response.text)
                 self.assertEqual(response.json()["session_id"], "ABC123")
@@ -528,6 +535,32 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 process.poll.return_value = 73
                 with patch.object(runtime.relay, "status", return_value={"status": "waiting"}), patch(
                         "switchtrade.control.subprocess.Popen", return_value=process):
+                    response = client.post("/api/session/start", json={
+                        "role": "host", "passcode": "ABC123", "usb_id": "0bda:818b",
+                    })
+            self.assertEqual(response.status_code, 503, response.text)
+            self.assertEqual(response.json()["code"], "endpoint_start_failed")
+            self.assertEqual(response.json()["stage"], "endpoint")
+
+    def test_windows_endpoint_requires_matching_launch_acknowledgement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                runtime = client.app.state.runtime
+                process = MagicMock(pid=1234)
+                process.poll.side_effect = [None, None, 73, 73]
+
+                def write_wrong_ack(command, **_kwargs):
+                    runtime.endpoint_launch_ack.write_text(json.dumps({
+                        "schema": 1,
+                        "launch_nonce": "0" * 32,
+                        "launcher_pid": 1234,
+                    }), encoding="utf-8")
+                    self.assertNotEqual(
+                        command[command.index("--launch-nonce") + 1], "0" * 32)
+                    return process
+
+                with patch.object(runtime.relay, "status", return_value={"status": "waiting"}), patch(
+                        "switchtrade.control.subprocess.Popen", side_effect=write_wrong_ack):
                     response = client.post("/api/session/start", json={
                         "role": "host", "passcode": "ABC123", "usb_id": "0bda:818b",
                     })

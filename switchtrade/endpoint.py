@@ -378,6 +378,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--attempt-id")
     parser.add_argument("--member-token-file")
     parser.add_argument("--launch-nonce", required=True)
+    parser.add_argument("--launch-ack-file", required=True)
     parser.add_argument("--connect-timeout", type=float, default=20)
     parser.add_argument("--radio-timeout", type=float, default=60)
     parser.add_argument("--room-timeout", type=float, default=300)
@@ -387,8 +388,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     try:
+        args = build_parser().parse_args()
+        if os.environ.get("SWITCHTRADE_ENDPOINT_LOCK_HELD") == "1":
+            raise SystemExit(run_endpoint(args))
         with SingleInstanceLock("endpoint"):
-            raise SystemExit(run_endpoint(build_parser().parse_args()))
+            raise SystemExit(run_endpoint(args))
     except AlreadyRunningError as error:
         raise SystemExit(str(error)) from error
 
