@@ -157,7 +157,15 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
             case "failed":
                 ConnectionState = LegacyConnectionState.NeedsRecovery;
                 StatusText = "This connection needs attention.";
-                RecoveryMessage = status.Error ?? "End the connection, check Settings, and try again.";
+                RecoveryMessage = status.FailureStage switch
+                {
+                    "relay" => "Check this PC’s internet connection, end this attempt, and try again. Export a support bundle if it repeats.",
+                    "radio" => "Run Repair adapter below. End this attempt before reattaching USB or starting another room.",
+                    "session" => "End this attempt and try once more. Export a support bundle if the same session failure repeats.",
+                    "decoder" => "End this attempt and repair or update SwitchTrade; the installed decoder does not match this app.",
+                    "control" => "Close SwitchTrade and run the latest signed SwitchTradeSetup.exe with Repair. Do not reset WSL.",
+                    _ => status.Error ?? "End this attempt and try again. Export a support bundle if it repeats.",
+                };
                 break;
             case "completed":
                 ConnectionState = LegacyConnectionState.Idle;

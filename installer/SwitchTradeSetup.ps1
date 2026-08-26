@@ -198,7 +198,7 @@ if (-not $audit.PayloadPresent) { throw "application payload is missing: $Payloa
 if (-not (Test-Path -LiteralPath $ReleaseConfig -PathType Leaf)) {
     throw 'signed installation configuration is missing'
 }
-if ($audit.PendingReboot -and -not $WasResume) {
+if ($audit.PendingReboot) {
     throw 'WINDOWS_RESTART_PENDING: restart Windows before installing or repairing SwitchTrade'
 }
 if (Test-Path -LiteralPath $DesktopExe -PathType Leaf) {
@@ -216,6 +216,9 @@ if (-not $audit.WslInstalled) {
     if (-not $AcceptPrerequisiteChanges) {
         throw 'WSL 2 is required and may require a reboot. Rerun after accepting prerequisite changes.'
     }
+    if (-not (Test-Path -LiteralPath (Join-Path $PackageRoot 'SwitchTradeSetup.exe') -PathType Leaf)) {
+        throw 'SETUP_RESUME_UNAVAILABLE: use the complete native setup package before enabling WSL'
+    }
     & dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart
     if ($LASTEXITCODE -ne 0) { throw 'could not enable Windows Subsystem for Linux' }
     & dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
@@ -227,6 +230,9 @@ if (-not $audit.WslInstalled) {
 if (-not $audit.UsbipdInstalled) {
     if (-not $AcceptPrerequisiteChanges) {
         throw 'usbipd-win is required. Rerun after accepting prerequisite changes.'
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $PackageRoot 'SwitchTradeSetup.exe') -PathType Leaf)) {
+        throw 'SETUP_RESUME_UNAVAILABLE: use the complete native setup package before installing usbipd-win'
     }
     if (-not (Test-Path -LiteralPath $UsbipdMsi) -or -not (Test-Path -LiteralPath $UsbipdManifest)) {
         throw 'the pinned usbipd-win installer is missing from this package'
