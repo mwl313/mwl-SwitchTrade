@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import random
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -18,9 +19,9 @@ from switchtrade.party_observer import (
     SET_MONS_TO_TRADE, START_TRADE, PassivePartyObserver,
 )
 from switchtrade.process_guard import AlreadyRunningError, SingleInstanceLock
-from switchtrade.rfu_tunnel import (Direction, Envelope, PlayerMap, SequenceGate,
-                                    direction_for_role)
-from switchtrade.tunnel_client import permanent_connect_error, relay_websocket_url
+from switchtrade.rfu_tunnel import (Direction, Envelope, MAX_PAYLOAD_BYTES, PlayerMap,
+                                    SequenceGate, direction_for_role)
+from switchtrade.tunnel_client import TunnelClient, permanent_connect_error, relay_websocket_url
 
 
 class HardwarePolicyTests(unittest.TestCase):
@@ -252,13 +253,31 @@ class PassiveObserverTests(unittest.TestCase):
                     ordinal=ordinal,
                 ))
 
-    def test_bounded_queue_drops_without_blocking(self):
+    def test_bounded_queue_overflow_is_coalesced_without_io_or_byte_mutation(self):
         with tempfile.TemporaryDirectory() as temporary:
             observer = PassivePartyObserver(
                 Path(temporary) / "party.json", "attempt", "member_a", capacity=1)
             observer.submit("member_a", "parent", b"first")
-            observer.submit("member_a", "parent", b"second")
-            self.assertEqual(observer.stats["dropped"], 1)
+            with mock.patch.object(
+                    observer, "_write", side_effect=AssertionError("forwarding thread wrote state")):
+                started = time.perf_counter()
+                for _ in range(10):
+                    observer.submit("member_a", "parent", b"second")
+                self.assertLess(time.perf_counter() - started, 0.1)
+            self.assertEqual(observer.stats["dropped"], 10)
+            self.assertEqual(observer._pending_invalidations,
+                             {"member_a": "observer_queue_overflow"})
+            self.assertEqual(observer._queue.get_nowait(),
+                             ("member_a", "parent", b"first"))
+            observer.start()
+            deadline = time.monotonic() + 1
+            while (time.monotonic() < deadline and
+                   observer.snapshot()["parties"]["member_a"]["reason"] !=
+                   "observer_queue_overflow"):
+                time.sleep(0.01)
+            self.assertEqual(observer.snapshot()["parties"]["member_a"]["reason"],
+                             "observer_queue_overflow")
+            observer.stop()
 
     def test_observer_rejects_late_frames_after_stop(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -438,6 +457,23 @@ class RfuTunnelTests(unittest.TestCase):
         guest = PlayerMap("guest")
         self.assertEqual(guest.local_to_wire(0), 1)
         self.assertEqual(guest.wire_to_local(0), 1)
+
+    def test_wire_payload_limit_is_enforced_at_encode_and_send_boundaries(self):
+        payload = b"x" * MAX_PAYLOAD_BYTES
+        encoded = Envelope(
+            "ABC123", Direction.HOST_TO_GUEST, 1, 0, 0, 1, payload,
+        ).encode()
+        self.assertEqual(Envelope.decode(encoded).payload, payload)
+        with self.assertRaisesRegex(ValueError, "payload exceeds"):
+            Envelope(
+                "ABC123", Direction.HOST_TO_GUEST, 1, 0, 0, 1, payload + b"x",
+            ).encode()
+
+        client = TunnelClient("ws://relay.invalid", "ABC123", "host")
+        client.connected.set()
+        client.send(payload)
+        with self.assertRaisesRegex(ValueError, "payload exceeds"):
+            client.send(payload + b"x")
 
     def test_bounded_malformed_envelope_fuzz_fails_closed(self):
         randomizer = random.Random(0x53575452)

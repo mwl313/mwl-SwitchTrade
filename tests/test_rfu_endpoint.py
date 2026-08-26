@@ -11,8 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "bridge"))
 
 from frlgsim.transport import HostTransport
-from frlgsim.tunnel import TunnelSim
-from switchtrade.rfu_tunnel import Direction, Envelope, Kind
+from frlgsim.tunnel import MAX_PENDING_REMOTE, TunnelSim
+from switchtrade.rfu_tunnel import Direction, Envelope, Kind, MAX_PAYLOAD_BYTES
 
 
 class FakeTunnel:
@@ -126,6 +126,30 @@ class RfuEndpointTest(unittest.TestCase):
 
         self.assertEqual(batches, [])
         self.assertEqual(list(sim._pending_remote), [])
+
+    def test_stalled_reliable_window_fails_at_bounded_remote_backlog(self):
+        sim, tunnel, _ = self._sim()
+        sim.rel.max_inflight = 0
+        tunnel.inbound.extend(
+            Envelope("ABC123", Direction.HOST_TO_GUEST, 0, sequence, 0, 1,
+                     b"rfu", kind=Kind.RFU, flags=0x01)
+            for sequence in range(MAX_PENDING_REMOTE + 1)
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "backlog overflow"):
+            sim._drive_tunnel_reliable()
+        self.assertEqual(len(sim._pending_remote), MAX_PENDING_REMOTE)
+
+    def test_bridge_rejects_payload_above_downstream_wire_limit(self):
+        sim, tunnel, batches = self._sim()
+        tunnel.inbound.append(Envelope(
+            "ABC123", Direction.HOST_TO_GUEST, 0, 1, 0, 1,
+            b"x" * (MAX_PAYLOAD_BYTES + 1), kind=Kind.RFU, flags=0x01,
+        ))
+
+        with self.assertRaisesRegex(RuntimeError, "wire limit"):
+            sim._drive_tunnel_reliable()
+        self.assertEqual(batches, [])
 
     def test_host_transport_keeps_mirrored_advertisement_override(self):
         transport = HostTransport(application_data=b"leader-advertisement")

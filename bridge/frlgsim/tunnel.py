@@ -7,7 +7,10 @@ from collections import deque
 from . import reliable
 from .sim import (ACK_PERIOD, PARENT_RTX_LIMIT, RELIABLE_BATCH_MAX,
                   RTX_GAP_LIMIT, Sim)
-from switchtrade.rfu_tunnel import Envelope, Kind
+from switchtrade.rfu_tunnel import Envelope, Kind, MAX_PAYLOAD_BYTES
+
+
+MAX_PENDING_REMOTE = 256
 
 
 class _NoGameEngine:
@@ -58,6 +61,10 @@ class TunnelSim(Sim):
             if envelope.kind == Kind.PEER_CLOSE:
                 self.host_disconnected = True
             elif envelope.kind == Kind.RFU:
+                if len(envelope.payload) > MAX_PAYLOAD_BYTES:
+                    raise RuntimeError("RFU payload exceeds the Pia Reliable wire limit")
+                if len(self._pending_remote) >= MAX_PENDING_REMOTE:
+                    raise RuntimeError("RFU receive backlog overflow")
                 self._pending_remote.append(envelope)
 
     def _drive_tunnel_reliable(self):

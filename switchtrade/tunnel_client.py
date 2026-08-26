@@ -16,6 +16,8 @@ from switchtrade.rfu_tunnel import (
     Direction,
     Envelope,
     Kind,
+    MAX_ENVELOPE_BYTES,
+    MAX_PAYLOAD_BYTES,
     SequenceGate,
     direction_for_role,
 )
@@ -110,11 +112,14 @@ class TunnelClient:
     def send(self, payload: bytes, *, kind: Kind = Kind.RFU, flags: int = 0,
              source_player: int | None = None, target_player: int | None = None,
              timeout: float = 1.0) -> None:
+        payload = bytes(payload)
+        if len(payload) > MAX_PAYLOAD_BYTES:
+            raise ValueError(f"RFU payload exceeds {MAX_PAYLOAD_BYTES} bytes")
         if not self.connected.is_set():
             raise ConnectionError("RFU tunnel is not connected")
         source = (0 if self.role == "host" else 1) if source_player is None else source_player
         target = (1 if self.role == "host" else 0) if target_player is None else target_player
-        self._outbox.put(_Pending(kind, bytes(payload), flags, source, target), timeout=timeout)
+        self._outbox.put(_Pending(kind, payload, flags, source, target), timeout=timeout)
 
     def advertise(self, application_data: bytes) -> None:
         self.send(application_data, kind=Kind.ADVERTISEMENT,
@@ -183,7 +188,7 @@ class TunnelClient:
         while not self._stop.is_set():
             connected_at = None
             try:
-                connect_args = {"max_size": (1 << 20) + 256}
+                connect_args = {"max_size": MAX_ENVELOPE_BYTES}
                 if self.member_token:
                     header_name = ("additional_headers" if "additional_headers" in
                                    inspect.signature(websockets.connect).parameters else "extra_headers")

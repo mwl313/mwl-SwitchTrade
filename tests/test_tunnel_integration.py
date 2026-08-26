@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
 import os
 from pathlib import Path
@@ -18,7 +20,8 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from switchtrade.rfu_tunnel import Direction, Kind
+from switchtrade.rfu_tunnel import (Direction, HEADER, Kind, MAGIC, MAX_PAYLOAD_BYTES,
+                                    VERSION)
 from switchtrade.relay_client import RelayClient
 from switchtrade.tunnel_client import TunnelClient
 from switchtrade.control import create_app, endpoint_command
@@ -302,6 +305,51 @@ class TunnelIntegrationTest(unittest.TestCase):
                 replacement_host.stop()
             if replacement_guest is not None:
                 replacement_guest.stop()
+
+    def test_oversized_authenticated_frame_is_rejected_and_attempt_fails_recoverably(self):
+        first = self._authority_request("/v1/trade-rooms", {
+            "name": "Oversized RFU", "trainer_display_name": "Leaf",
+            "game": "LeafGreen", "language": "English",
+        }, {"Idempotency-Key": uuid7(), "X-SwitchTrade-Client": "oversize-a"})
+        second = self._authority_request("/v1/trade-rooms:join", {
+            "room_code": first["room"]["room_code"], "trainer_display_name": "Red",
+        }, {"Idempotency-Key": uuid7(), "X-SwitchTrade-Client": "oversize-b"})
+        sid = first["room"]["room_code"]
+        attempt_id = self._prepare_authority_attempt(first, second)
+        payload = b"x" * (MAX_PAYLOAD_BYTES + 1)
+        raw = HEADER.pack(
+            MAGIC, VERSION, int(Kind.RFU), int(Direction.HOST_TO_GUEST), 1,
+            1, 0, 0, 0, 1, len(sid), len(payload),
+        ) + sid.encode() + payload
+
+        async def send_invalid() -> int | None:
+            import websockets
+
+            options = {}
+            header_name = ("additional_headers" if "additional_headers" in
+                           inspect.signature(websockets.connect).parameters else "extra_headers")
+            options[header_name] = {"Authorization": f"Bearer {first['member_token']}"}
+            url = (self.base.replace("http://", "ws://", 1) +
+                   f"/session/{sid}/ws?role=host&protocol=rfu&attempt_id={attempt_id}")
+            async with websockets.connect(url, **options) as websocket:
+                await websocket.send(raw)
+                try:
+                    await websocket.recv()
+                except Exception as error:
+                    received = getattr(error, "rcvd", None)
+                    return getattr(received, "code", None)
+            return None
+
+        self.assertEqual(asyncio.run(send_invalid()), 4400)
+        relay = RelayClient(self.base)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            room = relay.room(first["room"]["room_id"], second["member_token"])
+            if room["attempt"]["phase"] == "failed":
+                break
+            time.sleep(0.02)
+        self.assertEqual(room["attempt"]["phase"], "failed")
+        self.assertEqual(room["attempt"]["recoverable_error"], "relay.peer_lost")
 
     def test_authenticated_peer_loss_fails_attempt_and_disconnects_partner(self):
         first = self._authority_request("/v1/trade-rooms", {

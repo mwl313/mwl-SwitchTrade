@@ -18,7 +18,9 @@ from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import JSONResponse
 
-from switchtrade.rfu_tunnel import Direction, Envelope, Kind, direction_for_role
+from switchtrade.rfu_tunnel import (
+    Direction, Envelope, Kind, MAX_ENVELOPE_BYTES, direction_for_role,
+)
 from relay.authority import AuthorityError, AuthorityStore
 
 HEARTBEAT_TIMEOUT = 30.0
@@ -31,7 +33,7 @@ CLOSE_HEARTBEAT_TIMEOUT = 4408
 CLOSE_PEER_OFFLINE = 4000
 CLOSE_BAD_FRAME = 4400
 CLOSE_RATE_LIMITED = 4429
-MAX_MESSAGE_BYTES = (1 << 20) + 256
+MAX_MESSAGE_BYTES = MAX_ENVELOPE_BYTES
 SESSION_TTL = 6 * 60 * 60
 MAX_SESSIONS = 4096
 MAX_CONTROL_BODY_BYTES = 64 * 1024

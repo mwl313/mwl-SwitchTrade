@@ -12,8 +12,11 @@ import time
 MAGIC = b"MWRF"
 VERSION = 1
 MAX_SESSION_BYTES = 64
-MAX_PAYLOAD_BYTES = 1 << 20
 HEADER = struct.Struct("!4sBBBBIIQBBHI")
+# Pia Reliable stores its eight-byte header plus AppData in one uint16-sized
+# message. Keep the opaque tunnel inside that actual downstream wire bound.
+MAX_PAYLOAD_BYTES = 0xFFFF - 8
+MAX_ENVELOPE_BYTES = HEADER.size + MAX_SESSION_BYTES + MAX_PAYLOAD_BYTES
 BROADCAST_PLAYER = 0xFF
 
 

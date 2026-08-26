@@ -51,6 +51,8 @@ class PassivePartyObserver:
         self.remote_seat = "member_b" if local_seat == "member_a" else "member_a"
         self.log = log
         self._write_lock = threading.RLock()
+        self._signal_lock = threading.Lock()
+        self._pending_invalidations: dict[str, str] = {}
         self._queue: queue.Queue[tuple[str, str, bytes]] = queue.Queue(maxsize=capacity)
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="switchtrade-decoder", daemon=True)
@@ -91,7 +93,9 @@ class PassivePartyObserver:
             self.stats["submitted"] += 1
         except queue.Full:
             self.stats["dropped"] += 1
-            self._invalidate(source_seat, "observer_queue_overflow")
+            if source_seat in self._parties:
+                with self._signal_lock:
+                    self._pending_invalidations[source_seat] = "observer_queue_overflow"
 
     def stop(self, *, clear: bool = True, timeout: float = 2.0) -> None:
         self._stop.set()
@@ -121,7 +125,8 @@ class PassivePartyObserver:
             }
 
     def _run(self) -> None:
-        while not self._stop.is_set() or not self._queue.empty():
+        while not self._stop.is_set() or not self._queue.empty() or self._has_invalidations():
+            self._flush_invalidations()
             try:
                 source_seat, sender_role, payload = self._queue.get(timeout=0.1)
             except queue.Empty:
@@ -133,6 +138,16 @@ class PassivePartyObserver:
                 self.stats["parse_errors"] += 1
                 self._invalidate(source_seat, "decoder_error")
                 self.log("[decoder] passive observer error", type(error).__name__)
+
+    def _has_invalidations(self) -> bool:
+        with self._signal_lock:
+            return bool(self._pending_invalidations)
+
+    def _flush_invalidations(self) -> None:
+        with self._signal_lock:
+            pending, self._pending_invalidations = self._pending_invalidations, {}
+        for seat, reason in pending.items():
+            self._invalidate(seat, reason)
 
     def _process(self, source_seat: str, sender_role: str, payload: bytes) -> None:
         result = payload_decoder.parse_gba_frames(payload)
