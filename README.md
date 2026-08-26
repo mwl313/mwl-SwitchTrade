@@ -47,6 +47,7 @@
 | [docs/67-hardware-support-expansion-20260826.md](docs/67-hardware-support-expansion-20260826.md) | WSL USB 카드 매트릭스, host engine 정책, 자동 진단과 실기 승격 게이트 |
 | [docs/69-repository-preflight-completion-and-relay-handoff-20260826.md](docs/69-repository-preflight-completion-and-relay-handoff-20260826.md) | Repository preflight 완료 범위, relay hosting 인계, 남은 외부 gate |
 | [docs/70-private-beta-support-and-recovery-guide-20260826.md](docs/70-private-beta-support-and-recovery-guide-20260826.md) | Private-beta 지원 범위와 안전한 복구 가이드 |
+| [docs/75-visual-overhaul-3-installer-candidate-20260826.md](docs/75-visual-overhaul-3-installer-candidate-20260826.md) | Visual Overhaul 3가 포함된 최신 unsigned 설치 후보와 검증 기록 |
 | [relay/DEPLOYMENT.md](relay/DEPLOYMENT.md) | 별도 hosting agent용 production relay 배포·smoke runbook |
 | [docs/30-native-fixed-handshake-20260824.md](docs/30-native-fixed-handshake-20260824.md) | Native two-Switch fixed-channel gold, PC-host root cause, and byte-verified Session fix |
 | [handoff/HANDOFF-20260824-wsl-dual-radio.md](handoff/HANDOFF-20260824-wsl-dual-radio.md) | WSL 두 카드 최종 상태, 확장 구조, 다음 G5/G6 절차 |
@@ -109,6 +110,10 @@ Authoritative private rooms, the attempt-bound feature-neutral RFU tunnel, real 
 Windows frontend, passive decoder observer, isolated WSL lifecycle, native setup UI, signed-package
 verification, and hosting-ready relay are implemented. The pinned Linux/WSL runtime suite passes
 without Switch hardware. See [`docs/69-repository-preflight-completion-and-relay-handoff-20260826.md`](docs/69-repository-preflight-completion-and-relay-handoff-20260826.md).
+
+`production-beta` commit `77dd538` includes Visual Overhaul 3. The matching locally built unsigned
+installer candidate is `SwitchTrade-unsigned-private-beta-77dd538.zip`; its reproducible inputs and
+checksums are recorded in [`docs/75`](docs/75-visual-overhaul-3-installer-candidate-20260826.md).
 
 This is an internal beta candidate, not a signed user release. Two physical RTL8192EU endpoints,
 Switch-to-Switch validation, WAN/recovery soak, external clean-machine/reboot qualification, and
