@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import secrets
 import sqlite3
@@ -17,6 +18,8 @@ import string
 import threading
 import time
 import uuid
+
+from switchtrade.process_guard import SingleInstanceLock
 
 
 CONTRACT = "room-control.v1"
@@ -57,14 +60,71 @@ def _hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _database_writer_lock(database: str | Path) -> SingleInstanceLock:
+    resolved = Path(database).resolve()
+    lock_name = "relay-writer-" + hashlib.sha256(
+        os.fsencode(os.path.normcase(str(resolved)))).hexdigest()[:16]
+    return SingleInstanceLock(lock_name, resolved.parent)
+
+
+def _validate_database(connection: sqlite3.Connection) -> None:
+    if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+        raise sqlite3.DatabaseError("authority database integrity check failed")
+    tables = {
+        row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    required = {"rooms", "credentials", "commands", "events"}
+    if not required <= tables:
+        raise sqlite3.DatabaseError("authority database schema is incomplete")
+
+
+def copy_database(source: str | Path, destination: str | Path) -> None:
+    """Create or restore one atomic, WAL-consistent SQLite snapshot."""
+    source_path, destination_path = Path(source).resolve(), Path(destination).resolve()
+    if source_path == destination_path:
+        raise ValueError("source and destination databases must differ")
+    if not source_path.is_file():
+        raise FileNotFoundError(source_path)
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination_path.with_name(
+        f".{destination_path.name}.{uuid.uuid4().hex}.tmp")
+    with _database_writer_lock(destination_path):
+        try:
+            source_db = sqlite3.connect(f"{source_path.as_uri()}?mode=ro", uri=True)
+            try:
+                destination_db = sqlite3.connect(temporary)
+                try:
+                    source_db.backup(destination_db)
+                    _validate_database(destination_db)
+                finally:
+                    destination_db.close()
+            finally:
+                source_db.close()
+            for suffix in ("-wal", "-shm"):
+                destination_path.with_name(destination_path.name + suffix).unlink(missing_ok=True)
+            os.replace(temporary, destination_path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
 class AuthorityStore:
     """Small transactional room store shared by HTTP and WebSocket paths."""
 
     def __init__(self, database: str | Path):
         database = str(database)
+        self.database = database
+        self._writer_lock = None
         if database != ":memory:":
-            Path(database).parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(database, check_same_thread=False, isolation_level=None)
+            resolved = Path(database).resolve()
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            self._writer_lock = _database_writer_lock(resolved).acquire()
+        try:
+            self._db = sqlite3.connect(database, check_same_thread=False, isolation_level=None)
+        except Exception:
+            if self._writer_lock is not None:
+                self._writer_lock.close()
+            raise
         self._db.row_factory = sqlite3.Row
         self._lock = threading.RLock()
         self._ephemeral_responses: dict[tuple[str, str], tuple[float, dict]] = {}
@@ -107,6 +167,11 @@ class AuthorityStore:
                 data TEXT NOT NULL,
                 FOREIGN KEY(room_id) REFERENCES rooms(room_id) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS service_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            INSERT OR IGNORE INTO service_state(key,value) VALUES('readiness','initialized');
             """
         )
         columns = {row[1] for row in self._db.execute("PRAGMA table_info(commands)")}
@@ -141,7 +206,12 @@ class AuthorityStore:
 
     def close(self) -> None:
         with self._lock:
-            self._db.close()
+            try:
+                self._db.close()
+            finally:
+                if self._writer_lock is not None:
+                    self._writer_lock.close()
+                    self._writer_lock = None
 
     def _new_code(self) -> str:
         for _ in range(100):
@@ -177,6 +247,9 @@ class AuthorityStore:
         )
         if room["state"] not in {"closed", "expired"} and (
                 room["expires_at_epoch"] <= now or waiting_expired):
+            if not self._db.in_transaction:
+                with self._transaction():
+                    return self._load(room_id)
             room["state"] = "expired"
             room["room_version"] += 1
             self._event(room, "room.expired", None)
@@ -242,6 +315,14 @@ class AuthorityStore:
             "capacity": 2,
             "created_at": room.get("created_at"),
         }
+
+    @staticmethod
+    def _owner_available(room: dict) -> bool:
+        owner_id = room.get("owner_member_id")
+        owner = next(
+            (member for member in room.get("members", [])
+             if member.get("member_id") == owner_id), None)
+        return bool(owner and owner.get("online_state") in {"online", "reconnecting"})
 
     def _command_response(self, scope: str, command_id: str) -> dict | None:
         if not command_id:
@@ -376,7 +457,8 @@ class AuthorityStore:
             ).fetchall()
             for row in rows:
                 room = self._load(row["room_id"])
-                if room.get("state") in {"closed", "expired"}:
+                if (room.get("state") in {"closed", "expired"} or
+                        not self._owner_available(room)):
                     continue
                 listing = self._directory_listing(room)
                 if availability == "open" and listing["availability"] != "open":
@@ -412,7 +494,8 @@ class AuthorityStore:
             if row is None:
                 raise AuthorityError(404, "public room not found")
             room = self._load(row["room_id"])
-            if room.get("state") in {"closed", "expired"}:
+            if (room.get("state") in {"closed", "expired"} or
+                    not self._owner_available(room)):
                 raise AuthorityError(410, "public room is stale")
             return self._directory_listing(room)
 
@@ -429,7 +512,8 @@ class AuthorityStore:
             if row is None:
                 raise AuthorityError(404, "public room not found")
             room = self._load(row["room_id"])
-            if room.get("state") in {"closed", "expired"}:
+            if (room.get("state") in {"closed", "expired"} or
+                    not self._owner_available(room)):
                 raise AuthorityError(410, "public room is stale")
             return self._join_room(room, display_name, scope, command_id)
 
@@ -521,8 +605,11 @@ class AuthorityStore:
             }
 
     def ping(self) -> None:
-        with self._lock:
-            self._db.execute("SELECT 1").fetchone()
+        with self._transaction():
+            self._db.execute(
+                "UPDATE service_state SET value=? WHERE key='readiness'", (_utc(),))
+            if self._db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                raise sqlite3.DatabaseError("authority database integrity check failed")
 
     @staticmethod
     def _begin_attempt(room: dict, active: list[dict]) -> None:

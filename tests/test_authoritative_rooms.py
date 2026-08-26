@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
 from pathlib import Path
+import sqlite3
 import tempfile
 import time
 import unittest
@@ -12,7 +13,8 @@ from fastapi.testclient import TestClient
 import httpx
 
 import relay.server as relay_server
-from relay.authority import AuthorityStore, uuid7
+from relay.authority import AuthorityStore, copy_database, uuid7
+from switchtrade.process_guard import AlreadyRunningError
 
 
 def _command() -> str:
@@ -133,6 +135,28 @@ class AuthoritativeRoomTests(unittest.TestCase):
             headers={"Idempotency-Key": _command(), "X-SwitchTrade-Client": "public-third"},
         )
         self.assertEqual(losing_join.status_code, 409)
+
+    def test_offline_owner_room_is_hidden_and_cannot_be_joined_publicly(self):
+        created = self._create_public()
+        listing_id = created["room"]["directory"]["listing_id"]
+        baseline = time.time()
+        with patch("relay.authority.time.time", return_value=baseline + 46):
+            relay_server.authority.sweep_presence()
+        self.assertEqual(
+            self.client.get("/v1/public-trade-rooms").json()["rooms"][0]["listing_id"],
+            listing_id,
+        )
+        with patch("relay.authority.time.time", return_value=baseline + 137):
+            relay_server.authority.sweep_presence()
+        self.assertEqual(self.client.get("/v1/public-trade-rooms").json()["rooms"], [])
+        details = self.client.get(f"/v1/public-trade-rooms/{listing_id}")
+        self.assertEqual(details.status_code, 410, details.text)
+        joined = self.client.post(
+            f"/v1/public-trade-rooms/{listing_id}:join",
+            json={"trainer_display_name": "Red"},
+            headers={"Idempotency-Key": _command(), "X-SwitchTrade-Client": "offline-owner"},
+        )
+        self.assertEqual(joined.status_code, 410, joined.text)
 
     def test_production_mode_rejects_legacy_sessions_and_invalid_room_fields(self):
         with patch.dict(os.environ, {"SWITCHTRADE_ENABLE_LEGACY_RELAY": "0"}):
@@ -329,6 +353,134 @@ class AuthoritativeRoomTests(unittest.TestCase):
         snapshot = relay_server.authority.snapshot(room_id, first["member_token"])
         self.assertEqual(snapshot["room_id"], room_id)
         self.assertEqual(snapshot["local_member_id"], first["room"]["local_member_id"])
+
+    def test_database_writer_is_single_instance_and_releases_on_close(self):
+        database = Path(self.temporary.name) / "single-writer.sqlite3"
+        first = AuthorityStore(database)
+        try:
+            with self.assertRaises(AlreadyRunningError):
+                AuthorityStore(database)
+        finally:
+            first.close()
+        AuthorityStore(database).close()
+
+    def test_wal_backup_restore_drill_is_atomic_and_offline_only(self):
+        database = Path(self.temporary.name) / "restore-source.sqlite3"
+        backup = Path(self.temporary.name) / "backups" / "authority.sqlite3"
+        store = AuthorityStore(database)
+        created = store.create({
+            "name": "Backup drill", "visibility": "private",
+            "trainer_display_name": "Leaf", "game": "LeafGreen", "language": "English",
+        }, _command(), "backup-client")
+        room_id = created["room"]["room_id"]
+        copy_database(database, backup)
+        with self.assertRaises(AlreadyRunningError):
+            copy_database(backup, database)
+        store.close()
+        corrupt = Path(self.temporary.name) / "corrupt.sqlite3"
+        corrupt.write_bytes(b"not a sqlite database")
+        before = database.read_bytes()
+        with self.assertRaises(sqlite3.DatabaseError):
+            copy_database(corrupt, database)
+        self.assertEqual(database.read_bytes(), before)
+        copy_database(backup, database)
+        restored = AuthorityStore(database)
+        try:
+            room = restored.snapshot(room_id, created["member_token"])
+            self.assertEqual(room["state"], "waiting_for_partner")
+            restored.ping()
+        finally:
+            restored.close()
+        self.assertFalse(Path(str(database) + "-wal").exists())
+
+    def test_read_triggered_expiry_commits_as_one_transaction(self):
+        created = self._create()
+        room_id = created["room"]["room_id"]
+        statements = []
+        relay_server.authority._db.set_trace_callback(statements.append)
+        baseline = time.time()
+        with patch("relay.authority.time.time", return_value=baseline + 31 * 60):
+            room = relay_server.authority.snapshot(room_id, created["member_token"])
+        relay_server.authority._db.set_trace_callback(None)
+        self.assertEqual(room["state"], "expired")
+        self.assertIn("BEGIN IMMEDIATE", statements)
+        self.assertIn("COMMIT", statements)
+        self.assertFalse(relay_server.authority._db.in_transaction)
+        events = relay_server.authority._db.execute(
+            "SELECT COUNT(*) FROM events WHERE room_id=? AND event_type='room.expired'",
+            (room_id,),
+        ).fetchone()[0]
+        self.assertEqual(events, 1)
+
+    def test_authoritative_session_registry_prunes_and_enforces_capacity(self):
+        stale = relay_server.Session("STALE1")
+        stale.last_activity = 0
+        live = relay_server.Session("LIVE01")
+        live.host = object()
+        relay_server.sessions.update({"STALE1": stale, "LIVE01": live})
+        with patch("relay.server.time.monotonic", return_value=relay_server.SESSION_TTL + 1):
+            relay_server._prune_sessions()
+        self.assertNotIn("STALE1", relay_server.sessions)
+        self.assertIn("LIVE01", relay_server.sessions)
+        with patch.object(relay_server, "MAX_SESSIONS", 1):
+            with self.assertRaises(relay_server.HTTPException) as raised:
+                relay_server._session("NEW001")
+        self.assertEqual(raised.exception.status_code, 503)
+
+    def test_rate_limit_identity_ignores_untrusted_spoof_headers(self):
+        limiter = relay_server.RateLimiter(limit=1, window=60)
+        payload = {
+            "name": "Rate identity", "visibility": "private",
+            "trainer_display_name": "Leaf", "game": "LeafGreen", "language": "English",
+        }
+        with patch.object(relay_server, "rate_limiter", limiter):
+            first = self.client.post("/v1/trade-rooms", json=payload, headers={
+                "Idempotency-Key": _command(), "X-SwitchTrade-Client": "spoof-a",
+                "X-Forwarded-For": "198.51.100.1",
+            })
+            second = self.client.post("/v1/trade-rooms", json=payload, headers={
+                "Idempotency-Key": _command(), "X-SwitchTrade-Client": "spoof-b",
+                "X-Forwarded-For": "198.51.100.2",
+            })
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(second.status_code, 429, second.text)
+        request = relay_server.Request({
+            "type": "http", "method": "GET", "path": "/", "headers": [
+                (b"x-forwarded-for", b"198.51.100.99, 203.0.113.7")],
+            "client": ("10.0.0.5", 1234), "server": ("relay", 8788),
+            "scheme": "http", "query_string": b"",
+        })
+        with patch.dict(os.environ, {"SWITCHTRADE_TRUSTED_PROXIES": "10.0.0.0/8"}):
+            self.assertEqual(relay_server._rate_identity(request), "203.0.113.7")
+
+    def test_health_performs_writable_storage_probe(self):
+        before = relay_server.authority._db.execute(
+            "SELECT value FROM service_state WHERE key='readiness'").fetchone()[0]
+        response = self.client.get("/health")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["storage_status"], "writable")
+        self.assertEqual(response.json()["worker_model"], "single-writer")
+        after = relay_server.authority._db.execute(
+            "SELECT value FROM service_state WHERE key='readiness'").fetchone()[0]
+        self.assertNotEqual(after, before)
+
+    def test_unhandled_relay_failure_returns_generic_structured_envelope(self):
+        with patch.object(
+                relay_server.authority, "operational_stats",
+                side_effect=ExceptionGroup("do-not-leak", [RuntimeError("credential-secret")])):
+            response = self.client.get("/metrics")
+        self.assertEqual(response.status_code, 500, response.text)
+        body = response.json()
+        self.assertEqual(set(body), {
+            "code", "message", "detail", "stage", "recoverable",
+            "primary_action", "correlation_id",
+        })
+        self.assertEqual(body["code"], "relay_internal_error")
+        self.assertEqual(body["message"], "internal relay error")
+        self.assertTrue(body["recoverable"])
+        self.assertEqual(body["primary_action"], "retry")
+        self.assertEqual(response.headers["X-Correlation-ID"], body["correlation_id"])
+        self.assertNotIn("credential-secret", response.text)
 
     def test_public_listing_survives_service_restart_without_exposing_credentials(self):
         created = self._create_public()

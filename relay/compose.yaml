@@ -10,6 +10,7 @@ services:
     environment:
       SWITCHTRADE_AUTH_DB: /var/lib/switchtrade/authority.sqlite3
       SWITCHTRADE_ENABLE_LEGACY_RELAY: "0"
+      SWITCHTRADE_TRUSTED_PROXIES: 172.16.0.0/12
     volumes:
       - authority:/var/lib/switchtrade
     tmpfs:

@@ -1,6 +1,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import BackgroundTasks
+import ipaddress
 import os
 from pathlib import Path
 import json
@@ -18,7 +19,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import JSONResponse
 
 from switchtrade.rfu_tunnel import Direction, Envelope, Kind, direction_for_role
-from switchtrade.process_guard import AlreadyRunningError, SingleInstanceLock
 from relay.authority import AuthorityError, AuthorityStore
 
 HEARTBEAT_TIMEOUT = 30.0
@@ -33,6 +33,7 @@ CLOSE_BAD_FRAME = 4400
 CLOSE_RATE_LIMITED = 4429
 MAX_MESSAGE_BYTES = (1 << 20) + 256
 SESSION_TTL = 6 * 60 * 60
+MAX_SESSIONS = 4096
 MAX_CONTROL_BODY_BYTES = 64 * 1024
 RFU_CONTRACT = "rfu-tunnel.v1"
 
@@ -65,6 +66,7 @@ ERROR_CODES = {
     "reconnect credential is invalid": ("reconnect_credential_invalid", "authentication", False, "rejoin_room"),
     "rate limit exceeded": ("rate_limited", "relay", True, "retry_later"),
     "rate limit capacity exceeded": ("rate_limited", "relay", True, "retry_later"),
+    "relay session capacity exceeded": ("relay_capacity", "relay", True, "retry_later"),
 }
 
 
@@ -100,6 +102,11 @@ async def http_error(request: Request, error: HTTPException) -> JSONResponse:
 @app.exception_handler(RequestValidationError)
 async def validation_error(request: Request, _error: RequestValidationError) -> JSONResponse:
     return _error_response(request, 422, "request validation failed")
+
+
+@app.exception_handler(Exception)
+async def unexpected_error(request: Request, _error: Exception) -> JSONResponse:
+    return _error_response(request, 500, "internal relay error")
 
 
 class StrictPayload(BaseModel):
@@ -229,6 +236,32 @@ def _client_id(request: Request) -> str:
     return request.headers.get("x-switchtrade-client", "anonymous")[:128]
 
 
+def _rate_identity(request: Request) -> str:
+    peer = request.client.host if request.client else "unknown"
+    configured = os.environ.get("SWITCHTRADE_TRUSTED_PROXIES", "")
+    try:
+        peer_address = ipaddress.ip_address(peer)
+        networks = [
+            ipaddress.ip_network(value.strip(), strict=False)
+            for value in configured.split(",") if value.strip()
+        ]
+    except ValueError:
+        return peer
+    if any(peer_address in network for network in networks):
+        try:
+            chain = [
+                ipaddress.ip_address(value.strip())
+                for value in request.headers.get("x-forwarded-for", "").split(",")
+                if value.strip()
+            ]
+        except ValueError:
+            return peer
+        for address in reversed(chain):
+            if not any(address in network for network in networks):
+                return str(address)
+    return peer
+
+
 def _expected_version(request: Request) -> int:
     value = request.headers.get("if-match", "").strip().strip('"')
     if not value:
@@ -254,6 +287,8 @@ async def health() -> dict:
     authority.ping()
     return {
         "status": "ready",
+        "storage_status": "writable",
+        "worker_model": "single-writer",
         "service": "switchtrade-relay",
         "room_contract": "room-control.v1",
         "rfu_contract": RFU_CONTRACT,
@@ -280,15 +315,17 @@ async def structured_request_log(request: Request, call_next):
             body.extend(chunk)
         request._body = bytes(body)
     authority.sweep_presence()
+    _prune_sessions()
     route = request.url.path.split("?")[0]
     try:
         response = await call_next(request)
-    except Exception:
-        logger.exception(json.dumps({
+    except Exception as error:
+        logger.error(json.dumps({
             "event": "http_request_failed", "method": request.method, "route": route,
+            "error_type": type(error).__name__,
             "duration_ms": round((time.monotonic() - started) * 1000, 1),
         }, separators=(",", ":")))
-        raise
+        return _error_response(request, 500, "internal relay error")
     logger.info(json.dumps({
         "event": "http_request", "method": request.method, "route": route,
         "status": response.status_code,
@@ -300,16 +337,15 @@ async def structured_request_log(request: Request, call_next):
 
 @app.post("/v1/trade-rooms")
 async def create_trade_room(payload: CreateRoomPayload, request: Request) -> dict:
-    rate_limiter.check(f"create:{_client_id(request)}")
+    rate_limiter.check(f"create:{_rate_identity(request)}")
     response = _translate_authority(
         lambda: authority.create(payload.model_dump(), _command_id(request), _client_id(request)))
-    sessions.setdefault(response["room"]["room_code"], Session(response["room"]["room_code"]))
     return response
 
 
 @app.post("/v1/trade-rooms:join")
 async def join_trade_room(payload: JoinRoomPayload, request: Request) -> dict:
-    rate_limiter.check(f"join:{_client_id(request)}")
+    rate_limiter.check(f"join:{_rate_identity(request)}")
     return _translate_authority(
         lambda: authority.join(payload.model_dump(), _command_id(request), _client_id(request)))
 
@@ -326,7 +362,7 @@ async def list_public_trade_rooms(
         cursor: int = Query(default=0, ge=0),
         limit: int = Query(default=25, ge=1, le=50),
 ) -> dict:
-    identity = request.client.host if request.client else "unknown"
+    identity = _rate_identity(request)
     rate_limiter.check(f"public-list:{identity}")
     return _translate_authority(lambda: authority.list_public(
         query=query, game=game, language=language, availability=availability,
@@ -335,7 +371,7 @@ async def list_public_trade_rooms(
 
 @app.get("/v1/public-trade-rooms/{listing_id}")
 async def get_public_trade_room(listing_id: str, request: Request) -> dict:
-    identity = request.client.host if request.client else "unknown"
+    identity = _rate_identity(request)
     rate_limiter.check(f"public-details:{identity}")
     return _translate_authority(lambda: authority.public_details(listing_id))
 
@@ -343,14 +379,14 @@ async def get_public_trade_room(listing_id: str, request: Request) -> dict:
 @app.post("/v1/public-trade-rooms/{listing_id}:join")
 async def join_public_trade_room(
         listing_id: str, payload: JoinPublicRoomPayload, request: Request) -> dict:
-    rate_limiter.check(f"public-join:{_client_id(request)}")
+    rate_limiter.check(f"public-join:{_rate_identity(request)}")
     return _translate_authority(lambda: authority.join_public(
         listing_id, payload.trainer_display_name, _command_id(request), _client_id(request)))
 
 
 @app.post("/v1/trade-rooms/{room_id}:reconnect")
 async def reconnect_trade_room(room_id: str, payload: ReconnectPayload, request: Request) -> dict:
-    rate_limiter.check(f"reconnect:{room_id}")
+    rate_limiter.check(f"reconnect:{room_id}:{_rate_identity(request)}")
     return _translate_authority(
         lambda: authority.reconnect(room_id, payload.reconnect_token, _command_id(request)))
 
@@ -486,10 +522,23 @@ def _prune_sessions() -> None:
             sessions.pop(sid, None)
 
 
+def _session(sid: str) -> Session:
+    _prune_sessions()
+    if existing := sessions.get(sid):
+        return existing
+    if len(sessions) >= MAX_SESSIONS:
+        raise HTTPException(status_code=503, detail="relay session capacity exceeded")
+    session = Session(sid)
+    sessions[sid] = session
+    return session
+
+
 @app.post("/session/create")
 async def create_session() -> dict:
     _require_legacy()
     _prune_sessions()
+    if len(sessions) >= MAX_SESSIONS:
+        raise HTTPException(status_code=503, detail="relay session capacity exceeded")
     while True:
         sid = "".join(secrets.choice(SESSION_ID_CHARS) for _ in range(6))
         if sid not in sessions:
@@ -516,12 +565,13 @@ async def join_session(sid: str) -> dict:
 async def session_status(sid: str, request: Request) -> dict:
     if authority.has_code(sid):
         _translate_authority(lambda: authority.member_for_code(sid, _bearer(request)))
-        sessions.setdefault(sid, Session(sid))
+        session = _session(sid)
     else:
         _require_legacy()
-    session = sessions.get(sid)
+        session = sessions.get(sid)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
+    session.last_activity = time.monotonic()
     return {
         "session_id": sid,
         "host_connected": session.host is not None,
@@ -556,7 +606,11 @@ async def ws_session(websocket: WebSocket, sid: str, role: str = "host",
         if role != expected_role:
             await websocket.close(code=4403, reason="relay seat does not match member credential")
             return
-        sessions.setdefault(sid, Session(sid))
+        try:
+            _session(sid)
+        except HTTPException:
+            await websocket.close(code=1013, reason="relay session capacity exceeded")
+            return
     elif not _legacy_enabled():
         await websocket.close(code=CLOSE_NOT_FOUND, reason="session not found")
         return
@@ -656,17 +710,13 @@ async def ws_session(websocket: WebSocket, sid: str, role: str = "host",
 
 def main() -> None:
     import uvicorn
-    try:
-        with SingleInstanceLock("development-relay"):
-            uvicorn.run(
-                "relay.server:app",
-                host=os.environ.get("SWITCHTRADE_RELAY_HOST", "127.0.0.1"),
-                port=int(os.environ.get("SWITCHTRADE_RELAY_PORT", "8788")),
-                proxy_headers=True,
-                reload=False,
-            )
-    except AlreadyRunningError as error:
-        raise SystemExit(str(error)) from error
+    uvicorn.run(
+        "relay.server:app",
+        host=os.environ.get("SWITCHTRADE_RELAY_HOST", "127.0.0.1"),
+        port=int(os.environ.get("SWITCHTRADE_RELAY_PORT", "8788")),
+        proxy_headers=False,
+        reload=False,
+    )
 
 
 if __name__ == "__main__":
