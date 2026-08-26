@@ -66,6 +66,8 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertIn("--rollback", provision)
         self.assertIn('${TARGET}.previous', provision)
         self.assertNotIn('${TARGET}.previous.$(date', provision)
+        self.assertIn('cd "$stage"', provision)
+        self.assertLess(provision.index("--dry-run"), provision.index('backup=""'))
         self.assertIn("application, WSL runtime, and retained kernel rollback completed", setup)
         self.assertIn("Test-InstalledConfiguration", launcher)
         self.assertIn("payload/release-config.json", launcher)

@@ -54,6 +54,12 @@ python3 -m venv "$stage/bridge/.venv"
     --requirement "$stage/bridge/requirements.txt"
 find "$stage/scripts" -type f -name '*.sh' -exec chmod 0755 {} +
 
+(
+    cd "$stage"
+    "$stage/bridge/.venv/bin/python" -m switchtrade.endpoint \
+        --role host --session-id PROBE1 --relay-url http://127.0.0.1:9 --dry-run
+)
+
 backup=""
 if [[ -e $TARGET ]]; then
     backup="${TARGET}.previous"
@@ -67,6 +73,4 @@ if ! mv -- "$stage" "$TARGET"; then
 fi
 trap - EXIT
 
-"$TARGET/bridge/.venv/bin/python" -m switchtrade.endpoint \
-    --role host --session-id PROBE1 --relay-url http://127.0.0.1:9 --dry-run
 printf '[wsl] SwitchTrade runtime provisioned at %s\n' "$TARGET"

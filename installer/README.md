@@ -67,6 +67,8 @@ The retired web/demo frontend is not bundled into the WSL runtime or required by
 - `SwitchTradeSetup.ps1 -Action Audit` is read-only.
 - `Install` and `Repair` provision the isolated distro and retain the previous `/opt/switchtrade`
   runtime for rollback.
+- WSL provisioning builds and self-checks a complete staged runtime from its own application root
+  before replacing `/opt/switchtrade`; Setup's Windows or WSL working directory is irrelevant.
 - `Uninstall` removes application files only.
 - The distro is unregistered only when `Uninstall -PurgeDistro` is explicitly requested.
 - Setup changes global WSL kernel selection only when a verified kernel bundle is present and the user

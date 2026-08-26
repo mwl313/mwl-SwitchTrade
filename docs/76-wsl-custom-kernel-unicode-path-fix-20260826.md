@@ -60,3 +60,24 @@ running.
 The earlier `77dd538`, `9014e8f`, and `28221e1` packages are superseded and must not be distributed.
 The replacement `SwitchTrade-unsigned-private-beta-1e8b4bd.zip` passed the complete actual install on
 the affected non-ASCII-profile PC.
+
+## Reinstall working-directory correction
+
+An uninstall followed by reinstall exposed another independent bootstrap defect. The WSL provisioner
+ran `python -m switchtrade.endpoint` without changing to the application root. Python therefore found
+the `switchtrade` package only when Setup happened to inherit a working directory containing the
+repository. Launching the same Setup normally from Explorer failed with
+`ModuleNotFoundError: No module named 'switchtrade'`.
+
+This was not specific to the development PC, Windows account, custom kernel, or radio. Any machine
+could encounter it depending on Setup's launch directory.
+
+The provisioner now:
+
+- runs the endpoint self-check from the staged application root;
+- performs that check before replacing the active `/opt/switchtrade` runtime; and
+- retains the existing runtime unchanged if staging or self-check fails.
+
+The original failure was reproduced with WSL's working directory set to `/`. The corrected provisioner
+then completed from the same unrelated directory and activated the staged runtime successfully. The
+lifecycle regression test also requires the self-check to precede backup and activation.
