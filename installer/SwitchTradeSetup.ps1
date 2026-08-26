@@ -1,15 +1,16 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [ValidateSet('Audit', 'Install', 'Repair', 'Update', 'Rollback', 'Uninstall')]
+    [ValidateSet('Audit', 'Install', 'Repair', 'Update', 'Resume', 'Rollback', 'Uninstall')]
     [string]$Action = 'Audit',
     [string]$Distro = 'SwitchTrade',
     [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'Programs\SwitchTrade'),
     [string]$DistroRoot = (Join-Path $env:LOCALAPPDATA 'SwitchTrade\wsl'),
-    [string]$BusId = '',
-    [string]$UsbId = '',
+    [ValidatePattern('^$|^\d+-\d+$')][string]$BusId = '',
+    [ValidatePattern('^$|^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$')][string]$UsbId = '',
     [switch]$AcceptGlobalKernelChange,
     [switch]$AcceptPrerequisiteChanges,
     [switch]$AcceptVmwareRelease,
+    [switch]$AllowUnsignedPackage,
     [switch]$NoShortcut,
     [switch]$PurgeDistro
 )
@@ -23,13 +24,73 @@ $DesktopExe = Join-Path $PackageRoot 'windows\SwitchTrade.exe'
 $DesktopHash = Join-Path $PackageRoot 'windows\SwitchTrade.exe.sha256'
 $ReleaseConfig = Join-Path $PackageRoot 'payload\release-config.json'
 $Kernel = Join-Path $PackageRoot 'payload\kernel\kernel'
-$KernelModules = Join-Path $PackageRoot 'payload\kernel\modules'
+$KernelModulesVhdx = Join-Path $PackageRoot 'payload\kernel\modules.vhdx'
+$KernelModulesVhd = Join-Path $PackageRoot 'payload\kernel\modules.vhd'
+$KernelModulesArchive = Join-Path $PackageRoot 'payload\kernel\modules.tar.gz'
+$KernelModules = @($KernelModulesVhdx, $KernelModulesVhd, $KernelModulesArchive) |
+    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
 $KernelManifest = Join-Path $PackageRoot 'payload\kernel\manifest.json'
 $StateRoot = Join-Path $env:LOCALAPPDATA 'SwitchTrade'
 $UsbipdMsi = Join-Path $PackageRoot 'payload\prerequisites\usbipd-win.msi'
 $UsbipdManifest = Join-Path $PackageRoot 'payload\prerequisites\usbipd-win.json'
 $PreviousInstall = "$InstallRoot.previous"
 . (Join-Path $PSScriptRoot 'KernelLifecycle.ps1')
+. (Join-Path $PSScriptRoot 'PackageIntegrity.ps1')
+
+$ResumeStatePath = Join-Path $StateRoot 'setup-resume.json'
+$ResumeRunOnce = 'SwitchTradeSetupResume'
+$WasResume = $Action -eq 'Resume'
+
+function Save-SetupResume([string]$ResumeAction) {
+    New-Item -ItemType Directory -Force -Path $StateRoot | Out-Null
+    @{
+        schema = 1; package_root = $PackageRoot; action = $ResumeAction
+        distro = $Distro; install_root = $InstallRoot; distro_root = $DistroRoot
+        bus_id = $BusId; usb_id = $UsbId
+        accept_global_kernel_change = [bool]$AcceptGlobalKernelChange
+        accept_prerequisite_changes = [bool]$AcceptPrerequisiteChanges
+        accept_vmware_release = [bool]$AcceptVmwareRelease
+        no_shortcut = [bool]$NoShortcut
+    } | ConvertTo-Json | Set-Content -LiteralPath $ResumeStatePath -Encoding UTF8
+    $setupExe = Join-Path $PackageRoot 'SwitchTradeSetup.exe'
+    if (-not (Test-Path -LiteralPath $setupExe -PathType Leaf)) {
+        throw 'SETUP_RESUME_UNAVAILABLE: the native setup executable is missing'
+    }
+    $command = "`"$setupExe`" resume"
+    New-Item -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce' -Force | Out-Null
+    Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce' `
+        -Name $ResumeRunOnce -Value $command
+}
+
+function Clear-SetupResume {
+    if (Test-Path -LiteralPath $ResumeStatePath -PathType Leaf) {
+        Remove-Item -LiteralPath $ResumeStatePath -Force
+    }
+    Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce' `
+        -Name $ResumeRunOnce -ErrorAction SilentlyContinue
+}
+
+if ($WasResume) {
+    if (-not (Test-Path -LiteralPath $ResumeStatePath -PathType Leaf)) {
+        throw 'SETUP_RESUME_STATE_MISSING: rerun the signed SwitchTrade setup package'
+    }
+    $resume = Get-Content -Raw -LiteralPath $ResumeStatePath | ConvertFrom-Json
+    if ([int]$resume.schema -ne 1 -or [string]$resume.package_root -ne $PackageRoot -or
+        [string]$resume.action -notin @('Install', 'Repair', 'Update')) {
+        throw 'SETUP_RESUME_STATE_INVALID: rerun the signed SwitchTrade setup package'
+    }
+    $Action = [string]$resume.action
+    $Distro = [string]$resume.distro
+    $InstallRoot = [string]$resume.install_root
+    $DistroRoot = [string]$resume.distro_root
+    $BusId = [string]$resume.bus_id
+    $UsbId = [string]$resume.usb_id
+    $AcceptGlobalKernelChange = [bool]$resume.accept_global_kernel_change
+    $AcceptPrerequisiteChanges = [bool]$resume.accept_prerequisite_changes
+    $AcceptVmwareRelease = [bool]$resume.accept_vmware_release
+    $NoShortcut = [bool]$resume.no_shortcut
+    $PreviousInstall = "$InstallRoot.previous"
+}
 
 function Get-Distros {
     if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) { return @() }
@@ -77,6 +138,7 @@ if ($Action -eq 'Audit') {
 }
 
 if ($Action -eq 'Uninstall') {
+    Clear-SetupResume
     Restore-SwitchTradeKernel -StateRoot $StateRoot | Out-Null
     if (Test-Path -LiteralPath $InstallRoot) {
         if ($PSCmdlet.ShouldProcess($InstallRoot, 'Remove SwitchTrade application files')) {
@@ -105,6 +167,7 @@ if ($Action -eq 'Uninstall') {
 }
 
 if ($Action -eq 'Rollback') {
+    Clear-SetupResume
     if (-not (Test-Path -LiteralPath $PreviousInstall -PathType Container)) {
         throw 'no retained SwitchTrade application version is available for rollback'
     }
@@ -126,16 +189,17 @@ if ($Action -eq 'Rollback') {
 }
 
 $audit = Test-Setup
+Test-SwitchTradePackage -PackageRoot $PackageRoot -AllowUnsignedPackage:$AllowUnsignedPackage | Out-Null
 if (-not $audit.Windows64Bit) { throw 'SwitchTrade requires 64-bit Windows.' }
 if ($audit.WindowsBuild -lt 26100) { throw 'SwitchTrade private beta requires Windows 11 24H2 build 26100 or newer.' }
 if ($audit.FreeSpaceGB -lt 8) { throw 'SwitchTrade requires at least 8 GB of free space for safe install and rollback.' }
 if (-not $audit.VirtualizationReady) { throw 'Hardware virtualization/Hyper-V is not available to WSL 2.' }
 if (-not $audit.PayloadPresent) { throw "application payload is missing: $Payload" }
-$releaseManifest = Get-Content -Raw -LiteralPath (Join-Path $PackageRoot 'manifest.json') | ConvertFrom-Json
-if (-not (Test-Path -LiteralPath $ReleaseConfig -PathType Leaf) -or
-    (Get-FileSha256 $ReleaseConfig) -ne
-    ([string]$releaseManifest.release_config_sha256).ToLowerInvariant()) {
-    throw 'signed installation configuration checksum verification failed'
+if (-not (Test-Path -LiteralPath $ReleaseConfig -PathType Leaf)) {
+    throw 'signed installation configuration is missing'
+}
+if ($audit.PendingReboot -and -not $WasResume) {
+    throw 'WINDOWS_RESTART_PENDING: restart Windows before installing or repairing SwitchTrade'
 }
 if (Test-Path -LiteralPath $DesktopExe -PathType Leaf) {
     if (-not (Test-Path -LiteralPath $DesktopHash -PathType Leaf)) {
@@ -156,7 +220,9 @@ if (-not $audit.WslInstalled) {
     if ($LASTEXITCODE -ne 0) { throw 'could not enable Windows Subsystem for Linux' }
     & dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
     if ($LASTEXITCODE -ne 0) { throw 'could not enable Virtual Machine Platform' }
-    throw 'WSL prerequisites were enabled. Restart Windows, then run SwitchTrade Setup again.'
+    Save-SetupResume -ResumeAction $Action
+    Write-Host 'WSL prerequisites were enabled. Restart Windows; SwitchTrade Setup will resume after sign-in.'
+    exit 3010
 }
 if (-not $audit.UsbipdInstalled) {
     if (-not $AcceptPrerequisiteChanges) {
@@ -172,6 +238,11 @@ if (-not $audit.UsbipdInstalled) {
     }
     $msi = Start-Process msiexec.exe -ArgumentList @('/i', $UsbipdMsi, '/qn', '/norestart') -Wait -PassThru
     if ($msi.ExitCode -notin @(0, 3010)) { throw "usbipd-win installation failed with $($msi.ExitCode)" }
+    if ($msi.ExitCode -eq 3010) {
+        Save-SetupResume -ResumeAction $Action
+        Write-Host 'usbipd-win requires a restart. SwitchTrade Setup will resume after sign-in.'
+        exit 3010
+    }
 }
 if ($audit.VmwareUsbArbitrator -eq 'Running') {
     if (-not $AcceptVmwareRelease) {
@@ -202,13 +273,33 @@ if ((Test-Path -LiteralPath $Kernel -PathType Leaf) -and
         Kernel = $Kernel; Manifest = $KernelManifest; StateRoot = $StateRoot
         AcceptGlobalKernelChange = $AcceptGlobalKernelChange
     }
-    if (Test-Path -LiteralPath $KernelModules -PathType Leaf) {
+    if ($KernelModules -and (Test-Path -LiteralPath $KernelModules -PathType Leaf)) {
         $kernelArguments.KernelModules = $KernelModules
     }
     $kernelState = Install-SwitchTradeKernel @kernelArguments
-    $runningKernel = (& wsl.exe -d $Distro -- uname -r).Trim()
-    if ($LASTEXITCODE -ne 0 -or $runningKernel -ne [string]$kernelState.kernel_release) {
-        throw "SwitchTrade custom kernel verification failed: expected $($kernelState.kernel_release), got $runningKernel"
+    $kernelOutput = ((& wsl.exe -d $Distro -- uname -r 2>&1) -join "`n").Trim()
+    $kernelExit = $LASTEXITCODE
+    if ($kernelExit -ne 0 -or $kernelOutput -ne [string]$kernelState.kernel_release) {
+        try { Restore-SwitchTradeKernel -StateRoot $StateRoot | Out-Null } catch { }
+        if ($kernelOutput -match '(?i)policy|blocked|access.+denied|administrator') {
+            throw "CUSTOM_KERNEL_BLOCKED_BY_POLICY: this managed PC is unsupported by the private beta. $kernelOutput"
+        }
+        throw "CUSTOM_KERNEL_START_FAILED: restored the previous WSL configuration; expected $($kernelState.kernel_release), got $kernelOutput"
+    }
+    if ($KernelModules -and $kernelState.modules_format -eq 'archive') {
+        $modulesWsl = Convert-ToWslPath $KernelModules
+        $extractCommand = 'set -eu; mkdir -p /lib/modules; tar -xzf "{0}" -C /lib/modules; depmod -a "{1}"' -f `
+            $modulesWsl, [string]$kernelState.kernel_release
+        & wsl.exe -d $Distro -u root -- sh -lc $extractCommand
+        if ($LASTEXITCODE -ne 0) { throw 'KERNEL_MODULE_INSTALL_FAILED: could not install the matching module archive' }
+    }
+    if ($KernelModules) {
+        $moduleVerify = 'set -eu; test "$(uname -r)" = "{0}"; test "$(modinfo -F vermagic rtl8xxxu | awk ''{{print $1}}'')" = "{0}"; modinfo -F firmware rtl8xxxu | while IFS= read -r fw; do test -z "$fw" || test -f "/lib/firmware/$fw"; done' -f `
+            [string]$kernelState.kernel_release
+        & wsl.exe -d $Distro -u root -- sh -lc $moduleVerify
+        if ($LASTEXITCODE -ne 0) {
+            throw 'KERNEL_ABI_OR_FIRMWARE_MISMATCH: running kernel, rtl8xxxu module ABI, and firmware must come from one release'
+        }
     }
 }
 
@@ -271,3 +362,4 @@ if (-not $NoShortcut) {
 }
 
 Write-Host "SwitchTrade $Action completed. Only the named distro and the explicitly accepted kernel selection were changed."
+Clear-SetupResume

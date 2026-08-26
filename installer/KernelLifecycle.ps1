@@ -31,7 +31,9 @@ function Set-Wsl2Values {
         if ($line -match '^\s*\[([^]]+)\]\s*$') {
             if ($section -ieq 'wsl2' -and -not $inserted) {
                 foreach ($key in $Values.Keys) {
-                    if (-not $seen.ContainsKey($key)) { $result.Add("$key=$($Values[$key])") }
+                    if (-not $seen.ContainsKey($key) -and $null -ne $Values[$key]) {
+                        $result.Add("$key=$($Values[$key])")
+                    }
                 }
                 $inserted = $true
             }
@@ -53,14 +55,18 @@ function Set-Wsl2Values {
     }
     if ($section -ieq 'wsl2' -and -not $inserted) {
         foreach ($key in $Values.Keys) {
-            if (-not $seen.ContainsKey($key)) { $result.Add("$key=$($Values[$key])") }
+            if (-not $seen.ContainsKey($key) -and $null -ne $Values[$key]) {
+                $result.Add("$key=$($Values[$key])")
+            }
         }
         $inserted = $true
     }
     if (-not $inserted) {
         if ($result.Count -gt 0 -and $result[$result.Count - 1]) { $result.Add('') }
         $result.Add('[wsl2]')
-        foreach ($key in $Values.Keys) { $result.Add("$key=$($Values[$key])") }
+        foreach ($key in $Values.Keys) {
+            if ($null -ne $Values[$key]) { $result.Add("$key=$($Values[$key])") }
+        }
     }
     return ($result -join $newline).TrimEnd("`r", "`n") + $newline
 }
@@ -96,9 +102,13 @@ function Install-SwitchTradeKernel {
     $installedKernel = Join-Path $kernelRoot ([IO.Path]::GetFileName($Kernel))
     Copy-Item -LiteralPath $Kernel -Destination $installedKernel -Force
     $installedModules = ''
+    $modulesFormat = 'none'
     if ($KernelModules) {
         $installedModules = Join-Path $kernelRoot ([IO.Path]::GetFileName($KernelModules))
         Copy-Item -LiteralPath $KernelModules -Destination $installedModules -Force
+        $modulesFormat = if ([IO.Path]::GetExtension($KernelModules).ToLowerInvariant() -in @('.vhd', '.vhdx')) {
+            'vhd'
+        } else { 'archive' }
     }
 
     $config = Join-Path $env:USERPROFILE '.wslconfig'
@@ -117,14 +127,17 @@ function Install-SwitchTradeKernel {
         $priorPresentForRollback = $priorPresent
     }
 
-    $values = @{ kernel = $installedKernel.Replace('\', '\\') }
-    if ($installedModules) { $values.kernelModules = $installedModules.Replace('\', '\\') }
+    $values = @{
+        kernel = $installedKernel.Replace('\', '\\')
+        kernelModules = if ($modulesFormat -eq 'vhd') { $installedModules.Replace('\', '\\') } else { $null }
+    }
     $merged = Set-Wsl2Values -Text $priorText -Values $values
     [IO.File]::WriteAllText($config, $merged, [Text.UTF8Encoding]::new($false))
     $state = @{
-        schema = 1; owns_kernel_change = $true; prior_config_present = $priorPresentForRollback
+        schema = 2; owns_kernel_change = $true; prior_config_present = $priorPresentForRollback
         prior_config_backup = $backup; installed_config_sha256 = Get-FileSha256 $config
         kernel_path = $installedKernel; modules_path = $installedModules
+        modules_format = $modulesFormat
         kernel_release = [string]$metadata.kernel_release
         rollback_kernel_path = if ($existingState -and $existingState.owns_kernel_change) {
             [string]$existingState.kernel_path
@@ -132,6 +145,10 @@ function Install-SwitchTradeKernel {
         rollback_modules_path = if ($existingState -and $existingState.owns_kernel_change) {
             [string]$existingState.modules_path
         } else { '' }
+        rollback_modules_format = if ($existingState -and $existingState.owns_kernel_change -and
+            $existingState.PSObject.Properties.Name -contains 'modules_format') {
+            [string]$existingState.modules_format
+        } else { 'none' }
         rollback_kernel_release = if ($existingState -and $existingState.owns_kernel_change) {
             [string]$existingState.kernel_release
         } else { '' }
@@ -157,7 +174,14 @@ function Switch-SwitchTradeKernelRollback {
         if (-not (Test-Path -LiteralPath $state.rollback_modules_path -PathType Leaf)) {
             throw 'the retained rollback kernel modules are missing'
         }
-        $values.kernelModules = ([string]$state.rollback_modules_path).Replace('\', '\\')
+        $rollbackFormat = if ($state.PSObject.Properties.Name -contains 'rollback_modules_format') {
+            [string]$state.rollback_modules_format
+        } else { 'vhd' }
+        $values.kernelModules = if ($rollbackFormat -eq 'vhd') {
+            ([string]$state.rollback_modules_path).Replace('\', '\\')
+        } else { $null }
+    } else {
+        $values.kernelModules = $null
     }
     [IO.File]::WriteAllText($config, (Set-Wsl2Values -Text $text -Values $values),
         [Text.UTF8Encoding]::new($false))
@@ -166,6 +190,11 @@ function Switch-SwitchTradeKernelRollback {
         $state.rollback_kernel_path, $state.rollback_modules_path, $state.rollback_kernel_release
     $state.rollback_kernel_path, $state.rollback_modules_path, $state.rollback_kernel_release = `
         $currentKernel, $currentModules, $currentRelease
+    if ($state.PSObject.Properties.Name -contains 'modules_format') {
+        $currentFormat = $state.modules_format
+        $state.modules_format = $state.rollback_modules_format
+        $state.rollback_modules_format = $currentFormat
+    }
     $state.installed_config_sha256 = Get-FileSha256 $config
     $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
     Invoke-BoundedWslShutdown

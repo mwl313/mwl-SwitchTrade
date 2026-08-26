@@ -8,17 +8,18 @@
             Stroke="{DynamicResource DangerBrush}" StrokeThickness="1.8" HorizontalAlignment="Left" Margin="0,0,0,16" />
       <TextBlock Text="SwitchTrade couldn’t start" Style="{StaticResource ScreenTitle}"
                  automation:AutomationProperties.HeadingLevel="Level1" />
-      <TextBlock Text="The installed local service is not available. Try again, or check this computer’s setup."
+      <TextBlock Text="SwitchTrade stopped before opening an online room or a Switch connection."
                  FontSize="16" LineHeight="24" Margin="0,0,0,24" />
       <Border Style="{StaticResource ErrorNotice}">
         <StackPanel>
           <TextBlock Text="{Binding RecoverySummary}" FontWeight="SemiBold" Margin="0,0,0,4" />
-          <TextBlock Text="No online room or Switch connection was started." />
+          <TextBlock Text="{Binding RecoveryInstructions}" TextWrapping="Wrap" />
         </StackPanel>
       </Border>
       <WrapPanel Margin="-4,0,0,0">
         <Button Content="Try again" Command="{Binding RetryCommand}" Style="{StaticResource PrimaryButton}" Margin="0,0,8,8" />
-        <Button Content="Settings" Command="{Binding SettingsCommand}" Style="{StaticResource SecondaryButton}" Margin="0,0,8,8" />
+        <Button Content="Connection settings" Command="{Binding SettingsCommand}" Style="{StaticResource SecondaryButton}"
+                Visibility="{Binding ShowConnectionSettings, Converter={StaticResource BooleanToVisibility}}" Margin="0,0,8,8" />
         <Button Content="View interface preview" Command="{Binding PreviewCommand}" Style="{StaticResource TextButton}" Margin="0,0,0,8" />
       </WrapPanel>
       <Expander Header="Technical details" Margin="0,20,0,0">

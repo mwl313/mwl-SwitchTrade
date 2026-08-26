@@ -16,10 +16,20 @@ public sealed class RecoveryScreenViewModel : ScreenViewModel
 
     public override string Title => "SwitchTrade couldn’t start";
     public string RecoverySummary => Shell.RecoverySummary;
+    public string RecoveryInstructions => Shell.RecoveryInstructions;
     public string RecoveryTechnicalDetails => Shell.RecoveryTechnicalDetails;
+    public bool ShowConnectionSettings => Shell.RecoveryStage == "radio";
     public AsyncCommand RetryCommand { get; }
     public RelayCommand PreviewCommand { get; }
     public RelayCommand SettingsCommand { get; }
+
+    public void NotifyRecoveryChanged()
+    {
+        OnPropertyChanged(nameof(RecoverySummary));
+        OnPropertyChanged(nameof(RecoveryInstructions));
+        OnPropertyChanged(nameof(RecoveryTechnicalDetails));
+        OnPropertyChanged(nameof(ShowConnectionSettings));
+    }
 }
 
 public sealed class HomeScreenViewModel : ScreenViewModel
