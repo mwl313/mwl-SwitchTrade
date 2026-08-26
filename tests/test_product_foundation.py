@@ -8,7 +8,7 @@ from unittest import mock
 import zipfile
 
 from switchtrade.diagnostics import RunLogger, redact_text
-from switchtrade.endpoint import runtime_phy, runtime_plan
+from switchtrade.endpoint import cleanup_resources, runtime_phy, runtime_plan
 from switchtrade.hardware import HardwarePolicyError, load_profiles, require_host_engine
 from switchtrade.hardware_diagnostics import (
     classify_output, diagnose_hardware, parse_iw_capabilities,
@@ -63,6 +63,32 @@ class HardwarePolicyTests(unittest.TestCase):
         with mock.patch.dict("os.environ", {}, clear=True):
             with self.assertRaisesRegex(RuntimeError, "PHY_UNRESOLVED"):
                 runtime_phy()
+
+    def test_endpoint_cleanup_continues_after_multiple_failures(self):
+        calls = []
+
+        class Resource:
+            def __init__(self, name, fails=False):
+                self.name = name
+                self.fails = fails
+
+            def stop(self, **_kwargs):
+                calls.append(self.name)
+                if self.fails:
+                    raise RuntimeError("blocked")
+
+            def close(self):
+                self.stop()
+
+        logger = SimpleNamespace(event=lambda *args, **kwargs: calls.append(kwargs["subsystem"]))
+        errors = cleanup_resources(
+            Resource("observer", True), Resource("simulation", True),
+            Resource("transport"), Resource("tunnel"), logger,
+        )
+        self.assertEqual(calls, [
+            "observer", "observer", "simulation", "simulation", "transport", "tunnel",
+        ])
+        self.assertEqual(errors, ["observer: blocked", "simulation: blocked"])
 
     def test_in_development_engines_are_not_selectable(self):
         self.assertEqual(require_host_engine("ldn"), "ldn")
@@ -242,6 +268,23 @@ class PassiveObserverTests(unittest.TestCase):
             observer.submit("member_a", "parent", b"late")
             self.assertEqual(observer.stats["dropped"], 1)
             self.assertTrue(observer._queue.empty())
+
+    def test_observer_timeout_does_not_publish_stopped_state(self):
+        class BlockedThread:
+            def join(self, _timeout):
+                return None
+
+            def is_alive(self):
+                return True
+
+        with tempfile.TemporaryDirectory() as temporary:
+            observer = PassivePartyObserver(
+                Path(temporary) / "party.json", "attempt", "member_a")
+            observer._thread = BlockedThread()
+            before = observer.path.read_text(encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "did not stop"):
+                observer.stop(timeout=0)
+            self.assertEqual(observer.path.read_text(encoding="utf-8"), before)
 
     def test_three_complete_party_blocks_publish_only_safe_projection(self):
         fixtures = Path(__file__).resolve().parent / "fixtures" / "pokemon"

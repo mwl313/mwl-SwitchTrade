@@ -4,6 +4,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SYSFS_ROOT="${SWITCHTRADE_SYSFS_ROOT:-/sys}"
+LOCK_ROOT="${SWITCHTRADE_LOCK_ROOT:-/run/lock}"
 PROFILE_FILE="${SWITCHTRADE_RADIO_PROFILES:-$SCRIPT_DIR/../config/wsl-radio-hardware.tsv}"
 HEALTH_GATE="$SCRIPT_DIR/radio-health-gate.sh"
 USB_ID="${RADIO_USB_ID:-}"
@@ -68,7 +70,7 @@ usb_id_of_device() {
 
 attached_usb_devices() {
     local f dev id
-    for f in /sys/bus/usb/devices/*/idVendor; do
+    for f in "$SYSFS_ROOT"/bus/usb/devices/*/idVendor; do
         [[ -r $f ]] || continue
         dev="$(dirname "$f")"
         [[ ! -r $dev/bDeviceClass || $(<"$dev/bDeviceClass") != 09 ]] || continue
@@ -80,7 +82,7 @@ attached_usb_devices() {
 ifaces_for_device() {
     local dev_real name path
     dev_real="$(readlink -f "$1")"
-    for name in /sys/class/net/*; do
+    for name in "$SYSFS_ROOT"/class/net/*; do
         [[ -e $name/device ]] || continue
         path="$(readlink -f "$name/device")"
         case $path in
@@ -106,7 +108,7 @@ preferred_iface_for_device() {
 phy_for_device() {
     local dev_real link path
     dev_real="$(readlink -f "$1")"
-    for link in /sys/class/ieee80211/*/device; do
+    for link in "$SYSFS_ROOT"/class/ieee80211/*/device; do
         [[ -e $link ]] || continue
         path="$(readlink -f "$link")"
         case $path in
@@ -140,7 +142,7 @@ remove_extra_ifaces() {
         msg "[driver] removing stale extra interface $iface"
         ip link set "$iface" down 2>/dev/null || true
         iw dev "$iface" del || die "could not remove stale interface $iface"
-        [[ ! -e /sys/class/net/$iface ]] || die "stale interface still exists after delete: $iface"
+        [[ ! -e $SYSFS_ROOT/class/net/$iface ]] || die "stale interface still exists after delete: $iface"
     done < <(ifaces_for_device "$device")
 }
 
@@ -209,7 +211,7 @@ verify_loaded_module() {
     expected_name="$(modinfo -F name "$module")"
     [[ $driver == "$expected_name" ]] || die "profile module $expected_name does not match loaded driver $driver"
     expected_src="$(modinfo -F srcversion "$module")"
-    loaded_src="$(cat "/sys/module/$driver/srcversion" 2>/dev/null || true)"
+    loaded_src="$(cat "$SYSFS_ROOT/module/$driver/srcversion" 2>/dev/null || true)"
     [[ -n $expected_src && $loaded_src == "$expected_src" ]] || \
         die "loaded $driver is not the profiled module artifact (srcversion mismatch)"
 }
@@ -270,13 +272,14 @@ case $MODE in
     status) status_report; exit 0 ;;
 esac
 
-((EUID == 0)) || die "run as root"
+((EUID == 0)) || [[ $SYSFS_ROOT != /sys ]] || die "run as root"
 [[ -x $HEALTH_GATE ]] || die "health gate not executable: $HEALTH_GATE"
 
 selection="$(select_device)"
 IFS=$'\t' read -r USB_ID DEVICE <<< "$selection"
 command -v flock >/dev/null 2>&1 || die "flock is required for exclusive radio ownership"
-LOCK_PATH="/run/lock/switchtrade-radio-${USB_ID//:/-}.lock"
+mkdir -p "$LOCK_ROOT"
+LOCK_PATH="$LOCK_ROOT/switchtrade-radio-${USB_ID//:/-}.lock"
 exec 9>"$LOCK_PATH"
 flock -n 9 || die "RADIO_BUSY: another SwitchTrade endpoint, diagnostic, or repair owns $USB_ID"
 profile="$(profile_for "$USB_ID")"

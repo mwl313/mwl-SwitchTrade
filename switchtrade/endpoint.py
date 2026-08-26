@@ -50,6 +50,25 @@ def runtime_phy(explicit: str | None = None) -> str:
     return phy
 
 
+def cleanup_resources(observer, sim, transport, tunnel, logger) -> list[str]:
+    """Run every teardown step and return stable subsystem-labelled failures."""
+    errors = []
+    for name, cleanup in (
+        ("observer", (lambda: observer.stop(clear=True)) if observer is not None else None),
+        ("simulation", sim.close if sim is not None else None),
+        ("transport", transport.stop if transport is not None else None),
+        ("tunnel", tunnel.stop),
+    ):
+        if cleanup is None:
+            continue
+        try:
+            cleanup()
+        except Exception as error:
+            errors.append(f"{name}: {error}")
+            logger.event("cleanup_failed", level="error", subsystem=name, error=str(error))
+    return errors
+
+
 class StateReporter:
     def __init__(self, path: str | None, defaults: dict | None = None):
         self.path = Path(path).expanduser() if path else None
@@ -308,20 +327,7 @@ def run_endpoint(args) -> int:
                     ), **plan)
         return 1
     finally:
-        cleanup_errors = []
-        for name, cleanup in (
-            ("observer", (lambda: observer.stop(clear=True)) if observer is not None else None),
-            ("simulation", sim.close if sim is not None else None),
-            ("transport", transport.stop if transport is not None else None),
-            ("tunnel", tunnel.stop),
-        ):
-            if cleanup is None:
-                continue
-            try:
-                cleanup()
-            except Exception as error:  # cleanup must continue across subsystem failures
-                cleanup_errors.append(f"{name}: {error}")
-                logger.event("cleanup_failed", level="error", subsystem=name, error=str(error))
+        cleanup_errors = cleanup_resources(observer, sim, transport, tunnel, logger)
         if cleanup_errors:
             message = "; ".join(cleanup_errors)
             state.write(

@@ -4,6 +4,7 @@
 
 set -euo pipefail
 
+SYSFS_ROOT="${SWITCHTRADE_SYSFS_ROOT:-/sys}"
 HEALTH_CHANNELS="${RADIO_HEALTH_CHANNELS:-1,6,11}"
 TARGET_CHANNEL="${RADIO_TARGET_CHANNEL:-6}"
 RX_TIMEOUT="${RADIO_HEALTH_TIMEOUT:-2}"
@@ -37,8 +38,8 @@ EOF
 
 usb_id_of_iface() {
     local p
-    p="$(readlink -f "/sys/class/net/$1/device" 2>/dev/null)" || return 1
-    while [[ $p == /sys/* ]]; do
+    p="$(readlink -f "$SYSFS_ROOT/class/net/$1/device" 2>/dev/null)" || return 1
+    while [[ $p == "$SYSFS_ROOT"/* ]]; do
         if [[ -r $p/idVendor && -r $p/idProduct ]]; then
             printf '%s:%s\n' "$(<"$p/idVendor")" "$(<"$p/idProduct")"
             return 0
@@ -50,7 +51,7 @@ usb_id_of_iface() {
 
 find_card_ifaces() {
     local name id
-    for name in /sys/class/net/*; do
+    for name in "$SYSFS_ROOT"/class/net/*; do
         name="$(basename "$name")"
         id="$(usb_id_of_iface "$name")" || continue
         if [[ -n $EXPECTED_USB_ID ]]; then
@@ -66,7 +67,7 @@ find_card_ifaces() {
 select_iface() {
     local id cards=()
     if [[ -n $IFACE ]]; then
-        [[ -d /sys/class/net/$IFACE ]] || die "interface not found: $IFACE"
+        [[ -d $SYSFS_ROOT/class/net/$IFACE ]] || die "interface not found: $IFACE"
         id="$(usb_id_of_iface "$IFACE" || true)"
         if [[ -n $EXPECTED_USB_ID ]]; then
             [[ $id == "$EXPECTED_USB_ID" ]] || die "$IFACE USB ID $id != expected $EXPECTED_USB_ID"
@@ -86,8 +87,8 @@ select_iface() {
 
 card_busdev() {
     local p
-    p="$(readlink -f "/sys/class/net/$IFACE/device")"
-    while [[ $p == /sys/* ]]; do
+    p="$(readlink -f "$SYSFS_ROOT/class/net/$IFACE/device")"
+    while [[ $p == "$SYSFS_ROOT"/* ]]; do
         if [[ -r $p/busnum && -r $p/devnum ]]; then
             printf '%03d/%03d\n' "$((10#$(<"$p/busnum")))" "$((10#$(<"$p/devnum")))"
             return 0
@@ -135,7 +136,7 @@ has_rx() {
 reset_card() {
     local mac busdev
     command -v usbreset >/dev/null 2>&1 || die "usbreset is required to recover a dead radio"
-    mac="$(<"/sys/class/net/$IFACE/address")"
+    mac="$(<"$SYSFS_ROOT/class/net/$IFACE/address")"
     busdev="$(card_busdev)" || die "cannot resolve USB bus/device for $IFACE"
     msg "[health] RX dead; resetting $IFACE at $busdev"
     if ! usbreset "$busdev"; then
@@ -146,7 +147,7 @@ reset_card() {
     fi
     for _ in {1..20}; do
         IFACE="$(find_card_ifaces | while read -r name; do
-            [[ $(<"/sys/class/net/$name/address") == "$mac" ]] && { printf '%s\n' "$name"; break; }
+            [[ $(<"$SYSFS_ROOT/class/net/$name/address") == "$mac" ]] && { printf '%s\n' "$name"; break; }
         done)"
         [[ -n $IFACE ]] && return 0
         sleep 1
@@ -181,7 +182,7 @@ if (( DRY_RUN )); then
     exit 0
 fi
 
-(( EUID == 0 )) || die "run as root"
+(( EUID == 0 )) || [[ $SYSFS_ROOT != /sys ]] || die "run as root"
 [[ $TARGET_CHANNEL =~ ^[0-9]+$ ]] || die "invalid target channel: $TARGET_CHANNEL"
 (( TARGET_CHANNEL >= 1 && TARGET_CHANNEL <= 196 )) || die "target channel out of range: $TARGET_CHANNEL"
 [[ $RX_TIMEOUT =~ ^[0-9]+([.][0-9]+)?$ ]] || die "invalid timeout: $RX_TIMEOUT"
@@ -203,7 +204,7 @@ fi
 iw dev "$IFACE" set channel "$TARGET_CHANNEL"
 msg "[health] PASS; $IFACE restored to channel $TARGET_CHANNEL"
 
-PHY="$(basename "$(readlink -f "/sys/class/net/$IFACE/phy80211" 2>/dev/null)")"
+PHY="$(basename "$(readlink -f "$SYSFS_ROOT/class/net/$IFACE/phy80211" 2>/dev/null)")"
 [[ $PHY =~ ^phy[0-9]+$ ]] || die "PHY_UNRESOLVED: could not resolve the radio PHY for $IFACE"
 export SWITCHTRADE_IFACE="$IFACE"
 export SWITCHTRADE_USB_ID="$CARD_ID"
