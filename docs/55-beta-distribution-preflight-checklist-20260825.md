@@ -2,7 +2,7 @@
 
 > Status: Repository-controlled preflight implementation is complete as of 2026-08-26, excluding all
 > client privacy/consent work by explicit owner direction. This is not release approval: final owner/GPT
-> visual approval, legal notices, support destination, final kernel/rootfs inputs, relay operational
+> visual/legal approval, final kernel/package inputs, relay operational
 > qualification, clean-machine qualification, and two-PC/two-Switch hardware qualification remain.
 > The relay is live at `https://relay.pangyostonefist.org` and its credentialed opaque smoke passes;
 > backup/restore, staged restart, and two-NAT tests remain. The owner explicitly waived Windows code
@@ -27,7 +27,7 @@
   `.ek3` Pokémon records in fixtures and captured endpoint traffic.
 - [x] Source package includes SHA-256 verification for the rootfs and native EXE.
 - [x] Throwaway-distro install, repair, retained rollback runtime, uninstall, and explicit purge passed.
-- [x] Pinned WSL runtime suite passed 212 tests (3 skipped) without Switch hardware on 2026-08-26.
+- [x] Fully pinned WSL runtime suite passed 216 tests (3 skipped) without Switch hardware on 2026-08-26.
 
 ## Current gate summary and execution order
 
@@ -49,8 +49,9 @@ publisher-verified, and the signed release path remains preserved for a future p
 
 1. [x] Give GPT the final handoff/audit and implement its contract-grounded WPF overhaul without
    reintroducing the removed Privacy tab. Evidence is in `docs/64`.
-2. [ ] Owner-deferred: obtain final visual approval and supply approved legal notices and a real support
-   destination. Icon wiring/build validation is complete; visual redesign remains backlog.
+2. [ ] Owner-deferred: obtain final visual approval and approve the tracked factual legal-notice inventory.
+   Icon wiring/build validation and the real GitHub Issues support destination are complete; visual
+   redesign remains backlog.
 3. [x] Implement and internally test the authenticated server-authoritative two-member room state
    machine, reconnect tokens, atomic room-creator claims, ordered events, expiration, and recovery.
 4. [x] Connect the endpoint/control split to authoritative immutable seats and atomic per-attempt
@@ -140,9 +141,9 @@ This preflight checklist is the release-blocking superset of the immediate tasks
   retention, deletion/export, access control, and an option that does not upload party or trade
   analytics. Per owner direction, this workflow is administered outside the client.
 - [x] Freeze the first beta version, supported Windows versions, and RTL8192EU hardware policy.
-- [ ] Supply approved license/legal notices and a real support destination. App/setup/favicon wiring is
-  complete; final visual approval is owner-deferred. No Privacy tab or client analytics control is part
-  of this approval.
+- [ ] Approve the tracked license/legal notice inventory. The real GitHub Issues support destination and
+  app/setup/favicon wiring are complete; final visual approval is owner-deferred. No Privacy tab or
+  client analytics control is part of this approval.
 
 Gate 0 normally precedes installer work. The owner's written exception allowed repository-side
 installer implementation to proceed, but final public packaging and release approval remain blocked.
@@ -347,8 +348,8 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
 
 - [x] Owner exception: Windows Authenticode/CMS signing is skipped for this private beta. Preserve the
   signed path for a future public release and label every current package as unsigned.
-- [x] Publish the current hardware/Windows/WSL limitations and recovery guide in `docs/70`.
-  Final public URL/support contact and release-version values remain Gate 0/8 owner inputs.
+- [x] Publish the current hardware/Windows/WSL limitations and recovery guide in `docs/70`; the native
+  Support tab links to the enabled repository Issues page.
 - [ ] Complete security/privacy review of trainer, Pokémon, source-IP, coarse-location, consent,
   retention, deletion, and aggregate-statistics behavior before enabling server-side collection.
 - [ ] Preserve one tested previous release for atomic rollback.

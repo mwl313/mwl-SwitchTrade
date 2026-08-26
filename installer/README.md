@@ -74,7 +74,7 @@ The retired web/demo frontend is not bundled into the WSL runtime or required by
 - A managed-PC policy denial while starting the custom kernel restores the previous `.wslconfig` and
   reports `CUSTOM_KERNEL_BLOCKED_BY_POLICY`; such systems are unsupported by the private beta.
 
-The localhost relay default is for internal same-machine validation. A cross-network beta must supply
-a reachable HTTPS relay URL through `Build-Package.ps1 -Release`; the installed `config.json` is
-verified against the signed package manifest on every launch. Relay hosting is documented in
-`relay/DEPLOYMENT.md`, and user-safe recovery is documented in `docs/70`.
+The repository default is the public HTTPS relay in `payload/release-config.json`; local development may
+override it explicitly. The installed `config.json` is verified against the package's complete hashed
+manifest on every launch. A future signed release also authenticates that manifest. Relay hosting is
+documented in `relay/DEPLOYMENT.md`, and user-safe recovery is documented in `docs/70`.

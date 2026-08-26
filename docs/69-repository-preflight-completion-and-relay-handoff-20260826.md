@@ -87,13 +87,14 @@ substitute for real WAN/radio qualification.
 
 ## Remaining private-beta gates
 
-1. Owner-deferred final visual approval plus approved legal notices and a real support destination; icon
-   wiring is complete.
+1. Owner-deferred final visual and legal-notice approval. Icon wiring, the factual notice inventory, and
+   the real GitHub Issues support destination are complete.
 2. Final versioned kernel/modules/firmware/checksum artifacts from the kernel build mirror and a minimal
    rootfs/package input set.
 3. Reproducible unsigned private-beta archive/checksum retention. Windows code signing is waived by the
    owner for this beta and remains a future public-release feature.
-4. Relay backup/restore, staged restart/reconnect, restricted metrics, and two-NAT qualification.
+4. Relay backup/restore, staged restart/reconnect, and two-NAT qualification. Public metrics denial is
+   already verified.
 5. Clean Windows 11 24H2 install/reboot/coexistence/Defender/SmartScreen/lifecycle qualification,
    including the expected unknown-publisher behavior.
 6. Both RTL8192EU adapters and two-PC/two-WSL/two-Switch discovery, full trade, teardown, immediate reuse,

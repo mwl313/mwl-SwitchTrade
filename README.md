@@ -17,7 +17,7 @@
 
 - **기반 기술** (이미 존재, 검증됨): kinnay/LDN (로컬 무선 계층) + tornadus/frlg-ldn-trade (FRLG 게임 계층)
 - **현재 구현**: 서버 권위 2인 private room + credentialed opaque RFU relay + native Windows/WSL client
-- **출시 전 잔여**: 외부 TLS 배포, signed artifacts, clean-machine 및 two-PC/two-Switch qualification
+- **출시 전 잔여**: relay 운영 검증, unsigned package/clean-machine 및 two-PC/two-Switch qualification
 - **참고 아키텍처**: GB-Link/Celio 생태계 (실기 GBA를 인터넷에 연결한 형제 프로젝트)
 
 ## 문서
