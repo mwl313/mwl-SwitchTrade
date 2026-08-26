@@ -63,5 +63,4 @@ index 73e06e6..37815bd 100644
 +		eth_hw_addr_set(pnetdev, adapter_mac_addr(padapter));
  #endif /* CONFIG_PLATFORM_INTEL_BYT */
  
- 		rtw_clr_surprise_removed(padapter);
-
+		rtw_clr_surprise_removed(padapter);
