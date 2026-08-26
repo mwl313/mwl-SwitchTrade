@@ -600,6 +600,22 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         except RelayError as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
 
+    def release_authoritative_room(state: Runtime, path: str) -> dict:
+        try:
+            return authoritative_command(state, path, method="DELETE")
+        except HTTPException as error:
+            detail = str(error.detail)
+            already_released = any(message in detail for message in (
+                "no active authoritative trade room",
+                "member credential is invalid",
+                "reconnect credential is invalid",
+                "trade room is not active",
+                "trade room not found",
+            ))
+            if not already_released:
+                raise
+            return {}
+
     def group_from_room(room: dict) -> dict:
         profile = room.get("profile") or {}
         return {
@@ -842,7 +858,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     @app.delete("/api/v1/trade-room/members/me")
     def leave_trade_room(request: Request) -> dict:
         state = runtime(request)
-        room = authoritative_command(state, "/members/me", method="DELETE")
+        room = release_authoritative_room(state, "/members/me")
         state.clear_authority()
         return {"status": "left", "room_version": room.get("room_version"),
                 "run_id": state.log.run_id}
@@ -850,7 +866,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     @app.delete("/api/v1/trade-room")
     def close_trade_room(request: Request) -> dict:
         state = runtime(request)
-        room = authoritative_command(state, "", method="DELETE")
+        room = release_authoritative_room(state, "")
         state.clear_authority()
         return {"status": "closed", "room_version": room.get("room_version"),
                 "run_id": state.log.run_id}

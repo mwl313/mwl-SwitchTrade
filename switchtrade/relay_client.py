@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import time
 import uuid
@@ -22,6 +23,10 @@ class RelayError(RuntimeError):
 
 class RelayClient:
     def __init__(self, base_url: str, timeout: float = 5.0):
+        if os.name == "posix":
+            options = os.environ.get("RES_OPTIONS", "").split()
+            if "single-request-reopen" not in options:
+                os.environ["RES_OPTIONS"] = " ".join([*options, "single-request-reopen"])
         parts = urlsplit(base_url.strip())
         if parts.scheme not in {"http", "https", "ws", "wss"} or not parts.netloc:
             raise ValueError("relay URL must use http(s) or ws(s)")

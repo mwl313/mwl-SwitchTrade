@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import os
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -7,10 +8,16 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from switchtrade.control import Group, create_app, endpoint_command
-from switchtrade.relay_client import RelayError
+from switchtrade.relay_client import RelayClient, RelayError
 
 
 class Gate4RuntimeContractTests(unittest.TestCase):
+    def test_wsl_relay_client_uses_dual_stack_safe_dns_queries(self):
+        with patch.dict(os.environ, {"RES_OPTIONS": "rotate"}):
+            with patch("switchtrade.relay_client.os.name", "posix"):
+                RelayClient("https://relay.example")
+            self.assertEqual(os.environ["RES_OPTIONS"], "rotate single-request-reopen")
+
     def test_legacy_group_listing_never_exposes_room_code(self):
         listing = Group("Compatibility room", "ABC123", "public").public()
         self.assertNotIn("passcode", listing)
@@ -114,6 +121,34 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 self.assertEqual(joined.status_code, 200, joined.text)
                 self.assertEqual(joined.json()["room"]["room_code"], "ABC123")
                 self.assertNotIn("member_token", joined.text)
+
+    def test_release_is_idempotent_after_remote_membership_already_ended(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                runtime = client.app.state.runtime
+                expired = {
+                    "room": {"room_id": "room-1", "room_code": "ABC123"},
+                    "member_token": "expired-member", "reconnect_token": "expired-reconnect",
+                }
+                with patch.object(runtime.relay, "room", side_effect=RelayError(
+                        "relay returned 401: member credential is invalid")), patch.object(
+                        runtime.relay, "reconnect_trade_room", side_effect=RelayError(
+                            "relay returned 401: reconnect credential is invalid")):
+                    for path in ("/api/v1/trade-room/members/me", "/api/v1/trade-room"):
+                        runtime.save_authority(expired)
+                        response = client.delete(path)
+                        self.assertEqual(response.status_code, 200, response.text)
+                        self.assertFalse(runtime.authority_state.exists())
+
+    def test_end_connection_succeeds_when_relay_teardown_sync_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                runtime = client.app.state.runtime
+                with patch.object(runtime, "authoritative_room", side_effect=RelayError(
+                        "relay unavailable: temporary DNS failure")):
+                    response = client.post("/api/v1/session/stop")
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["status"], "stopped")
 
     def test_retry_without_retained_session_fails_safely(self):
         with tempfile.TemporaryDirectory() as temporary:

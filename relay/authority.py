@@ -538,7 +538,7 @@ class AuthorityStore:
                     response = self._public(room, member_id)
                     self._remember(scope, command_id, response)
                     return response
-                if action not in {"ready", "heartbeat"}:
+                if action not in {"ready", "heartbeat", "leave", "close"}:
                     raise AuthorityError(409, "room version conflict")
             member = next(item for item in room["members"] if item["member_id"] == member_id)
             event = action

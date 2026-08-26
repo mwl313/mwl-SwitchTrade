@@ -214,6 +214,26 @@ class AuthoritativeRoomTests(unittest.TestCase):
         room = relay_server.authority.snapshot(room_id, first["member_token"])
         self.assertEqual(room["last_attempt_number"], 1)
 
+    def test_member_leave_and_owner_close_ignore_stale_presence_version(self):
+        owner = self._create()
+        member = self._join(owner["room"]["room_code"])
+        room_id = owner["room"]["room_id"]
+        stale_version = member["room"]["room_version"]
+
+        self._mutate(room_id, owner["member_token"], "/heartbeat")
+        left = self.client.delete(f"/v1/trade-rooms/{room_id}/members/me", headers={
+            "Authorization": f"Bearer {member['member_token']}",
+            "Idempotency-Key": _command(), "If-Match": str(stale_version),
+        })
+        self.assertEqual(left.status_code, 200, left.text)
+
+        closed = self.client.delete(f"/v1/trade-rooms/{room_id}", headers={
+            "Authorization": f"Bearer {owner['member_token']}",
+            "Idempotency-Key": _command(), "If-Match": str(stale_version),
+        })
+        self.assertEqual(closed.status_code, 200, closed.text)
+        self.assertEqual(closed.json()["state"], "closed")
+
     def test_hashed_credentials_and_room_state_survive_service_restart(self):
         first = self._create()
         room_id = first["room"]["room_id"]
