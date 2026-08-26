@@ -197,6 +197,7 @@ def run_endpoint(args) -> int:
     state = StateReporter(args.state_file, {
         "session_id": args.session_id,
         "attempt_id": args.attempt_id or args.session_id,
+        "wsl_distro": os.environ.get("WSL_DISTRO_NAME"),
     })
     state.write("initializing", radio_checked=False, tunnel_connected=False,
                 failure_stage=None, recovery_action=None, **plan)

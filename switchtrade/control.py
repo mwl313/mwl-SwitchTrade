@@ -370,12 +370,38 @@ class Runtime:
         if not isinstance(pid, int) or pid <= 1 or endpoint.get("process_kind") != "rfu-endpoint":
             return None
         if os.name == "nt":
-            return None
+            distro = os.environ.get("SWITCHTRADE_WSL_DISTRO", "SwitchTrade")
+            if endpoint.get("wsl_distro") != distro:
+                return None
+            try:
+                result = subprocess.run(
+                    ["wsl.exe", "-d", distro, "--", "cat", f"/proc/{pid}/cmdline"],
+                    capture_output=True, timeout=5, check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                return None
+            command = result.stdout if isinstance(result.stdout, bytes) else str(result.stdout).encode()
+            return pid if result.returncode == 0 and b"switchtrade.endpoint" in command else None
         try:
             command = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ")
         except OSError:
             return None
         return pid if b"switchtrade.endpoint" in command else None
+
+    @staticmethod
+    def _signal_endpoint_pid(pid: int, signal_name: str, endpoint: dict) -> None:
+        if os.name != "nt":
+            os.kill(pid, signal.SIGTERM if signal_name == "TERM" else signal.SIGKILL)
+            return
+        distro = os.environ.get("SWITCHTRADE_WSL_DISTRO", "SwitchTrade")
+        if endpoint.get("wsl_distro") != distro:
+            raise RuntimeError("endpoint WSL identity is not verified")
+        result = subprocess.run(
+            ["wsl.exe", "-d", distro, "--", "kill", f"-{signal_name}", str(pid)],
+            capture_output=True, timeout=5, check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("verified WSL endpoint could not be stopped")
 
     def stop_endpoint(self) -> None:
         process = self.endpoint
@@ -386,13 +412,13 @@ class Runtime:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
-        elif (pid := self._verified_endpoint_pid(self.read_endpoint())) is not None:
-            os.kill(pid, signal.SIGTERM)
+        if (pid := self._verified_endpoint_pid(endpoint := self.read_endpoint())) is not None:
+            self._signal_endpoint_pid(pid, "TERM", endpoint)
             deadline = time.monotonic() + 10
             while time.monotonic() < deadline and self._verified_endpoint_pid(self.read_endpoint()) == pid:
                 time.sleep(0.1)
             if self._verified_endpoint_pid(self.read_endpoint()) == pid:
-                os.kill(pid, signal.SIGKILL)
+                self._signal_endpoint_pid(pid, "KILL", self.read_endpoint())
         self.endpoint = None
         self.endpoint_session = None
 
@@ -755,6 +781,25 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 state.endpoint = subprocess.Popen(command, cwd=Path(__file__).resolve().parents[1])
             except OSError as error:
                 raise HTTPException(status_code=503, detail=f"endpoint launch failed: {error}") from error
+            if os.name == "nt":
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    if state.endpoint.poll() is not None:
+                        state.endpoint = None
+                        raise ControlApiError(
+                            503, "endpoint_start_failed", "the Switch endpoint stopped during startup",
+                            stage="endpoint", recoverable=True, primary_action="retry",
+                        )
+                    if state._verified_endpoint_pid(state.read_endpoint()) is not None:
+                        break
+                    time.sleep(0.05)
+                else:
+                    state.endpoint.terminate()
+                    state.endpoint = None
+                    raise ControlApiError(
+                        503, "endpoint_start_timeout", "the Switch endpoint did not finish starting",
+                        stage="endpoint", recoverable=True, primary_action="restart_backend",
+                    )
             state.endpoint_session = code
         state.log.event(
             "session_started", passcode=code, tunnel_seat=plan["tunnel_seat"],

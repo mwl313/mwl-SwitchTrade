@@ -287,7 +287,15 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 process = MagicMock()
                 process.pid = 1234
                 process.poll.return_value = None
-                with patch.object(runtime, "authoritative_room", return_value=room), patch(
+                verification_calls = 0
+
+                def verify_after_launch(_endpoint):
+                    nonlocal verification_calls
+                    verification_calls += 1
+                    return 1234 if verification_calls >= 4 else None
+
+                with patch.object(runtime, "authoritative_room", return_value=room), patch.object(
+                        runtime, "_verified_endpoint_pid", side_effect=verify_after_launch), patch(
                         "switchtrade.control.subprocess.Popen", return_value=process) as popen:
                     response = client.post("/api/v1/app/retry")
                 self.assertEqual(response.status_code, 200, response.text)
@@ -322,6 +330,75 @@ class Gate4RuntimeContractTests(unittest.TestCase):
             self.assertIn("member_a", command)
             self.assertIn("--switch-room-role", command)
             self.assertIn("finder", command)
+
+    def test_windows_control_adopts_and_stops_verified_wsl_endpoint(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state_path = Path(temporary) / "runtime" / "endpoint-state.json"
+            state_path.parent.mkdir(parents=True)
+            state_path.write_text(json.dumps({
+                "state": "trading_room", "pid": 4321, "process_kind": "rfu-endpoint",
+                "wsl_distro": "SwitchTrade", "session_id": "ABC123",
+            }), encoding="utf-8")
+            cat_calls = 0
+            real_run = __import__("subprocess").run
+
+            def wsl_process(command, **kwargs):
+                nonlocal cat_calls
+                if command and command[0] == "wsl.exe" and "cat" in command:
+                    cat_calls += 1
+                    if cat_calls <= 3:
+                        return MagicMock(returncode=0, stdout=b"python -m switchtrade.endpoint\0")
+                    return MagicMock(returncode=1, stdout=b"")
+                if command and command[0] == "wsl.exe" and "kill" in command:
+                    return MagicMock(returncode=0, stdout=b"")
+                return real_run(command, **kwargs)
+
+            with patch.dict(os.environ, {"SWITCHTRADE_WSL_DISTRO": "SwitchTrade"}), patch(
+                    "switchtrade.control.subprocess.run", side_effect=wsl_process) as run:
+                with TestClient(create_app(runs_root=temporary)) as client:
+                    runtime = client.app.state.runtime
+                    self.assertEqual(runtime.endpoint_session, "ABC123")
+                    self.assertTrue(runtime.endpoint_running())
+                    runtime.stop_endpoint()
+                    self.assertFalse(runtime.endpoint_running())
+            commands = [call.args[0] for call in run.call_args_list]
+            self.assertTrue(any("kill" in command and "-TERM" in command for command in commands))
+
+    def test_windows_control_rejects_endpoint_from_another_wsl_distro(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state_path = Path(temporary) / "runtime" / "endpoint-state.json"
+            state_path.parent.mkdir(parents=True)
+            state_path.write_text(json.dumps({
+                "state": "trading_room", "pid": 4321, "process_kind": "rfu-endpoint",
+                "wsl_distro": "ForeignDistro", "session_id": "ABC123",
+            }), encoding="utf-8")
+            real_run = __import__("subprocess").run
+
+            def passthrough(command, **kwargs):
+                if command and command[0] == "wsl.exe":
+                    self.fail(f"foreign endpoint triggered a WSL command: {command}")
+                return real_run(command, **kwargs)
+
+            with patch.dict(os.environ, {"SWITCHTRADE_WSL_DISTRO": "SwitchTrade"}), patch(
+                    "switchtrade.control.subprocess.run", side_effect=passthrough) as run:
+                with TestClient(create_app(runs_root=temporary)) as client:
+                    self.assertFalse(client.app.state.runtime.endpoint_running())
+            self.assertFalse(any(call.args[0][0] == "wsl.exe" for call in run.call_args_list))
+
+    def test_windows_endpoint_early_exit_is_reported_before_starting(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                runtime = client.app.state.runtime
+                process = MagicMock(pid=1234)
+                process.poll.return_value = 73
+                with patch.object(runtime.relay, "status", return_value={"status": "waiting"}), patch(
+                        "switchtrade.control.subprocess.Popen", return_value=process):
+                    response = client.post("/api/session/start", json={
+                        "role": "host", "passcode": "ABC123", "usb_id": "0bda:818b",
+                    })
+            self.assertEqual(response.status_code, 503, response.text)
+            self.assertEqual(response.json()["code"], "endpoint_start_failed")
+            self.assertEqual(response.json()["stage"], "endpoint")
 
     def test_hardware_profiles_publish_engine_availability_and_candidates(self):
         with tempfile.TemporaryDirectory() as temporary:
