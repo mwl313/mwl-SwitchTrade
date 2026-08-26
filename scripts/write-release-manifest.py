@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write reproducible application and radio metadata for a packaged build."""
+"""Write a complete, reproducible integrity manifest for a packaged build."""
 
 from __future__ import annotations
 
@@ -32,6 +32,9 @@ def sha256(path: Path) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--package-root", type=Path, required=True)
+    parser.add_argument("--release-id", required=True)
+    parser.add_argument("--signature-required", action="store_true")
     parser.add_argument("--kernel-build", default="unverified")
     parser.add_argument("--driver", default="unverified")
     parser.add_argument("--firmware", default="unverified")
@@ -42,11 +45,18 @@ def main() -> None:
         ROOT / "bridge" / "requirements.txt",
         ROOT / "test-requirements.txt",
         ROOT / "config" / "wsl-radio-hardware.tsv",
-        ROOT / "apps" / "web" / "package.json",
-        ROOT / "apps" / "web" / "pnpm-lock.yaml",
     ]
+    package_root = args.package_root.resolve()
+    output = args.output.resolve()
+    excluded = {output, package_root / "manifest.json.p7s"}
+    artifacts = {
+        path.relative_to(package_root).as_posix(): sha256(path)
+        for path in sorted(package_root.rglob("*"))
+        if path.is_file() and path.resolve() not in excluded
+    }
     manifest = {
-        "schema": 1,
+        "schema": 2,
+        "release_id": args.release_id,
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "application_commit": command("git", "rev-parse", "HEAD"),
         "branch": command("git", "branch", "--show-current"),
@@ -54,7 +64,9 @@ def main() -> None:
         "driver": args.driver,
         "firmware": args.firmware,
         "usb_id": args.usb_id.lower(),
+        "signature_required": args.signature_required,
         "inputs": {str(path.relative_to(ROOT)).replace("\\", "/"): sha256(path) for path in tracked},
+        "artifact_hashes": artifacts,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

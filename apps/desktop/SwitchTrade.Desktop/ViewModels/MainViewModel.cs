@@ -22,6 +22,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private string _radioStateText = "Not checked";
     private string _sessionStateText = "Not active";
     private string _recoverySummary = "The installed local service did not respond.";
+    private string _recoveryInstructions = "Close SwitchTrade, run the latest signed SwitchTradeSetup.exe, and choose Repair. Do not reset or unregister WSL.";
+    private string _recoveryStage = "control";
     private string _recoveryTechnicalDetails = "Local setup · The desktop app could not reach 127.0.0.1:8787.";
 
     internal IControlGateway Gateway { get; }
@@ -89,6 +91,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public string RadioStateText { get => _radioStateText; private set => Set(ref _radioStateText, value); }
     public string SessionStateText { get => _sessionStateText; private set => Set(ref _sessionStateText, value); }
     public string RecoverySummary { get => _recoverySummary; private set => Set(ref _recoverySummary, value); }
+    public string RecoveryInstructions { get => _recoveryInstructions; private set => Set(ref _recoveryInstructions, value); }
+    public string RecoveryStage { get => _recoveryStage; private set => Set(ref _recoveryStage, value); }
     public string RecoveryTechnicalDetails
     {
         get => _recoveryTechnicalDetails;
@@ -147,6 +151,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ReadinessText = "Setup needs attention";
         ControlStateText = "Unavailable";
         RecoverySummary = "The installed local service did not respond.";
+        RecoveryStage = "control";
+        RecoveryInstructions = "Close SwitchTrade, run the latest signed SwitchTradeSetup.exe, and choose Repair. Do not reset or unregister WSL.";
         RecoveryTechnicalDetails = "control.unavailable · 127.0.0.1:8787 did not answer the bounded readiness probe.";
         CurrentScreen = new RecoveryScreenViewModel(this);
     }
@@ -162,6 +168,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             {
                 IsServiceReady = false;
                 ReadinessText = "Setup needs attention";
+                RecoveryStage = "control";
+                RecoverySummary = "The installed local service did not respond.";
+                RecoveryInstructions = "Close SwitchTrade, run the latest signed SwitchTradeSetup.exe, and choose Repair. Do not reset or unregister WSL.";
+                if (CurrentScreen is RecoveryScreenViewModel unavailableRecovery) unavailableRecovery.NotifyRecoveryChanged();
                 return;
             }
             ApplyStatus(status);
@@ -197,6 +207,17 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         RecoveryTechnicalDetails = !status.Compatible
             ? $"app.version_mismatch · UI expects {ControlApiClient.ReadinessContract} / 0.2.x; runtime reported {status.ContractVersion} / {status.Version}."
             : $"{status.FailureStage ?? "control"}.failed · run {status.RunId} · action {status.RecoveryAction ?? "retry"}";
+        RecoveryStage = !status.Compatible ? "version" : status.FailureStage ?? "control";
+        RecoveryInstructions = RecoveryStage switch
+        {
+            "version" => "Close SwitchTrade and run a newer signed SwitchTradeSetup.exe with Update. Preview mode is not safe for trading.",
+            "relay" => "Check this PC’s internet connection, then try again. If the relay still fails, export a support bundle before changing WSL.",
+            "radio" => "Open Settings → Connection, select the adapter, and run the adapter check. Reattach USB only when the diagnostic asks.",
+            "session" => "End the failed connection and try once more. If it repeats, export a support bundle before creating another room.",
+            "decoder" => "End the current connection and try again. Trading remains blocked until the installed decoder matches this app.",
+            _ => "Close SwitchTrade, run the latest signed SwitchTradeSetup.exe, and choose Repair. Do not reset or unregister WSL.",
+        };
+        if (CurrentScreen is RecoveryScreenViewModel recovery) recovery.NotifyRecoveryChanged();
         RoomCoordinator.ApplyStatus(status);
     }
 

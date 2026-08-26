@@ -18,20 +18,27 @@ try {
     $stateRoot = Join-Path $TestRoot 'state'
     $kernelOne = Join-Path $TestRoot 'kernel-one'
     $kernelTwo = Join-Path $TestRoot 'kernel-two'
+    $modulesOne = Join-Path $TestRoot 'modules-one.tar.gz'
     [IO.File]::WriteAllText($kernelOne, 'kernel one')
     [IO.File]::WriteAllText($kernelTwo, 'kernel two')
+    [IO.File]::WriteAllText($modulesOne, 'test module archive')
     $manifestOne = Join-Path $TestRoot 'manifest-one.json'
     $manifestTwo = Join-Path $TestRoot 'manifest-two.json'
-    @{ kernel_release = 'test-one'; kernel_sha256 = Get-FileSha256 $kernelOne } |
+    @{ kernel_release = 'test-one'; kernel_sha256 = Get-FileSha256 $kernelOne
+       modules_sha256 = Get-FileSha256 $modulesOne } |
         ConvertTo-Json | Set-Content -LiteralPath $manifestOne -Encoding UTF8
     @{ kernel_release = 'test-two'; kernel_sha256 = Get-FileSha256 $kernelTwo } |
         ConvertTo-Json | Set-Content -LiteralPath $manifestTwo -Encoding UTF8
 
-    Install-SwitchTradeKernel -Kernel $kernelOne -Manifest $manifestOne -StateRoot $stateRoot `
+    Install-SwitchTradeKernel -Kernel $kernelOne -KernelModules $modulesOne `
+        -Manifest $manifestOne -StateRoot $stateRoot `
         -AcceptGlobalKernelChange | Out-Null
     $merged = Get-Content -Raw -LiteralPath (Join-Path $env:USERPROFILE '.wslconfig')
     if ($merged -notmatch 'instanceIdleTimeout=-1' -or $merged -notmatch 'vmIdleTimeout=-1') {
         throw 'unrelated WSL settings were not preserved'
+    }
+    if ($merged -match '(?m)^kernelModules=') {
+        throw 'a modules tar archive was incorrectly configured as a WSL modules VHD'
     }
     Install-SwitchTradeKernel -Kernel $kernelTwo -Manifest $manifestTwo -StateRoot $stateRoot `
         -AcceptGlobalKernelChange | Out-Null
