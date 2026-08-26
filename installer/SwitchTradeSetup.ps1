@@ -17,6 +17,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+trap {
+    [Console]::Error.WriteLine("SWITCHTRADE_SETUP_ERROR: $($_.Exception.Message)")
+    exit 1
+}
 $PackageRoot = Split-Path -Parent $PSScriptRoot
 $Payload = Join-Path $PackageRoot 'payload\app'
 $Rootfs = Join-Path $PackageRoot 'payload\switchtrade-rootfs.tar.gz'

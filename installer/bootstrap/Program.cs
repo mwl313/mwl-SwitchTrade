@@ -9,6 +9,8 @@ namespace SwitchTrade.Setup;
 
 internal static class Program
 {
+    private const string SetupFailurePrefix = "SWITCHTRADE_SETUP_ERROR: ";
+
     [STAThread]
     private static int Main(string[] args)
     {
@@ -143,9 +145,16 @@ internal static class Program
         }
     }
 
-    private static string FirstErrorLine(string error) => error
-        .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-        .FirstOrDefault() ?? "SwitchTrade setup did not complete.";
+    private static string FirstErrorLine(string error)
+    {
+        var lines = error.Replace("\0", "").Split(['\r', '\n'],
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var setupFailure = lines.LastOrDefault(line =>
+            line.StartsWith(SetupFailurePrefix, StringComparison.Ordinal));
+        return setupFailure is null
+            ? lines.FirstOrDefault() ?? "SwitchTrade setup did not complete."
+            : setupFailure[SetupFailurePrefix.Length..].Trim();
+    }
 
     private static SetupProcessResult RunHeadless(ProcessStartInfo start)
     {

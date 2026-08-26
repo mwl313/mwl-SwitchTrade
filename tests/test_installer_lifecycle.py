@@ -137,6 +137,20 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertIn("Distro", result.stdout)
 
     @unittest.skipUnless(shutil.which("powershell"), "Windows PowerShell is required")
+    def test_setup_failure_has_a_stable_bootstrap_marker(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            package = Path(temporary)
+            shutil.copytree(ROOT / "installer", package / "installer")
+            result = subprocess.run([
+                "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                str(package / "installer" / "SwitchTradeSetup.ps1"), "-Action", "Install",
+            ], cwd=package, capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("SWITCHTRADE_SETUP_ERROR: PACKAGE_MANIFEST_MISSING", result.stderr)
+        program = (ROOT / "installer" / "bootstrap" / "Program.cs").read_text(encoding="utf-8")
+        self.assertIn('error.Replace("\\0", "")', program)
+
+    @unittest.skipUnless(shutil.which("powershell"), "Windows PowerShell is required")
     def test_windows_host_support_matrix(self):
         compatibility = ROOT / "installer" / "HostCompatibility.ps1"
         cases = (
