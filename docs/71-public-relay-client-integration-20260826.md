@@ -69,6 +69,8 @@ Python distribution licenses, self-contained .NET runtime, WSL kernel source off
 wireless regulatory database, Ubuntu rootfs license locations, and the unmodified usbipd-win prerequisite.
 It is the package builder's default notice input. Technical inventory is complete; final legal approval
 remains an owner/reviewer release decision.
+The archive builder also writes a sibling SHA-256 file so the exact private-beta download can be retained
+and checked independently of the manifest inside the archive.
 
 ## Remaining release gates
 

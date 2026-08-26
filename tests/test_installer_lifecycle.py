@@ -38,6 +38,7 @@ class InstallerLifecycleTests(unittest.TestCase):
             self.assertIn(value, builder)
         self.assertIn("payload\\release-config.json", builder)
         self.assertIn("legal\\THIRD-PARTY-NOTICES.txt", builder)
+        self.assertIn('"$archive.sha256"', builder)
         release_config = json.loads((ROOT / "payload" / "release-config.json").read_text())
         self.assertEqual(release_config["relay_url"], "https://relay.pangyostonefist.org")
 

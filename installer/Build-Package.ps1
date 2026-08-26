@@ -261,7 +261,11 @@ Test-SwitchTradePackage -PackageRoot $Stage -AllowUnsignedPackage:(!$Release) | 
 if (-not $NoArchive) {
     $archive = "$Stage.zip"
     Compress-Archive -LiteralPath $Stage -DestinationPath $archive -Force
+    $archiveHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+    "$archiveHash  $([IO.Path]::GetFileName($archive))" |
+        Set-Content -LiteralPath "$archive.sha256" -Encoding Ascii
     Write-Host $archive
+    Write-Host "$archive.sha256"
 } else {
     Write-Host $Stage
 }
