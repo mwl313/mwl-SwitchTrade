@@ -93,6 +93,57 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertIn("SWITCH_ASSOCIATION_NOT_TESTED",
                           [stage["code"] for stage in report["stages"]])
 
+    def test_quick_diagnostic_ignores_another_usb_devices_historical_failure(self):
+        from subprocess import CompletedProcess
+
+        def runner(command, timeout):
+            if command[0] == "bash":
+                return CompletedProcess(command, 0, "USB_PATH=1-2\nrtl8xxxu\n", "")
+            if command[0] == "dmesg":
+                return CompletedProcess(
+                    command, 0,
+                    "rtl8xxxu 1-1:1.0: probe with driver rtl8xxxu failed with error -11\n"
+                    "rtl8xxxu 1-2:1.0: RTL8192EU initialized\n", "")
+            return self._healthy_runner(command, timeout)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            report, _ = diagnose_hardware(
+                "0bda:818b", runs_root=temporary, runner=runner)
+
+        binding = next(stage for stage in report["stages"]
+                       if stage["name"] == "driver_binding")
+        kernel_log = next(stage for stage in report["stages"]
+                          if stage["name"] == "kernel_firmware_log")
+        self.assertEqual(binding["details"]["usb_path"], "1-2")
+        self.assertEqual(kernel_log["code"], "KERNEL_LOG_CLEAR")
+        self.assertNotIn("DRIVER_PROBE_FAILED",
+                         [item["code"] for item in report["incompatibilities"]])
+
+    def test_quick_diagnostic_scopes_fallback_profile_to_the_bound_driver(self):
+        from subprocess import CompletedProcess
+
+        def runner(command, timeout):
+            if command[0] == "bash":
+                return CompletedProcess(command, 0, "USB_PATH=1-1\n8188eu\n", "")
+            if command[0] == "dmesg":
+                return CompletedProcess(
+                    command, 0,
+                    "rtl8xxxu 1-1:1.0: probe with driver rtl8xxxu failed with error -11\n",
+                    "")
+            return self._healthy_runner(command, timeout)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            report, _ = diagnose_hardware(
+                "0bda:8179", runs_root=temporary, runner=runner)
+
+        module = next(stage for stage in report["stages"]
+                      if stage["name"] == "driver_module")
+        kernel_log = next(stage for stage in report["stages"]
+                          if stage["name"] == "kernel_firmware_log")
+        self.assertEqual(module["details"]["driver"], "8188eu")
+        self.assertEqual(module["status"], "passed")
+        self.assertEqual(kernel_log["code"], "KERNEL_LOG_CLEAR")
+
     def test_redaction_and_support_bundle(self):
         with tempfile.TemporaryDirectory() as temporary:
             logger = RunLogger("test", temporary)

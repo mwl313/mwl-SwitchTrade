@@ -20,9 +20,12 @@
 - 커널 SSOT에 기존 `gptsolreview`의 확장형 빌드 입력, 실험용 pinned RTL8188EU patch, LDN 필수
   TUN/TAP·CCM·CMAC 설정을 복원하고, 실기 검증 기준 6.18.35.2와 산출물 SHA-256 manifest를 고정했다.
   별도 커널 repo에는 이 소스를 그대로 미러하고 새 Actions 산출물을 검증한다.
-- WSL Python 직접·전이 의존성을 clean runtime의 정확한 버전으로 잠갔고 전체 216 tests/3 skips가
+- WSL Python 직접·전이 의존성을 clean runtime의 정확한 버전으로 잠갔고 전체 219 tests/3 skips가
   통과했다. native Support 탭은 실제 GitHub Issues로 연결되며, third-party/source-offer inventory를
   패키지 기본 입력으로 추가했다. 공개 relay `/metrics`는 HTTP 403으로 차단됨을 확인했다.
+- hardware quick 진단은 이제 대상 USB topology와 현재 bound driver만의 dmesg를 판정하며,
+  `/sys/module`에 load된 외부 vendor 모듈도 인식한다. 8192가 8188의 과거 probe 실패를 자기 실패로
+  오인하던 false negative를 실기 상태에서 제거했다.
 
 **2026-08-26**: `0.2.0-beta.1` repository preflight 및 relay hosting handoff 완료
 - Production relay를 authenticated two-seat authority + attempt-bound opaque RFU WebSocket으로

@@ -27,7 +27,7 @@
   `.ek3` Pokémon records in fixtures and captured endpoint traffic.
 - [x] Source package includes SHA-256 verification for the rootfs and native EXE.
 - [x] Throwaway-distro install, repair, retained rollback runtime, uninstall, and explicit purge passed.
-- [x] Fully pinned WSL runtime suite passed 216 tests (3 skipped) without Switch hardware on 2026-08-26.
+- [x] Fully pinned WSL runtime suite passed 219 tests (3 skipped) without Switch hardware on 2026-08-26.
 
 ## Current gate summary and execution order
 

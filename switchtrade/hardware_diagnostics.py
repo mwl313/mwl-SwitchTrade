@@ -173,8 +173,9 @@ def diagnose_hardware(usb_id: str, *, mode: str = "quick", role: str = "host",
         "[ -r \"$vendor\" ] || continue; dev=${vendor%/idVendor}; "
         "id=$(cat \"$vendor\"):$(cat \"$dev/idProduct\" 2>/dev/null); "
         "[ \"${id,,}\" = \"$wanted\" ] || continue; "
-        "for link in \"$dev\"/*:*/driver; do [ -L \"$link\" ] && "
-        "basename \"$(readlink -f \"$link\")\" && exit 0; done; done; exit 3",
+        "for link in \"$dev\"/*:*/driver; do if [ -L \"$link\" ]; then "
+        "echo USB_PATH=$(basename \"$dev\"); "
+        "basename \"$(readlink -f \"$link\")\"; exit 0; fi; done; done; exit 3",
         "switchtrade-driver", usb_id,
     ]
     binding_rc, binding = _capture(logger, "driver-binding", binding_command, runner)
@@ -182,6 +183,8 @@ def diagnose_hardware(usb_id: str, *, mode: str = "quick", role: str = "host",
         line.strip() for line in reversed(binding.splitlines())
         if re.fullmatch(r"[A-Za-z0-9_-]+", line.strip())
     ), None)
+    usb_path_match = re.search(r"^USB_PATH=([0-9]+-[0-9]+(?:\.[0-9]+)*)$", binding, re.M)
+    usb_path = usb_path_match.group(1) if usb_path_match else None
     allowed = set(profile.allowed_drivers) if profile else set()
     binding_ok = binding_rc == 0 and bound_driver is not None and (
         not allowed or bound_driver in allowed)
@@ -193,7 +196,7 @@ def diagnose_hardware(usb_id: str, *, mode: str = "quick", role: str = "host",
         "driver_binding", "passed" if binding_ok else "failed", binding_code,
         f"The adapter is bound to {bound_driver}." if binding_ok else
         "The adapter is not bound to an allowed matrix driver.",
-        driver=bound_driver, allowed_drivers=sorted(allowed),
+        driver=bound_driver, usb_path=usb_path, allowed_drivers=sorted(allowed),
     ))
     if not binding_ok:
         incompatibilities.append({
@@ -236,15 +239,24 @@ def diagnose_hardware(usb_id: str, *, mode: str = "quick", role: str = "host",
         "Wi-Fi is blocked." if blocked else "No Wi-Fi block was reported.",
     ))
 
-    driver_name = profile.allowed_drivers[0] if profile and profile.allowed_drivers else ""
+    driver_name = bound_driver if binding_ok and bound_driver else (
+        profile.allowed_drivers[0] if profile and profile.allowed_drivers else ""
+    )
     if driver_name:
         module_rc, module = _capture(
-            logger, "driver-module", ["modinfo", driver_name], runner)
+            logger, "driver-module", [
+                "bash", "-c",
+                "modinfo \"$1\" 2>/dev/null || { [ -d \"/sys/module/$1\" ] && "
+                "echo loaded-from-sysfs; }",
+                "switchtrade-module", driver_name,
+            ], runner)
+        module_source = "loaded_sysfs" if "loaded-from-sysfs" in module else "module_tree"
         stages.append(_stage(
             "driver_module", "passed" if module_rc == 0 else "failed",
             "DRIVER_MODULE_AVAILABLE" if module_rc == 0 else "DRIVER_MODULE_MISSING",
             f"Kernel module {driver_name} is available." if module_rc == 0 else
             f"Kernel module {driver_name} is unavailable.", driver=driver_name,
+            source=module_source if module_rc == 0 else None,
         ))
     else:
         module = ""
@@ -255,10 +267,13 @@ def diagnose_hardware(usb_id: str, *, mode: str = "quick", role: str = "host",
 
     dmesg_rc, dmesg = _capture(
         logger, "kernel-log", ["dmesg", "--level=err,warn"], runner)
-    driver_terms = tuple(profile.allowed_drivers) if profile else ()
+    driver_terms = (bound_driver,) if binding_ok and bound_driver else (
+        tuple(profile.allowed_drivers) if profile else ()
+    )
     dmesg_scope = "\n".join(
         line for line in dmesg.splitlines()
-        if not driver_terms or any(term.lower() in line.lower() for term in driver_terms)
+        if (not driver_terms or any(term.lower() in line.lower() for term in driver_terms))
+        and (not usb_path or re.search(rf"(?<![0-9.-]){re.escape(usb_path)}(?=[:.\s-])", line))
     )
     known = classify_output(dmesg_scope)
     for item in known:

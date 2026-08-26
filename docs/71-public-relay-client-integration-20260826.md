@@ -72,6 +72,11 @@ remains an owner/reviewer release decision.
 The archive builder also writes a sibling SHA-256 file so the exact private-beta download can be retained
 and checked independently of the manifest inside the archive.
 
+Hardware quick diagnostics now scope kernel failures to the selected USB topology and its currently
+bound driver. This prevents an RTL8192EU run from inheriting an RTL8188EU failure left earlier in the
+same boot's dmesg, and recognizes an externally loaded vendor module through `/sys/module` when no
+installed `modinfo` record exists. Both behaviors are regression-tested against the live two-card state.
+
 ## Remaining release gates
 
 1. Run the reconciled kernel workflow, download and inspect its checksummed artifact, then provide the
