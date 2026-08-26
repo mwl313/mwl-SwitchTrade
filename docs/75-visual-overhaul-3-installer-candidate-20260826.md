@@ -3,24 +3,26 @@
 ## Candidate identity
 
 - Branch: `production-beta`
-- Application commit: `8667888150ea4dfb216eb9699f5a17a7f0a11cc5`
-- Package: `SwitchTrade-unsigned-private-beta-8667888.zip`
-- ZIP SHA-256: `2c9a4888f02f738bfc6ae653a50cbfb41cc8237912c695e0f320bb99f5f047fe`
-- ZIP size: `219378132` bytes
+- Application commit: `125fbac0f18765ca79e00565de4276a45b550190`
+- Package: `SwitchTrade-unsigned-private-beta-125fbac.zip`
+- ZIP SHA-256: `3ac85518f63e118c5f5d44ae6797ad30d72de1d302fe13984c4761b0c6f0cb23`
+- ZIP size: `219381404` bytes
 - Local build location: `artifacts/release-candidates/`
-- Relay: `https://relay.pangyostonefist.org`
+- Configured relay: `https://relay.pangyostonefist.org` (currently unavailable because its DNS name
+  returns NXDOMAIN; this is an external release blocker)
 - Signing state: explicitly labeled unsigned private beta, per owner exception
 
-The package manifest reports schema 2, release ID `beta-8667888`, branch `production-beta`, and the
+The package manifest reports schema 2, release ID `beta-125fbac`, branch `production-beta`, and the
 full application commit above. The packaged Windows client is the native Visual Overhaul 3 WPF build,
 not the retired web frontend or the earlier `91f5a3e` client.
 
-The earlier `77dd538`, `9014e8f`, `28221e1`, `1e8b4bd`, and `b2c9d36` local candidates are superseded and must not be
-distributed. They were retained only as diagnostic evidence for the fixes recorded in `docs/76`.
+The earlier `77dd538`, `9014e8f`, `28221e1`, `1e8b4bd`, `b2c9d36`, and `8667888` local candidates are
+superseded and must not be distributed. They were retained only as diagnostic evidence for the fixes
+recorded in `docs/76` and `docs/77`.
 
 ## Reused verified system inputs
 
-The application and installer source were archived fresh from `8667888`. The hardware/runtime inputs
+The application and installer source were archived fresh from `125fbac`. The hardware/runtime inputs
 were reused byte-for-byte from the previously integrity-qualified `91f5a3e` candidate because they are
 versioned independently of the UI:
 
@@ -53,6 +55,13 @@ builder then independently checked the kernel/modules manifest and regenerated e
   before runtime activation and did not reproduce `ModuleNotFoundError`
 - Installed `app-readiness.v1` control API startup, compatibility, and graceful shutdown: PASS
 - Installed release/commit/branch and public relay configuration: PASS
+- Corrected launcher startup from an unrelated Windows working directory with no USB radio attached:
+  PASS; control became ready and version-compatible
+- Actual package Update followed by installed WPF launch: PASS; UI Automation reached Home rather than
+  the recovery screen, and no radio was required for Settings or online-room navigation
+- Launcher failure diagnostics are bounded and preserved under the startup log directory: PASS
+- Relay health failure is separated from local-control health: PASS; the current DNS NXDOMAIN is shown
+  as `relay.unavailable` and Public Rooms is disabled without disabling the rest of the app
 - Desktop shortcut creation: PASS
 - ZIP checksum compared with the sibling `.sha256`: PASS
 
@@ -65,6 +74,6 @@ no unrelated packages were installed into the user's Ubuntu distribution during 
 ## Remaining release gates
 
 This is a current installable candidate, not release approval. It still requires extraction before
-launching `SwitchTradeSetup.exe`, Windows unsigned-publisher acceptance, external clean-machine and
-reboot/resume qualification, two physical RTL8192EU endpoints, two-PC/two-Switch qualification, WAN
-fault/recovery testing, and private publication approval.
+launching `SwitchTradeSetup.exe`, Windows unsigned-publisher acceptance, relay DNS/TLS restoration,
+external clean-machine and reboot/resume qualification, two physical RTL8192EU endpoints,
+two-PC/two-Switch qualification, WAN fault/recovery testing, and private publication approval.

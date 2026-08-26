@@ -49,6 +49,7 @@
 | [docs/70-private-beta-support-and-recovery-guide-20260826.md](docs/70-private-beta-support-and-recovery-guide-20260826.md) | Private-beta 지원 범위와 안전한 복구 가이드 |
 | [docs/75-visual-overhaul-3-installer-candidate-20260826.md](docs/75-visual-overhaul-3-installer-candidate-20260826.md) | Visual Overhaul 3가 포함된 최신 unsigned 설치 후보와 검증 기록 |
 | [docs/76-wsl-custom-kernel-unicode-path-fix-20260826.md](docs/76-wsl-custom-kernel-unicode-path-fix-20260826.md) | 한글 Windows 사용자 경로의 WSL 커스텀 커널 시작 실패와 설치기 수정 |
+| [docs/77-control-first-startup-and-relay-diagnosis-20260826.md](docs/77-control-first-startup-and-relay-diagnosis-20260826.md) | 설치 후 로컬 서비스 기동 실패, control-first 수정, Public Rooms relay 진단 |
 | [relay/DEPLOYMENT.md](relay/DEPLOYMENT.md) | 별도 hosting agent용 production relay 배포·smoke runbook |
 | [docs/30-native-fixed-handshake-20260824.md](docs/30-native-fixed-handshake-20260824.md) | Native two-Switch fixed-channel gold, PC-host root cause, and byte-verified Session fix |
 | [handoff/HANDOFF-20260824-wsl-dual-radio.md](handoff/HANDOFF-20260824-wsl-dual-radio.md) | WSL 두 카드 최종 상태, 확장 구조, 다음 G5/G6 절차 |
@@ -112,9 +113,10 @@ Windows frontend, passive decoder observer, isolated WSL lifecycle, native setup
 verification, and hosting-ready relay are implemented. The pinned Linux/WSL runtime suite passes
 without Switch hardware. See [`docs/69-repository-preflight-completion-and-relay-handoff-20260826.md`](docs/69-repository-preflight-completion-and-relay-handoff-20260826.md).
 
-`production-beta` commit `8667888` includes Visual Overhaul 3, the installer reliability corrections,
-and a native progress window with concise completion messaging. The matching locally built unsigned
-installer candidate is `SwitchTrade-unsigned-private-beta-8667888.zip`; its reproducible inputs and checksums are recorded in
+`production-beta` commit `125fbac` includes Visual Overhaul 3, the native installer progress window,
+control-first daily startup, bounded native recovery, and explicit relay availability diagnostics. The
+matching locally built unsigned installer candidate is `SwitchTrade-unsigned-private-beta-125fbac.zip`;
+its reproducible inputs and checksums are recorded in
 [`docs/75`](docs/75-visual-overhaul-3-installer-candidate-20260826.md).
 
 This is an internal beta candidate, not a signed user release. Two physical RTL8192EU endpoints,

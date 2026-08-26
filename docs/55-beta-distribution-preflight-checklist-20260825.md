@@ -2,17 +2,18 @@
 
 > Status: Repository-controlled preflight implementation is complete as of 2026-08-26, excluding all
 > client privacy/consent work by explicit owner direction. This is not release approval: final owner/GPT
-> visual/legal approval, relay operational
+> visual/legal approval, relay DNS/operational
 > qualification, clean-machine qualification, and two-PC/two-Switch hardware qualification remain.
-> The relay is live at `https://relay.pangyostonefist.org` and its credentialed opaque smoke passes;
-> backup/restore, staged restart, and two-NAT tests remain. The owner explicitly waived Windows code
+> The relay previously passed credentialed opaque smoke at `https://relay.pangyostonefist.org`, but its
+> hostname currently returns NXDOMAIN. DNS restoration, health requalification, backup/restore, staged
+> restart, and two-NAT tests remain. The owner explicitly waived Windows code
 > signing for this private beta, so the package must remain visibly labeled unsigned.
 > UI baseline: `docs/56-native-ui-ux-redesign-handoff-20260825.md` and the owner overrides in
 > `docs/57-native-ui-overhaul-implementation-report-20260825.md` are the preliminary redesign source.
 > Latest UI evidence: `docs/74-stitch-dark-ui-overhaul-3-implementation-report-20260826.md` and
 > `docs/assets/ui-overhaul-3/`.
-> Latest installer candidate: `SwitchTrade-unsigned-private-beta-8667888.zip`, built from the same
-> `production-beta` commit and recorded with its SHA-256 in `docs/75`.
+> Latest installer candidate: `SwitchTrade-unsigned-private-beta-125fbac.zip`, built from application
+> commit `125fbac` and recorded with its SHA-256 in `docs/75`.
 > Second-overhaul audit: `docs/63-second-native-ui-overhaul-codex-handoff-20260825.md`.
 > Final-overhaul handoff: `docs/62-final-ui-overhaul-gpt-handoff-20260825.md`.
 > Frozen contracts: `room-control.v1` (`docs/58`), `party-commit.v1` (`docs/59`), and
@@ -39,8 +40,8 @@
 | 1 | Gate 4 local integration | Internally implemented | Hardware-qualify authoritative role transition, retry, and recovery in Gate 7 |
 | 2 | Gate 0 | Visual Overhaul 3 implemented as native dark WPF; icon, real GitHub Issues link, embedded fonts, and factual third-party notices complete | Owner visual acceptance and legal-notice approval |
 | 3 | Gates 4–5 contracts | Implemented and internally tested | Qualify the ordered room path across two production endpoints |
-| 4 | Gate 5 remote services | Public TLS deployment, credentialed smoke, and public metrics denial passed | Pass backup/restore, staged restart/reconnect, and two-NAT qualification |
-| 5 | Gates 1–3 | Visual Overhaul 3 runtime `b2c9d36` reinstalled successfully from an unrelated working directory; candidate `8667888` adds the native progress UI and passed build, integrity, WPF self-test, and ZIP checks | Approve notices and qualify the latest package on a separate clean machine |
+| 4 | Gate 5 remote services | Public TLS deployment and credentialed smoke passed previously; the configured hostname now returns NXDOMAIN and the client reports `relay.unavailable` | Restore DNS/TLS health, then pass backup/restore, staged restart/reconnect, and two-NAT qualification |
+| 5 | Gates 1–3 | Candidate `125fbac` adds the native progress UI and control-first startup; actual Update and installed no-radio WPF launch passed from the non-ASCII-profile development PC | Approve notices and qualify the latest package on a separate clean machine |
 | 6 | Gate 6 | Automated subset passed; physical lifecycle not qualified | Pass clean-machine, reboot, coexistence, unsigned-publisher warning, and destructive lifecycle matrix |
 | 7 | Gate 7 | Waiting for production stack and second RTL8192EU | Pass two-PC/two-Switch hardware, trade, decoder, teardown, reuse, and network-fault qualification |
 | 8 | Gate 8 | Windows signing waived; labeled unsigned candidate and sibling checksum built | Retain externally, publish privately, review, and approve |
@@ -97,17 +98,20 @@ This preflight checklist is the release-blocking superset of the immediate tasks
   authoritative lobby, decoder observer, and clean shutdown. Covered by Gates 1, 2, 4, and 5.
 - [x] Finish the production-hosting package for the opaque relay and authoritative lobby, including
   a hardened container, persistent authority store, deployment runbook, and credentialed smoke test.
-- [x] Hosting operator deployed the relay at `https://relay.pangyostonefist.org`; health, legacy-endpoint
-  rejection, authenticated room lifecycle, opaque bidirectional WebSocket smoke, and public `/metrics`
-  denial passed. Backup, restart, and two-NAT qualification remain in Gate 5. Evidence: `docs/71`.
+- [x] Hosting operator previously deployed the relay at `https://relay.pangyostonefist.org`; health,
+  legacy-endpoint rejection, authenticated room lifecycle, opaque bidirectional WebSocket smoke, and
+  public `/metrics` denial passed. Evidence: `docs/71`.
+- [ ] Restore the missing DNS record for `relay.pangyostonefist.org` and repeat TLS health/capability
+  verification. Until then the client intentionally disables the public directory and reports
+  `relay.unavailable`. Evidence: `docs/77`.
 - [ ] Run the first real two-endpoint, two-Switch production test. Covered by Gate 7.
 - [ ] Run LAN/WAN reliability, fault, recovery, and immediate-reuse testing. Covered by Gate 7.
 - [x] Implement and internally test build, install, repair, update, atomic app/WSL/kernel rollback,
   uninstall, manifest/signature verification, and guided native setup.
 - [x] Build the explicitly labeled Visual Overhaul 3 unsigned private-beta package from commit
-  `8667888`; internal manifest, desktop self-test, product tests, kernel lifecycle, and ZIP checksum
-  checks pass. Its unchanged runtime base passed the actual non-ASCII-profile reinstall from an
-  unrelated working directory at `b2c9d36`. Evidence: `docs/75` and `docs/76`.
+  `125fbac`; internal manifest, desktop self-test, product tests, kernel lifecycle, ZIP checksum,
+  actual Update, and installed no-radio control/WPF startup checks pass on the non-ASCII-profile
+  development PC. Evidence: `docs/75`–`docs/77`.
 - [ ] Externally qualify that package. Windows code signing is an accepted owner exception; covered by
   Gates 1-8 and `docs/71`.
 
@@ -242,8 +246,8 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
 - [x] Implement retained-session `/api/v1/app/retry`, an allowlisted adapter health-gate repair, and
   bind radio-stage failures to the native repair action without accepting free-form commands.
 - [ ] Publish and qualify the labeled unsigned private-beta update package. Candidate
-  `SwitchTrade-unsigned-private-beta-8667888.zip` is built and integrity-qualified; its runtime base is
-  installed on the development PC. External
+  `SwitchTrade-unsigned-private-beta-125fbac.zip` is built, integrity-qualified, and installed on the
+  development PC; control-first startup opens the UI without requiring a radio. External
   retention, clean-machine/hardware qualification, private publication, and approval remain. The signed
   update path remains implemented for a future public release.
 - [x] Finish stage-specific native routing for control, version, relay, session, decoder, and radio
@@ -282,8 +286,9 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
 
 ## Gate 5 — production relay and authoritative groups; analytics owner-deferred
 
-- [x] Deploy a reachable TLS-protected relay at `https://relay.pangyostonefist.org`; credentialed room
-  and opaque bidirectional WebSocket smoke passed on 2026-08-26.
+- [ ] Restore a reachable TLS-protected relay at `https://relay.pangyostonefist.org`. Credentialed room
+  and opaque bidirectional WebSocket smoke passed earlier on 2026-08-26, but the hostname later returned
+  NXDOMAIN during candidate qualification; repeat health and capability smoke after DNS restoration.
 - [x] Configure the relay URL through manifest-hashed installation configuration rather than hardcoded
   UI state; private-beta builds reject loopback/non-HTTPS URLs and daily launch revalidates the config
   hash. A future signed release also authenticates that manifest.
