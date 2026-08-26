@@ -202,7 +202,7 @@ class PassiveObserverTests(unittest.TestCase):
             self.assertEqual(observer.stats["dropped"], 1)
 
     def test_three_complete_party_blocks_publish_only_safe_projection(self):
-        fixtures = Path(__file__).resolve().parents[1] / "archive" / "pokemon" / "fixtures"
+        fixtures = Path(__file__).resolve().parent / "fixtures" / "pokemon"
         pair = ((fixtures / "0001_BULBASAUR_user_20260824.pk3").read_bytes() +
                 (fixtures / "0019_RATTATA_user_20260824.pk3").read_bytes())
         with tempfile.TemporaryDirectory() as temporary:
@@ -220,7 +220,7 @@ class PassiveObserverTests(unittest.TestCase):
             self.assertNotIn("canonical_hex", serialized)
 
     def test_trade_commit_requires_finish_save_and_swapped_post_parties(self):
-        fixtures = Path(__file__).resolve().parents[1] / "archive" / "pokemon" / "fixtures"
+        fixtures = Path(__file__).resolve().parent / "fixtures" / "pokemon"
         bulbasaur = (fixtures / "0001_BULBASAUR_user_20260824.pk3").read_bytes()
         rattata = (fixtures / "0019_RATTATA_user_20260824.pk3").read_bytes()
         salamence = (fixtures / "0373_SALAMENCE.pk3").read_bytes()
@@ -251,7 +251,7 @@ class PassiveObserverTests(unittest.TestCase):
             self.assertEqual(len(observer.snapshot()["commits"]), 1)
 
     def test_trade_commit_fails_closed_on_rollback(self):
-        fixtures = Path(__file__).resolve().parents[1] / "archive" / "pokemon" / "fixtures"
+        fixtures = Path(__file__).resolve().parent / "fixtures" / "pokemon"
         a = [(fixtures / "0001_BULBASAUR_user_20260824.pk3").read_bytes()] * 6
         b = [(fixtures / "0373_SALAMENCE.pk3").read_bytes()] * 6
         with tempfile.TemporaryDirectory() as temporary:

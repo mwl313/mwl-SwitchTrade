@@ -14,6 +14,7 @@
       <RowDefinition Height="64" />
       <RowDefinition Height="44" />
       <RowDefinition Height="*" />
+      <RowDefinition Height="40" />
     </Grid.RowDefinitions>
 
     <Border Grid.Row="0" Background="{DynamicResource CanvasDeepestBrush}"
@@ -117,6 +118,12 @@
     <controls:ScenePresenter x:Name="ScenePresenter" Grid.Row="2" Content="{Binding CurrentScreen}"
                              MaxWidth="1080" Margin="24,12,24,16" HorizontalAlignment="Left"
                              HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
+
+    <Button x:Name="CreditsButton" Grid.Row="3" Content="Credits"
+            Click="OpenCredits" Style="{StaticResource TextButton}"
+            HorizontalAlignment="Left" VerticalAlignment="Center" Margin="14,0,0,4"
+            Padding="10,5" MinHeight="30" FontSize="12"
+            automation:AutomationProperties.Name="Open credits" />
 
     <TextBlock Text="{Binding Announcement}" Width="1" Height="1" Opacity="0.01" IsHitTestVisible="False"
                automation:AutomationProperties.LiveSetting="Assertive"

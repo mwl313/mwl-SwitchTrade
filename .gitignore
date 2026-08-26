@@ -1,7 +1,25 @@
-# Nested reference repositories are evidence only; production source is tracked under bridge/.
-/archive/references/
-__pycache__/
+# Internal research and historical evidence stay local. Only the maintained public documents below
+# belong in the distribution repository.
+/docs/**
+!/docs/README.md
+!/docs/TECHNICAL_GUIDE.md
+!/docs/FRLG_PROTOCOL.md
+!/docs/DEVELOPMENT_HISTORY.md
+!/docs/FUTURE_TODO.md
+/handoff/
+/archive/
 /logs/
+/apps/web/
+/assets/ui/
+/assets/README.md
+/bridge/HANDOFF.md
+/bridge/PHASE2_DESIGN.md
+/bridge/README_MWL.md
+/scripts/run_trade.sh
+/scripts/setup-nm-unmanaged.sh
+
+__pycache__/
+/.pytest_cache/
 /apps/web/dist-desktop/
 /artifacts/
 **/bin/

@@ -315,7 +315,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--phy", default="phy0")
     parser.add_argument("--channel", type=int, choices=range(1, 14), default=6)
     parser.add_argument("--name", default="CODEX")
-    parser.add_argument("--keys", default="~/.switch/prod.keys")
+    parser.add_argument("--keys", default="./config/prod.keys")
     parser.add_argument("--target-bssid")
     parser.add_argument("--runs-root")
     parser.add_argument("--state-file")

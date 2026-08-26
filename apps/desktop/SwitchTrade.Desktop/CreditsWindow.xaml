@@ -1,0 +1,70 @@
+<Window x:Class="SwitchTrade.Desktop.CreditsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:automation="clr-namespace:System.Windows.Automation;assembly=PresentationCore"
+        Title="SwitchTrade Credits" Width="640" Height="570" MinWidth="560" MinHeight="500"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip"
+        Background="{DynamicResource CanvasBrush}" FontFamily="{StaticResource BodyFontFamily}"
+        FontSize="14" UseLayoutRounding="True" SnapsToDevicePixels="True">
+  <Grid Margin="28">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+
+    <StackPanel Margin="0,0,0,20">
+      <TextBlock Text="Credits" Style="{StaticResource ScreenTitle}" />
+      <TextBlock Text="People and open-source projects that made SwitchTrade possible."
+                 Style="{StaticResource SecondaryText}" Margin="0,6,0,0" />
+    </StackPanel>
+
+    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+      <StackPanel>
+        <Border Style="{StaticResource SurfaceCard}" Margin="0,0,0,12">
+          <StackPanel>
+            <TextBlock Text="Created by" Style="{StaticResource FieldLabel}" />
+            <TextBlock Text="Min W. Lim" FontFamily="{StaticResource HeadingFontFamily}"
+                       FontWeight="SemiBold" FontSize="18" Margin="0,7,0,0" />
+          </StackPanel>
+        </Border>
+
+        <Border Style="{StaticResource SurfaceCard}">
+          <StackPanel>
+            <TextBlock Text="Open-source acknowledgements" Style="{StaticResource SectionTitle}" />
+            <TextBlock Margin="0,14,0,0" TextWrapping="Wrap">
+              <Hyperlink NavigateUri="https://github.com/tornadus/frlg-ldn-trade"
+                         RequestNavigate="OpenExternalLink" Foreground="{DynamicResource LinkBlueBrush}">tornadus / frlg-ldn-trade</Hyperlink>
+              <Run Text=" — the original FireRed/LeafGreen LDN trading implementation." />
+            </TextBlock>
+            <TextBlock Margin="0,12,0,0" TextWrapping="Wrap">
+              <Hyperlink NavigateUri="https://github.com/kinnay/LDN"
+                         RequestNavigate="OpenExternalLink" Foreground="{DynamicResource LinkBlueBrush}">kinnay / LDN</Hyperlink>
+              <Run Text=" and " />
+              <Hyperlink NavigateUri="https://github.com/kinnay/NintendoClients"
+                         RequestNavigate="OpenExternalLink" Foreground="{DynamicResource LinkBlueBrush}">NintendoClients</Hyperlink>
+              <Run Text=" — LDN and network protocol foundations." />
+            </TextBlock>
+            <TextBlock Margin="0,12,0,0" TextWrapping="Wrap">
+              <Hyperlink NavigateUri="https://github.com/pret/pokefirered"
+                         RequestNavigate="OpenExternalLink" Foreground="{DynamicResource LinkBlueBrush}">pret / pokefirered contributors</Hyperlink>
+              <Run Text=" — documented FireRed/LeafGreen game and link behavior." />
+            </TextBlock>
+            <TextBlock Margin="0,12,0,0" TextWrapping="Wrap">
+              <Hyperlink NavigateUri="https://github.com/GB-Link"
+                         RequestNavigate="OpenExternalLink" Foreground="{DynamicResource LinkBlueBrush}">GB-Link contributors</Hyperlink>
+              <Run Text=" — architectural reference for connecting classic link experiences online." />
+            </TextBlock>
+            <TextBlock Margin="0,16,0,0" TextWrapping="Wrap" Style="{StaticResource SecondaryText}"
+                       Text="Each bundled dependency remains subject to its own license and notices." />
+          </StackPanel>
+        </Border>
+      </StackPanel>
+    </ScrollViewer>
+
+    <Button Grid.Row="2" Content="Close" IsDefault="True" IsCancel="True"
+            Style="{StaticResource PrimaryButton}" HorizontalAlignment="Right"
+            Margin="0,20,0,0" MinWidth="104"
+            automation:AutomationProperties.Name="Close credits" />
+  </Grid>
+</Window>

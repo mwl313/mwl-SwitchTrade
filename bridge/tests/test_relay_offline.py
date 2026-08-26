@@ -8,7 +8,7 @@ RemoteTransport remote channel (no LiveTransport.start(), i.e. no LDN radio):
   3. host.remote_send(TRADE_SELECT, slot=2) -> guest.remote_poll() == (0x01, b"\\x02")
   4. guest -> host round-trip (bidirectional)
   5. HEARTBEAT (0x04) and STATE_SYNC (0x10) transmit/receive
-  6. relay session create/join API via curl (3rd join -> 409)
+  6. relay session create/join API via the Python standard library (3rd join -> 409)
 
 Run:  .venv/bin/python tests/test_relay_offline.py
 """
@@ -20,6 +20,8 @@ import subprocess
 import sys
 import time
 import unittest
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 from pathlib import Path
 
 EMU_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -80,6 +82,8 @@ class RelayOfflineTest(unittest.TestCase):
         except subprocess.TimeoutExpired:
             cls.proc.kill()
             cls.proc.wait(timeout=5)
+        if cls.proc.stderr:
+            cls.proc.stderr.close()
 
     @classmethod
     def _wait_server(cls, timeout=20):
@@ -96,16 +100,19 @@ class RelayOfflineTest(unittest.TestCase):
         raise RuntimeError("relay server did not start in time")
 
     # -- helpers -------------------------------------------------------------
-    def _curl(self, method, path):
-        cmd = ["curl", "-s", "-w", "\n%{http_code}", "-X", method, f"{self.http}{path}"]
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        lines = out.stdout.splitlines()
-        status = int(lines[-1].strip()) if lines else 0
-        body = "\n".join(lines[:-1])
-        return status, body
+    def _request(self, method, path):
+        request = Request(f"{self.http}{path}", method=method)
+        try:
+            with urlopen(request, timeout=30) as response:
+                return response.status, response.read().decode("utf-8")
+        except HTTPError as error:
+            try:
+                return error.code, error.read().decode("utf-8")
+            finally:
+                error.close()
 
     def _create_session(self):
-        status, body = self._curl("POST", "/session/create")
+        status, body = self._request("POST", "/session/create")
         self.assertEqual(status, 200, f"session/create failed: {body}")
         import json
         return json.loads(body)["session_id"]
@@ -128,23 +135,23 @@ class RelayOfflineTest(unittest.TestCase):
             time.sleep(0.05)
         return frames
 
-    # -- 6. session create/join API via curl ---------------------------------
-    def test_session_api_via_curl(self):
-        status, body = self._curl("POST", "/session/create")
+    # -- 6. session create/join API ------------------------------------------
+    def test_session_api_via_http(self):
+        status, body = self._request("POST", "/session/create")
         self.assertEqual(status, 200)
         import json
         sid = json.loads(body)["session_id"]
         self.assertEqual(len(sid), 6)
 
-        status, body = self._curl("POST", f"/session/{sid}/join")
+        status, body = self._request("POST", f"/session/{sid}/join")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["participants"], 1)
 
-        status, body = self._curl("POST", f"/session/{sid}/join")
+        status, body = self._request("POST", f"/session/{sid}/join")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["participants"], 2)
 
-        status, body = self._curl("POST", f"/session/{sid}/join")
+        status, body = self._request("POST", f"/session/{sid}/join")
         self.assertEqual(status, 409, f"3rd join should be 409, got {status}: {body}")
 
     # -- 3/4. TRADE_SELECT + bidirectional -----------------------------------

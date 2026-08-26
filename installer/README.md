@@ -92,4 +92,5 @@ The retired web/demo frontend is not bundled into the WSL runtime or required by
 The repository default is the public HTTPS relay in `payload/release-config.json`; local development may
 override it explicitly. The installed `config.json` is verified against the package's complete hashed
 manifest on every launch. A future signed release also authenticates that manifest. Relay hosting is
-documented in `relay/DEPLOYMENT.md`, and user-safe recovery is documented in `docs/70`.
+documented in `relay/DEPLOYMENT.md`, and user-safe recovery is documented in
+`docs/TECHNICAL_GUIDE.md#troubleshooting-and-recovery`.

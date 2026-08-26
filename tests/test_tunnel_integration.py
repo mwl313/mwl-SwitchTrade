@@ -180,7 +180,7 @@ class TunnelIntegrationTest(unittest.TestCase):
         }, {"Idempotency-Key": uuid7(), "X-SwitchTrade-Client": "replay-b"})
         sid = first["room"]["room_code"]
         attempt_id = self._prepare_authority_attempt(first, second)
-        fixture = (ROOT / "archive" / "pokemon" / "fixtures" /
+        fixture = (ROOT / "tests" / "fixtures" / "pokemon" /
                    "0373_SALAMENCE.pk3").read_bytes()
         host = TunnelClient(self.base, sid, "host", heartbeat_interval=0.2,
                             member_token=first["member_token"], attempt_id=attempt_id).start()

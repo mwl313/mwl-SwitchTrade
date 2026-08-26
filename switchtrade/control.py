@@ -17,7 +17,6 @@ import sys
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
@@ -30,7 +29,6 @@ from switchtrade.process_guard import AlreadyRunningError, SingleInstanceLock
 from switchtrade.relay_client import RelayClient, RelayError
 
 
-UI_ROOT = Path(__file__).resolve().parents[1] / "apps" / "web" / "dist-desktop"
 READINESS_CONTRACT = "app-readiness.v1"
 ROOM_CONTRACT = "room-control.v1"
 PARTY_CONTRACT = "party-commit.v1"
@@ -1163,9 +1161,6 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         if os.environ.get("SWITCHTRADE_ALLOW_PROCESS_SHUTDOWN") == "1":
             background_tasks.add_task(lambda: (time.sleep(0.1), os.kill(os.getpid(), 15)))
         return {"status": "stopping", "run_id": state.log.run_id}
-
-    if UI_ROOT.is_dir():
-        app.mount("/", StaticFiles(directory=UI_ROOT, html=True), name="frontend")
 
     return app
 

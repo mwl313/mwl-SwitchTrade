@@ -669,7 +669,7 @@ def main():
                          "docs/09-testing-audit I-7). 'auto' uses the scanned network's address; "
                          "or give the console's MAC explicitly, e.g. 98:41:5c:79:41:38. Default: "
                          "off - unchanged SSID+channel association")
-    ap.add_argument("--keys", default="~/.switch/prod.keys", help="Switch prod.keys (live)")
+    ap.add_argument("--keys", default="./config/prod.keys", help="LDN key file (live)")
     ap.add_argument("--comm-id", help="LDN local_communication_id (hex) to join (live); "
                     "if omitted, joins the only available network (scan logs candidates)")
     ap.add_argument("--capture", metavar="FILE", help="(live) record EVERY Pia datagram both "

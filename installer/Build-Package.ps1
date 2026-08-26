@@ -23,6 +23,7 @@ $Repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if (-not $OutputRoot) { $OutputRoot = Join-Path $Repo 'artifacts' }
 $ReleaseConfigSource = Join-Path $Repo 'payload\release-config.json'
 $RepositoryNotices = Join-Path $Repo 'legal\THIRD-PARTY-NOTICES.txt'
+$RuntimeLdnKeys = Join-Path $Repo 'config\prod.keys'
 if (-not $Notices -and (Test-Path -LiteralPath $RepositoryNotices -PathType Leaf)) {
     $Notices = $RepositoryNotices
 }
@@ -39,6 +40,9 @@ if (-not $RelayUrl) {
 }
 if ($Release -and $UnsignedPrivateBeta) {
     throw '-Release and -UnsignedPrivateBeta are mutually exclusive'
+}
+if (-not (Test-Path -LiteralPath $RuntimeLdnKeys -PathType Leaf)) {
+    throw 'runtime LDN key input is missing: config/prod.keys'
 }
 $Version = (& git -C $Repo rev-parse --short HEAD).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'cannot determine repository revision' }
@@ -69,6 +73,7 @@ if ($Release -or $UnsignedPrivateBeta) {
 
 if (Test-Path -LiteralPath $Stage) { throw "package stage already exists: $Stage" }
 New-Item -ItemType Directory -Force -Path (Join-Path $Stage 'payload\app') | Out-Null
+Copy-Item -LiteralPath (Join-Path $Repo 'README.md') -Destination (Join-Path $Stage 'README.md')
 
 $app = Join-Path $Stage 'payload\app'
 $sourceArchive = Join-Path $Stage 'source.tar'
@@ -81,6 +86,9 @@ if ($LASTEXITCODE -ne 0) { throw 'could not archive tracked runtime source' }
 & tar -xf $sourceArchive -C $app
 if ($LASTEXITCODE -ne 0) { throw 'could not extract tracked runtime source' }
 Remove-Item -LiteralPath $sourceArchive
+if (-not (Test-Path -LiteralPath (Join-Path $app 'config\prod.keys') -PathType Leaf)) {
+    throw 'runtime source archive omitted config/prod.keys'
+}
 $installerArchive = Join-Path $Stage 'installer.tar'
 & git -C $Repo archive --format=tar --output=$installerArchive HEAD -- installer
 if ($LASTEXITCODE -ne 0) { throw 'could not archive installer source' }

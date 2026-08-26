@@ -9,7 +9,7 @@ from tools import payload_decoder as decoder
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SALAMENCE = ROOT / "archive" / "pokemon" / "fixtures" / "0373_SALAMENCE.pk3"
+SALAMENCE = ROOT / "tests" / "fixtures" / "pokemon" / "0373_SALAMENCE.pk3"
 
 
 class RepositoryLayoutTests(unittest.TestCase):

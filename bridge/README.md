@@ -24,7 +24,7 @@ This demo was recorded using the **ALFA AWUS036ACHM**. The RZ616 is half as fast
 - a compatible WiFi card (see below)
 - A Switch or Switch 2 with FRLG, played to the point where the Direct Corner has been unlocked (~20-40 minutes)
 - At least 2 .pk3 files to serve as simulated party members/trade fodder
-- Switch prod.keys (the default location is ``~/.switch/prod.keys``)
+- the LDN key file included by the SwitchTrade runtime (standalone bridge default: ``./config/prod.keys``)
 
 ### Tested WiFi Cards
 
@@ -50,7 +50,7 @@ This demo was recorded using the **ALFA AWUS036ACHM**. The RZ616 is half as fast
 |--------------|------------------|----------------|
 | --verbose    | N/A              | Verbose output  |
 | --phy        | phy# (e.g. phy1)  | WiFi phy selection |
-| --keys       | /path/to/prod.keys | non-default prod.keys location |
+| --keys       | /path/to/prod.keys | non-default LDN key-file location |
 
 Above is the configuration I suggest using if you'd like a quick and easy demonstration of the program. You can use any of the listed optional flags, they're safe. Many of the undocumented ones are either unfinished, untested, internal tools, or artifacts of experiments that did not/have not yet panned out.
 

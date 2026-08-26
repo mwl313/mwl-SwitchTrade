@@ -73,6 +73,13 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertIn("KERNEL_ABI_OR_FIRMWARE_MISMATCH", setup)
         self.assertIn("CUSTOM_KERNEL_BLOCKED_BY_POLICY", setup)
 
+    def test_package_requires_and_archives_runtime_ldn_keys(self):
+        builder = (ROOT / "installer" / "Build-Package.ps1").read_text(encoding="utf-8")
+        self.assertIn("config\\prod.keys", builder)
+        self.assertIn("runtime LDN key input is missing", builder)
+        self.assertIn("Join-Path $Stage 'README.md'", builder)
+        self.assertTrue((ROOT / "config" / "prod.keys").is_file())
+
     def test_application_and_wsl_runtime_rollback_are_kept_together(self):
         provision = (ROOT / "installer" / "provision-wsl.sh").read_text(encoding="utf-8")
         setup = (ROOT / "installer" / "SwitchTradeSetup.ps1").read_text(encoding="utf-8")

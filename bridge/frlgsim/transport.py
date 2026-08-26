@@ -777,7 +777,7 @@ class LiveTransport:
     # 내에도 is_alive()면 라디오 상태를 알 수 없으므로 남은 재시도를 포기한다 (아래 start()).
     THREAD_JOIN_GRACE = 15
 
-    def __init__(self, password=None, nickname="EMU", keys_path="~/.switch/prod.keys",
+    def __init__(self, password=None, nickname="EMU", keys_path="./config/prod.keys",
                  local_comm_id=None, scene_id=None, app_version=None,
                  phyname="phy0", ifname="ldnclient", log=print, target_bssid=None):
         self.info = getattr(log, "info", log)   # clean milestone sink (default-mode narration)
@@ -1499,7 +1499,7 @@ class HostTransport:
     # _stop; past this grace the radio state is unknown, so fail loudly instead of touching it.
     THREAD_JOIN_GRACE = 15
 
-    def __init__(self, password=None, nickname="EMU", keys_path="~/.switch/prod.keys",
+    def __init__(self, password=None, nickname="EMU", keys_path="./config/prod.keys",
                  phyname="phy0", ifname="ldn", ifname_monitor="ldn-mon", channel=6,
                  trainer_id=None, use_ap_engine=False, ap_passphrase=None,
                  application_data=None, log=print, host_engine="ldn"):
