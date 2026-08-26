@@ -57,6 +57,6 @@ rollback pointer during same-release Repair. The actual partially installed dist
 same-release repair probe with the kernel reused, rollback state preserved, and the expected release
 running.
 
-The earlier `77dd538` package retains the defective user-profile kernel path and must not be used for
-installation on a Windows account whose physical profile path contains non-ASCII characters. A
-replacement package must be built from the fix commit.
+The earlier `77dd538`, `9014e8f`, and `28221e1` packages are superseded and must not be distributed.
+The replacement `SwitchTrade-unsigned-private-beta-1e8b4bd.zip` passed the complete actual install on
+the affected non-ASCII-profile PC.

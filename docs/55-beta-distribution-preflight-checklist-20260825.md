@@ -11,7 +11,7 @@
 > `docs/57-native-ui-overhaul-implementation-report-20260825.md` are the preliminary redesign source.
 > Latest UI evidence: `docs/74-stitch-dark-ui-overhaul-3-implementation-report-20260826.md` and
 > `docs/assets/ui-overhaul-3/`.
-> Latest installer candidate: `SwitchTrade-unsigned-private-beta-77dd538.zip`, built from the same
+> Latest installer candidate: `SwitchTrade-unsigned-private-beta-1e8b4bd.zip`, built from the same
 > `production-beta` commit and recorded with its SHA-256 in `docs/75`.
 > Second-overhaul audit: `docs/63-second-native-ui-overhaul-codex-handoff-20260825.md`.
 > Final-overhaul handoff: `docs/62-final-ui-overhaul-gpt-handoff-20260825.md`.
@@ -40,7 +40,7 @@
 | 2 | Gate 0 | Visual Overhaul 3 implemented as native dark WPF; icon, real GitHub Issues link, embedded fonts, and factual third-party notices complete | Owner visual acceptance and legal-notice approval |
 | 3 | Gates 4–5 contracts | Implemented and internally tested | Qualify the ordered room path across two production endpoints |
 | 4 | Gate 5 remote services | Public TLS deployment, credentialed smoke, and public metrics denial passed | Pass backup/restore, staged restart/reconnect, and two-NAT qualification |
-| 5 | Gates 1–3 | Visual Overhaul 3 candidate `77dd538` built from final rootfs, kernel/modules, usbipd, notices, and public-relay config | Approve notices and qualify install/runtime on clean hardware |
+| 5 | Gates 1–3 | Visual Overhaul 3 candidate `1e8b4bd` built and installed successfully on the non-ASCII-profile development PC with final rootfs compatibility, kernel/modules, usbipd, notices, and public-relay config | Approve notices and qualify install/runtime on a separate clean machine |
 | 6 | Gate 6 | Automated subset passed; physical lifecycle not qualified | Pass clean-machine, reboot, coexistence, unsigned-publisher warning, and destructive lifecycle matrix |
 | 7 | Gate 7 | Waiting for production stack and second RTL8192EU | Pass two-PC/two-Switch hardware, trade, decoder, teardown, reuse, and network-fault qualification |
 | 8 | Gate 8 | Windows signing waived; labeled unsigned candidate and sibling checksum built | Retain externally, publish privately, review, and approve |
@@ -105,8 +105,8 @@ This preflight checklist is the release-blocking superset of the immediate tasks
 - [x] Implement and internally test build, install, repair, update, atomic app/WSL/kernel rollback,
   uninstall, manifest/signature verification, and guided native setup.
 - [x] Build the explicitly labeled Visual Overhaul 3 unsigned private-beta package from commit
-  `77dd538`; internal manifest, setup Audit, desktop self-test, product tests, kernel lifecycle, and ZIP
-  checksum checks pass. Evidence: `docs/75`.
+  `1e8b4bd`; internal manifest, setup Audit, desktop self-test, product tests, kernel lifecycle, actual
+  non-ASCII-profile installation, and ZIP checksum checks pass. Evidence: `docs/75` and `docs/76`.
 - [ ] Externally qualify that package. Windows code signing is an accepted owner exception; covered by
   Gates 1-8 and `docs/71`.
 
@@ -241,7 +241,8 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
 - [x] Implement retained-session `/api/v1/app/retry`, an allowlisted adapter health-gate repair, and
   bind radio-stage failures to the native repair action without accepting free-form commands.
 - [ ] Publish and qualify the labeled unsigned private-beta update package. Candidate
-  `SwitchTrade-unsigned-private-beta-77dd538.zip` is built and integrity-qualified internally; external
+  `SwitchTrade-unsigned-private-beta-1e8b4bd.zip` is built, integrity-qualified, and installed on the
+  development PC; external
   retention, clean-machine/hardware qualification, private publication, and approval remain. The signed
   update path remains implemented for a future public release.
 - [x] Finish stage-specific native routing for control, version, relay, session, decoder, and radio

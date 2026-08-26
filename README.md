@@ -112,9 +112,10 @@ Windows frontend, passive decoder observer, isolated WSL lifecycle, native setup
 verification, and hosting-ready relay are implemented. The pinned Linux/WSL runtime suite passes
 without Switch hardware. See [`docs/69-repository-preflight-completion-and-relay-handoff-20260826.md`](docs/69-repository-preflight-completion-and-relay-handoff-20260826.md).
 
-`production-beta` commit `77dd538` includes Visual Overhaul 3. The matching locally built unsigned
-installer candidate is `SwitchTrade-unsigned-private-beta-77dd538.zip`; its reproducible inputs and
-checksums are recorded in [`docs/75`](docs/75-visual-overhaul-3-installer-candidate-20260826.md).
+`production-beta` commit `1e8b4bd` includes Visual Overhaul 3 and the Unicode-profile, minimal-rootfs,
+and same-release Repair corrections. The matching locally built unsigned installer candidate is
+`SwitchTrade-unsigned-private-beta-1e8b4bd.zip`; its reproducible inputs and checksums are recorded in
+[`docs/75`](docs/75-visual-overhaul-3-installer-candidate-20260826.md).
 
 This is an internal beta candidate, not a signed user release. Two physical RTL8192EU endpoints,
 Switch-to-Switch validation, WAN/recovery soak, external clean-machine/reboot qualification, and
