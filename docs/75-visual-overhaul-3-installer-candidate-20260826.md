@@ -3,27 +3,27 @@
 ## Candidate identity
 
 - Branch: `production-beta`
-- Application commit: `71d936c70c25d88b546256a9023a3936eee92e33`
-- Package: `SwitchTrade-unsigned-private-beta-71d936c.zip`
-- ZIP SHA-256: `1656effd19ac4c7f6577c5b272805566b43fe0fd715a81f1ebc4adf26fb028e8`
-- ZIP size: `219382404` bytes
+- Application commit: `af761dd644fa25c2e5084c203fa9ba28d7761c3d`
+- Package: `SwitchTrade-unsigned-private-beta-af761dd.zip`
+- ZIP SHA-256: `3987990226f48f4fa0059aeddc114a7fbf52ebc50eb45ca4b9f6889ff61861a3`
+- ZIP size: `218734936` bytes
 - Local build location: `artifacts/release-candidates/`
 - Configured relay: `https://relay.pangyostonefist.org` (DNS/TLS health and public directory restored;
   relay commit `71d936c` deployment remains required for stale-version teardown)
 - Signing state: explicitly labeled unsigned private beta, per owner exception
 
-The package manifest reports schema 2, release ID `beta-71d936c`, branch `production-beta`, and the
+The package manifest reports schema 2, release ID `beta-af761dd`, branch `production-beta`, and the
 full application commit above. The packaged Windows client is the native Visual Overhaul 3 WPF build,
 not the retired web frontend or the earlier `91f5a3e` client.
 
-The earlier `77dd538`, `9014e8f`, `28221e1`, `1e8b4bd`, `b2c9d36`, `8667888`, and `125fbac` local candidates are
-superseded and must not be distributed. They were retained only as diagnostic evidence for the fixes
-recorded in `docs/76` and `docs/77`.
+The earlier `77dd538`, `9014e8f`, `28221e1`, `1e8b4bd`, `b2c9d36`, `8667888`, `125fbac`, and
+`71d936c` local candidates are superseded and must not be distributed. They were retained only as
+diagnostic evidence for the fixes recorded in `docs/76` and `docs/77`.
 
 ## Reused verified system inputs
 
-The application and installer source were archived fresh from `71d936c`. The hardware/runtime inputs
-were reused byte-for-byte from the previously integrity-qualified `91f5a3e` candidate because they are
+The application and installer source were archived fresh from `af761dd`. The hardware/runtime inputs
+were reused byte-for-byte from the previously integrity-qualified `71d936c` candidate because they are
 versioned independently of the UI:
 
 - Rootfs SHA-256: `d708ea4be7e7acc8d3ce1a4e5b8d06dd9ac7583c48ca21c4c200b47daf3d2ec3`
@@ -39,6 +39,11 @@ builder then independently checked the kernel/modules manifest and regenerated e
 ## Internal verification
 
 - Native WPF Release publish and built-in self-test: PASS
+- Physical pointer expansion/collapse for all four Public Rooms filters and the Settings adapter
+  selector: PASS; popup selection still commits and closes normally
+- Unselected Public Rooms details state: PASS; room fields are absent and one centered selection
+  prompt remains
+- Settings gear and filled circular refresh icon visual QA at the 1240×860 default: PASS
 - Native setup progress bootstrap build with zero warnings: PASS
 - GUI success output is reduced to a concise completion/package-retention message; CLI output remains
   unchanged for automation and failure diagnostics remain visible

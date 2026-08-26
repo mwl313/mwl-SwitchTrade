@@ -12,8 +12,8 @@
 > `docs/57-native-ui-overhaul-implementation-report-20260825.md` are the preliminary redesign source.
 > Latest UI evidence: `docs/74-stitch-dark-ui-overhaul-3-implementation-report-20260826.md` and
 > `docs/assets/ui-overhaul-3/`.
-> Latest installer candidate: `SwitchTrade-unsigned-private-beta-71d936c.zip`, built from application
-> commit `71d936c` and recorded with its SHA-256 in `docs/75`.
+> Latest installer candidate: `SwitchTrade-unsigned-private-beta-af761dd.zip`, built from application
+> commit `af761dd` and recorded with its SHA-256 in `docs/75`.
 > Second-overhaul audit: `docs/63-second-native-ui-overhaul-codex-handoff-20260825.md`.
 > Final-overhaul handoff: `docs/62-final-ui-overhaul-gpt-handoff-20260825.md`.
 > Frozen contracts: `room-control.v1` (`docs/58`), `party-commit.v1` (`docs/59`), and
@@ -249,7 +249,7 @@ Decision: the beta uses the project-maintained custom WSL kernel because it is t
 - [x] Implement retained-session `/api/v1/app/retry`, an allowlisted adapter health-gate repair, and
   bind radio-stage failures to the native repair action without accepting free-form commands.
 - [ ] Publish and qualify the labeled unsigned private-beta update package. Candidate
-  `SwitchTrade-unsigned-private-beta-71d936c.zip` is built, integrity-qualified, and installed on the
+  `SwitchTrade-unsigned-private-beta-af761dd.zip` is built, integrity-qualified, and installed on the
   development PC; control-first startup opens the UI without requiring a radio. External
   retention, clean-machine/hardware qualification, private publication, and approval remain. The signed
   update path remains implemented for a future public release.
