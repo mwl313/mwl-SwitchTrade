@@ -20,7 +20,7 @@ from switchtrade.party_observer import (
 from switchtrade.process_guard import AlreadyRunningError, SingleInstanceLock
 from switchtrade.rfu_tunnel import (Direction, Envelope, PlayerMap, SequenceGate,
                                     direction_for_role)
-from switchtrade.tunnel_client import relay_websocket_url
+from switchtrade.tunnel_client import permanent_connect_error, relay_websocket_url
 
 
 class HardwarePolicyTests(unittest.TestCase):
@@ -326,6 +326,16 @@ class PassiveObserverTests(unittest.TestCase):
 
 
 class RfuTunnelTests(unittest.TestCase):
+    def test_permanent_websocket_rejections_are_not_retried_forever(self):
+        response = SimpleNamespace(status_code=401)
+        rejected = type("InvalidStatus", (Exception,), {})("unauthorized")
+        rejected.response = response
+        self.assertTrue(permanent_connect_error(rejected))
+        transient = type("InvalidStatus", (Exception,), {})("server error")
+        transient.response = SimpleNamespace(status_code=503)
+        self.assertFalse(permanent_connect_error(transient))
+        self.assertTrue(permanent_connect_error(type("InvalidURI", (Exception,), {})("bad url")))
+
     def test_role_direction_and_relay_url_are_stable(self):
         self.assertEqual(direction_for_role("host"), Direction.HOST_TO_GUEST)
         self.assertEqual(direction_for_role("guest"), Direction.GUEST_TO_HOST)

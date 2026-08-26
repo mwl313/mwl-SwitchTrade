@@ -23,6 +23,16 @@ from switchtrade.rfu_tunnel import (
 
 HEARTBEAT_INTERVAL = 10.0
 RECONNECT_DELAY = 0.5
+RECONNECT_DELAY_MAX = 15.0
+STABLE_CONNECTION_SECONDS = 5.0
+PERMANENT_HTTP_STATUSES = {400, 401, 403, 404, 409, 426}
+
+
+def permanent_connect_error(error: Exception) -> bool:
+    """Classify handshake failures that retries cannot repair without new state."""
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None)
+    return status in PERMANENT_HTTP_STATUSES or type(error).__name__ == "InvalidURI"
 
 
 def relay_websocket_url(base: str, session_id: str, role: str,
@@ -169,7 +179,9 @@ class TunnelClient:
         import websockets
 
         first = True
+        reconnect_delay = RECONNECT_DELAY
         while not self._stop.is_set():
+            connected_at = None
             try:
                 connect_args = {"max_size": (1 << 20) + 256}
                 if self.member_token:
@@ -186,6 +198,7 @@ class TunnelClient:
                     if not first:
                         self.stats["reconnects"] += 1
                     first = False
+                    connected_at = time.monotonic()
                     self.connected.set()
                     self.last_error = ""
                     self.log(f"[tunnel] connected epoch={self._epoch} role={self.role}")
@@ -197,10 +210,16 @@ class TunnelClient:
             except Exception as error:
                 self.last_error = str(error)
                 self.log(f"[tunnel] disconnected: {error}")
+                if permanent_connect_error(error):
+                    self.log("[tunnel] permanent relay rejection; retry requires new credentials or configuration")
+                    self._stop.set()
             finally:
                 self.connected.clear()
             if not self._stop.is_set():
-                await asyncio.sleep(RECONNECT_DELAY)
+                if connected_at is not None and time.monotonic() - connected_at >= STABLE_CONNECTION_SECONDS:
+                    reconnect_delay = RECONNECT_DELAY
+                await asyncio.sleep(reconnect_delay)
+                reconnect_delay = min(RECONNECT_DELAY_MAX, reconnect_delay * 2)
 
     async def _session(self, websocket) -> None:
         last_heartbeat = time.monotonic()
