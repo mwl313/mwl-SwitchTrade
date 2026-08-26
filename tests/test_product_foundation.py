@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import random
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -351,6 +352,22 @@ class RfuTunnelTests(unittest.TestCase):
         guest = PlayerMap("guest")
         self.assertEqual(guest.local_to_wire(0), 1)
         self.assertEqual(guest.wire_to_local(0), 1)
+
+    def test_bounded_malformed_envelope_fuzz_fails_closed(self):
+        randomizer = random.Random(0x53575452)
+        valid = Envelope(
+            "ABC123", Direction.HOST_TO_GUEST, 2, 5, 0, 1, b"rfu"
+        ).encode()
+        corpus = [b"", valid[:-1], valid + b"extra"]
+        for _ in range(1000):
+            length = randomizer.randrange(0, min(len(valid) + 16, 128))
+            corpus.append(randomizer.randbytes(length))
+        for sample in corpus:
+            try:
+                decoded = Envelope.decode(sample)
+            except ValueError:
+                continue
+            self.assertEqual(Envelope.decode(decoded.encode()).payload, decoded.payload)
 
 
 if __name__ == "__main__":
