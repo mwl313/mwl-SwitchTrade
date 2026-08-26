@@ -12,7 +12,7 @@
 |---|---|
 | 역할 | FRLG LDN 투명 중계 — MWLB/WS 바이트 파이프 (내용 해석 없음, 비상태 원칙) |
 | 오리진 순위 | **① Oracle Always Free (ap-tokyo-1, 2 OCPU/12GB)** 확보 시 → **② Mac mini 임시 오리진** (확보 전까지, 주인님 승인 2026-08-24) |
-| 공개 경로 | `relay.minwoolim.com` — Cloudflare Tunnel 기반 WSS(443), **포트 직접 개방 없음** |
+| 공개 경로 | `https://relay.pangyostonefist.org` — Cloudflare Tunnel 기반 WSS(443), **포트 직접 개방 없음** |
 | 스토리지 | **SQLite(`relay.db`) 1파일** — 방 리스트 + 트레이드 통계 영속. 이식 = 파일 복사 1개 |
 | 세션 제한 | MAX_SESSIONS = **800** (egress 10TB/월 보호) |
 | 상태 | Oracle 그랩 폴링 진행 중 (`MWL-OracleGrab`, 24/7) |
@@ -31,7 +31,7 @@
 
 - **세션(방)은 메모리가 원본** — 실시간 중계 경로에 DB 개입 없음 (지연에 영향 0)
 - **DB는 영속 메타 전용**: 공개방 목록 조회 + 트레이드 통계 기록
-- 브리지/스위치는 기존과 동일 — 클라이언트는 `wss://relay.minwoolim.com`만 알면 됨
+- 브리지/스위치는 기존과 동일 — 클라이언트는 `wss://relay.pangyostonefist.org`만 알면 됨
 
 ## 2. 용량 산정 (2026-08-24 실측 기준)
 
@@ -113,7 +113,7 @@ CREATE TABLE trade_stats (
 
 | Phase | 내용 | 상태 |
 |---|---|---|
-| M1 | Mac mini 임시 오리진: relay launchd + `relay.minwoolim.com` 터널 인그레스 (cloudflared 리로드 1~2초) | ⬜ 승인 대기 |
+| M1 | Mac mini 임시 오리진 — ✅ 완료 (2026-08-26): launchd(`com.haven.relay`)+터널 인그레스 `relay.pangyostonefist.org` (venv 실행, Docker Hub 연결 불가로 compose는 오라클 시 재검증) | ✅ |
 | M2 | server.py v2: 공개방 목록 API(`GET /rooms`) + 통계 기록(3.2/3.3) + SQLite | ⬜ 개발 |
 | O1 | 오라클 확보 → git clone + systemd + cloudflared **다중 커넥터**(동일 터널 토큰) → 무중단 전환 | ⬜ 그랩 대기중 |
 | O2 | 이식 완료 후 Mac mini 임시 종료 + 그랩 워치 정리 | ⬜ |
