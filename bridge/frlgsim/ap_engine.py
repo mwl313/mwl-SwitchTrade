@@ -1,14 +1,12 @@
-"""ApEngine abstraction + CardProfile registry (A안, docs/plan/2026-08-22).
+"""Experimental ApEngine prototypes retained for development work.
 
-The HOST path needs an AP that actually emits periodic beacons. rtl8xxxu does not
-start beaconing from NL80211_CMD_START_AP alone (docs/19), so the default engine for
-Realtek cards is hostapd. Future AP-native drivers (e.g. mt76 for MT7612U) can use the
-Nl80211ApEngine stub once implemented — HostTransport only talks to ApEngine.
+Production SwitchTrade does not select this registry. Its canonical policy is
+``config/wsl-radio-hardware.tsv`` and its only available host engine is
+``HostTransport + ldn.create_network()``. The hostapd and direct-nl80211 paths here
+remain In Development because neither implements the complete Nintendo LDN lifecycle.
 
-Extension recipe (new card):
-    1. Add a CardProfile entry to CARD_REGISTRY.
-    2. If preferred_engine == "nl80211", implement Nl80211ApEngine.
-Nothing else changes.
+Do not infer product support from CARD_REGISTRY or preferred_engine; those fields only
+select a prototype in isolated engine tests.
 """
 
 from __future__ import annotations
@@ -27,7 +25,7 @@ class EngineNotAvailable(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# CardProfile registry — driver differences live here, not in code paths
+# Prototype-only registry. Product card/driver policy lives in the TSV matrix.
 # ---------------------------------------------------------------------------
 @dataclasses.dataclass(frozen=True)
 class CardProfile:

@@ -6,6 +6,7 @@ param(
     [switch]$Prepare,
     [switch]$AllowVmwareStop,
     [switch]$AutoAttach,
+    [switch]$AllowExperimentalHardware,
     [string]$ProfileFile = (Join-Path $PSScriptRoot "..\..\config\wsl-radio-hardware.tsv")
 )
 
@@ -46,12 +47,13 @@ $isAdministrator = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::
 $profiles = @(
     Get-Content -LiteralPath $ProfileFile | ForEach-Object {
         if ($_ -and -not $_.StartsWith('#')) {
-            $columns = @($_ -split "`t", 8)
-            if ($columns.Count -ne 8) { Fail "invalid hardware profile row: $_" }
+            $columns = @($_ -split "`t")
+            if ($columns.Count -notin @(8, 12)) { Fail "invalid hardware profile row: $_" }
             [pscustomobject]@{
                 UsbId = $columns[0].ToLowerInvariant()
                 Status = $columns[5]
                 AutoSelect = $columns[6] -eq 'yes'
+                HostEngine = if ($columns.Count -eq 12) { $columns[10] } else { 'ldn' }
             }
         }
     }
@@ -62,6 +64,15 @@ if ($UsbId.Count -gt 0) {
     $wanted = @($UsbId | ForEach-Object { $_.ToLowerInvariant() })
     foreach ($id in $wanted) {
         if ($profileIds -notcontains $id) { Fail "USB ID $id has no hardware profile" }
+        $profile = @($profiles | Where-Object UsbId -eq $id)[0]
+        if ($profile.Status -eq 'quarantined') { Fail "HARDWARE_QUARANTINED: $id cannot be used" }
+        if ($profile.Status -in @('upstream-candidate', 'driver-candidate') -and
+            -not $AllowExperimentalHardware) {
+            Fail "HARDWARE_EXPERIMENTAL_OPT_IN_REQUIRED: pass -AllowExperimentalHardware for $id"
+        }
+        if ($profile.HostEngine -ne 'ldn') {
+            Fail "HOST_ENGINE_IN_DEVELOPMENT: $($profile.HostEngine) cannot be selected"
+        }
     }
 }
 
@@ -89,6 +100,8 @@ foreach ($device in $state.Devices) {
         $profiledDevices += [pscustomobject]@{
             UsbId = $id
             AutoSelect = $profile[0].AutoSelect
+            Status = $profile[0].Status
+            HostEngine = $profile[0].HostEngine
             Device = $device
         }
     }
@@ -116,6 +129,16 @@ if ($BusId) {
 foreach ($entry in $matched) {
     $id = $entry.UsbId
     $device = $entry.Device
+    if ($entry.Status -eq 'quarantined') {
+        Fail "HARDWARE_QUARANTINED: $id cannot be prepared for a trading attempt"
+    }
+    if ($entry.Status -in @('upstream-candidate', 'driver-candidate') -and
+        -not $AllowExperimentalHardware) {
+        Fail "HARDWARE_EXPERIMENTAL_OPT_IN_REQUIRED: pass -AllowExperimentalHardware for $id"
+    }
+    if ($entry.HostEngine -ne 'ldn') {
+        Fail "HOST_ENGINE_IN_DEVELOPMENT: $($entry.HostEngine) cannot be selected"
+    }
     if (-not $device.BusId) { Fail "$id has no BUSID; unplug/replug it, then rerun" }
     if (-not $device.ClientIPAddress) {
         if (-not $Prepare) {
