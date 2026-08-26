@@ -70,7 +70,7 @@ flowchart TD
 | Join a private Trade Room | Normalizes or pastes a shared code, locks editing while one atomic Join request is active, and enters the Trade Room on success | The compatibility API cannot yet provide authoritative presence/reconnect state |
 | Browse Public Rooms | Interactive local search, field selector, availability/game/language filters, sorting, selection, empty state, and sample detail panel | Every public-room surface says `Public Rooms Preview` or `Demo Preview`; no network directory is queried |
 | Settings tabs | Connection, Support, and Advanced remain visible as flat navigation tabs with a selected underline at every supported width; there is no compact dropdown or button-card replacement | Changing tabs does not alter room/session state |
-| Settings · Connection | Reads profile-driven adapter compatibility, support state, summary, and technical details; permits recheck | It does not claim to select, repair, attach, or live-probe an adapter |
+| Settings · Connection | Lists physically detected profiled USB Wi-Fi adapters with bus ID and support state, lets the user select the next-session adapter, shows an explicit experimental disclaimer, lists the complete compatibility matrix, and runs read-only diagnostics | Experimental hardware is untested and may fail; quarantined hardware remains blocked |
 | Settings · Support | Requests the real local support-bundle endpoint and reports a friendly result | Requires the installed local service |
 | Trade Room · real | Coordinator-owned room identity that survives Settings/navigation, code/invitation copy, role-specific Switch instructions, current endpoint start/stop, truthful recovery, owner-close/member-leave semantics, and safe app shutdown | Shared Ready, authoritative membership, role election, reconnect, and live parties remain unavailable in the compatibility API |
 | Trade Room · demo | Two side-by-side parties at wide widths; compact layouts stack Partner above You. Each has six explicit slots, neutral initial placeholders, pointer tooltips, click/Enter selection, detailed stats, and Escape dismissal | All trainers, Pokémon, network quality, and party fields are sample data |
@@ -113,7 +113,7 @@ flowchart TD
   reconnect tokens, expiration, and conflict handling.
 - Either-member room-creator claims independent of stable member identity and group ownership.
 - A production public directory and real public room publication.
-- Live adapter selection, automatic repair, and full per-stage control/relay/radio/session telemetry.
+- Automatic adapter repair and full per-stage control/relay/radio/session telemetry.
 - The frozen `party-commit.v1` passive decoder party snapshots, checksum-valid live party presentation,
   and fail-closed committed-trade events.
 - The frozen externally administered `privacy-statistics.v1` consent decision and server-side

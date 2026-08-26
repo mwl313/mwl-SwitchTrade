@@ -74,7 +74,7 @@ class HardwareProfile:
         data["roles"] = list(self.roles)
         data["evidence"] = list(self.evidence)
         data["operational"] = any(role in {"host", "guest", "relay"} for role in self.roles)
-        data["requires_opt_in"] = self.status in EXPERIMENTAL_STATUSES
+        data["experimental"] = self.status in EXPERIMENTAL_STATUSES
         data["blocked"] = self.status in BLOCKED_STATUSES
         data["selectable"] = data["operational"] and not data["blocked"]
         return data
@@ -161,12 +161,6 @@ def require_hardware(profile: HardwareProfile, role: str,
         raise HardwarePolicyError(
             "HARDWARE_QUARANTINED",
             f"{profile.usb_id} is quarantined and cannot be used for a trading attempt",
-        )
-    if profile.status in EXPERIMENTAL_STATUSES and not allow_experimental:
-        raise HardwarePolicyError(
-            "HARDWARE_EXPERIMENTAL_OPT_IN_REQUIRED",
-            f"{profile.usb_id} is a {profile.status}; explicitly allow experimental hardware "
-            "for this attempt after reviewing diagnostics",
         )
     if profile.status not in SAFE_STATUSES | EXPERIMENTAL_STATUSES:
         raise HardwarePolicyError(

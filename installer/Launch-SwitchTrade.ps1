@@ -52,7 +52,14 @@ if (-not $RelayUrl) { $RelayUrl = "http://127.0.0.1:8788" }
 $preflightArguments = @('-Distro', $Distro, '-ProfileFile', $ProfileFile, '-Prepare', '-AutoAttach')
 if ($BusId) { $preflightArguments += @('-BusId', $BusId) }
 if ($UsbId) { $preflightArguments += @('-UsbId', $UsbId) }
-& $Preflight @preflightArguments
+try {
+    & $Preflight @preflightArguments
+} catch {
+    if ($_.Exception.Message -notmatch 'no auto-selectable profiled radio|multiple auto-selectable radios') {
+        throw
+    }
+    Write-Warning 'No single default adapter was selected. Choose a detected adapter in Settings.'
+}
 
 $python = "/opt/switchtrade/bridge/.venv/bin/python"
 $processes = @()

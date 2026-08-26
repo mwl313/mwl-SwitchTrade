@@ -19,6 +19,8 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertIn("VerifyPackage", program)
         self.assertIn("PACKAGE_SIGNATURE_MISSING", program)
         self.assertIn("RunOnce", setup)
+        launcher = (ROOT / "installer" / "Launch-SwitchTrade.ps1").read_text(encoding="utf-8")
+        self.assertIn("Choose a detected adapter in Settings", launcher)
         self.assertIn("--unregister $Distro", setup)
         self.assertNotIn("--unregister Ubuntu", setup)
 

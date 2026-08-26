@@ -66,10 +66,6 @@ if ($UsbId.Count -gt 0) {
         if ($profileIds -notcontains $id) { Fail "USB ID $id has no hardware profile" }
         $profile = @($profiles | Where-Object UsbId -eq $id)[0]
         if ($profile.Status -eq 'quarantined') { Fail "HARDWARE_QUARANTINED: $id cannot be used" }
-        if ($profile.Status -in @('upstream-candidate', 'driver-candidate') -and
-            -not $AllowExperimentalHardware) {
-            Fail "HARDWARE_EXPERIMENTAL_OPT_IN_REQUIRED: pass -AllowExperimentalHardware for $id"
-        }
         if ($profile.HostEngine -ne 'ldn') {
             Fail "HOST_ENGINE_IN_DEVELOPMENT: $($profile.HostEngine) cannot be selected"
         }
@@ -131,10 +127,6 @@ foreach ($entry in $matched) {
     $device = $entry.Device
     if ($entry.Status -eq 'quarantined') {
         Fail "HARDWARE_QUARANTINED: $id cannot be prepared for a trading attempt"
-    }
-    if ($entry.Status -in @('upstream-candidate', 'driver-candidate') -and
-        -not $AllowExperimentalHardware) {
-        Fail "HARDWARE_EXPERIMENTAL_OPT_IN_REQUIRED: pass -AllowExperimentalHardware for $id"
     }
     if ($entry.HostEngine -ne 'ldn') {
         Fail "HOST_ENGINE_IN_DEVELOPMENT: $($entry.HostEngine) cannot be selected"

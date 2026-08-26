@@ -41,15 +41,12 @@ class HardwarePolicyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             runtime_plan("host", "0bda:8179")
 
-    def test_candidate_requires_explicit_per_attempt_consent(self):
-        with self.assertRaisesRegex(
-                HardwarePolicyError, "HARDWARE_EXPERIMENTAL_OPT_IN_REQUIRED"):
-            runtime_plan("host", "0e8d:7610")
-        plan = runtime_plan(
-            "host", "0e8d:7610", allow_experimental_hardware=True)
+    def test_candidate_is_selectable_without_repeated_confirmation(self):
+        plan = runtime_plan("host", "0e8d:7610")
         self.assertEqual(plan["hardware_model"], "ALFA AWUS036ACHM")
         self.assertEqual(plan["host_engine"], "ldn")
-        self.assertTrue(plan["allow_experimental_hardware"])
+        self.assertTrue(plan["experimental_hardware"])
+        self.assertFalse(plan["allow_experimental_hardware"])
 
     def test_in_development_engines_are_not_selectable(self):
         self.assertEqual(require_host_engine("ldn"), "ldn")
@@ -91,7 +88,7 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertEqual(report["contract_version"], "hardware-diagnostic.v1")
             self.assertEqual(report["overall_status"], "partial")
             self.assertEqual(report["stages"][0]["code"],
-                             "HARDWARE_EXPERIMENTAL_OPT_IN_REQUIRED")
+                             "HARDWARE_POLICY_ACCEPTED")
             self.assertTrue((logger.run_dir / "diagnostic-report.json").is_file())
             self.assertIn("SWITCH_ASSOCIATION_NOT_TESTED",
                           [stage["code"] for stage in report["stages"]])

@@ -13,7 +13,6 @@ TARGET_CHANNEL="${RADIO_TARGET_CHANNEL:-6}"
 RX_TIMEOUT="${RADIO_HEALTH_TIMEOUT:-2}"
 REQUIRED_ROLE="${RADIO_ROLE:-}"
 MODE=ensure
-ALLOW_EXPERIMENTAL=false
 
 msg() { printf '%s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -34,7 +33,7 @@ Options:
   --timeout SECONDS      Per-channel health timeout (default: 2)
   --role ROLE            Require a profile role: host, guest, or relay
   --allow-experimental-hardware
-                         Allow an upstream/driver candidate for this invocation only
+                         Deprecated compatibility flag; candidates no longer require confirmation
   --status               Report attached USB devices/drivers without mutation
   --list-profiles        Print supported profiles without mutation
 EOF
@@ -251,7 +250,7 @@ while (($#)); do
         --target-channel) [[ $# -ge 2 ]] || die "--target-channel needs a value"; TARGET_CHANNEL=$2; shift 2 ;;
         --timeout) [[ $# -ge 2 ]] || die "--timeout needs a value"; RX_TIMEOUT=$2; shift 2 ;;
         --role) [[ $# -ge 2 ]] || die "--role needs a value"; REQUIRED_ROLE=$2; shift 2 ;;
-        --allow-experimental-hardware) ALLOW_EXPERIMENTAL=true; shift ;;
+        --allow-experimental-hardware) shift ;;
         --status) MODE=status; shift ;;
         --list-profiles) MODE=profiles; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -278,10 +277,7 @@ IFS=$'\t' read -r _ strategy module_file allowed_drivers roles status auto_selec
 host_engine=${host_engine:-ldn}
 case $status in
     production-verified|beta-candidate) ;;
-    upstream-candidate|driver-candidate)
-        [[ $ALLOW_EXPERIMENTAL == true ]] || die \
-            "HARDWARE_EXPERIMENTAL_OPT_IN_REQUIRED: $USB_ID is $status; pass --allow-experimental-hardware for this invocation"
-        ;;
+    upstream-candidate|driver-candidate) ;;
     quarantined) die "HARDWARE_QUARANTINED: $USB_ID cannot be used for a trading attempt" ;;
     *) die "HARDWARE_STATUS_BLOCKED: unknown profile status $status for $USB_ID" ;;
 esac

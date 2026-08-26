@@ -85,8 +85,8 @@ public sealed record AdapterProfileViewData(
     string SupportLabel,
     string Summary,
     string TechnicalDetails,
-    bool IsSupported,
-    bool RequiresOptIn,
+    bool IsSelectable,
+    bool IsExperimental,
     string HostEngine);
 
 public sealed record HardwareDiagnosticViewData(
@@ -94,6 +94,24 @@ public sealed record HardwareDiagnosticViewData(
     string OverallStatus,
     string Summary,
     string ReportPath);
+
+public sealed record HardwareDeviceViewData(
+    string BusId,
+    string UsbId,
+    string FriendlyName,
+    string SupportLabel,
+    bool IsSelectable,
+    bool IsExperimental,
+    bool IsAttached,
+    bool IsSelected)
+{
+    public string DisplayLabel => $"{FriendlyName} · {SupportLabel} · USB {BusId}";
+    public string Disclaimer => !IsSelectable
+        ? "Quarantined — available for diagnostics only and blocked from trading."
+        : IsExperimental
+            ? "Experimental — untested with SwitchTrade and may not work reliably."
+            : "Supported hardware profile.";
+}
 
 public enum PreviewAvailability { Open, Full }
 public enum PublicSearchBy { AnyField, RoomName, Trainer, OfferedPokemon, WantedPokemon }
