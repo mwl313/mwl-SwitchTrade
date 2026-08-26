@@ -386,7 +386,14 @@ class Runtime:
         if self.endpoint and self.endpoint.poll() is None:
             return True
         endpoint = self.read_endpoint()
-        return self._verified_endpoint_pid(endpoint) is not None
+        if self._verified_endpoint_pid(endpoint) is None:
+            return False
+        observed_session = endpoint.get("session_id")
+        if self.endpoint_session != observed_session:
+            self.endpoint_session = observed_session
+            self.log.event("late_endpoint_adopted", pid=endpoint.get("pid"),
+                           session_id=observed_session, stage=endpoint.get("state"))
+        return True
 
     @staticmethod
     def _verified_endpoint_pid(endpoint: dict) -> int | None:
@@ -450,33 +457,86 @@ class Runtime:
         return pid if observed_start == start_ticks and exact_module and exact_nonce and exact_session else None
 
     @staticmethod
-    def _signal_endpoint_pid(pid: int, signal_name: str, endpoint: dict) -> None:
+    def _signal_endpoint_pid(pid: int, signal_name: str, endpoint: dict) -> bool:
         if os.name != "nt":
             selected_signal = signal.SIGTERM if signal_name == "TERM" else signal.SIGKILL
             if hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"):
-                descriptor = os.pidfd_open(pid)
+                try:
+                    descriptor = os.pidfd_open(pid)
+                except ProcessLookupError:
+                    return False
                 try:
                     if Runtime._verified_endpoint_pid(endpoint) != pid:
+                        try:
+                            signal.pidfd_send_signal(descriptor, 0)
+                        except ProcessLookupError:
+                            return False
                         raise RuntimeError("endpoint process identity changed before shutdown")
-                    signal.pidfd_send_signal(descriptor, selected_signal)
+                    try:
+                        signal.pidfd_send_signal(descriptor, selected_signal)
+                    except ProcessLookupError:
+                        return False
                 finally:
                     os.close(descriptor)
             else:
                 if Runtime._verified_endpoint_pid(endpoint) != pid:
+                    try:
+                        os.kill(pid, 0)
+                    except ProcessLookupError:
+                        return False
                     raise RuntimeError("endpoint process identity changed before shutdown")
-                os.kill(pid, selected_signal)
-            return
-        if Runtime._verified_endpoint_pid(endpoint) != pid:
-            raise RuntimeError("endpoint process identity changed before shutdown")
+                try:
+                    os.kill(pid, selected_signal)
+                except ProcessLookupError:
+                    return False
+            return True
         distro = os.environ.get("SWITCHTRADE_WSL_DISTRO", "SwitchTrade")
         if endpoint.get("wsl_distro") != distro:
             raise RuntimeError("endpoint WSL identity is not verified")
-        result = subprocess.run(
-            ["wsl.exe", "-d", distro, "--", "kill", f"-{signal_name}", str(pid)],
-            capture_output=True, timeout=5, check=False,
+        start_ticks = endpoint.get("process_start_ticks")
+        nonce = endpoint.get("launch_nonce")
+        session_id = endpoint.get("session_id")
+        if (not isinstance(start_ticks, int) or start_ticks <= 0 or
+                not isinstance(nonce, str) or not re.fullmatch(r"[0-9a-f]{32}", nonce) or
+                not isinstance(session_id, str) or not session_id):
+            raise RuntimeError("endpoint WSL identity is not verified")
+        helper = (
+            "import os,pathlib,signal,sys\n"
+            "p=int(sys.argv[1]); expected_start=int(sys.argv[2])\n"
+            "nonce=sys.argv[3].encode(); session=sys.argv[4].encode()\n"
+            "selected=getattr(signal,'SIG'+sys.argv[5])\n"
+            "try:\n"
+            " fd=os.pidfd_open(p)\n"
+            " signal.pidfd_send_signal(fd,0)\n"
+            " root=pathlib.Path('/proc')/str(p)\n"
+            " a=(root/'stat').read_text(); cmd=(root/'cmdline').read_bytes()\n"
+            " b=(root/'stat').read_text()\n"
+            " parts=cmd.rstrip(b'\\0').split(b'\\0')\n"
+            " start=int(a[a.rfind(')')+2:].split()[19])\n"
+            " pairs=list(zip(parts,parts[1:]))\n"
+            " ok=(a==b and start==expected_start and "
+            "(b'-m',b'switchtrade.endpoint') in pairs and "
+            "(b'--launch-nonce',nonce) in pairs and "
+            "(b'--session-id',session) in pairs)\n"
+            " if not ok: sys.exit(4)\n"
+            " signal.pidfd_send_signal(fd,selected)\n"
+            "except (ProcessLookupError,FileNotFoundError):\n"
+            " sys.exit(3)\n"
         )
+        result = subprocess.run(
+            ["wsl.exe", "-d", distro, "-u", "root", "--", "python3", "-c", helper, str(pid),
+             str(start_ticks), nonce, session_id, signal_name],
+            capture_output=True, timeout=5, check=False, text=True,
+        )
+        if result.returncode == 0:
+            return True
+        if result.returncode == 3:
+            return False
+        if result.returncode == 4:
+            raise RuntimeError("endpoint process identity changed before shutdown")
         if result.returncode != 0:
             raise RuntimeError("verified WSL endpoint could not be stopped")
+        return True
 
     def stop_endpoint(self) -> None:
         process = self.endpoint
@@ -487,12 +547,18 @@ class Runtime:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
-        if (pid := self._verified_endpoint_pid(endpoint := self.read_endpoint())) is not None:
-            self._signal_endpoint_pid(pid, "TERM", endpoint)
+        endpoint = self.read_endpoint()
+        pid = endpoint.get("pid")
+        if (isinstance(pid, int) and pid > 1 and
+                endpoint.get("process_kind") == "rfu-endpoint" and
+                (os.name != "nt" or endpoint.get("wsl_distro") ==
+                 os.environ.get("SWITCHTRADE_WSL_DISTRO", "SwitchTrade"))):
+            signaled = self._signal_endpoint_pid(pid, "TERM", endpoint)
             deadline = time.monotonic() + 10
-            while time.monotonic() < deadline and self._verified_endpoint_pid(self.read_endpoint()) == pid:
+            while (signaled and time.monotonic() < deadline and
+                   self._verified_endpoint_pid(self.read_endpoint()) == pid):
                 time.sleep(0.1)
-            if self._verified_endpoint_pid(self.read_endpoint()) == pid:
+            if signaled and self._verified_endpoint_pid(self.read_endpoint()) == pid:
                 self._signal_endpoint_pid(pid, "KILL", self.read_endpoint())
         self.endpoint = None
         self.endpoint_session = None
@@ -908,7 +974,9 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     def launch_authoritative_attempt(state: Runtime, room: dict) -> dict | None:
         attempt = room.get("attempt") or {}
         if attempt.get("phase") in {"completed", "canceled", "failed"}:
-            if state.endpoint_session == room.get("room_code"):
+            if (state.endpoint_session == room.get("room_code") or
+                    (state.endpoint_running() and
+                     state.endpoint_session == room.get("room_code"))):
                 state.stop_endpoint()
             return None
         if not attempt.get("role_locked") or attempt.get("phase") is None:
@@ -920,8 +988,8 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 409, "role_choice_conflict", "the two Switch role choices do not match",
                 stage="coordination", recoverable=True, primary_action="choose_role",
             )
-        if (state.endpoint_session == room.get("room_code") and
-                state.endpoint_running()):
+        if (state.endpoint_running() and
+                state.endpoint_session == room.get("room_code")):
             return {"status": "starting", "session_id": room.get("room_code"),
                     "run_id": state.log.run_id}
         selected_usb_id = attach_selected_hardware(state)

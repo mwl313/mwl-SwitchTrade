@@ -120,8 +120,58 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 os, "kill") as kill:
             with self.assertRaisesRegex(RuntimeError, "identity changed"):
                 Runtime._signal_endpoint_pid(4321, "TERM", endpoint)
-        self.assertEqual([event[0] for event in events], ["open", "close"])
+        self.assertEqual([event[0] for event in events], ["open", "signal", "close"])
+        self.assertEqual(events[1][1:], (99, 0))
         kill.assert_not_called()
+
+    def test_pidfd_disappearance_is_idempotent_and_stop_clears_session(self):
+        endpoint = {"pid": 4321, "process_kind": "rfu-endpoint"}
+        with patch("switchtrade.control.os.name", "posix"), patch.object(
+                os, "pidfd_open", return_value=99, create=True), patch.object(
+                signal, "pidfd_send_signal", side_effect=ProcessLookupError, create=True), patch.object(
+                Runtime, "_verified_endpoint_pid", return_value=None), patch.object(os, "close") as close:
+            self.assertFalse(Runtime._signal_endpoint_pid(4321, "TERM", endpoint))
+        close.assert_called_once_with(99)
+
+        runtime = Runtime.__new__(Runtime)
+        runtime.endpoint = None
+        runtime.endpoint_session = "ABC123"
+        runtime.read_endpoint = lambda: endpoint
+        with patch("switchtrade.control.os.name", "posix"), patch.object(
+                Runtime, "_signal_endpoint_pid", return_value=False) as signal_endpoint:
+            runtime.stop_endpoint()
+        signal_endpoint.assert_called_once_with(4321, "TERM", endpoint)
+        self.assertIsNone(runtime.endpoint_session)
+
+    def test_windows_wsl_signal_uses_one_pinned_helper_and_rejects_reuse(self):
+        endpoint = {
+            "pid": 4321, "process_kind": "rfu-endpoint", "wsl_distro": "SwitchTrade",
+            "session_id": "ABC123", "launch_nonce": "a" * 32,
+            "process_start_ticks": 9876,
+        }
+        with patch("switchtrade.control.os.name", "nt"), patch.dict(
+                os.environ, {"SWITCHTRADE_WSL_DISTRO": "SwitchTrade"}), patch(
+                "switchtrade.control.subprocess.run",
+                return_value=MagicMock(returncode=0, stdout="", stderr="")) as run, patch.object(
+                Runtime, "_verified_endpoint_pid") as verify:
+            self.assertTrue(Runtime._signal_endpoint_pid(4321, "TERM", endpoint))
+        verify.assert_not_called()
+        command = run.call_args.args[0]
+        self.assertEqual(command[:6], ["wsl.exe", "-d", "SwitchTrade", "-u", "root", "--"])
+        self.assertNotIn("kill", command)
+        helper = command[command.index("-c") + 1]
+        compile(helper, "<wsl-pidfd-helper>", "exec")
+        self.assertLess(helper.index("pidfd_open"), helper.index("/proc"))
+        self.assertIn("pidfd_send_signal", helper)
+
+        with patch("switchtrade.control.os.name", "nt"), patch.dict(
+                os.environ, {"SWITCHTRADE_WSL_DISTRO": "SwitchTrade"}), patch(
+                "switchtrade.control.subprocess.run",
+                return_value=MagicMock(returncode=4, stdout="", stderr="")) as reused:
+            with self.assertRaisesRegex(RuntimeError, "identity changed"):
+                Runtime._signal_endpoint_pid(4321, "TERM", endpoint)
+        self.assertEqual(reused.call_count, 1)
+        self.assertNotIn("kill", reused.call_args.args[0])
 
     def test_wsl_relay_client_uses_dual_stack_safe_dns_queries(self):
         with patch.dict(os.environ, {"RES_OPTIONS": "rotate"}):
@@ -616,6 +666,8 @@ class Gate4RuntimeContractTests(unittest.TestCase):
 
             def wsl_process(command, **kwargs):
                 nonlocal probe_calls
+                if command and command[0] == "wsl.exe" and "pidfd_open" in " ".join(command):
+                    return MagicMock(returncode=0, stdout="", stderr="")
                 if command and command[0] == "wsl.exe" and "python3" in command:
                     probe_calls += 1
                     if probe_calls <= 4:
@@ -637,7 +689,56 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                     runtime.stop_endpoint()
                     self.assertFalse(runtime.endpoint_running())
             commands = [call.args[0] for call in run.call_args_list]
-            self.assertTrue(any("kill" in command and "-TERM" in command for command in commands))
+            self.assertTrue(any("pidfd_open" in " ".join(command) for command in commands))
+            self.assertFalse(any("kill" in command for command in commands))
+
+    def test_late_endpoint_state_is_adopted_for_terminal_cleanup_and_relaunch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                runtime = client.app.state.runtime
+                runtime.last_authority_heartbeat = time.monotonic()
+                runtime.endpoint_state.write_text(json.dumps({
+                    "state": "initializing", "pid": 4321,
+                    "process_kind": "rfu-endpoint", "session_id": "ABC123",
+                }), encoding="utf-8")
+                room = {
+                    "room_id": "room-1", "room_code": "ABC123", "room_version": 7,
+                    "attempt": {"attempt_id": "attempt-1", "phase": "completed"},
+                    "members": [],
+                }
+                adopted = []
+
+                def stop_late_endpoint():
+                    adopted.append(runtime.endpoint_session)
+                    runtime.endpoint_state.unlink(missing_ok=True)
+                    runtime.endpoint = None
+                    runtime.endpoint_session = None
+
+                with patch.object(runtime, "authoritative_room", return_value=room), patch.object(
+                        runtime, "_verified_endpoint_pid", return_value=4321), patch.object(
+                        runtime, "stop_endpoint", side_effect=stop_late_endpoint) as stop:
+                    terminal = client.get("/api/v1/trade-room")
+                self.assertEqual(terminal.status_code, 200, terminal.text)
+                stop.assert_called_once()
+                self.assertEqual(adopted, ["ABC123"])
+
+                process = MagicMock(pid=8765)
+                process.poll.return_value = None
+
+                def acknowledge_relaunch(command, **_kwargs):
+                    nonce = command[command.index("--launch-nonce") + 1]
+                    runtime.endpoint_launch_ack.write_text(json.dumps({
+                        "schema": 1, "launch_nonce": nonce, "launcher_pid": 8765,
+                    }), encoding="utf-8")
+                    return process
+
+                with patch.object(runtime.relay, "status", return_value={"status": "waiting"}), patch(
+                        "switchtrade.control.subprocess.Popen", side_effect=acknowledge_relaunch):
+                    relaunched = client.post("/api/session/start", json={
+                        "role": "host", "passcode": "XYZ789", "usb_id": "0bda:818b",
+                    })
+                self.assertEqual(relaunched.status_code, 200, relaunched.text)
+                self.assertEqual(runtime.endpoint_session, "XYZ789")
 
     def test_windows_control_rejects_endpoint_from_another_wsl_distro(self):
         with tempfile.TemporaryDirectory() as temporary:
