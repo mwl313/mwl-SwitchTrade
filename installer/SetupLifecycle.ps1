@@ -154,6 +154,87 @@ function Write-SwitchTradeSetupLog {
     Add-Content -LiteralPath $Path -Value ($entry | ConvertTo-Json -Compress) -Encoding UTF8
 }
 
+function Write-SwitchTradeTreeIntegrity {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$ReleaseId
+    )
+    $rootPath = [IO.Path]::GetFullPath($Root).TrimEnd('\')
+    $integrityPath = Join-Path $rootPath '.switchtrade-integrity.json'
+    if (@(Get-ChildItem -LiteralPath $rootPath -Recurse -Force |
+            Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) {
+        throw 'INSTALL_INTEGRITY_REPARSE_POINT: release tree cannot be redirected'
+    }
+    $artifacts = [ordered]@{}
+    foreach ($item in @(Get-ChildItem -LiteralPath $rootPath -File -Recurse -Force |
+            Where-Object { $_.FullName -ne $integrityPath } | Sort-Object FullName)) {
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw 'INSTALL_INTEGRITY_REPARSE_POINT: release files cannot be redirected'
+        }
+        $relative = $item.FullName.Substring($rootPath.Length + 1).Replace('\', '/')
+        $artifacts[$relative] = Get-FileSha256 $item.FullName
+    }
+    Write-AtomicJson -Path $integrityPath -Value ([ordered]@{
+        schema = 1; release_id = $ReleaseId; artifact_hashes = $artifacts
+    })
+    return Get-FileSha256 $integrityPath
+}
+
+function Test-SwitchTradeTreeIntegrity {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$ExpectedReleaseId,
+        [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F]{64}$')]
+        [string]$ExpectedIntegritySha256
+    )
+    $rootPath = [IO.Path]::GetFullPath($Root).TrimEnd('\')
+    $rootItem = Get-Item -LiteralPath $rootPath -Force
+    if ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw 'INSTALL_INTEGRITY_REPARSE_POINT: release root cannot be redirected'
+    }
+    $integrityPath = Join-Path $rootPath '.switchtrade-integrity.json'
+    if (@(Get-ChildItem -LiteralPath $rootPath -Recurse -Force |
+            Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) {
+        throw 'INSTALL_INTEGRITY_REPARSE_POINT: release tree cannot be redirected'
+    }
+    if (-not (Test-Path -LiteralPath $integrityPath -PathType Leaf) -or
+            (Get-FileSha256 $integrityPath) -ne $ExpectedIntegritySha256.ToLowerInvariant()) {
+        throw 'INSTALL_INTEGRITY_MANIFEST_MISMATCH: release integrity anchor changed'
+    }
+    try { $integrity = Get-Content -Raw -LiteralPath $integrityPath | ConvertFrom-Json }
+    catch { throw 'INSTALL_INTEGRITY_MANIFEST_INVALID: release integrity manifest is unreadable' }
+    if ([int]$integrity.schema -ne 1 -or [string]$integrity.release_id -ne $ExpectedReleaseId -or
+            -not $integrity.artifact_hashes) {
+        throw 'INSTALL_INTEGRITY_MANIFEST_INVALID: release integrity identity is invalid'
+    }
+    $expected = @{}
+    foreach ($property in $integrity.artifact_hashes.PSObject.Properties) {
+        $relative = ([string]$property.Name).Replace('/', '\')
+        if ([IO.Path]::IsPathRooted($relative) -or $relative -match '(^|\\)\.\.(\\|$)') {
+            throw 'INSTALL_INTEGRITY_PATH_INVALID: release manifest contains an unsafe path'
+        }
+        $expected[$relative.ToLowerInvariant()] = ([string]$property.Value).ToLowerInvariant()
+    }
+    $actual = @{}
+    foreach ($item in @(Get-ChildItem -LiteralPath $rootPath -File -Recurse -Force |
+            Where-Object { $_.FullName -ne $integrityPath })) {
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw 'INSTALL_INTEGRITY_REPARSE_POINT: release files cannot be redirected'
+        }
+        $relative = $item.FullName.Substring($rootPath.Length + 1).ToLowerInvariant()
+        $actual[$relative] = Get-FileSha256 $item.FullName
+    }
+    if ($actual.Count -ne $expected.Count) {
+        throw 'INSTALL_INTEGRITY_ARTIFACT_SET_MISMATCH: release file set changed'
+    }
+    foreach ($relative in $expected.Keys) {
+        if (-not $actual.ContainsKey($relative) -or $actual[$relative] -ne $expected[$relative]) {
+            throw "INSTALL_INTEGRITY_ARTIFACT_MISMATCH: $relative"
+        }
+    }
+    return $true
+}
+
 function New-SwitchTradeTransaction {
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -173,10 +254,14 @@ function New-SwitchTradeTransaction {
         [string]$KernelStatePath = '',
         [string]$KernelPriorPath = '',
         [string]$KernelPriorModulesPath = '',
-        [bool]$KernelChangeExpected = $false
+        [bool]$KernelChangeExpected = $false,
+        [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{32}$')][string]$InstallId,
+        [Parameter(Mandatory)][string]$DistroBasePath,
+        [string]$WindowsPriorIntegritySha256 = '',
+        [string]$WslPriorIntegritySha256 = ''
     )
     $state = [ordered]@{
-        schema = 2
+        schema = 3
         transaction_id = [guid]::NewGuid().ToString('N')
         action = $Action
         release_id = $ReleaseId
@@ -195,11 +280,18 @@ function New-SwitchTradeTransaction {
         wsl_candidate_path = '/opt/switchtrade.candidate'
         wsl_previous_path = '/opt/switchtrade.previous'
         wsl_commit_swap_path = '/opt/switchtrade.commit-swap'
+        wsl_rollback_swap_path = '/opt/switchtrade.rollback-swap'
         kernel_prior_release_id = $KernelPriorReleaseId
         kernel_state_path = $KernelStatePath
         kernel_prior_path = $KernelPriorPath
         kernel_prior_modules_path = $KernelPriorModulesPath
         kernel_change_expected = $KernelChangeExpected
+        install_id = $InstallId
+        distro_base_path = $DistroBasePath
+        windows_integrity_sha256 = ''
+        wsl_integrity_sha256 = ''
+        windows_prior_integrity_sha256 = $WindowsPriorIntegritySha256
+        wsl_prior_integrity_sha256 = $WslPriorIntegritySha256
         distro_imported = $false
         wsl_staged = $false
         kernel_applied = $false
@@ -241,6 +333,20 @@ function Assert-SwitchTradeRecordedStagePath {
     return $stage
 }
 
+function Remove-SwitchTradeRecoveryTree {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$ReparseCode
+    )
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    $item = Get-Item -LiteralPath $Path -Force
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw "${ReparseCode}: refusing to remove a redirected recovery path"
+    }
+    Remove-Item -LiteralPath $Path -Recurse -Force
+    return $true
+}
+
 function Assert-SwitchTradeTransactionPackage {
     param(
         [Parameter(Mandatory)]$Transaction,
@@ -261,11 +367,21 @@ function Resolve-SwitchTradeTransactionRecovery {
         [Parameter(Mandatory)]$Transaction,
         [Parameter(Mandatory)]$Actual
     )
-    if ([int]$Transaction.schema -ne 2) {
+    if ([int]$Transaction.schema -ne 3) {
         throw 'SETUP_TRANSACTION_LEGACY_AMBIGUOUS: the interrupted transaction cannot prove pre-mutation ownership'
+    }
+    if (-not [bool]$Actual.EnumerationKnown) {
+        throw 'SETUP_TRANSACTION_DISTRO_ENUMERATION_UNKNOWN: WSL distribution state could not be determined'
     }
     if ($Actual.DistroExists -and -not $Actual.DistroOwned) {
         throw 'SETUP_TRANSACTION_DISTRO_OWNERSHIP_CHANGED: the named distribution is not installer-owned'
+    }
+    if ($Actual.DistroExists -and
+            ([string]$Actual.DistroInstallId -cne [string]$Transaction.install_id -or
+             -not [string]::Equals([IO.Path]::GetFullPath([string]$Actual.DistroBasePath).TrimEnd('\'),
+                 [IO.Path]::GetFullPath([string]$Transaction.distro_base_path).TrimEnd('\'),
+                 [StringComparison]::OrdinalIgnoreCase))) {
+        throw 'SETUP_TRANSACTION_DISTRO_IDENTITY_CHANGED: distribution install identity or BasePath changed'
     }
     if ([bool]$Transaction.distro_existed_before -and
             (-not [bool]$Transaction.distro_owned_before -or -not $Actual.DistroExists)) {
@@ -276,14 +392,18 @@ function Resolve-SwitchTradeTransactionRecovery {
     $windowsPrior = [string]$Transaction.prior_release_id
     $wslPrior = [string]$Transaction.wsl_prior_release_id
     $kernelPrior = [string]$Transaction.kernel_prior_release_id
+    $windowsIntegrity = [string]$Transaction.windows_integrity_sha256
+    $wslIntegrity = [string]$Transaction.wsl_integrity_sha256
     $kernelExpected = if ([bool]$Transaction.kernel_change_expected) { $release } else { $kernelPrior }
     $retainedReady = (-not $windowsPrior -or $Actual.WindowsPreviousRelease -eq $windowsPrior) -and
         (-not $wslPrior -or $Actual.WslPreviousRelease -eq $wslPrior)
-    $coherentCommit = $Actual.WindowsActiveRelease -eq $release -and
-        $Actual.WslActiveRelease -eq $release -and
+    $coherentCommit = $windowsIntegrity -and $wslIntegrity -and
+        $Actual.WindowsActiveRelease -eq $release -and
+        $Actual.WindowsActiveIntegrity -eq $windowsIntegrity -and
+        $Actual.WslActiveRelease -eq $release -and $Actual.WslActiveIntegrity -eq $wslIntegrity -and
         $Actual.KernelRelease -eq $kernelExpected -and $retainedReady -and
         -not $Actual.WindowsStageExists -and -not $Actual.WslCandidateExists -and
-        -not $Actual.WslCommitSwapExists
+        -not $Actual.WslCommitSwapExists -and -not $Actual.WslRollbackSwapExists
     if ($coherentCommit) {
         return [pscustomobject]@{
             Disposition = 'finalize'; WindowsAction = 'none'; WslAction = 'none'
@@ -298,7 +418,16 @@ function Resolve-SwitchTradeTransactionRecovery {
     if ($Actual.WindowsPreviousExists -and -not $Actual.WindowsPreviousRelease) {
         throw 'SETUP_TRANSACTION_WINDOWS_RETAINED_INVALID: the retained Windows tree is not a proven release'
     }
-    if ($windowsPrior) {
+    if ($Actual.WindowsSwapExists) {
+        if (-not $windowsPrior -or $Actual.WindowsSwapRelease -ne $release -or
+                -not (($Actual.WindowsActiveRelease -eq '' -and
+                        $Actual.WindowsPreviousRelease -eq $windowsPrior) -or
+                       ($Actual.WindowsActiveRelease -eq $windowsPrior -and
+                        -not $Actual.WindowsPreviousExists))) {
+            throw 'SETUP_TRANSACTION_WINDOWS_SWAP_INVALID: interrupted rollback state is not proven'
+        }
+        $windowsAction = 'rollback'
+    } elseif ($windowsPrior) {
         if ($Actual.WindowsActiveRelease -eq $windowsPrior) { $windowsAction = 'none' }
         elseif ($Actual.WindowsActiveRelease -eq $release -and
                 $Actual.WindowsPreviousRelease -eq $windowsPrior) { $windowsAction = 'rollback' }
@@ -319,10 +448,16 @@ function Resolve-SwitchTradeTransactionRecovery {
             throw 'SETUP_TRANSACTION_WSL_PRIOR_UNKNOWN: the prior WSL release was not recorded'
         }
         if (($Actual.WslCandidateExists -and $Actual.WslCandidateRelease -ne $release) -or
-                ($Actual.WslCommitSwapExists -and $Actual.WslCommitSwapRelease -ne $wslPrior)) {
+                ($Actual.WslCommitSwapExists -and $Actual.WslCommitSwapRelease -ne $wslPrior) -or
+                ($Actual.WslRollbackSwapExists -and $Actual.WslRollbackSwapRelease -ne $release)) {
             throw 'SETUP_TRANSACTION_WSL_LAYOUT_INVALID: an unproven WSL runtime occupies a transaction path'
         }
-        if ($Actual.WslActiveRelease -eq $wslPrior -and -not $Actual.WslCommitSwapExists) {
+        if ($Actual.WslRollbackSwapExists -and
+                (($Actual.WslActiveRelease -eq '' -and $Actual.WslPreviousRelease -eq $wslPrior) -or
+                 ($Actual.WslActiveRelease -eq $wslPrior -and $Actual.WslPreviousRelease -eq ''))) {
+            $wslAction = 'compensate'
+        } elseif ($Actual.WslActiveRelease -eq $wslPrior -and
+                -not $Actual.WslCommitSwapExists) {
             if ($Actual.WslCandidateExists) { $wslAction = 'abort_candidate' }
         } elseif ($Actual.WslActiveRelease -eq $release -and
                 $Actual.WslPreviousRelease -eq $wslPrior -and
@@ -478,13 +613,31 @@ function Switch-SwitchTradeWindowsRollback {
     param(
         [Parameter(Mandatory)][string]$Active,
         [Parameter(Mandatory)][string]$Previous,
-        [Parameter(Mandatory)][string]$ExpectedReleaseId
+        [Parameter(Mandatory)][string]$ExpectedReleaseId,
+        [string]$ExpectedActiveReleaseId = ''
     )
+    $swap = "$Active.rollback-swap"
+    if (Test-Path -LiteralPath $swap) {
+        $swapRelease = Get-InstalledWindowsReleaseId -Root $swap
+        if (-not $ExpectedActiveReleaseId) { $ExpectedActiveReleaseId = $swapRelease }
+        Test-WindowsReleaseTree -Root $swap -ExpectedReleaseId $ExpectedActiveReleaseId | Out-Null
+        if (-not (Test-Path -LiteralPath $Active)) {
+            Test-WindowsReleaseTree -Root $Previous -ExpectedReleaseId $ExpectedReleaseId | Out-Null
+            Move-Item -LiteralPath $Previous -Destination $Active
+        }
+        if (-not (Test-Path -LiteralPath $Previous)) {
+            Test-WindowsReleaseTree -Root $Active -ExpectedReleaseId $ExpectedReleaseId | Out-Null
+            Move-Item -LiteralPath $swap -Destination $Previous
+        }
+        if (Test-Path -LiteralPath $swap) { throw 'ROLLBACK_WINDOWS_SWAP_STALE' }
+        return $ExpectedActiveReleaseId
+    }
     Test-WindowsReleaseTree -Root $Previous -ExpectedReleaseId $ExpectedReleaseId | Out-Null
     $activeRelease = Get-InstalledWindowsReleaseId -Root $Active
+    if ($ExpectedActiveReleaseId -and $activeRelease -ne $ExpectedActiveReleaseId) {
+        throw 'ROLLBACK_WINDOWS_ACTIVE_RELEASE_MISMATCH'
+    }
     Test-WindowsReleaseTree -Root $Active -ExpectedReleaseId $activeRelease | Out-Null
-    $swap = "$Active.rollback-swap"
-    if (Test-Path -LiteralPath $swap) { throw 'ROLLBACK_WINDOWS_SWAP_STALE' }
     $swapped = $false
     Move-Item -LiteralPath $Active -Destination $swap
     try {
