@@ -275,6 +275,10 @@ esac
 
 selection="$(select_device)"
 IFS=$'\t' read -r USB_ID DEVICE <<< "$selection"
+command -v flock >/dev/null 2>&1 || die "flock is required for exclusive radio ownership"
+LOCK_PATH="/run/lock/switchtrade-radio-${USB_ID//:/-}.lock"
+exec 9>"$LOCK_PATH"
+flock -n 9 || die "RADIO_BUSY: another SwitchTrade endpoint, diagnostic, or repair owns $USB_ID"
 profile="$(profile_for "$USB_ID")"
 IFS=$'\t' read -r _ strategy module_file allowed_drivers roles status auto_select _notes _model _chipset host_engine _evidence <<< "$profile"
 host_engine=${host_engine:-ldn}

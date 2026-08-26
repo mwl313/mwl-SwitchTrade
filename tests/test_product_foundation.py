@@ -23,6 +23,13 @@ from switchtrade.tunnel_client import relay_websocket_url
 
 
 class HardwarePolicyTests(unittest.TestCase):
+    def test_radio_prepare_holds_one_lock_across_the_exec_workload(self):
+        script = (Path(__file__).resolve().parents[1] / "scripts" /
+                  "wsl-radio-prepare.sh").read_text(encoding="utf-8")
+        self.assertIn("exec 9>\"$LOCK_PATH\"", script)
+        self.assertIn("flock -n 9", script)
+        self.assertIn("RADIO_BUSY", script)
+
     def test_only_8192_is_auto_selected(self):
         profiles = load_profiles()
         automatic = [profile.usb_id for profile in profiles if profile.auto_select]
