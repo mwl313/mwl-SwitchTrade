@@ -1,10 +1,15 @@
 # SwitchTrade beta bug register
 
-Last updated: 2026-08-26
+Last updated: 2026-08-27
 
-This is the authoritative register for reproducible defects in the current private-beta build. It
-separates observed evidence from suspected causes. An issue remains open until its acceptance checks
-pass on the affected Windows versions and the relevant two-PC workflow.
+This is the field-validation register for the four release blockers observed during private-beta
+testing. It separates observed evidence from suspected causes. An issue remains open until its
+acceptance checks pass on the affected Windows versions and the relevant two-PC workflow. The full
+software and external-validation register is `docs/AUDIT_REPORT.md`.
+
+The 2026-08-27 software audit closed the reproducible code-level causes and added regression tests.
+The four entries remain here because their final acceptance requires clean-host, physical-radio, or
+two-PC evidence. See `docs/AUDIT_REPORT.md` for the reviewed software finding register.
 
 ## Status and priority
 
@@ -82,7 +87,7 @@ authority/control tests pass; real two-PC validation is still required before cl
 ### STB-002 — Windows 10 detects an RTL8192EU but cannot attach it when connection starts
 
 - **Priority:** P0
-- **Status:** Investigating
+- **Status:** Fix ready for validation
 - **Scope:** Observed on the Windows 10 22H2 qualification machine with RTL8192EU `0bda:818b`.
 - **Observed build:** `v0.2.0-win10test.3` lineage
 
@@ -144,12 +149,19 @@ restarting, resetting WSL, or changing drivers.
   Linux driver or RX-health failure.
 - The same package retains the existing Windows 11 lifecycle behavior.
 
+#### Candidate implementation
+
+The audit candidate now persists the Windows USB InstanceId, resolves its current bus ID after reboot
+or replug, and keeps detected/shared/attached/USB-visible/driver/PHY/RX as separate gates. Setup resume
+never trusts a saved transient bus ID. Automated re-enumeration and lifecycle simulations pass; this
+issue remains open until clean Windows 10 and Windows 11 RTL8192EU tests pass.
+
 ---
 
 ### STB-003 — Cold WSL start leaves RTL8192EU attached but driver-unbound
 
 - **Priority:** P0
-- **Status:** Confirmed
+- **Status:** Fix ready for validation
 - **Scope:** Any cold isolated-WSL start where module autoload does not run; reproduced on Windows 11
   with RTL8192EU `0bda:818b`.
 
@@ -172,12 +184,17 @@ so success currently depends on module state left by an earlier run.
 - Pass from a cold WSL shutdown, after Windows reboot, and after unplug/replug without manual shell
   commands; repeat twice to catch retained-module false positives.
 
+The audit candidate explicitly loads `rtl8xxxu`, captures fatal dmesg signatures across module load,
+serializes radio ownership, exports the actual PHY, and separates non-destructive RX-inconclusive from
+explicit USB reset recovery. A fake-sysfs Linux workflow now exercises cold load, PHY handoff, lock
+contention, both RX paths, and fatal driver warnings. Physical cold-start repetition remains pending.
+
 ---
 
 ### STB-004 — Failed Repair can leave Windows and WSL components on different revisions
 
 - **Priority:** P0
-- **Status:** Confirmed
+- **Status:** Fix ready for clean-machine validation
 - **Scope:** Install/Update/Repair transaction ordering.
 
 #### Evidence
@@ -196,6 +213,14 @@ The progress dialog also discarded the actionable child output and displayed onl
 - Persist the complete Setup log and display the exact failed gate plus one recovery action.
 - Fault-inject every stage of Install, Update, and Repair and verify that the active Windows manifest,
   WSL runtime, kernel state, and rollback metadata always describe one coherent release.
+
+The audit candidate introduces one persisted release transaction, staged WSL readiness, distro
+ownership markers, exact Windows/WSL/control release identity, kernel A/B hash validation, reverse-order
+compensation, and a global Setup mutex. A pre-mutation rollback journal binds the verified initiating
+package and exact Windows/WSL/kernel anchors. Separate PowerShell processes now terminate after every
+rollback axis and before metadata publication; a fresh Repair converges and reverse Rollback passes.
+Temp-root Setup, kernel, and process-death simulations pass. Clean-host
+Install/Repair/Update/Rollback/Uninstall remain external gates.
 
 ## Regression rule
 
