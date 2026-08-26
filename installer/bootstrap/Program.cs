@@ -126,7 +126,7 @@ internal static class Program
                       "Keep or re-download a setup package only for Update, Repair, Rollback, or Uninstall."
                     : string.IsNullOrWhiteSpace(message)
                         ? "SwitchTrade setup did not complete."
-                        : message;
+                        : FirstErrorLine(message);
             MessageBox.Show(message, "SwitchTrade Setup", MessageBoxButtons.OK,
                 success ? MessageBoxIcon.Information : MessageBoxIcon.Error);
             return result.ExitCode;
@@ -142,6 +142,10 @@ internal static class Program
             return 1;
         }
     }
+
+    private static string FirstErrorLine(string error) => error
+        .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .FirstOrDefault() ?? "SwitchTrade setup did not complete.";
 
     private static SetupProcessResult RunHeadless(ProcessStartInfo start)
     {

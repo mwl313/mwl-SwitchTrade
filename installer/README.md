@@ -1,5 +1,10 @@
 # SwitchTrade beta package
 
+The installer accepts Windows 10 22H2 x64 build 19045 and Windows 11 x64. It rejects older Windows,
+Windows Server, and ARM64 because the packaged application and rootfs are x64. A successful
+`wsl --version` probe is required; with prerequisite consent, Setup updates legacy inbox WSL through
+the native `wsl --update` path before importing the isolated distribution.
+
 The bootstrap installs and provisions only the named `SwitchTrade` distribution. When a verified
 custom-kernel bundle is supplied and the user accepts the global warning, it merges only SwitchTrade's
 kernel settings into the user's global `.wslconfig` and retains the complete prior file for rollback.
@@ -86,6 +91,8 @@ The retired web/demo frontend is not bundled into the WSL runtime or required by
 - If enabling WSL or installing `usbipd-win` requires a restart, setup persists only non-secret setup
   options and registers a per-user RunOnce continuation. The same package is re-verified when setup
   resumes after sign-in.
+- Windows 10 compatibility is qualified against build 19045 with current Microsoft Store WSL. Merely
+  having an old `wsl.exe` stub is not treated as a complete WSL installation.
 - A managed-PC policy denial while starting the custom kernel restores the previous `.wslconfig` and
   reports `CUSTOM_KERNEL_BLOCKED_BY_POLICY`; such systems are unsupported by the private beta.
 

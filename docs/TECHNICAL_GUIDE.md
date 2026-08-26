@@ -10,6 +10,7 @@ room, assigns complementary radio roles, and transports the RFU stream between t
 The `0.2.0-beta.1` product boundary is intentionally narrow:
 
 - native Windows WPF client;
+- Windows 10 22H2 x64 build 19045 or Windows 11 x64 with current Microsoft Store WSL 2;
 - isolated `SwitchTrade` WSL distribution and a verified custom WSL kernel bundle;
 - one USB Wi-Fi adapter per endpoint;
 - server-authoritative private and public rooms with exactly two active member seats;
@@ -91,8 +92,9 @@ and agent handoffs are excluded by `.gitignore`.
 
 ## 4. Windows desktop application
 
-The desktop project is `apps/desktop/SwitchTrade.Desktop`. It targets self-contained x64 .NET and
-publishes one native `SwitchTrade.exe`. It does not require Electron, WebView2, or an external browser.
+The desktop project is `apps/desktop/SwitchTrade.Desktop`. It targets the Windows 10 build 19041 SDK
+surface and publishes one self-contained x64 `SwitchTrade.exe`; Setup enforces the qualified build
+19045 product minimum. It does not require Electron, WebView2, or an external browser.
 
 The application follows a view-model-driven screen flow:
 
@@ -133,15 +135,17 @@ Important UI invariants:
 manifest before running a mutating action. The normal install path is:
 
 1. Verify all payload hashes and reject missing or unexpected files.
-2. Enable WSL prerequisites when required and resume after restart through a non-secret RunOnce entry.
-3. Install the pinned `usbipd-win` prerequisite when required.
-4. Import or update the isolated WSL distribution named `SwitchTrade`.
-5. Install the bundled kernel and modules under `%ProgramData%\SwitchTrade\kernel`.
-6. Back up and merge the SwitchTrade kernel settings into the user's global `.wslconfig` after explicit
+2. Require Windows 10 22H2 x64 build 19045 or Windows 11 x64 and reject Server/ARM64 hosts.
+3. Enable WSL prerequisites, update legacy inbox WSL to current Microsoft Store WSL, and resume after
+   restart through a non-secret RunOnce entry when required.
+4. Install the pinned `usbipd-win` prerequisite when required.
+5. Import or update the isolated WSL distribution named `SwitchTrade`.
+6. Install the bundled kernel and modules under `%ProgramData%\SwitchTrade\kernel`.
+7. Back up and merge the SwitchTrade kernel settings into the user's global `.wslconfig` after explicit
    consent.
-7. Stage and self-check `/opt/switchtrade` before replacing the active runtime.
-8. Install the native app and launcher under the SwitchTrade application directory.
-9. Start the local control service and verify readiness.
+8. Stage and self-check `/opt/switchtrade` before replacing the active runtime.
+9. Install the native app and launcher under the SwitchTrade application directory.
+10. Start the local control service and verify readiness.
 
 The endpoint resolves its required LDN key input from `/opt/switchtrade/config/prod.keys` in the
 installed application root. It must be included by the source archive/package builder and must never

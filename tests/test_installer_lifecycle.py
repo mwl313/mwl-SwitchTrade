@@ -137,6 +137,33 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertIn("Distro", result.stdout)
 
     @unittest.skipUnless(shutil.which("powershell"), "Windows PowerShell is required")
+    def test_windows_host_support_matrix(self):
+        compatibility = ROOT / "installer" / "HostCompatibility.ps1"
+        cases = (
+            (19044, 1, "X64", False),
+            (19045, 1, "X64", True),
+            (22000, 1, "X64", True),
+            (26100, 1, "X64", True),
+            (19045, 1, "Arm64", False),
+            (20348, 3, "X64", False),
+        )
+        checks = "; ".join(
+            f"if ((Test-SwitchTradeWindowsHost -Build {build} -ProductType {product_type} "
+            f"-Architecture '{architecture}') -ne ${str(expected).lower()}) {{ exit 1 }}"
+            for build, product_type, architecture, expected in cases
+        )
+        result = subprocess.run([
+            "powershell", "-NoProfile", "-Command", f". '{compatibility}'; {checks}",
+        ], cwd=ROOT, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        setup = (ROOT / "installer" / "SwitchTradeSetup.ps1").read_text(encoding="utf-8")
+        self.assertIn("Windows 10 22H2 x64 (build 19045)", setup)
+        self.assertIn("$audit.WslModern", setup)
+        self.assertIn("WslFeaturesEnabled", setup)
+        self.assertIn("wsl.exe --update --web-download", setup)
+        self.assertNotIn("WindowsBuild -lt 26100", setup)
+
+    @unittest.skipUnless(shutil.which("powershell"), "Windows PowerShell is required")
     def test_kernel_update_release_rollback_and_exact_uninstall_restore(self):
         with tempfile.TemporaryDirectory() as temporary:
             result = subprocess.run([

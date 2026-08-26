@@ -19,6 +19,8 @@ section. None should be presented as a current beta capability.
    authority reset.
 7. Add Windows code signing and trusted timestamping before a wider public release. The private beta
    remains intentionally unsigned.
+8. Complete physical Windows 10 22H2 qualification: clean install, reboot resume, custom-kernel boot,
+   USB/IP attach, RTL8192EU health gate, full two-console trade, update, rollback, and uninstall.
 
 ## 2. Reliability and product operations
 

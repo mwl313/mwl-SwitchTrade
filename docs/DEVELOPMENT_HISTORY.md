@@ -188,7 +188,19 @@ False. WSL removed VMware USB ownership and made deployment controllable, but it
 drivers. A custom kernel can add or patch a driver; it cannot make an incompatible hardware/driver
 combination reliable without evidence.
 
-## 10. Current state
+## 10. Windows 10 compatibility branch
+
+The original private-beta installer intentionally rejected every build below Windows 11 24H2. The
+`win10support` work changed the technical baseline to Windows 10 22H2 x64 build 19045 while retaining
+Windows 11 support. Host detection now rejects Server and ARM64 explicitly, distinguishes an old WSL
+stub from current Microsoft Store WSL, can update WSL with prerequisite consent, and accepts firmware
+virtualization before the optional Windows features have activated the hypervisor. Native projects
+compile against the Windows 10 build 19041 SDK surface while Setup enforces build 19045.
+
+These changes make a complete Windows 10 installation possible in code. Physical Windows 10
+qualification remains required before it becomes a release claim.
+
+## 11. Current state
 
 The repository contains the complete beta client, local runtime, relay service, installer, hardware
 policy, diagnostics, protocol implementation, and package tooling. The Direct Connection trade cycle

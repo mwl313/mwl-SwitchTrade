@@ -38,6 +38,7 @@ $UsbipdManifest = Join-Path $PackageRoot 'payload\prerequisites\usbipd-win.json'
 $PreviousInstall = "$InstallRoot.previous"
 . (Join-Path $PSScriptRoot 'KernelLifecycle.ps1')
 . (Join-Path $PSScriptRoot 'PackageIntegrity.ps1')
+. (Join-Path $PSScriptRoot 'HostCompatibility.ps1')
 
 $ResumeStatePath = Join-Path $StateRoot 'setup-resume.json'
 $ResumeRunOnce = 'SwitchTradeSetupResume'
@@ -98,7 +99,9 @@ if ($WasResume) {
 
 function Get-Distros {
     if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) { return @() }
-    return @(& wsl.exe --list --quiet | ForEach-Object { $_.Trim([char]0).Trim() } | Where-Object { $_ })
+    $output = @(& wsl.exe --list --quiet 2>$null)
+    if ($LASTEXITCODE -ne 0) { return @() }
+    return @($output | ForEach-Object { $_.Trim([char]0).Trim() } | Where-Object { $_ })
 }
 
 function Convert-ToWslPath([string]$Path) {
@@ -111,12 +114,47 @@ function Test-Setup {
     $distros = Get-Distros
     $vmware = Get-Service VMUSBArbService -ErrorAction SilentlyContinue
     $computer = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-    $wslVersion = if (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
-        ((& wsl.exe --version 2>$null) -join ' ').Replace([string][char]0, '').Trim()
-    } else { 'Absent' }
+    $operatingSystem = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+    $processors = @(Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue)
+    $wslCommandPresent = [bool](Get-Command wsl.exe -ErrorAction SilentlyContinue)
+    $wslFeature = $null
+    $vmFeature = $null
+    try {
+        $wslFeature = Get-WindowsOptionalFeature -Online `
+            -FeatureName Microsoft-Windows-Subsystem-Linux -ErrorAction Stop
+        $vmFeature = Get-WindowsOptionalFeature -Online `
+            -FeatureName VirtualMachinePlatform -ErrorAction Stop
+    } catch { }
+    $wslFeaturesEnabled = $wslFeature -and $vmFeature -and
+        [string]$wslFeature.State -in @('Enabled', 'EnablePending') -and
+        [string]$vmFeature.State -in @('Enabled', 'EnablePending')
+    $wslStatusExit = 1
+    $wslVersionExit = 1
+    $wslVersion = 'Absent'
+    if ($wslCommandPresent) {
+        & wsl.exe --status 2>$null | Out-Null
+        $wslStatusExit = $LASTEXITCODE
+        $versionOutput = @(& wsl.exe --version 2>$null)
+        $wslVersionExit = $LASTEXITCODE
+        if ($wslVersionExit -eq 0) {
+            $wslVersion = ($versionOutput -join ' ').Replace([string][char]0, '').Trim()
+        }
+    }
+    $architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+    $windowsBuild = if ($operatingSystem) { [int]$operatingSystem.BuildNumber } else {
+        [Environment]::OSVersion.Version.Build
+    }
+    $productType = if ($operatingSystem) { [int]$operatingSystem.ProductType } else { 0 }
+    $firmwareVirtualization = [bool]($processors | Where-Object { $_.VirtualizationFirmwareEnabled } |
+        Select-Object -First 1)
     [pscustomobject]@{
         Windows64Bit = [Environment]::Is64BitOperatingSystem
-        WslInstalled = [bool](Get-Command wsl.exe -ErrorAction SilentlyContinue)
+        WindowsSupported = Test-SwitchTradeWindowsHost -Build $windowsBuild `
+            -ProductType $productType -Architecture $architecture
+        WindowsProductType = $productType
+        WslInstalled = $wslCommandPresent -and ($wslFeaturesEnabled -or $wslStatusExit -eq 0)
+        WslFeaturesEnabled = [bool]$wslFeaturesEnabled
+        WslModern = $wslCommandPresent -and $wslVersionExit -eq 0 -and [bool]$wslVersion
         WslVersion = $wslVersion
         UsbipdInstalled = [bool](Get-Command usbipd.exe -ErrorAction SilentlyContinue)
         DistroInstalled = $distros -contains $Distro
@@ -126,11 +164,12 @@ function Test-Setup {
         Distro = $Distro
         KernelPolicy = 'unchanged'
         ExistingWslConfig = Test-Path -LiteralPath (Join-Path $env:USERPROFILE '.wslconfig')
-        WindowsBuild = [Environment]::OSVersion.Version.Build
-        Architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+        WindowsBuild = $windowsBuild
+        Architecture = $architecture
         FreeSpaceGB = [math]::Round((Get-PSDrive -Name ([IO.Path]::GetPathRoot($InstallRoot).Substring(0,1))).Free / 1GB, 1)
         PendingReboot = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
-        VirtualizationReady = [bool]($computer -and $computer.HypervisorPresent)
+        VirtualizationReady = [bool](($computer -and $computer.HypervisorPresent) -or
+            $firmwareVirtualization)
         VmwareUsbArbitrator = if ($vmware) { [string]$vmware.Status } else { 'Absent' }
         KernelBundlePresent = (Test-Path -LiteralPath $Kernel) -and (Test-Path -LiteralPath $KernelManifest)
     }
@@ -216,8 +255,9 @@ if ($Action -eq 'Rollback') {
 
 $audit = Test-Setup
 Test-SwitchTradePackage -PackageRoot $PackageRoot -AllowUnsignedPackage:$AllowUnsignedPackage | Out-Null
-if (-not $audit.Windows64Bit) { throw 'SwitchTrade requires 64-bit Windows.' }
-if ($audit.WindowsBuild -lt 26100) { throw 'SwitchTrade private beta requires Windows 11 24H2 build 26100 or newer.' }
+if (-not $audit.WindowsSupported) {
+    throw 'SwitchTrade requires Windows 10 22H2 x64 (build 19045) or Windows 11 x64.'
+}
 if ($audit.FreeSpaceGB -lt 8) { throw 'SwitchTrade requires at least 8 GB of free space for safe install and rollback.' }
 if (-not $audit.VirtualizationReady) { throw 'Hardware virtualization/Hyper-V is not available to WSL 2.' }
 if (-not $audit.PayloadPresent) { throw "application payload is missing: $Payload" }
@@ -246,12 +286,28 @@ if (-not $audit.WslInstalled) {
         throw 'SETUP_RESUME_UNAVAILABLE: use the complete native setup package before enabling WSL'
     }
     & dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart
-    if ($LASTEXITCODE -ne 0) { throw 'could not enable Windows Subsystem for Linux' }
+    if ($LASTEXITCODE -notin @(0, 3010)) { throw 'could not enable Windows Subsystem for Linux' }
     & dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
-    if ($LASTEXITCODE -ne 0) { throw 'could not enable Virtual Machine Platform' }
+    if ($LASTEXITCODE -notin @(0, 3010)) { throw 'could not enable Virtual Machine Platform' }
     Save-SetupResume -ResumeAction $Action
     Write-Host 'WSL prerequisites were enabled. Restart Windows; SwitchTrade Setup will resume after sign-in.'
     exit 3010
+}
+if (-not $audit.WslModern) {
+    if (-not $AcceptPrerequisiteChanges) {
+        throw 'The current Microsoft Store version of WSL 2 is required. Rerun after accepting prerequisite changes.'
+    }
+    & wsl.exe --update --web-download
+    if ($LASTEXITCODE -ne 0) {
+        & wsl.exe --update
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw 'WSL_UPDATE_FAILED: install the current Microsoft Store WSL package, restart Windows, and run Setup again.'
+    }
+    & wsl.exe --version 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'WSL_UPDATE_INCOMPLETE: restart Windows and run Setup again.'
+    }
 }
 if (-not $audit.UsbipdInstalled) {
     if (-not $AcceptPrerequisiteChanges) {

@@ -9,8 +9,9 @@ the FireRed/LeafGreen protocol endpoint, and the connection to the hosted Switch
 
 ## Requirements
 
-- 64-bit Windows 11 with administrator access for initial setup
-- WSL2 and virtualization support (Setup can enable required Windows features)
+- Windows 10 22H2 x64 (build 19045) or Windows 11 x64, with administrator access for initial setup
+- current Microsoft Store WSL 2 (Setup can enable or update it)
+- hardware virtualization support (Setup can enable the required Windows features)
 - one supported USB Wi-Fi adapter per PC
 - one Nintendo Switch console running FireRed or LeafGreen per player
 - internet access for both PCs

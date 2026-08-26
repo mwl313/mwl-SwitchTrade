@@ -79,7 +79,7 @@ internal static class SetupDialog
 
         var prerequisites = new CheckBox
         {
-            Text = "Allow Setup to enable WSL 2 and install the pinned USB/IP prerequisite if needed",
+            Text = "Allow Setup to enable or update WSL 2 and install the pinned USB/IP prerequisite if needed",
             AutoSize = true,
             Margin = new Padding(0, 12, 0, 8),
         };
