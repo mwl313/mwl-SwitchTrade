@@ -171,7 +171,7 @@ class TunnelIntegrationTest(unittest.TestCase):
             host.stop()
             guest.stop()
 
-    def test_tracked_trade_fixture_replays_byte_exactly_without_switch_hardware(self):
+    def test_tracked_pokemon_payload_replays_byte_exactly_without_switch_hardware(self):
         first = self._authority_request("/v1/trade-rooms", {
             "name": "Recorded replay", "trainer_display_name": "Leaf",
             "game": "LeafGreen", "language": "English",

@@ -329,6 +329,10 @@ class PiaHostTest(unittest.TestCase):
         self.assertEqual(engine.requests, [0, 2, 1, 1, 1, 3, 4])
 
     def test_parent_combines_local_and_child_selection_as_owner_zero(self):
+        # This is a deterministic emulator lifecycle transcript, not a claim that these bytes
+        # were captured from a physical Switch.  The separately named NATIVE_* fixtures cover
+        # only the wire stages for which a real capture exists.
+        semantic_transcript = []
         party = [mon.Mon(bytes([pid]) + b"\x00" * 99) for pid in (1, 2)]
         engine = trade.TradeEngine(
             party, trade_slot=1,
@@ -375,6 +379,7 @@ class PiaHostTest(unittest.TestCase):
         self.assertEqual(sim._parent_child_ready_cursor, 2)
         self.assertTrue(sim._parent_set_mons_sent)
         self.assertEqual(engine.sender.data, trade.linkcmd_block(trade.SET_MONS_TO_TRADE, 1))
+        semantic_transcript.append(engine.sender.data)
         self.assertEqual(engine.host_cursor, 2)
         self.assertEqual(engine.state, trade.S6_CONFIRM)
         self.assertEqual(engine._pending_push, trade.linkcmd_block(trade.INIT_BLOCK))
@@ -389,6 +394,7 @@ class PiaHostTest(unittest.TestCase):
                   if entry[1] != reliable.FLAGSA_CTRL]
         local_init = rfu.parse_slot(gbaframe.parse_in(frames[-1])["slots"][0][1])
         self.assertEqual(engine.sender.data, trade.linkcmd_block(trade.INIT_BLOCK))
+        semantic_transcript.append(engine.sender.data)
         self.assertTrue(sim._parent_local_confirm_started)
         self.assertEqual((local_init["op"], local_init["count"], local_init["peer"]),
                          (rfu.SEND_BLOCK_INIT, 2, 0))
@@ -410,6 +416,7 @@ class PiaHostTest(unittest.TestCase):
         self.assertTrue(sim._parent_local_confirm_complete)
         self.assertTrue(sim._parent_start_trade_sent)
         self.assertEqual(engine.sender.data, trade.linkcmd_block(trade.START_TRADE))
+        semantic_transcript.append(engine.sender.data)
         self.assertEqual(engine.state, trade.S7_ANIM)
         self.assertEqual((start["op"], start["count"], start["peer"]),
                          (rfu.SEND_BLOCK_INIT, 2, 0))
@@ -424,6 +431,7 @@ class PiaHostTest(unittest.TestCase):
         local_finish = rfu.parse_slot(gbaframe.parse_in(frames[-1])["slots"][0][1])
         self.assertTrue(sim._parent_local_finish_started)
         self.assertEqual(engine.sender.data, trade.linkcmd_block(trade.READY_FINISH_TRADE))
+        semantic_transcript.append(engine.sender.data)
         self.assertEqual((local_finish["op"], local_finish["count"], local_finish["peer"]),
                          (rfu.SEND_BLOCK_INIT, 2, 0))
 
@@ -444,6 +452,7 @@ class PiaHostTest(unittest.TestCase):
         self.assertTrue(sim._parent_local_finish_complete)
         self.assertTrue(sim._parent_confirm_finish_sent)
         self.assertEqual(engine.sender.data, trade.linkcmd_block(trade.CONFIRM_FINISH_TRADE))
+        semantic_transcript.append(engine.sender.data)
         self.assertEqual(engine.commits, 1)
         self.assertTrue(engine.leaving)
         self.assertEqual((committed["op"], committed["count"], committed["peer"]),
@@ -485,10 +494,19 @@ class PiaHostTest(unittest.TestCase):
         cancelled = rfu.parse_slot(gbaframe.parse_in(frames[-1])["slots"][0][1])
         self.assertTrue(sim._parent_final_cancel_sent)
         self.assertEqual(engine.sender.data, trade.linkcmd_block(trade.BOTH_CANCEL_TRADE))
+        semantic_transcript.append(engine.sender.data)
         self.assertTrue(engine.left_gracefully)
         self.assertTrue(engine.barrier.active)
         self.assertEqual((cancelled["op"], cancelled["count"], cancelled["peer"]),
                          (rfu.SEND_BLOCK_INIT, 2, 0))
+        self.assertEqual(semantic_transcript, [
+            trade.linkcmd_block(trade.SET_MONS_TO_TRADE, 1),
+            trade.linkcmd_block(trade.INIT_BLOCK),
+            trade.linkcmd_block(trade.START_TRADE),
+            trade.linkcmd_block(trade.READY_FINISH_TRADE),
+            trade.linkcmd_block(trade.CONFIRM_FINISH_TRADE),
+            trade.linkcmd_block(trade.BOTH_CANCEL_TRADE),
+        ])
 
     def test_parent_uni_drives_real_trade_engine_to_card_gate(self):
         engine = trade.TradeEngine(
