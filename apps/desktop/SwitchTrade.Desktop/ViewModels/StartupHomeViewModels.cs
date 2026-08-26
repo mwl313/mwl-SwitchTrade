@@ -46,9 +46,7 @@ public sealed class HomeScreenViewModel : ScreenViewModel
         "Performance", "CA1822:Mark members as static",
         Justification = "The message is a bindable property of this screen projection.")]
     public string AttentionText => "SwitchTrade needs attention before a connection can start.";
-    public string PublicAvailabilityText => Shell.IsPublicDirectoryAvailable
-        ? "Find a room in the live directory."
-        : "Public rooms are unavailable with this runtime.";
+    public string PublicAvailabilityText => Shell.PublicDirectoryStatusText;
     public RelayCommand CreateCommand { get; }
     public RelayCommand PublicCommand { get; }
     public RelayCommand JoinCommand { get; }

@@ -10,12 +10,14 @@ using System.Windows.Media;
 
 namespace SwitchTrade.Desktop.Services;
 
+public sealed record BackendLaunchResult(bool Succeeded, string Details);
+
 public sealed class BackendLauncher
 {
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Performance", "CA1822:Mark members as static",
         Justification = "The launcher is an injected service boundary and may gain platform state.")]
-    public bool TryStart()
+    public async Task<BackendLaunchResult> StartAsync(CancellationToken cancellationToken)
     {
         var candidates = new[]
         {
@@ -23,20 +25,60 @@ public sealed class BackendLauncher
             Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "installer", "Launch-SwitchTrade.ps1")),
         };
         var launcher = candidates.FirstOrDefault(File.Exists);
-        if (launcher is null) return false;
+        if (launcher is null)
+            return new BackendLaunchResult(false, "The installed backend launcher is missing.");
         try
         {
-            Process.Start(new ProcessStartInfo
+            var start = new ProcessStartInfo
             {
-                FileName = "powershell.exe",
-                Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{launcher}\" -NoBrowser",
-                UseShellExecute = true,
-                WindowStyle = ProcessWindowStyle.Hidden,
-            });
-            return true;
+                FileName = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.System),
+                    "WindowsPowerShell", "v1.0", "powershell.exe"),
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            foreach (var argument in new[]
+                     { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                       "-File", launcher, "-NoBrowser" })
+                start.ArgumentList.Add(argument);
+            using var process = Process.Start(start) ??
+                throw new InvalidOperationException("The backend launcher did not start.");
+            try
+            {
+                await process.WaitForExitAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                if (!process.HasExited) process.Kill(entireProcessTree: true);
+                throw;
+            }
+            if (process.ExitCode == 0) return new BackendLaunchResult(true, "");
+            var error = await CompletedTextAsync(
+                process.StandardError.ReadToEndAsync(cancellationToken), cancellationToken);
+            var output = string.IsNullOrWhiteSpace(error)
+                ? await CompletedTextAsync(
+                    process.StandardOutput.ReadToEndAsync(cancellationToken), cancellationToken)
+                : "";
+            return new BackendLaunchResult(false,
+                Compact(string.IsNullOrWhiteSpace(error) ? output : error));
         }
-        catch (InvalidOperationException) { return false; }
-        catch (Win32Exception) { return false; }
+        catch (InvalidOperationException error) { return new BackendLaunchResult(false, error.Message); }
+        catch (Win32Exception error) { return new BackendLaunchResult(false, error.Message); }
+    }
+
+    private static string Compact(string value)
+    {
+        var text = value.Trim();
+        return text.Length <= 3000 ? text : text[^3000..];
+    }
+
+    private static async Task<string> CompletedTextAsync(
+        Task<string> readTask, CancellationToken cancellationToken)
+    {
+        var completed = await Task.WhenAny(readTask, Task.Delay(1000, cancellationToken));
+        return completed == readTask ? await readTask : "The launcher exited without diagnostic output.";
     }
 }
 

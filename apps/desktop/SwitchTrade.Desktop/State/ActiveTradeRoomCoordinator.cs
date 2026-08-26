@@ -173,7 +173,7 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
                     "radio" => "Run Repair adapter below. End this attempt before reattaching USB or starting another room.",
                     "session" => "End this attempt and try once more. Export a support bundle if the same session failure repeats.",
                     "decoder" => "End this attempt and repair or update SwitchTrade; the installed decoder does not match this app.",
-                    "control" => "Close SwitchTrade and run the latest signed SwitchTradeSetup.exe with Repair. Do not reset WSL.",
+                    "control" => "Close SwitchTrade and run the latest SwitchTradeSetup.exe with Repair. Do not reset WSL.",
                     _ => status.Error ?? "End this attempt and try again. Export a support bundle if it repeats.",
                 };
                 break;

@@ -7,6 +7,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from switchtrade.control import Group, create_app, endpoint_command
+from switchtrade.relay_client import RelayError
 
 
 class Gate4RuntimeContractTests(unittest.TestCase):
@@ -52,6 +53,17 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                         runs_root=temporary, relay_url="https://relay.example")) as client:
                     body = client.get("/api/v1/app/readiness").json()
                     self.assertEqual(body["capabilities"], [])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch("switchtrade.control.RelayClient.health",
+                       side_effect=RelayError("relay unavailable: DNS lookup failed")):
+                with TestClient(create_app(
+                        runs_root=temporary, relay_url="https://relay.example")) as client:
+                    body = client.get("/api/v1/app/readiness").json()
+                    self.assertEqual(body["capabilities"], [])
+                    self.assertEqual(body["states"]["relay"]["status"], "failed")
+                    self.assertEqual(body["states"]["relay"]["technical_code"],
+                                     "relay.unavailable")
 
     def test_local_control_rejects_cross_origin_browser_mutations(self):
         with tempfile.TemporaryDirectory() as temporary:

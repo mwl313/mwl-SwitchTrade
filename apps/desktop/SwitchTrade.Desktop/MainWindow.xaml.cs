@@ -45,8 +45,8 @@ public partial class MainWindow : Window
         Width = Math.Min(Width, Math.Max(MinWidth, work.Width - 24));
         Height = Math.Min(Height, Math.Max(MinHeight, work.Height - 24));
         UpdateShellMargins();
-        _statusTimer.Start();
         await _viewModel.InitializeAsync();
+        _statusTimer.Start();
     }
 
     private void WindowSizeChanged(object sender, SizeChangedEventArgs e) => UpdateShellMargins();

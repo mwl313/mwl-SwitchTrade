@@ -21,7 +21,17 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertIn("PACKAGE_SIGNATURE_MISSING", program)
         self.assertIn("RunOnce", setup)
         launcher = (ROOT / "installer" / "Launch-SwitchTrade.ps1").read_text(encoding="utf-8")
-        self.assertIn("Choose a detected adapter in Settings", launcher)
+        self.assertNotIn("wsl-radio-preflight.ps1", launcher)
+        self.assertNotIn("preflightArguments", launcher)
+        self.assertIn("switchtrade.control", launcher)
+        self.assertIn("RedirectStandardError", launcher)
+        desktop_services = (ROOT / "apps" / "desktop" / "SwitchTrade.Desktop" /
+                            "Services" / "DesktopServices.cs").read_text(encoding="utf-8")
+        main_view_model = (ROOT / "apps" / "desktop" / "SwitchTrade.Desktop" /
+                           "ViewModels" / "MainViewModel.cs").read_text(encoding="utf-8")
+        self.assertIn("Task<BackendLaunchResult> StartAsync", desktop_services)
+        self.assertIn("await _launcher.StartAsync", main_view_model)
+        self.assertIn("if (_refreshing || _starting)", main_view_model)
         self.assertIn("--unregister $Distro", setup)
         self.assertNotIn("--unregister Ubuntu", setup)
         dialog = (ROOT / "installer" / "bootstrap" / "SetupDialog.cs").read_text(encoding="utf-8")

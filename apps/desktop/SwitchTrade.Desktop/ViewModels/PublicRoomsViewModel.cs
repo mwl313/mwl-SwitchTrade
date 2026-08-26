@@ -145,7 +145,7 @@ public sealed class PublicRoomsScreenViewModel : ScreenViewModel
     {
         if (!Shell.IsPublicDirectoryAvailable)
         {
-            ErrorMessage = "Public rooms are unavailable with this SwitchTrade runtime.";
+            ErrorMessage = Shell.PublicDirectoryStatusText;
             return;
         }
         var selectedId = SelectedRoom?.ListingId;

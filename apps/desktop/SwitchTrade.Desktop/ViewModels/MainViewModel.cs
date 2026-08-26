@@ -11,6 +11,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private readonly IDialogService _dialogs;
     private readonly IClipboardService _clipboard;
     private CancellationTokenSource? _startupCancellation;
+    private bool _starting;
     private bool _refreshing;
     private ScreenViewModel _currentScreen;
     private TradeRoomScreenViewModel? _activeTradeRoom;
@@ -22,8 +23,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private string _relayStateText = "Not checked";
     private string _radioStateText = "Not checked";
     private string _sessionStateText = "Not active";
+    private string _publicDirectoryStatusText = "Checking the online public directory.";
     private string _recoverySummary = "The installed local service did not respond.";
-    private string _recoveryInstructions = "Close SwitchTrade, run the latest signed SwitchTradeSetup.exe, and choose Repair. Do not reset or unregister WSL.";
+    private string _recoveryInstructions = "Close SwitchTrade, run the latest SwitchTradeSetup.exe, and choose Repair. Do not reset or unregister WSL.";
     private string _recoveryStage = "control";
     private string _recoveryTechnicalDetails = "Local setup · The desktop app could not reach 127.0.0.1:8787.";
 
@@ -98,6 +100,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public string RelayStateText { get => _relayStateText; private set => Set(ref _relayStateText, value); }
     public string RadioStateText { get => _radioStateText; private set => Set(ref _radioStateText, value); }
     public string SessionStateText { get => _sessionStateText; private set => Set(ref _sessionStateText, value); }
+    public string PublicDirectoryStatusText
+    {
+        get => _publicDirectoryStatusText;
+        private set => Set(ref _publicDirectoryStatusText, value);
+    }
     public string RecoverySummary { get => _recoverySummary; private set => Set(ref _recoverySummary, value); }
     public string RecoveryInstructions { get => _recoveryInstructions; private set => Set(ref _recoveryInstructions, value); }
     public string RecoveryStage { get => _recoveryStage; private set => Set(ref _recoveryStage, value); }
@@ -115,8 +122,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         _startupCancellation?.Cancel();
         _startupCancellation?.Dispose();
-        _startupCancellation = new CancellationTokenSource();
-        var cancellationToken = _startupCancellation.Token;
+        var startup = new CancellationTokenSource();
+        _startupCancellation = startup;
+        var cancellationToken = startup.Token;
+        _starting = true;
 
         try
         {
@@ -126,6 +135,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             // A retry or application shutdown superseded this startup attempt.
         }
+        finally
+        {
+            if (ReferenceEquals(_startupCancellation, startup)) _starting = false;
+        }
     }
 
     private async Task InitializeCoreAsync(CancellationToken cancellationToken)
@@ -134,14 +147,17 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _history.Clear();
         CurrentScreen = new StartupScreenViewModel(this);
         ReadinessText = "Starting SwitchTrade";
+        RecoveryTechnicalDetails = "control.starting · Waiting for the installed local service.";
 
         var status = await Gateway.TryGetStatusAsync(cancellationToken);
+        BackendLaunchResult? launch = null;
         if (status is null)
         {
-            _launcher.TryStart();
-            for (var attempt = 0; attempt < 8 && status is null; attempt++)
+            ReadinessText = "Starting local service";
+            launch = await _launcher.StartAsync(cancellationToken);
+            for (var attempt = 0; attempt < 12 && status is null && launch.Succeeded; attempt++)
             {
-                await Task.Delay(350, cancellationToken);
+                await Task.Delay(250, cancellationToken);
                 status = await Gateway.TryGetStatusAsync(cancellationToken);
             }
         }
@@ -159,16 +175,20 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         IsPublicDirectoryAvailable = false;
         ReadinessText = "Setup needs attention";
         ControlStateText = "Unavailable";
-        RecoverySummary = "The installed local service did not respond.";
+        RecoverySummary = launch is { Succeeded: false }
+            ? "The installed local service could not start."
+            : "The installed local service did not respond.";
         RecoveryStage = "control";
-        RecoveryInstructions = "Close SwitchTrade, run the latest signed SwitchTradeSetup.exe, and choose Repair. Do not reset or unregister WSL.";
-        RecoveryTechnicalDetails = "control.unavailable · 127.0.0.1:8787 did not answer the bounded readiness probe.";
+        RecoveryInstructions = "Close SwitchTrade, run the latest SwitchTradeSetup.exe, and choose Repair. Do not reset or unregister WSL.";
+        RecoveryTechnicalDetails = launch is { Succeeded: false } && !string.IsNullOrWhiteSpace(launch.Details)
+            ? $"control.launch_failed · {launch.Details}"
+            : "control.unavailable · 127.0.0.1:8787 did not answer the bounded readiness probe.";
         CurrentScreen = new RecoveryScreenViewModel(this);
     }
 
     public async Task RefreshAsync()
     {
-        if (_refreshing) return;
+        if (_refreshing || _starting) return;
         _refreshing = true;
         try
         {
@@ -179,8 +199,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 IsPublicDirectoryAvailable = false;
                 ReadinessText = "Setup needs attention";
                 RecoveryStage = "control";
-                RecoverySummary = "The installed local service did not respond.";
-                RecoveryInstructions = "Close SwitchTrade, run the latest signed SwitchTradeSetup.exe, and choose Repair. Do not reset or unregister WSL.";
+                if (!RecoveryTechnicalDetails.StartsWith("control.launch_failed", StringComparison.Ordinal))
+                {
+                    RecoverySummary = "The installed local service did not respond.";
+                    RecoveryInstructions = "Close SwitchTrade, run the latest SwitchTradeSetup.exe, and choose Repair. Do not reset or unregister WSL.";
+                }
                 if (CurrentScreen is RecoveryScreenViewModel unavailableRecovery) unavailableRecovery.NotifyRecoveryChanged();
                 return;
             }
@@ -198,12 +221,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private void ApplyStatus(ControlStatus status)
     {
         var control = status.Axis("control");
+        var relay = status.Axis("relay");
         ControlStateText = control.Display;
-        RelayStateText = status.Axis("relay").Display;
+        RelayStateText = relay.Display;
         RadioStateText = status.Axis("radio").Display;
         SessionStateText = status.Axis("session").Display;
         IsServiceReady = status.Compatible && control.Status == "ready";
         IsPublicDirectoryAvailable = IsServiceReady && status.HasCapability("public-directory.v1");
+        PublicDirectoryStatusText = IsPublicDirectoryAvailable
+            ? "Find a room in the live directory."
+            : relay.Status == "failed"
+                ? "Public rooms are unavailable while the online relay is offline."
+                : "The connected relay does not currently offer public rooms.";
         ReadinessText = !status.Compatible ? "Update or repair required" : status.Status switch
         {
             "initializing" or "starting" => "Preparing connection",
@@ -226,8 +255,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             "radio" => "Open Settings → Connection, select the adapter, and run the adapter check. Reattach USB only when the diagnostic asks.",
             "session" => "End the failed connection and try once more. If it repeats, export a support bundle before creating another room.",
             "decoder" => "End the current connection and try again. Trading remains blocked until the installed decoder matches this app.",
-            _ => "Close SwitchTrade, run the latest signed SwitchTradeSetup.exe, and choose Repair. Do not reset or unregister WSL.",
+            _ => "Close SwitchTrade, run the latest SwitchTradeSetup.exe, and choose Repair. Do not reset or unregister WSL.",
         };
+        CurrentScreen.NotifyShellState();
         if (CurrentScreen is RecoveryScreenViewModel recovery) recovery.NotifyRecoveryChanged();
         RoomCoordinator.ApplyStatus(status);
     }

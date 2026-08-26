@@ -115,6 +115,7 @@ class Runtime:
         self.relay_url = relay_url
         self.relay = RelayClient(relay_url)
         self.relay_capabilities: set[str] = set()
+        self.relay_capability_error: str | None = None
         self.next_capability_probe = 0.0
         self.endpoint: subprocess.Popen | None = None
         self.endpoint_session: str | None = None
@@ -152,9 +153,11 @@ class Runtime:
             self.relay_capabilities = {
                 str(capability) for capability in advertised if isinstance(capability, str)
             }
+            self.relay_capability_error = None
             self.next_capability_probe = now + 30
-        except RelayError:
+        except RelayError as error:
             self.relay_capabilities = set()
+            self.relay_capability_error = str(error)
             self.next_capability_probe = now + 5
         return sorted(self.relay_capabilities)
 
@@ -395,6 +398,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         }
 
     def readiness_payload(state: Runtime) -> dict:
+        capabilities = state.public_capabilities()
         endpoint = state.read_endpoint()
         parties = state.read_parties()
         state.sync_authoritative_phase(endpoint, parties)
@@ -405,13 +409,25 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         failure_stage = endpoint.get("failure_stage")
         failure_action = endpoint.get("recovery_action")
         failed = endpoint_status == "failed"
+        relay_probe_failed = state.relay_capability_error is not None
+        relay_status = "ready" if tunnel_connected or not relay_probe_failed else "failed"
+        relay_message = (
+            "The online relay is connected." if tunnel_connected else
+            "The online relay is reachable." if not relay_probe_failed else
+            "The online relay is currently unavailable."
+        )
+        relay_code = (
+            "relay.ready" if tunnel_connected else
+            "relay.available" if not relay_probe_failed else
+            "relay.unavailable"
+        )
         axes = {
             "control": readiness_axis(
                 "ready", "The local SwitchTrade service is ready.", "control.ready"),
             "relay": readiness_axis(
-                "ready" if tunnel_connected else ("failed" if failed and failure_stage == "relay" else "unknown"),
-                "The online relay is connected." if tunnel_connected else "The relay is checked when a connection starts.",
-                "relay.ready" if tunnel_connected else "relay.not_checked",
+                "failed" if failed and failure_stage == "relay" else relay_status,
+                relay_message,
+                "relay.failed" if failed and failure_stage == "relay" else relay_code,
                 failure_action if failure_stage == "relay" else None),
             "radio": readiness_axis(
                 "ready" if radio_checked else ("failed" if failed and failure_stage == "radio" else "unknown"),
@@ -437,7 +453,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             "compatible": True,
             "supported_contracts": [
                 READINESS_CONTRACT, ROOM_CONTRACT, PARTY_CONTRACT, PUBLIC_DIRECTORY_CONTRACT],
-            "capabilities": state.public_capabilities(),
+            "capabilities": capabilities,
             "run_id": state.log.run_id,
             "endpoint_process_running": running,
             "session_id": state.endpoint_session,
