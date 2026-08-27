@@ -167,6 +167,7 @@ $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -En
 $wixOutput = Join-Path $output 'wix'
 $desktopProject = Join-Path $PSScriptRoot 'wix\Desktop\SwitchTrade.Desktop.wixproj'
 Invoke-Checked 'dotnet' @('build', $desktopProject, '-c', 'Release',
+    '-t:Rebuild',
     "-p:ProductVersion=$ProductVersion", "-p:ReleaseId=$ReleaseId",
     "-p:DesktopExe=$desktopExe", "-p:ProvisionerExe=$provisionerExe",
     "-p:ReleaseManifest=$manifestPath", '-o', $wixOutput)
@@ -178,6 +179,7 @@ $usbipdMsi = Join-Path $prerequisites ([string]$definition.packages.usbipd.file)
 $bundleOutput = Join-Path $output 'bundle'
 $bundleProject = Join-Path $PSScriptRoot 'wix\Bundle\SwitchTrade.Bundle.wixproj'
 Invoke-Checked 'dotnet' @('build', $bundleProject, '-c', 'Release',
+    '-t:Rebuild',
     "-p:ProductVersion=$ProductVersion", "-p:ReleaseId=$ReleaseId",
     "-p:IconFile=$(Join-Path $repo 'assets\branding\SwitchTrade.ico')",
     "-p:PrerequisiteExe=$prerequisiteExe", "-p:WslMsi=$wslMsi", "-p:UsbipdMsi=$usbipdMsi",

@@ -7,6 +7,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath($PackageDirectory)
+$repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $resultPath = Join-Path $root 'build-result.json'
 $setup = Join-Path $root 'SwitchTradeSetup.exe'
 $manifestPath = Join-Path $root 'package\release-manifest.json'
@@ -76,60 +77,125 @@ try {
     # An absent CustomAction table is the expected zero-custom-action representation.
 }
 
-$layout = Join-Path $root 'validation-layout'
-New-Item -ItemType Directory -Force -Path $layout | Out-Null
-$start = [Diagnostics.ProcessStartInfo]::new()
-$start.FileName = $setup
-$start.UseShellExecute = $false
-foreach ($argument in @('/layout', $layout, '/quiet')) { [void]$start.ArgumentList.Add($argument) }
-$process = [Diagnostics.Process]::Start($start)
-$process.WaitForExit()
-if ($process.ExitCode -ne 0) { throw "Burn layout verification failed: $($process.ExitCode)" }
-$layoutBundle = @(Get-ChildItem -LiteralPath $layout -Filter '*.exe' -File)
-if ($layoutBundle.Count -ne 1 -or
-    (Get-FileHash -LiteralPath $layoutBundle[0].FullName -Algorithm SHA256).Hash -ne
-        (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash) {
-    throw 'The compressed Burn bundle did not reproduce itself independently.'
+$tempPrefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+$validationRoot = [IO.Path]::GetFullPath((Join-Path $tempPrefix (
+    'SwitchTrade-package-validation-' + [Guid]::NewGuid().ToString('N'))))
+if (-not $validationRoot.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Validation directory escaped the system temporary directory.'
 }
+New-Item -ItemType Directory -Force -Path $validationRoot | Out-Null
+try {
+    $layout = Join-Path $validationRoot 'layout'
+    New-Item -ItemType Directory -Force -Path $layout | Out-Null
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = $setup
+    $start.UseShellExecute = $false
+    foreach ($argument in @('/layout', $layout, '/quiet')) { [void]$start.ArgumentList.Add($argument) }
+    $process = [Diagnostics.Process]::Start($start)
+    $process.WaitForExit()
+    if ($process.ExitCode -ne 0) { throw "Burn layout verification failed: $($process.ExitCode)" }
+    $layoutBundle = @(Get-ChildItem -LiteralPath $layout -Filter '*.exe' -File)
+    if ($layoutBundle.Count -ne 1 -or
+        (Get-FileHash -LiteralPath $layoutBundle[0].FullName -Algorithm SHA256).Hash -ne
+            (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash) {
+        throw 'The compressed Burn bundle did not reproduce itself independently.'
+    }
 
-if ($RunDisposableWslLifecycle) {
-    $cache = Join-Path $root 'validation-lifecycle\burn-cache'
-    New-Item -ItemType Directory -Force -Path $cache | Out-Null
-    Copy-Item -LiteralPath (Join-Path $root 'package\release-manifest.json') -Destination $cache
-    Copy-Item -LiteralPath (Join-Path $root 'package\payload') -Destination $cache -Recurse
-    Copy-Item -LiteralPath (Join-Path $root 'publish\provisioner\SwitchTradeProvisioner.exe') -Destination $cache
-    $provisioner = Join-Path $cache 'SwitchTradeProvisioner.exe'
-    $data = Join-Path $root 'validation-lifecycle\data'
-    $profile = Join-Path $root 'validation-lifecycle\사용자 profile'
-    $before = @((@(& wsl.exe --list --quiet) -replace ([char]0), '') | Where-Object { $_ })
-    function Invoke-Provisioner([string]$Action) {
-        $arguments = @($Action, '--json', '--data-root', $data, '--user-profile', $profile)
-        $start = [Diagnostics.ProcessStartInfo]::new()
-        $start.FileName = $provisioner
-        $start.UseShellExecute = $false
-        $start.Environment['SWITCHTRADE_PROVISIONER_TEST_ROOTS'] = '1'
-        foreach ($argument in $arguments) { [void]$start.ArgumentList.Add($argument) }
-        $process = [Diagnostics.Process]::Start($start)
-        $process.WaitForExit()
-        if ($process.ExitCode -ne 0) { throw "Provisioner $Action failed: $($process.ExitCode)" }
+    $wixProject = Join-Path $repo 'installer\replacement\wix\Bundle\SwitchTrade.Bundle.wixproj'
+    $sdkMatch = [regex]::Match((Get-Content -Raw -LiteralPath $wixProject),
+        'Sdk="WixToolset\.Sdk/([^"]+)"')
+    if (-not $sdkMatch.Success) { throw 'Could not resolve the pinned WiX SDK version.' }
+    $wix = Join-Path $env:USERPROFILE (
+        ".nuget\packages\wixtoolset.sdk\$($sdkMatch.Groups[1].Value)\tools\net6.0\wix.dll")
+    if (-not (Test-Path -LiteralPath $wix -PathType Leaf)) { throw "Pinned WiX CLI is missing: $wix" }
+    $attachedRoot = Join-Path $validationRoot 'attached'
+    $baRoot = Join-Path $validationRoot 'ba'
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = (Get-Command dotnet -ErrorAction Stop).Source
+    $start.UseShellExecute = $false
+    foreach ($argument in @($wix, 'burn', 'extract', '-o', $attachedRoot, '-oba', $baRoot, $setup)) {
+        [void]$start.ArgumentList.Add($argument)
     }
-    try {
-        Invoke-Provisioner 'repair'
-        Invoke-Provisioner 'verify-software'
-        Invoke-Provisioner 'repair'
-    } finally {
-        Invoke-Provisioner 'uninstall'
+    $process = [Diagnostics.Process]::Start($start)
+    $process.WaitForExit()
+    if ($process.ExitCode -ne 0) { throw "Burn extraction failed: $($process.ExitCode)" }
+
+    $cache = Join-Path $attachedRoot 'WixAttachedContainer'
+    $embeddedManifestPath = Join-Path $cache 'release-manifest.json'
+    if ((Get-FileHash -LiteralPath $embeddedManifestPath -Algorithm SHA256).Hash -ne
+        (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash) {
+        throw 'The Setup EXE contains a stale or altered release manifest.'
     }
-    $after = @((@(& wsl.exe --list --quiet) -replace ([char]0), '') | Where-Object { $_ })
-    $distroDifference = $before.Count -ne $after.Count
-    if (-not $distroDifference -and $before.Count -gt 0) {
-        $distroDifference = @(Compare-Object -ReferenceObject $before -DifferenceObject $after).Count -ne 0
+    $embeddedManifest = Get-Content -Raw -LiteralPath $embeddedManifestPath | ConvertFrom-Json
+    if ([string]$embeddedManifest.release_id -ne [string]$manifest.release_id -or
+        [string]$embeddedManifest.release_id -ne [string]$result.release_id) {
+        throw 'The Setup EXE release identity does not match its build result.'
     }
-    if ($distroDifference) {
-        throw 'Disposable lifecycle changed unrelated WSL distributions.'
+    foreach ($payload in $embeddedManifest.payloads.PSObject.Properties) {
+        $embeddedFile = Join-Path $cache ([string]$payload.Value.path)
+        if ([long]$payload.Value.size -ne (Get-Item -LiteralPath $embeddedFile).Length -or
+            [string]$payload.Value.sha256 -ne
+                (Get-FileHash -LiteralPath $embeddedFile -Algorithm SHA256).Hash.ToLowerInvariant()) {
+            throw "Embedded release payload verification failed: $($payload.Name)"
+        }
     }
-    if (Test-Path -LiteralPath (Join-Path $profile '.wslconfig')) {
-        throw 'Disposable lifecycle did not restore the absent .wslconfig state.'
+    $embeddedProvisioner = Join-Path $cache 'SwitchTradeProvisioner.exe'
+    if ((Get-FileHash -LiteralPath $embeddedProvisioner -Algorithm SHA256).Hash -ne
+        (Get-FileHash -LiteralPath (Join-Path $root 'publish\provisioner\SwitchTradeProvisioner.exe') -Algorithm SHA256).Hash) {
+        throw 'The Setup EXE contains a stale provisioner.'
+    }
+
+    [xml]$burnManifest = Get-Content -Raw -LiteralPath (Join-Path $baRoot 'manifest.xml')
+    $namespace = [Xml.XmlNamespaceManager]::new($burnManifest.NameTable)
+    $namespace.AddNamespace('burn', 'http://wixtoolset.org/schemas/v4/2008/Burn')
+    $runtimePackage = $burnManifest.SelectSingleNode(
+        '//burn:ExePackage[@Id="SwitchTradeRuntime"]', $namespace)
+    $expectedDetect = 'InstalledRelease = "' + [string]$manifest.release_id + '"'
+    if ($null -eq $runtimePackage -or $runtimePackage.DetectCondition -ne $expectedDetect -or
+        $runtimePackage.InstallArguments -notmatch '--burn' -or
+        $runtimePackage.InstallArguments -notmatch 'WixBundleLog_SwitchTradeRuntime' -or
+        $runtimePackage.InstallArguments -match '--package-root') {
+        throw 'The Setup EXE contains stale or unsafe runtime package arguments.'
+    }
+
+    if ($RunDisposableWslLifecycle) {
+        $provisioner = $embeddedProvisioner
+        $data = Join-Path $validationRoot 'lifecycle\data'
+        $profile = Join-Path $validationRoot 'lifecycle\사용자 profile'
+        $runtimeLog = Join-Path $validationRoot 'lifecycle\SwitchTradeRuntime.log'
+        $before = @((@(& wsl.exe --list --quiet) -replace ([char]0), '') | Where-Object { $_ })
+        function Invoke-Provisioner([string]$Action) {
+            $arguments = @($Action, '--json', '--burn', '--log', $runtimeLog,
+                '--data-root', $data, '--user-profile', $profile)
+            $start = [Diagnostics.ProcessStartInfo]::new()
+            $start.FileName = $provisioner
+            $start.UseShellExecute = $false
+            $start.Environment['SWITCHTRADE_PROVISIONER_TEST_ROOTS'] = '1'
+            foreach ($argument in $arguments) { [void]$start.ArgumentList.Add($argument) }
+            $process = [Diagnostics.Process]::Start($start)
+            $process.WaitForExit()
+            if ($process.ExitCode -ne 0) { throw "Provisioner $Action failed: $($process.ExitCode)" }
+        }
+        try {
+            Invoke-Provisioner 'repair'
+            Invoke-Provisioner 'verify-software'
+            Invoke-Provisioner 'repair'
+        } finally {
+            Invoke-Provisioner 'uninstall'
+        }
+        $after = @((@(& wsl.exe --list --quiet) -replace ([char]0), '') | Where-Object { $_ })
+        $distroDifference = $before.Count -ne $after.Count
+        if (-not $distroDifference -and $before.Count -gt 0) {
+            $distroDifference = @(Compare-Object -ReferenceObject $before -DifferenceObject $after).Count -ne 0
+        }
+        if ($distroDifference) { throw 'Disposable lifecycle changed unrelated WSL distributions.' }
+        if (Test-Path -LiteralPath (Join-Path $profile '.wslconfig')) {
+            throw 'Disposable lifecycle did not restore the absent .wslconfig state.'
+        }
+    }
+} finally {
+    if (Test-Path -LiteralPath $validationRoot) {
+        Remove-Item -LiteralPath $validationRoot -Recurse -Force
     }
 }
 
@@ -137,5 +203,6 @@ if ($RunDisposableWslLifecycle) {
     release_id = [string]$manifest.release_id
     setup_sha256 = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant()
     package_verified = $true
+    embedded_bundle_verified = $true
     disposable_wsl_lifecycle = [bool]$RunDisposableWslLifecycle
 }

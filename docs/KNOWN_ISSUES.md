@@ -36,8 +36,14 @@ The following observed failures are closed in source and remain part of clean-ho
 - Burn's package-cache directory ends with a separator. The replacement provisioner previously
   appended another separator during containment checks and falsely returned `PAYLOAD_PATH_ESCAPE`
   as Windows error `0x8007001e`. Package roots are now normalized, Burn passes the cache root
-  explicitly, and a Burn-layout lifecycle regression test covers the exact execution path. Burn also
-  receives a sanitized structured provisioner log and a standard installer failure code.
+  safely through its executable location, and a Burn-layout lifecycle regression test covers the
+  exact execution path. Burn also receives a sanitized structured provisioner log and a standard
+  installer failure code.
+- Candidate `beta-d0e3f825439f` was rejected after field testing proved that WiX incremental output
+  had embedded the older `beta-test` bundle, `beta-31d37b3b2707` manifest, and old provisioner even
+  though the outer build result named the new release. Release builds now force WiX `Rebuild`, extract
+  the finished Setup EXE, and compare the embedded release, provisioner, and payload hashes before
+  accepting the artifact.
 
 ## Status and priority
 
