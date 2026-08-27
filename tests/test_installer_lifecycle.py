@@ -13,7 +13,8 @@ class InstallerLifecycleTests(unittest.TestCase):
     def test_native_bootstrap_and_lifecycle_modes_are_present(self):
         program = (ROOT / "installer" / "bootstrap" / "Program.cs").read_text(encoding="utf-8")
         setup = (ROOT / "installer" / "SwitchTradeSetup.ps1").read_text(encoding="utf-8")
-        lifecycle = (ROOT / "installer" / "SetupLifecycle.ps1").read_text(encoding="utf-8")
+        executor = (ROOT / "installer" / "engine" / "Executor.ps1").read_text(encoding="utf-8")
+        platform = (ROOT / "installer" / "engine" / "PlatformOps.ps1").read_text(encoding="utf-8")
         self.assertIn("SwitchTradeSetup", program)
         for action in ("Audit", "Install", "Repair", "Update", "Resume", "Rollback", "Uninstall"):
             self.assertIn(action, setup)
@@ -33,8 +34,8 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertIn("Task<BackendLaunchResult> StartAsync", desktop_services)
         self.assertIn("await _launcher.StartAsync", main_view_model)
         self.assertIn("if (_refreshing || _starting)", main_view_model)
-        self.assertIn("@('--unregister', $Distro)", setup)
-        self.assertNotIn("--unregister Ubuntu", setup)
+        self.assertIn("@('--unregister', $Context.Distro)", executor)
+        self.assertNotIn("--unregister Ubuntu", executor)
         dialog = (ROOT / "installer" / "bootstrap" / "SetupDialog.cs").read_text(encoding="utf-8")
         progress = (ROOT / "installer" / "bootstrap" / "SetupProgressDialog.cs").read_text(encoding="utf-8")
         self.assertIn("DeferHardwareSetup", dialog)
@@ -55,29 +56,28 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertIn('"resume" => "Continuing SwitchTrade setup"', progress)
         self.assertIn("SWITCHTRADE_SETUP_PROGRESS: ", progress)
         self.assertIn("ReadLinesAsync(process.StandardOutput", progress)
-        self.assertIn("Set-SwitchTradeSetupStage 'prerequisites_enable'", setup)
-        self.assertIn("Set-SwitchTradeSetupStage 'wsl_update'", setup)
-        self.assertIn("Set-SwitchTradeSetupStage 'usbipd_install'", setup)
-        self.assertIn("Set-SwitchTradeSetupStage 'distro_import'", setup)
-        self.assertIn("$distroImportAttempted -and -not $distroImported", setup)
-        self.assertIn("preserving the transaction for deterministic recovery", setup)
-        self.assertNotIn("$wslHelp.ExitCode -ne 0", setup)
-        self.assertNotIn("$helpProbe.ExitCode -eq 0", setup)
-        self.assertIn("$VersionText.Replace([string][char]0, '')", lifecycle)
+        for stage in ("prerequisites_enable", "usbipd_install", "wsl_stage", "distro_identity",
+                      "kernel_apply", "commit", "hardware_readiness", "rollback_recovery"):
+            self.assertIn(f"Set-SwitchTradeEngineStage '{stage}'", executor)
+        self.assertIn("Set-SwitchTradeTransactionPhase -Path $Context.TransactionPath -Phase 'importing_distro'", executor)
+        self.assertIn("DISTRO_IMPORT_FAILED", executor)
+        self.assertIn("Replace([string][char]0, '')", platform)
+        self.assertIn("Invoke-SwitchTradeProcess", platform)
         self.assertIn("'Run Setup Install again'", setup)
         self.assertIn("You can now delete the extracted setup folder and ZIP", program)
-        self.assertIn("$UsbId.ToLowerInvariant()", setup)
-        self.assertIn("wslHealthArguments", setup)
-        self.assertIn("$KernelStorageRoot = Join-Path $env:ProgramData 'SwitchTrade\\kernel'", setup)
-        self.assertIn("KernelStorageRoot = $KernelStorageRoot", setup)
-        self.assertIn("Register-SwitchTradeUsbWatcherStartup", setup)
-        self.assertIn("Unregister-SwitchTradeUsbWatcherStartup", setup)
-        self.assertIn("HARDWARE_SELECTION_IMPORT_FAILED", setup)
-        self.assertIn("'install', '-m', '0600'", setup)
+        self.assertIn("$UsbId.ToLowerInvariant()", executor)
+        self.assertIn("wslHealthArguments", executor)
+        self.assertIn("Join-Path $env:ProgramData 'SwitchTrade\\kernel'", executor)
+        self.assertIn("KernelStorageRoot =", executor)
+        self.assertIn("'SwitchTradeUsbWatcher'", executor)
+        self.assertIn("Set-ItemProperty -Path $startupRegistryPath -Name 'SwitchTradeUsbWatcher'", executor)
+        self.assertIn("Remove-ItemProperty -Path $startupRegistryPath -Name 'SwitchTradeUsbWatcher'", executor)
+        self.assertIn("HARDWARE_SELECTION_IMPORT_FAILED", executor)
+        self.assertIn("'install', '-m', '0600'", executor)
         self.assertIn("SETUP_ELEVATION_FAILED", program)
         self.assertIn("--invoking-user-profile-b64=", program)
         self.assertIn("-InvokingUserSid", program)
-        self.assertIn("requestedExecutionLevel level=\"asInvoker\"", (ROOT / "installer" / "bootstrap" /
+        self.assertIn('requestedExecutionLevel level="asInvoker"', (ROOT / "installer" / "bootstrap" /
                                                                      "app.manifest").read_text(encoding="utf-8"))
 
     def test_package_accepts_versioned_external_release_inputs(self):
@@ -94,20 +94,21 @@ class InstallerLifecycleTests(unittest.TestCase):
 
     def test_kernel_archive_is_not_mapped_as_a_wsl_modules_vhd(self):
         lifecycle = (ROOT / "installer" / "KernelLifecycle.ps1").read_text(encoding="utf-8")
-        setup = (ROOT / "installer" / "SwitchTradeSetup.ps1").read_text(encoding="utf-8")
+        executor = (ROOT / "installer" / "engine" / "Executor.ps1").read_text(encoding="utf-8")
+        platform = (ROOT / "installer" / "engine" / "PlatformOps.ps1").read_text(encoding="utf-8")
         rootfs = (ROOT / "installer" / "Build-Rootfs.sh").read_text(encoding="utf-8")
         provision = (ROOT / "installer" / "provision-wsl.sh").read_text(encoding="utf-8")
         self.assertIn("modules_format", lifecycle)
         self.assertIn("'archive'", lifecycle)
-        self.assertIn("modules.tar.gz", setup)
-        self.assertIn("tar -xzf", setup)
+        self.assertIn("modules.tar.gz", executor)
+        self.assertIn("tar -xzf", platform)
         self.assertIn("--include=ca-certificates,ethtool,iproute2,iw,kmod", rootfs)
-        self.assertIn("command -v depmod", setup)
+        self.assertIn("command -v depmod", platform)
         self.assertIn("modinfo", provision)
-        self.assertIn("KERNEL_ABI_OR_FIRMWARE_MISMATCH", setup)
-        self.assertIn("CUSTOM_KERNEL_BLOCKED_BY_POLICY", setup)
-        self.assertIn("builtInFirmwareVerified", setup)
-        self.assertIn("firmware_sha256", setup)
+        self.assertIn("KERNEL_ABI_OR_FIRMWARE_MISMATCH", executor)
+        self.assertIn("CUSTOM_KERNEL_BLOCKED_BY_POLICY", executor)
+        self.assertIn("builtInFirmwareVerified", platform)
+        self.assertIn("firmware_sha256", executor)
 
     def test_package_requires_and_archives_runtime_ldn_keys(self):
         builder = (ROOT / "installer" / "Build-Package.ps1").read_text(encoding="utf-8")
@@ -118,7 +119,7 @@ class InstallerLifecycleTests(unittest.TestCase):
 
     def test_application_and_wsl_runtime_rollback_are_kept_together(self):
         provision = (ROOT / "installer" / "provision-wsl.sh").read_text(encoding="utf-8")
-        setup = (ROOT / "installer" / "SwitchTradeSetup.ps1").read_text(encoding="utf-8")
+        executor = (ROOT / "installer" / "engine" / "Executor.ps1").read_text(encoding="utf-8")
         launcher = (ROOT / "installer" / "Launch-SwitchTrade.ps1").read_text(encoding="utf-8")
         self.assertIn("--rollback", provision)
         self.assertIn('${TARGET}.previous', provision)
@@ -127,96 +128,87 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertLess(provision.index("--dry-run"), provision.index('commit)'))
         for mode in ("--stage", "--validate", "--commit", "--abort", "--compensate"):
             self.assertIn(mode, provision)
-        self.assertIn("application, WSL runtime, and retained kernel rollback completed", setup)
+        for phase in ("rollback_wsl_committed", "rollback_kernel_committed",
+                      "rollback_windows_committed"):
+            self.assertIn(f"-Phase '{phase}'", executor)
+        self.assertIn("Get-SwitchTradeRollbackPublishedState -Transaction $transaction -Direction 'target'", executor)
         self.assertIn("Test-InstalledConfiguration", launcher)
         self.assertIn("payload/release-config.json", launcher)
         self.assertIn("release_id", launcher)
 
     def test_destructive_recovery_blockers_fail_closed(self):
-        setup = (ROOT / "installer" / "SwitchTradeSetup.ps1").read_text(encoding="utf-8")
-        self.assertIn("@('Install', 'Repair', 'Update', 'Rollback')", setup)
-
-        recovery = setup[setup.index("function Repair-SwitchTradeInterruptedTransaction"):
-                         setup.index("function Test-StagedControlReadiness")]
-        staging = recovery.index("phase -eq 'staging_wsl'")
-        cleanup = recovery.index("'--cleanup-staging'", staging)
-        discard = recovery.index("'--abort'", cleanup)
-        candidate_probe = recovery.index(
-            "Get-SwitchTradeWslRuntimeState -Name $Distro -Location candidate", discard)
-        self.assertLess(cleanup, discard)
-        self.assertLess(discard, candidate_probe)
-        self.assertNotIn(
-            "wsl_integrity_sha256 = $wslCandidate.IntegritySha256", recovery)
-
-        rollback = setup[setup.index("if ($Action -eq 'Rollback')"):
-                         setup.index("$audit = Test-Setup")]
-        windows_swap = rollback.index(
-            "Switch-SwitchTradeWindowsRollback -Active $InstallRoot")
-        journal = rollback.index("Start-SwitchTradeRollbackTransaction")
-        first_wsl_swap = rollback.index("'--rollback', '--release-id'")
-        clear_resume = rollback.index("Clear-SetupResume")
-        persist = rollback.index("Set-SwitchTradeRollbackPublishedState")
-        compensation = rollback.index("} catch {", persist)
-        self.assertLess(journal, clear_resume)
-        self.assertLess(journal, first_wsl_swap)
-        self.assertLess(journal, windows_swap)
-        self.assertLess(windows_swap, persist)
-        self.assertLess(persist, compensation)
-        self.assertIn("-PackageManifestSha256 $PackageManifestSha256", rollback)
-
-        uninstall = setup[setup.index("if ($Action -eq 'Uninstall')"):
-                          setup.index("if ($Action -eq 'Rollback')")]
-        recheck = uninstall.index(
-            "Assert-SwitchTradeCurrentDistroMutationIdentity")
-        unregister = uninstall.index("@('--unregister', $Distro)")
-        first_other_mutation = uninstall.index("Clear-SetupResume")
-        self.assertLess(recheck, unregister)
-        self.assertLess(unregister, first_other_mutation)
-        self.assertGreaterEqual(
-            setup.count("Assert-SwitchTradeCurrentDistroMutationIdentity"), 2)
-        self.assertIn("-Phase 'uninstalled'", uninstall)
-        self.assertIn("$namedDistroExists -and $PSCmdlet.ShouldProcess", uninstall)
+        planner = (ROOT / "installer" / "engine" / "Planner.ps1").read_text(encoding="utf-8")
+        executor = (ROOT / "installer" / "engine" / "Executor.ps1").read_text(encoding="utf-8")
+        self.assertIn("@('Install', 'Repair', 'Update', 'Rollback')",
+                      (ROOT / "installer" / "SwitchTradeSetup.ps1").read_text(encoding="utf-8"))
+        recovery_plan = planner[planner.index("function Resolve-SwitchTradeRecoveryPlan"):]
+        self.assertLess(recovery_plan.index("gate_recovery_package"),
+                        recovery_plan.index("recovery_decide"))
+        self.assertLess(recovery_plan.index("recovery_decide"),
+                        recovery_plan.index("compensate_kernel"))
+        self.assertLess(recovery_plan.index("compensate_kernel"),
+                        recovery_plan.index("compensate_wsl"))
+        self.assertLess(recovery_plan.index("compensate_wsl"),
+                        recovery_plan.index("compensate_windows"))
+        uninstall_plan = planner[planner.index("function Resolve-SwitchTradeUninstallPlan"):
+                                 planner.index("function Resolve-SwitchTradePlan {")]
+        self.assertLess(uninstall_plan.index("gate_uninstall"),
+                        uninstall_plan.index("unregister_distro"))
+        self.assertLess(uninstall_plan.index("unregister_distro"),
+                        uninstall_plan.index("remove_active"))
+        self.assertIn("'uninstalled'", executor)
+        self.assertIn("DESTRUCTIVE_PATH_DENIED", executor)
+        self.assertIn("Assert-SwitchTradeDistroMutationIdentity", executor)
 
     def test_release_transaction_and_owned_identity_gates_are_present(self):
         setup = (ROOT / "installer" / "SwitchTradeSetup.ps1").read_text(encoding="utf-8")
-        lifecycle = (ROOT / "installer" / "SetupLifecycle.ps1").read_text(encoding="utf-8")
+        executor = (ROOT / "installer" / "engine" / "Executor.ps1").read_text(encoding="utf-8")
+        planner = (ROOT / "installer" / "engine" / "Planner.ps1").read_text(encoding="utf-8")
+        inspector = (ROOT / "installer" / "engine" / "StateInspector.ps1").read_text(encoding="utf-8")
         builder = (ROOT / "installer" / "Build-Package.ps1").read_text(encoding="utf-8")
         rootfs = (ROOT / "installer" / "Build-Rootfs.sh").read_text(encoding="utf-8")
         control = (ROOT / "switchtrade" / "control.py").read_text(encoding="utf-8")
         dialog = (ROOT / "installer" / "bootstrap" / "SetupDialog.cs").read_text(encoding="utf-8")
-        for value in ("DISTRO_NAME_COLLISION", "Test-StagedControlReadiness", "UsbInstanceId"):
-            self.assertIn(value, setup)
-        self.assertIn("SETUP_TRANSACTION_INCOMPLETE", lifecycle)
-        self.assertIn("package_manifest_sha256", lifecycle)
-        self.assertIn("Test-SwitchTradeEarlyFreshInstallRecovery", lifecycle)
-        self.assertIn("Test-SwitchTradeFreshImportMarkerBootstrap", lifecycle)
-        self.assertIn("-PackageManifestSha256 $PackageManifestSha256", setup)
-        self.assertIn("Global\\SwitchTrade.Setup", lifecycle)
+        for value in ("DISTRO_NAME_COLLISION", "Test-SwitchTradeStagedControlReadiness", "UsbInstanceId"):
+            self.assertIn(value, executor)
+        self.assertIn("SETUP_TRANSACTION_INCOMPLETE", executor)
+        self.assertIn("package_manifest_sha256", executor)
+        self.assertIn("Test-SwitchTradeEarlyFreshInstallRecovery", planner)
+        self.assertIn("Test-SwitchTradeFreshImportMarkerBootstrap", planner)
+        self.assertIn("-PackageManifestSha256 $Package.ManifestSha256", executor)
+        self.assertIn("Global\\SwitchTrade.Setup", setup)
         self.assertLess(setup.index("Enter-SwitchTradeSetupMutex"),
-                        setup.index("if ($Action -eq 'Uninstall')"))
+                        setup.index("Resolve-SwitchTradePlan"))
         self.assertIn("switchtrade-distro.json", rootfs)
         self.assertIn("ROOTFS_IDENTITY_MARKER_MISSING", builder)
         self.assertIn('"release_id": runtime_release_id()', control)
         self.assertIn("InstanceId", dialog)
-        self.assertNotIn("Restore-SwitchTradeKernel -StateRoot $StateRoot | Out-Null } catch", setup)
-        collision_gate = setup.index("Assert-SwitchTradeDistroOwned -Name $Distro")
-        self.assertLess(collision_gate, setup.index("if ($Action -eq 'Uninstall')"))
-        self.assertLess(collision_gate, setup.index("@('--import', $Distro"))
-        rollback = setup.index("if ($Action -eq 'Rollback')")
-        validation = setup.index("Test-SwitchTradeKernelRollback", rollback)
-        first_swap = setup.index("--rollback', '--release-id'", rollback)
-        self.assertLess(validation, first_swap)
+        self.assertIn("present_owned", inspector)
+        self.assertIn("present_generic", inspector)
+        self.assertLess(executor.index("Test-SwitchTradeKernelRollback"),
+                        executor.index("function Invoke-SwitchTradeRollbackWsl"))
 
     def test_inline_wsl_shells_use_the_exec_argument_boundary(self):
-        setup = (ROOT / "installer" / "SwitchTradeSetup.ps1").read_text(encoding="utf-8")
-        install_id_writer = setup[
-            setup.index("function Set-SwitchTradeDistroInstallId"):
-            setup.index("function Invoke-LoggedWsl")
+        engine_files = [
+            ROOT / "installer" / "engine" / "PlatformOps.ps1",
+            ROOT / "installer" / "engine" / "Executor.ps1",
+            ROOT / "installer" / "engine" / "StateInspector.ps1",
         ]
-        self.assertIn("'--exec', 'sh', '-c'", install_id_writer)
-        self.assertIn("DISTRO_INSTALL_ID_WRITE_FAILED: $detail", install_id_writer)
-        self.assertNotIn("'--', 'sh', '-c'", setup)
-        self.assertNotIn("'--', 'sh', '-lc'", setup)
+        platform = engine_files[0].read_text(encoding="utf-8")
+        sh_boundary = platform[
+            platform.index("function Invoke-SwitchTradeWslSh"):
+            platform.index("function ConvertTo-SwitchTradeWslPath")
+        ]
+        self.assertIn("'--exec', 'sh', '-c'", sh_boundary)
+        marker_writer = platform[
+            platform.index("function Set-SwitchTradeDistroMarker"):
+            platform.index("function Get-SwitchTradeWslRuntimeLocationProbe")
+        ]
+        self.assertIn("DISTRO_INSTALL_ID_WRITE_FAILED: $detail", marker_writer)
+        for engine_file in engine_files:
+            text = engine_file.read_text(encoding="utf-8")
+            self.assertNotIn("'--', 'sh', '-c'", text)
+            self.assertNotIn("'--', 'sh', '-lc'", text)
 
     @unittest.skipUnless(shutil.which("powershell"), "Windows PowerShell is required")
     def test_temp_rooted_setup_transaction_fails_closed_before_swap(self):
@@ -228,6 +220,28 @@ class InstallerLifecycleTests(unittest.TestCase):
             ], cwd=ROOT, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Setup lifecycle simulation PASS", result.stdout)
+
+    @unittest.skipUnless(shutil.which("powershell"), "Windows PowerShell is required")
+    def test_engine_planner_parity_and_live_fixture_recovery(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            result = subprocess.run([
+                "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                str(ROOT / "installer" / "Test-EnginePlanner.ps1"),
+                "-TestRoot", temporary,
+            ], cwd=ROOT, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Engine planner simulation PASS", result.stdout)
+
+    @unittest.skipUnless(shutil.which("powershell"), "Windows PowerShell is required")
+    def test_engine_subprocess_boundary_including_real_wsl_argv_round_trip(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            result = subprocess.run([
+                "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                str(ROOT / "installer" / "Test-EngineBoundary.ps1"),
+                "-TestRoot", temporary,
+            ], cwd=ROOT, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Engine boundary simulation PASS", result.stdout)
 
     @unittest.skipUnless(shutil.which("powershell"), "Windows PowerShell is required")
     def test_rollback_process_death_repair_and_reverse_rollback(self):
@@ -284,22 +298,16 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertIn("Distro", result.stdout)
 
     def test_setup_audit_does_not_launch_the_windows_wsl_install_stub(self):
-        setup = (ROOT / "installer" / "SwitchTradeSetup.ps1").read_text(encoding="utf-8")
-        self.assertIn("function Test-SwitchTradeWslRuntimeLaunchSafe", setup)
-        self.assertIn("System32\\wsl.exe remains as an installation stub", setup)
-        self.assertIn("if ($wslCommandPresent -and $wslRuntimeLaunchSafe)", setup)
-        self.assertIn("$distros = Get-Distros -AllowUnavailable", setup)
-        self.assertLess(
-            setup.index("if ($wslCommandPresent -and $wslRuntimeLaunchSafe)"),
-            setup.index("$distros = Get-Distros -AllowUnavailable", setup.index("function Test-Setup")),
-        )
-        get_distros = setup.split("function Get-Distros", 1)[1].split(
-            "function Test-SwitchTradeWslRuntimeLaunchSafe", 1)[0]
-        self.assertIn("-not (Test-SwitchTradeWslRuntimeLaunchSafe)", get_distros)
-        initial_enumeration = setup.split("$namedDistroExists = if", 1)[1].split(
-            "$recoveredCommitted", 1)[0]
-        self.assertIn("Test-SwitchTradeWslRuntimeLaunchSafe", initial_enumeration)
-        self.assertNotIn("Get-Command wsl.exe", initial_enumeration)
+        inspector = (ROOT / "installer" / "engine" / "StateInspector.ps1").read_text(encoding="utf-8")
+        self.assertIn("function Test-SwitchTradeWslRuntimeLaunchSafe", inspector)
+        identity_state = inspector[
+            inspector.index("function Get-SwitchTradeDistroIdentityState"):
+            inspector.index("function Get-SwitchTradeDistroRegistrationState")
+        ]
+        self.assertIn("Test-SwitchTradeWslRuntimeLaunchSafe", identity_state)
+        self.assertLess(identity_state.index("Test-SwitchTradeWslRuntimeLaunchSafe"),
+                        identity_state.index("Invoke-SwitchTradeWsl"))
+        self.assertNotIn("Get-Command wsl.exe", identity_state)
 
     @unittest.skipUnless(shutil.which("powershell"), "Windows PowerShell is required")
     def test_setup_failure_has_a_stable_bootstrap_marker(self):
@@ -321,6 +329,8 @@ class InstallerLifecycleTests(unittest.TestCase):
             ], cwd=package, capture_output=True, text=True, timeout=30)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("SWITCHTRADE_SETUP_ERROR: PACKAGE_MANIFEST_MISSING", result.stderr)
+        self.assertIn("SWITCHTRADE_SETUP_FAILURE:", result.stderr)
+        self.assertIn("technical_detail_log_path", result.stderr)
         program = (ROOT / "installer" / "bootstrap" / "Program.cs").read_text(encoding="utf-8")
         self.assertIn('error.Replace("\\0", "")', program)
 
@@ -344,12 +354,13 @@ class InstallerLifecycleTests(unittest.TestCase):
             "powershell", "-NoProfile", "-Command", f". '{compatibility}'; {checks}",
         ], cwd=ROOT, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
-        setup = (ROOT / "installer" / "SwitchTradeSetup.ps1").read_text(encoding="utf-8")
-        self.assertIn("Windows 10 22H2 x64 (build 19045)", setup)
-        self.assertIn("$audit.WslModern", setup)
-        self.assertIn("WslFeaturesEnabled", setup)
-        self.assertIn("@('--update', '--web-download')", setup)
-        self.assertNotIn("WindowsBuild -lt 26100", setup)
+        executor = (ROOT / "installer" / "engine" / "Executor.ps1").read_text(encoding="utf-8")
+        entry = (ROOT / "installer" / "SwitchTradeSetup.ps1").read_text(encoding="utf-8")
+        self.assertIn("Windows 10 22H2 x64 (build 19045)", executor)
+        self.assertIn("$State.WslCapability.CapabilityReady", executor)
+        self.assertIn("WslFeaturesEnabled", entry)
+        self.assertIn("@('--update', '--web-download')", executor)
+        self.assertNotIn("WindowsBuild -lt 26100", executor)
 
     @unittest.skipUnless(shutil.which("powershell"), "Windows PowerShell is required")
     def test_kernel_update_release_rollback_and_exact_uninstall_restore(self):

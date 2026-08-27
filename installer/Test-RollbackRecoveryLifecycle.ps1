@@ -13,23 +13,14 @@ $TestRoot = [IO.Path]::GetFullPath($TestRoot)
 . (Join-Path $PSScriptRoot 'KernelLifecycle.ps1')
 . (Join-Path $PSScriptRoot 'PackageIntegrity.ps1')
 . (Join-Path $PSScriptRoot 'SetupLifecycle.ps1')
+. (Join-Path $PSScriptRoot 'engine\PlatformOps.ps1')
+. (Join-Path $PSScriptRoot 'engine\StateInspector.ps1')
+. (Join-Path $PSScriptRoot 'engine\Planner.ps1')
+. (Join-Path $PSScriptRoot 'engine\Executor.ps1')
+# The engine loads after SetupLifecycle so the engine marker-bootstrap gate and the
+# executor's ports win; legacy-only helpers (Start-SwitchTradeRollbackTransaction) remain.
 
-$tokens = $null
-$parseErrors = $null
-$setupAst = [Management.Automation.Language.Parser]::ParseFile(
-    (Join-Path $PSScriptRoot 'SwitchTradeSetup.ps1'), [ref]$tokens, [ref]$parseErrors)
-if ($parseErrors.Count) { throw 'could not parse SwitchTradeSetup.ps1 for lifecycle test' }
-foreach ($functionName in @('Set-SwitchTradeSetupStage', 'Repair-SwitchTradeInterruptedRollback',
-        'Repair-SwitchTradeInterruptedTransaction')) {
-    $functionAst = $setupAst.Find({
-        param($node)
-        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
-            $node.Name -eq $functionName
-    }, $true)
-    if (-not $functionAst) { throw "actual $functionName function is missing" }
-    Invoke-Expression $functionAst.Extent.Text
-}
-
+# --- Simulated platform boundary (never touches a real distribution) ---
 function Invoke-BoundedWslShutdown { return $true }
 function Invoke-BoundedNativeProcess {
     param([string]$FilePath, [string[]]$Arguments, [int]$TimeoutSeconds)
@@ -39,26 +30,85 @@ function Convert-ToWslPath([string]$Path) { return $Path }
 function Write-SwitchTradeSetupLog {
     param([string]$Path, [string]$Stage, [string]$Message, [string]$Level)
 }
-function Get-Distros { return @('SwitchTrade') }
-function Get-SwitchTradeDistroRegistration {
-    return [pscustomobject]@{ Exists = $true; BasePath = (Get-Layout).DistroRoot }
+function Invoke-SwitchTradeWsl {
+    param(
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 30,
+        [string]$FilePath = '',
+        [scriptblock]$CancellationCheck = $null
+    )
+    $output = if ($Arguments[0] -eq '--list') { 'SwitchTrade' } else { '' }
+    return [pscustomobject]@{
+        ExitCode = 0; Output = $output; Error = ''
+        TimedOut = $false; Cancelled = $false; CommandLine = ''; DurationMs = 0
+    }
 }
-function Get-SwitchTradeDistroMarker {
-    return [pscustomobject]@{ Valid = $true; InstallId = '0123456789abcdef0123456789abcdef' }
+function Get-SwitchTradeDistroRegistrationState {
+    param([Parameter(Mandatory)]$Context)
+    return [pscustomobject]@{ Exists = $true; BasePath = (Get-Layout).DistroRoot; Known = $true }
 }
-function Get-SwitchTradeRollbackActual {
-    param([Parameter(Mandatory)]$Transaction)
-    return Get-Actual (Get-Layout)
+function Get-SwitchTradeDistroMarkerProbe {
+    param([Parameter(Mandatory)][string]$Distro, [string]$FilePath = '', [int]$TimeoutSeconds = 20)
+    return [pscustomobject]@{ Missing = $false; Valid = $true; InstallId = '0123456789abcdef0123456789abcdef'; ExitCode = 0 }
 }
-function Invoke-LoggedWsl {
-    param([string[]]$Arguments, [string]$FailureCode, [string]$Stage)
-    $mode = @('--rollback', '--compensate') | Where-Object { $Arguments -contains $_ } |
-        Select-Object -First 1
-    if (-not $mode) { throw "unexpected simulated WSL operation: $($Arguments -join ' ')" }
+function Get-SwitchTradeWslRuntimeLocationProbe {
+    param(
+        [Parameter(Mandatory)][string]$Distro,
+        [Parameter(Mandatory)][ValidateSet('active', 'candidate', 'previous', 'commit_swap', 'rollback_swap')]
+        [string]$Location,
+        [string]$FilePath = '',
+        [int]$TimeoutSeconds = 30
+    )
+    $layout = Get-Layout
+    $root = switch ($Location) {
+        'active' { $layout.WslActive }
+        'previous' { $layout.WslPrevious }
+        'candidate' { Join-Path $TestRoot 'wsl-candidate' }
+        'commit_swap' { $layout.WslActive + '.commit-swap' }
+        'rollback_swap' { $layout.WslActive + '.rollback-swap' }
+    }
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+        return [pscustomobject]@{ Exists = $false; Valid = $true; ReleaseId = ''; IntegritySha256 = '' }
+    }
+    $release = (Get-Content -Raw -LiteralPath (Join-Path $root '.switchtrade-release.json') |
+        ConvertFrom-Json).release_id
+    return [pscustomobject]@{
+        Exists = $true; Valid = $true; ReleaseId = [string]$release
+        IntegritySha256 = (Get-FileSha256 (Join-Path $root '.switchtrade-integrity.json'))
+    }
+}
+function Invoke-SwitchTradeWslCommand {
+    param(
+        [Parameter(Mandatory)][string]$Distro,
+        [Parameter(Mandatory)][AllowEmptyString()][string[]]$Command,
+        [string]$User = 'root',
+        [string]$WorkingDirectory = '',
+        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 30,
+        [string]$FilePath = '',
+        [scriptblock]$CancellationCheck = $null
+    )
+    return Invoke-SwitchTradeWsl -Arguments $Command -TimeoutSeconds $TimeoutSeconds
+}
+function Invoke-SwitchTradeWslProvision {
+    param(
+        [Parameter(Mandatory)][string]$Distro,
+        [Parameter(Mandatory)][string]$ScriptPath,
+        [Parameter(Mandatory)][string]$Mode,
+        [AllowEmptyString()][string[]]$Arguments = @(),
+        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 600,
+        [string]$FilePath = '',
+        [scriptblock]$CancellationCheck = $null
+    )
+    if ($Mode -notin @('rollback', 'compensate')) {
+        return [pscustomobject]@{ ExitCode = 0; Output = ''; Error = '' }
+    }
     $releaseIndex = [Array]::IndexOf($Arguments, '--release-id')
     $priorIndex = [Array]::IndexOf($Arguments, '--prior-release-id')
+    if ($releaseIndex -lt 0 -or $priorIndex -lt 0) {
+        throw "unexpected simulated provision arguments: $($Arguments -join ' ')"
+    }
     Switch-Pair (Get-Layout) Wsl $Arguments[$releaseIndex + 1] $Arguments[$priorIndex + 1]
-    return ''
+    return [pscustomobject]@{ ExitCode = 0; Output = ''; Error = '' }
 }
 
 function New-Release([string]$Root, [string]$ReleaseId) {
@@ -88,13 +138,16 @@ function New-Package([string]$Root, [string]$ReleaseId) {
 }
 
 function Get-Layout {
+    param([string]$Root = $TestRoot)
+    $stateRoot = Join-Path $Root 'appdata-local\SwitchTrade'
     return [pscustomobject]@{
-        Transaction = Join-Path $TestRoot 'transaction.json'
-        WindowsActive = Join-Path $TestRoot 'windows-active'
-        WindowsPrevious = Join-Path $TestRoot 'windows-previous'
-        WslActive = Join-Path $TestRoot 'wsl-active'
-        WslPrevious = Join-Path $TestRoot 'wsl-previous'
-        KernelState = Join-Path $TestRoot 'kernel-state.json'
+        Transaction = Join-Path $stateRoot 'setup-transaction.json'
+        StateRoot = $stateRoot
+        WindowsActive = Join-Path $Root 'windows-active'
+        WindowsPrevious = (Join-Path $Root 'windows-active') + '.previous'
+        WslActive = Join-Path $Root 'wsl-active'
+        WslPrevious = Join-Path $Root 'wsl-previous'
+        KernelState = Join-Path $stateRoot 'kernel-state.json'
         KernelSource = Join-Path $TestRoot 'kernel-b'
         KernelTarget = Join-Path $TestRoot 'kernel-a'
         UserProfile = Join-Path $TestRoot 'user-profile'
@@ -148,7 +201,7 @@ function Switch-KernelStateOnly([string]$Path) {
 
 function Switch-Kernel($Layout) {
     $state = Get-Content -Raw -LiteralPath $Layout.KernelState | ConvertFrom-Json
-    Switch-SwitchTradeKernelRollback -StateRoot $TestRoot `
+    Switch-SwitchTradeKernelRollback -StateRoot $Layout.StateRoot `
         -ExpectedReleaseId ([string]$state.rollback_package_release_id) `
         -UserProfileRoot $Layout.UserProfile | Out-Null
 }
@@ -282,26 +335,22 @@ function Crash-Rollback {
 
 function Repair-Rollback {
     $layout = Get-Layout
-    $script:Action = 'Repair'
-    $script:Distro = 'SwitchTrade'
-    $script:InstallRoot = $layout.WindowsActive
-    $script:PreviousInstall = $layout.WindowsPrevious
-    $script:DistroRoot = $layout.DistroRoot
-    $script:StateRoot = $TestRoot
-    $script:TransactionPath = $layout.Transaction
-    $script:UserProfileRoot = $layout.UserProfile
-    $script:SetupLog = ''
-    $script:PackageRoot = $layout.PackageA
-    Test-SwitchTradePackage -PackageRoot $PackageRoot -AllowUnsignedPackage | Out-Null
-    $script:ReleaseId = Get-SwitchTradeReleaseId -ManifestPath (Join-Path $PackageRoot 'manifest.json')
-    $transaction = Get-Content -Raw -LiteralPath $layout.Transaction | ConvertFrom-Json
+    $localAppData = Join-Path $TestRoot 'appdata-local'
+    $context = New-SwitchTradeSetupContext -Action Repair -Distro 'SwitchTrade' -UserProfileRoot $layout.UserProfile -LocalAppDataRoot $localAppData -DesktopRoot (Join-Path $layout.UserProfile 'Desktop') -InstallRoot $layout.WindowsActive -DistroRoot $layout.DistroRoot -PackageRoot $layout.PackageA
+    $script:TransactionPath = $context.TransactionPath
+    Test-SwitchTradePackage -PackageRoot $context.PackageRoot -AllowUnsignedPackage | Out-Null
+    $releaseId = Get-SwitchTradeReleaseId -ManifestPath (Join-Path $context.PackageRoot 'manifest.json')
+    $package = New-SwitchTradePackageIdentity -ReleaseId $releaseId -ManifestSha256 (Get-FileSha256 (Join-Path $context.PackageRoot 'manifest.json'))
+    $transaction = Get-Content -Raw -LiteralPath $context.TransactionPath | ConvertFrom-Json
     $source = [string]$transaction.rollback_journal.source.release_id
-    $target = [string]$transaction.rollback_journal.target.release_id
-    $result = Repair-SwitchTradeInterruptedTransaction -Transaction $transaction
-    if ($result -ne 'finalize') { throw 'actual interrupted transaction Repair did not finalize' }
-    $completed = Get-Content -Raw -LiteralPath $layout.Transaction | ConvertFrom-Json
+    $state = Get-SwitchTradeInstallState -Context $context
+    $plan = Resolve-SwitchTradePlan -Context $context -State $state -Package $package
+    if ($plan.Outcome -ne 'plan') { throw "actual interrupted transaction Repair blocked: $($plan.Code)" }
+    $null = Invoke-SwitchTradePlan -Context $context -State $state -Package $package -Plan $plan
+    $completed = Get-Content -Raw -LiteralPath $context.TransactionPath | ConvertFrom-Json
+    if ($completed.phase -ne 'completed') { throw 'actual interrupted transaction Repair did not finalize' }
     if ($completed.release_id -eq $source) { return 'source' }
-    if ($completed.release_id -eq $target) { return 'target' }
+    if ($completed.release_id -eq [string]$transaction.rollback_journal.target.release_id) { return 'target' }
     throw 'actual interrupted transaction Repair published an unexpected release'
 }
 
@@ -335,7 +384,7 @@ foreach ($case in @(
     if ($LASTEXITCODE -ne 197) {
         throw "crash process did not stop at $($case.Point): $LASTEXITCODE"
     }
-    $interrupted = Get-Content -Raw -LiteralPath (Join-Path $caseRoot 'transaction.json') |
+    $interrupted = Get-Content -Raw -LiteralPath (Get-Layout -Root $caseRoot).Transaction |
         ConvertFrom-Json
     if ([string]$interrupted.phase -notmatch '^rollback_' -or
             [string]$interrupted.rollback_journal.initiating_package.release_id -ne 'release-a' -or
@@ -357,7 +406,7 @@ foreach ($case in @(
         $replacement.artifact_hashes.'payload.txt' = Get-PackageFileSha256 $payloadPath
         $replacement | ConvertTo-Json -Depth 4 |
             Set-Content -LiteralPath $manifestPath -Encoding UTF8
-        $transactionHash = Get-FileSha256 (Join-Path $caseRoot 'transaction.json')
+        $transactionHash = Get-FileSha256 (Get-Layout -Root $caseRoot).Transaction
         $savedErrorAction = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
         & $shell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath `
@@ -365,7 +414,7 @@ foreach ($case in @(
         $replacementExit = $LASTEXITCODE
         $ErrorActionPreference = $savedErrorAction
         if ($replacementExit -eq 0 -or
-                (Get-FileSha256 (Join-Path $caseRoot 'transaction.json')) -ne $transactionHash) {
+                (Get-FileSha256 (Get-Layout -Root $caseRoot).Transaction) -ne $transactionHash) {
             throw 'same-release replacement package bypassed rollback package identity without mutation'
         }
         Copy-Item -LiteralPath $manifestBackup -Destination $manifestPath -Force
@@ -376,7 +425,7 @@ foreach ($case in @(
     if ($LASTEXITCODE -ne 0 -or [string]$repaired.Trim() -ne $case.Direction) {
         throw "actual Repair package gate failed after $($case.Point)"
     }
-    $completed = Get-Content -Raw -LiteralPath (Join-Path $caseRoot 'transaction.json') |
+    $completed = Get-Content -Raw -LiteralPath (Get-Layout -Root $caseRoot).Transaction |
         ConvertFrom-Json
     if ($completed.phase -ne 'completed' -or $completed.rollback_journal) {
         throw "Repair did not publish a completed record after $($case.Point)"
@@ -385,7 +434,7 @@ foreach ($case in @(
     & $shell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath `
         -TestRoot $caseRoot -Mode reverse
     if ($LASTEXITCODE -ne 0) { throw "reverse Rollback failed after $($case.Point)" }
-    $reversed = Get-Content -Raw -LiteralPath (Join-Path $caseRoot 'transaction.json') |
+    $reversed = Get-Content -Raw -LiteralPath (Get-Layout -Root $caseRoot).Transaction |
         ConvertFrom-Json
     if ($reversed.phase -ne 'completed' -or [string]$reversed.release_id -eq $beforeReverse) {
         throw "reverse Rollback did not rotate metadata after $($case.Point)"
