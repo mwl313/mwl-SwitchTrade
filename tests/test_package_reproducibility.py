@@ -80,7 +80,7 @@ def test_production_source_payload_excludes_test_and_internal_documentation():
         assert forbidden_path in builder
     assert "Remove-Item -LiteralPath $path -Recurse -Force" in builder
     installer_block = builder.split("$installerRuntimePaths = @(", 1)[1].split(")\n& git", 1)[0]
-    for required in ("SwitchTradeSetup.ps1", "SetupLifecycle.ps1", "PackageIntegrity.ps1",
+    for required in ("installer/engine", "SwitchTradeSetup.ps1", "SetupLifecycle.ps1", "PackageIntegrity.ps1",
                      "UsbAutoAttachWatcher.ps1", "provision-wsl.sh"):
         assert required in installer_block
     for forbidden in ("Test-", "Build-Package.ps1", "Build-Rootfs.sh", "bootstrap", "README.md"):

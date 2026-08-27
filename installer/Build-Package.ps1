@@ -151,6 +151,7 @@ if ($Wheelhouse) {
 }
 $installerArchive = Join-Path $Stage 'installer.tar'
 $installerRuntimePaths = @(
+    'installer/engine',
     'installer/HostCompatibility.ps1', 'installer/KernelLifecycle.ps1',
     'installer/Launch-SwitchTrade.ps1', 'installer/PackageIntegrity.ps1',
     'installer/provision-wsl.sh', 'installer/SetupLifecycle.ps1',
