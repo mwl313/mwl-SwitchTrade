@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://switchtrade.local/contracts/active-runtime.v1.json",
+  "title": "SwitchTrade active runtime",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "release_id", "active_runtime", "kernel_release", "control_contract"],
+  "properties": {
+    "schema": { "const": 1 },
+    "release_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+    "active_runtime": { "type": "string", "pattern": "^SwitchTrade-beta-[A-Za-z0-9._-]+$" },
+    "previous_runtime": { "type": ["string", "null"] },
+    "kernel_release": { "type": "string", "minLength": 1 },
+    "control_contract": { "type": "string", "const": "app-readiness.v1" }
+  }
+}

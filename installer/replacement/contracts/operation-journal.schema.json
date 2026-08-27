@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://switchtrade.local/contracts/operation-journal.v1.json",
+  "title": "SwitchTrade provisioner operation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "operation_id", "action", "release_id", "runtime_content_id", "candidate_runtime", "candidate_location", "committed"],
+  "properties": {
+    "schema": { "const": 1 },
+    "operation_id": { "type": "string", "format": "uuid" },
+    "action": { "enum": ["install", "repair", "uninstall"] },
+    "release_id": { "type": "string" },
+    "runtime_content_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "candidate_runtime": { "type": ["string", "null"] },
+    "candidate_location": { "type": ["string", "null"] },
+    "previous_runtime": { "type": ["string", "null"] },
+    "committed": { "type": "boolean" }
+  }
+}

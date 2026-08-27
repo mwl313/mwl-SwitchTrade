@@ -11,6 +11,12 @@ The 2026-08-27 software audit closed the reproducible code-level causes and adde
 The four entries remain here because their final acceptance requires clean-host, physical-radio, or
 two-PC evidence. See `docs/AUDIT_REPORT.md` for the reviewed software finding register.
 
+The replacement installer candidate on `codex/installer-replacement` supersedes the legacy
+PowerShell release path for STB-004 validation. It uses an immutable side-by-side WSL runtime, one
+atomic active pointer, a desktop-owned release manifest, pre-commit rollback, and deferred
+post-commit cleanup. Automated fault injection and a disposable real-WSL lifecycle pass; STB-004
+still requires the clean Windows 10/11 Burn lifecycle matrix before closure.
+
 ## Resolved installer lifecycle defects
 
 The following observed failures are closed in source and remain part of clean-host qualification:

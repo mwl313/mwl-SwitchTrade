@@ -33,6 +33,12 @@ jobs:
         run: dotnet build apps/desktop/SwitchTrade.Desktop/SwitchTrade.Desktop.csproj --configuration Release
       - name: Run desktop self-test
         run: dotnet run --no-build --configuration Release --project apps/desktop/SwitchTrade.Desktop/SwitchTrade.Desktop.csproj -- --self-test
+      - name: Build replacement prerequisite and provisioner
+        run: |
+          dotnet build installer/replacement/SwitchTrade.Prerequisites/SwitchTrade.Prerequisites.csproj --configuration Release
+          dotnet build installer/replacement/SwitchTrade.Provisioner/SwitchTrade.Provisioner.csproj --configuration Release
+      - name: Run replacement provisioner contract and fault-injection tests
+        run: dotnet run --configuration Release --project installer/replacement/SwitchTrade.Provisioner.Tests/SwitchTrade.Provisioner.Tests.csproj
       - name: Build setup
         run: dotnet build installer/bootstrap/SwitchTrade.Setup.csproj --configuration Release
       - name: Parse PowerShell with Windows PowerShell 5.1
@@ -69,7 +75,12 @@ jobs:
         run: |
           foreach ($project in @(
             'apps/desktop/SwitchTrade.Desktop/SwitchTrade.Desktop.csproj',
-            'installer/bootstrap/SwitchTrade.Setup.csproj'
+            'installer/bootstrap/SwitchTrade.Setup.csproj',
+            'installer/replacement/SwitchTrade.Prerequisites/SwitchTrade.Prerequisites.csproj',
+            'installer/replacement/SwitchTrade.Provisioner/SwitchTrade.Provisioner.csproj',
+            'installer/replacement/SwitchTrade.Provisioner.Tests/SwitchTrade.Provisioner.Tests.csproj',
+            'installer/replacement/wix/Desktop/SwitchTrade.Desktop.wixproj',
+            'installer/replacement/wix/Bundle/SwitchTrade.Bundle.wixproj'
           )) {
             $report = dotnet list $project package --vulnerable --include-transitive 2>&1 | Out-String
             if ($LASTEXITCODE -ne 0) { throw $report }

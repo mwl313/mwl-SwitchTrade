@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://switchtrade.local/contracts/provisioner-event.v1.json",
+  "title": "SwitchTrade provisioner event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "type", "correlation_id", "stage"],
+  "properties": {
+    "schema": { "const": 1 },
+    "type": { "enum": ["progress", "result", "error"] },
+    "correlation_id": { "type": "string", "format": "uuid" },
+    "action": { "type": ["string", "null"] },
+    "stage": { "type": "string" },
+    "percent": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+    "status": { "type": ["string", "null"] },
+    "software_ready": { "type": ["boolean", "null"] },
+    "code": { "type": ["string", "null"] },
+    "message": { "type": ["string", "null"] },
+    "recoverable": { "type": ["boolean", "null"] },
+    "primary_action": { "type": ["string", "null"] }
+  }
+}

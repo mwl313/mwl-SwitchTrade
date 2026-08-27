@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "distribution": "Ubuntu Base 24.04.3 LTS",
+  "architecture": "amd64",
+  "file": "ubuntu-base-24.04.3-base-amd64.tar.gz",
+  "url": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.3-base-amd64.tar.gz",
+  "size": 29983772,
+  "sha256": "6bc2cde3930ad088b3bb46fa45279e96d25bc3810f209850ecbe4722711874f9",
+  "package_snapshot": "https://snapshot.ubuntu.com/ubuntu/20260827T000000Z",
+  "builder_source": {
+    "relative_path": "artifacts/final-package-27d17b1/SwitchTrade-unsigned-private-beta-27d17b1/payload/switchtrade-rootfs.tar.gz",
+    "size": 43790384,
+    "sha256": "145aabcaaf25034ce05ce9f4d7276352f9fe510c0c9cf4551a9f7bbf1e2b9064"
+  }
+}

@@ -1,0 +1,12 @@
+<Project Sdk="WixToolset.Sdk/4.0.6">
+  <PropertyGroup>
+    <OutputType>Bundle</OutputType>
+    <Platform>x64</Platform>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <DefineConstants>ProductVersion=$(ProductVersion);ReleaseId=$(ReleaseId);IconFile=$(IconFile);PrerequisiteExe=$(PrerequisiteExe);WslMsi=$(WslMsi);UsbipdMsi=$(UsbipdMsi);DesktopMsi=$(DesktopMsi);ProvisionerExe=$(ProvisionerExe);ReleaseManifest=$(ReleaseManifest);RuntimeWsl=$(RuntimeWsl);RuntimeFileName=$(RuntimeFileName);KernelFile=$(KernelFile);ModulesFile=$(ModulesFile);FirmwareManifest=$(FirmwareManifest)</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="WixToolset.Bal.wixext" Version="4.0.6" />
+    <PackageReference Include="WixToolset.Util.wixext" Version="4.0.6" />
+  </ItemGroup>
+</Project>

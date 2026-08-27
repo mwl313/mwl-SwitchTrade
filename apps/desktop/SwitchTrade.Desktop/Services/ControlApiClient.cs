@@ -114,6 +114,21 @@ public sealed class ControlApiClient : IControlGateway
     {
         try
         {
+            var active = Path.Combine(Environment.GetFolderPath(
+                Environment.SpecialFolder.LocalApplicationData),
+                "SwitchTrade", "state", "active-runtime.json");
+            if (File.Exists(active))
+            {
+                using var activeDocument = JsonDocument.Parse(File.ReadAllBytes(active));
+                var activeRoot = activeDocument.RootElement;
+                if (activeRoot.TryGetProperty("schema", out var activeSchema) && activeSchema.GetInt32() == 1 &&
+                    activeRoot.TryGetProperty("release_id", out var activeRelease))
+                {
+                    var activeValue = activeRelease.GetString();
+                    if (activeValue is not null && Regex.IsMatch(
+                            activeValue, "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")) return activeValue;
+                }
+            }
             var manifest = Path.Combine(AppContext.BaseDirectory, "manifest.json");
             var marker = Path.Combine(AppContext.BaseDirectory, ".switchtrade-release.json");
             using var document = JsonDocument.Parse(File.ReadAllBytes(manifest));

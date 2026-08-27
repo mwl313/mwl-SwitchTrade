@@ -1,10 +1,50 @@
 # SwitchTrade replacement installer execution plan
 
-**Status:** authoritative implementation plan  
+**Status:** implemented software candidate; clean-host and physical qualification pending
 **Date:** 2026-08-27  
 **Scope:** Windows installer, immutable WSL runtime, mandatory custom kernel, lifecycle, migration, and post-install hardware onboarding
 
 This plan supersedes the current PowerShell installer-engine design for all new implementation work. The existing engine remains available only as legacy behavior, migration evidence, and an uninstall reference until the replacement passes qualification.
+
+## Implementation record — 2026-08-27
+
+The replacement is implemented on `codex/installer-replacement` from frozen base `audit@08bfcdb`.
+The legacy release path is frozen at tag `legacy-installer-20260827`; its tests and one package fixture
+remain available for migration qualification.
+
+Implemented and software-validated:
+
+- safe allowlisted artifact cleanup with reviewed-preview binding; 15.53 GiB recovered while retained
+  rootfs/kernel/wheel/capture/database inputs were hashed;
+- versioned JSON schemas and a native self-contained provisioner with `inspect`, `install`, `repair`,
+  `uninstall`, `verify-software`, and `status --json`;
+- side-by-side WSL generations, stable ownership checks, atomic active pointer, cross-release interrupted
+  recovery, deferred post-commit cleanup, and fault injection before and after commit;
+- mandatory custom-kernel merge/backup/restore preserving unrelated `.wslconfig` settings, encodings,
+  line endings, and post-install user changes;
+- an immutable appliance with no user-host `apt`/`pip`, built from a pinned Ubuntu snapshot, exact wheel
+  hashes, pinned firmware, and matching kernel/modules payloads;
+- a per-user MSI containing the WPF client, native provisioner, release configuration, Desktop shortcut,
+  and Start Menu shortcut, with no WSL custom actions;
+- a compressed WiX Burn bundle chaining feature enablement, pinned WSL, pinned usbipd-win, MSI, and the
+  vital provisioner with standard progress and reboot continuation;
+- native desktop startup from the atomic active-runtime record with release/contract checks and stable
+  provisioner recovery codes;
+- package hash/table/layout verification plus real disposable WSL Install, health, repeated same-release
+  Repair, Uninstall, Unicode path, and unrelated-distro preservation tests.
+
+Software results at this record: root Python suite `315 passed, 3 platform skips`; provisioner contract,
+fault, concurrency, migration, log-redaction, and lifecycle tests pass; native projects build with zero
+warnings/errors; PowerShell 5.1/7 parsing and dependency vulnerability checks pass.
+
+Not closed by software testing:
+
+- clean Windows 10 19045 and Windows 11 snapshot matrices, including first-install reboot continuation;
+- an actual elevated Burn Install/Repair/Uninstall pass on each clean OS;
+- physical RTL8192EU onboarding after software-only installation;
+- two clean PCs completing a Switch-to-Switch trade and final kernel restoration verification.
+
+These remain release gates and must not be reported as complete based on simulation alone.
 
 ## 1. Locked product decisions
 
@@ -313,4 +353,3 @@ The replacement is complete only when all of the following are proven:
 - A supported Wi-Fi adapter can be added later entirely through the application.
 - Win10/Win11 lifecycle and interruption matrices pass.
 - The final Setup EXE is reproducible, integrity-verified, and independent of the extracted source package.
-

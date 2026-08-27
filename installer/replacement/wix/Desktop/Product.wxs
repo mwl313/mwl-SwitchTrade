@@ -1,0 +1,46 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="SwitchTrade" Manufacturer="Min W. Lim"
+           Version="$(var.ProductVersion)" UpgradeCode="{E667B098-06C8-44FA-A58D-84647B97DE27}"
+           Scope="perUser" InstallerVersion="500" Compressed="yes">
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer SwitchTrade release is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="LocalProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="SwitchTrade" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="DesktopFolder" />
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="ProductFeature" Title="SwitchTrade" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+    </Feature>
+
+    <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
+      <Component Id="DesktopExecutable" Guid="{AC764C22-F46C-4E9D-8CBD-3383DC20680E}">
+        <File Id="SwitchTradeExe" Source="$(var.DesktopExe)">
+          <Shortcut Id="DesktopShortcut" Directory="DesktopFolder" Name="SwitchTrade"
+                    Description="SwitchTrade" WorkingDirectory="INSTALLFOLDER" Advertise="no" />
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="SwitchTrade"
+                    Description="SwitchTrade" WorkingDirectory="INSTALLFOLDER" Advertise="no" />
+        </File>
+        <RegistryValue Root="HKCU" Key="Software\SwitchTrade\Components" Name="Desktop"
+                       Type="integer" Value="1" KeyPath="yes" />
+        <RemoveFolder Id="RemoveInstallFolder" Directory="INSTALLFOLDER" On="uninstall" />
+      </Component>
+      <Component Id="ProvisionerExecutable" Guid="{478B56AD-15B5-4BA5-89B6-2930F5DF5806}">
+        <File Id="ProvisionerExe" Source="$(var.ProvisionerExe)" />
+        <RegistryValue Root="HKCU" Key="Software\SwitchTrade\Components" Name="Provisioner"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+      <Component Id="InstalledRelease" Guid="{33DA875E-7446-4DF0-B631-5F2EE8A9BA3D}">
+        <File Id="InstalledReleaseManifest" Source="$(var.ReleaseManifest)" Name="release-manifest.json" />
+        <RegistryValue Root="HKCU" Key="Software\SwitchTrade" Name="ReleaseId"
+                       Type="string" Value="$(var.ReleaseId)" KeyPath="yes" />
+        <RemoveFolder Id="RemoveLocalProgramsFolderIfEmpty" Directory="LocalProgramsFolder" On="uninstall" />
+      </Component>
+    </ComponentGroup>
+  </Package>
+</Wix>

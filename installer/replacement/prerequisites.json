@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "packages": {
+    "wsl": {
+      "version": "2.7.12.0",
+      "file": "wsl.2.7.12.0.x64.msi",
+      "url": "https://github.com/microsoft/WSL/releases/download/2.7.12/wsl.2.7.12.0.x64.msi",
+      "size": 258998272,
+      "sha256": "a460d4560215f2efe003c136244b78ea3415d773824d7a688ea9ded36dbe9145"
+    },
+    "usbipd": {
+      "version": "5.3.0",
+      "file": "usbipd-win_5.3.0_x64.msi",
+      "url": "https://github.com/dorssel/usbipd-win/releases/download/v5.3.0/usbipd-win_5.3.0_x64.msi",
+      "size": 4501504,
+      "sha256": "1c984914aec944de19b64eff232421439629699f8138e3ddc29301175bc6d938"
+    }
+  }
+}

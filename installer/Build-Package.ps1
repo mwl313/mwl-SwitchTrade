@@ -42,6 +42,9 @@ if (-not $RelayUrl) {
 if ($Release -and $UnsignedPrivateBeta) {
     throw '-Release and -UnsignedPrivateBeta are mutually exclusive'
 }
+if ($Release -or $UnsignedPrivateBeta) {
+    throw 'The legacy installer is frozen and cannot produce releases. Use installer/replacement/Build-ReplacementPackage.ps1.'
+}
 if (-not (Test-Path -LiteralPath $RuntimeLdnKeys -PathType Leaf)) {
     throw 'runtime LDN key input is missing: config/prod.keys'
 }

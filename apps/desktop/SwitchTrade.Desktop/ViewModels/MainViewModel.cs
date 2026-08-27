@@ -201,10 +201,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         RecoverySummary = launch is { Succeeded: false }
             ? "The installed local service could not start."
             : "The installed local service did not respond.";
-        RecoveryStage = "control";
-        RecoveryInstructions = "Close SwitchTrade, run the latest SwitchTradeSetup.exe, and choose Repair. Do not reset or unregister WSL.";
+        RecoveryStage = launch?.Stage ?? "control";
+        RecoveryInstructions = launch?.PrimaryAction ??
+            "Close SwitchTrade, run the latest SwitchTradeSetup.exe, and choose Repair. Do not reset or unregister WSL.";
         RecoveryTechnicalDetails = launch is { Succeeded: false } && !string.IsNullOrWhiteSpace(launch.Details)
-            ? $"control.launch_failed · {launch.Details}"
+            ? $"{launch.Code ?? "control.launch_failed"} · {launch.Details}" +
+              (string.IsNullOrWhiteSpace(launch.CorrelationId) ? "" : $" · {launch.CorrelationId}")
             : "control.unavailable · 127.0.0.1:8787 did not answer the bounded readiness probe.";
         CurrentScreen = new RecoveryScreenViewModel(this);
     }

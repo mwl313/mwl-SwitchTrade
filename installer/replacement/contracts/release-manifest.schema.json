@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://switchtrade.local/contracts/release-manifest.v1.json",
+  "title": "SwitchTrade replacement release",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "release_id", "version", "architecture", "minimum_windows_build", "minimum_wsl_version", "control_contract", "relay_url", "runtime_content_id", "kernel", "payloads"],
+  "properties": {
+    "schema": { "const": 1 },
+    "release_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[A-Za-z0-9.-]+)?$" },
+    "architecture": { "const": "x64" },
+    "minimum_windows_build": { "type": "integer", "minimum": 19045 },
+    "minimum_wsl_version": { "type": "string" },
+    "control_contract": { "const": "app-readiness.v1" },
+    "relay_url": { "type": "string", "pattern": "^https://" },
+    "runtime_content_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "kernel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["release", "primary_driver", "driver_profiles"],
+      "properties": {
+        "release": { "type": "string" },
+        "primary_driver": { "type": "string" },
+        "driver_profiles": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "payloads": {
+      "type": "object",
+      "minProperties": 3,
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "size", "sha256"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "size": { "type": "integer", "minimum": 1 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    }
+  }
+}

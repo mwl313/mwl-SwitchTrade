@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://switchtrade.local/contracts/runtime-ownership.v1.json",
+  "title": "SwitchTrade immutable runtime ownership",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "owner", "product", "release_id", "payload_sha256"],
+  "properties": {
+    "schema": { "const": 1 },
+    "owner": { "const": "switchtrade-provisioner" },
+    "product": { "const": "SwitchTrade" },
+    "release_id": { "type": "string" },
+    "payload_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}
