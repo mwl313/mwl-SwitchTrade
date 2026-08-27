@@ -217,8 +217,7 @@ if ($Action -in @('Install', 'Repair', 'Update', 'Rollback')) {
     Set-SwitchTradeSetupStage 'package_integrity'
     Test-SwitchTradePackage -PackageRoot $Context.PackageRoot -AllowUnsignedPackage:$AllowUnsignedPackage | Out-Null
     $ReleaseId = Get-SwitchTradeReleaseId -ManifestPath (Join-Path $Context.PackageRoot 'manifest.json')
-    $Package = New-SwitchTradePackageIdentity -ReleaseId $ReleaseId
-        -ManifestSha256 (Get-FileSha256 (Join-Path $Context.PackageRoot 'manifest.json'))
+    $Package = New-SwitchTradePackageIdentity -ReleaseId $ReleaseId -ManifestSha256 (Get-FileSha256 (Join-Path $Context.PackageRoot 'manifest.json'))
 }
 
 Set-SwitchTradeSetupStage 'mutex'
@@ -228,8 +227,7 @@ Write-SwitchTradeSetupLog -Path $SetupLog -Stage $SetupStage -Message "setup act
 $state = Get-SwitchTradeInstallState -Context $Context
 $plan = Resolve-SwitchTradePlan -Context $Context -State $state -Package $Package
 if ($plan.Outcome -eq 'blocker') {
-    $failure = New-SwitchTradeFailure -Code $plan.Code -Message $plan.Message -Stage $plan.Stage
-        -Recoverable $plan.Recoverable -PrimaryAction $plan.PrimaryAction -LogPath $SetupLog
+    $failure = New-SwitchTradeFailure -Code $plan.Code -Message $plan.Message -Stage $plan.Stage -Recoverable $plan.Recoverable -PrimaryAction $plan.PrimaryAction -LogPath $SetupLog
     $failure.action = $Action
     [Console]::Error.WriteLine("SWITCHTRADE_SETUP_FAILURE: $($failure | ConvertTo-Json -Compress)")
     Write-SwitchTradeSetupLog -Path $SetupLog -Stage $plan.Stage -Message "blocker $($plan.Code): $($plan.Message)" -Level error

@@ -795,7 +795,7 @@ function Invoke-SwitchTradeRequirePrerequisites {
 function Invoke-SwitchTradeEnsureWsl {
     param([Parameter(Mandatory)]$Context, [Parameter(Mandatory)]$State)
     Set-SwitchTradeEngineStage 'prerequisites_enable'
-    if (-not $State.Host.WslInstalled) {
+    if (-not ($State.Host.WslRuntimeLaunchSafe -or $State.Host.WslFeaturesEnabled)) {
         Assert-SwitchTradePlanPrecondition $Context.AcceptPrerequisiteChanges 'PREREQUISITE_CONSENT_REQUIRED' 'WSL 2 is required and may require a reboot. Rerun after accepting prerequisite changes.'
         Assert-SwitchTradePlanPrecondition (Test-Path -LiteralPath (Join-Path $Context.PackageRoot 'SwitchTradeSetup.exe') -PathType Leaf) 'SETUP_RESUME_UNAVAILABLE' 'use the complete native setup package before enabling WSL'
         $dismWsl = Invoke-SwitchTradeProcess -FilePath 'dism.exe' -Arguments @('/online', '/enable-feature', '/featurename:Microsoft-Windows-Subsystem-Linux', '/all', '/norestart') -TimeoutSeconds 600
@@ -866,16 +866,32 @@ function Invoke-SwitchTradeCreateTransaction {
     $kernelChangeExpected = (Test-Path -LiteralPath (Join-Path $Context.PackageRoot 'payload\kernel\kernel') -PathType Leaf) -and
         (Test-Path -LiteralPath (Join-Path $Context.PackageRoot 'payload\kernel\manifest.json') -PathType Leaf)
     $stage = Join-Path $State.StageParent ("SwitchTrade.stage." + [guid]::NewGuid().ToString('N'))
-    return New-SwitchTradeTransaction -Path $Context.TransactionPath -Action $Context.Action -ReleaseId $Package.ReleaseId
-        -PriorReleaseId $priorReleaseId -WindowsStage $stage -PackageRoot $Context.PackageRoot
-        -InstallRoot $Context.InstallRoot -PreviousInstall $Context.PreviousInstall -DistroName $Context.Distro
-        -DistroRoot $Context.DistroRoot -DistroExistedBefore $identity.DistroExists
-        -DistroOwnedBefore ($identity.Classification -eq 'present_owned') -WslPriorReleaseId $wslPriorReleaseId
-        -KernelPriorReleaseId $kernelPriorReleaseId -KernelStatePath $Context.KernelStatePath
-        -KernelPriorPath $kernelPriorPath -KernelPriorModulesPath $kernelPriorModulesPath
-        -KernelChangeExpected $kernelChangeExpected -InstallId $installId -DistroBasePath $Context.DistroRoot
-        -PackageManifestSha256 $Package.ManifestSha256
-        -WindowsPriorIntegritySha256 $windowsPriorIntegrity -WslPriorIntegritySha256 $wslPriorIntegrity
+    $transactionParameters = @{
+        Path = $Context.TransactionPath
+        Action = $Context.Action
+        ReleaseId = $Package.ReleaseId
+        PriorReleaseId = $priorReleaseId
+        WindowsStage = $stage
+        PackageRoot = $Context.PackageRoot
+        InstallRoot = $Context.InstallRoot
+        PreviousInstall = $Context.PreviousInstall
+        DistroName = $Context.Distro
+        DistroRoot = $Context.DistroRoot
+        DistroExistedBefore = $identity.DistroExists
+        DistroOwnedBefore = ($identity.Classification -eq 'present_owned')
+        WslPriorReleaseId = $wslPriorReleaseId
+        KernelPriorReleaseId = $kernelPriorReleaseId
+        KernelStatePath = $Context.KernelStatePath
+        KernelPriorPath = $kernelPriorPath
+        KernelPriorModulesPath = $kernelPriorModulesPath
+        KernelChangeExpected = $kernelChangeExpected
+        InstallId = $installId
+        DistroBasePath = $Context.DistroRoot
+        PackageManifestSha256 = $Package.ManifestSha256
+        WindowsPriorIntegritySha256 = $windowsPriorIntegrity
+        WslPriorIntegritySha256 = $wslPriorIntegrity
+    }
+    return New-SwitchTradeTransaction @transactionParameters
 }
 
 function Invoke-SwitchTradeStageWindows {

@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -10,6 +11,23 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class InstallerLifecycleTests(unittest.TestCase):
+    def test_runtime_powershell_has_no_detached_named_parameters(self):
+        runtime_roots = (ROOT / "installer", ROOT / "scripts", ROOT / "apps")
+        for runtime_root in runtime_roots:
+            for path in (*runtime_root.rglob("*.ps1"), *runtime_root.rglob("*.psm1")):
+                if path.name.startswith("Test-"):
+                    continue
+                lines = path.read_text(encoding="utf-8-sig").splitlines()
+                for index, line in enumerate(lines):
+                    if not re.match(r"^\s+-[A-Z][A-Za-z0-9]*\b", line):
+                        continue
+                    previous = lines[index - 1].rstrip() if index else ""
+                    self.assertTrue(
+                        previous.endswith("`"),
+                        f"{path.relative_to(ROOT)}:{index + 1} starts a detached PowerShell "
+                        "named parameter; use one command line, splatting, or explicit continuation",
+                    )
+
     def test_native_bootstrap_and_lifecycle_modes_are_present(self):
         program = (ROOT / "installer" / "bootstrap" / "Program.cs").read_text(encoding="utf-8")
         setup = (ROOT / "installer" / "SwitchTradeSetup.ps1").read_text(encoding="utf-8")
@@ -175,7 +193,9 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertIn("package_manifest_sha256", executor)
         self.assertIn("Test-SwitchTradeEarlyFreshInstallRecovery", planner)
         self.assertIn("Test-SwitchTradeFreshImportMarkerBootstrap", planner)
-        self.assertIn("-PackageManifestSha256 $Package.ManifestSha256", executor)
+        self.assertIn("PackageManifestSha256 = $Package.ManifestSha256", executor)
+        self.assertIn("$State.Host.WslRuntimeLaunchSafe -or $State.Host.WslFeaturesEnabled", executor)
+        self.assertNotIn("$State.Host.WslInstalled", executor)
         self.assertIn("Global\\SwitchTrade.Setup", setup)
         self.assertLess(setup.index("Enter-SwitchTradeSetupMutex"),
                         setup.index("Resolve-SwitchTradePlan"))
