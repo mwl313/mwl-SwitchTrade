@@ -180,6 +180,7 @@ class InstallerLifecycleTests(unittest.TestCase):
     def test_release_transaction_and_owned_identity_gates_are_present(self):
         setup = (ROOT / "installer" / "SwitchTradeSetup.ps1").read_text(encoding="utf-8")
         lifecycle = (ROOT / "installer" / "SetupLifecycle.ps1").read_text(encoding="utf-8")
+        builder = (ROOT / "installer" / "Build-Package.ps1").read_text(encoding="utf-8")
         rootfs = (ROOT / "installer" / "Build-Rootfs.sh").read_text(encoding="utf-8")
         control = (ROOT / "switchtrade" / "control.py").read_text(encoding="utf-8")
         dialog = (ROOT / "installer" / "bootstrap" / "SetupDialog.cs").read_text(encoding="utf-8")
@@ -188,11 +189,13 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertIn("SETUP_TRANSACTION_INCOMPLETE", lifecycle)
         self.assertIn("package_manifest_sha256", lifecycle)
         self.assertIn("Test-SwitchTradeEarlyFreshInstallRecovery", lifecycle)
+        self.assertIn("Test-SwitchTradeFreshImportMarkerBootstrap", lifecycle)
         self.assertIn("-PackageManifestSha256 $PackageManifestSha256", setup)
         self.assertIn("Global\\SwitchTrade.Setup", lifecycle)
         self.assertLess(setup.index("Enter-SwitchTradeSetupMutex"),
                         setup.index("if ($Action -eq 'Uninstall')"))
         self.assertIn("switchtrade-distro.json", rootfs)
+        self.assertIn("ROOTFS_IDENTITY_MARKER_MISSING", builder)
         self.assertIn('"release_id": runtime_release_id()', control)
         self.assertIn("InstanceId", dialog)
         self.assertNotIn("Restore-SwitchTradeKernel -StateRoot $StateRoot | Out-Null } catch", setup)

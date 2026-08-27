@@ -244,3 +244,13 @@ Install/Repair/Update/Rollback/Uninstall remain external gates.
 Every P0 fix must add automated coverage for its state/error contract and must also pass the relevant
 clean-machine or two-PC acceptance checks above. Internal unit tests alone cannot close a USB,
 driver, radio, or cross-machine coordination issue.
+
+## Resolved installer incident: markerless post-import distro
+
+An interrupted fresh install on 2026-08-27 completed `wsl --import` but stopped before writing the
+per-install distro marker. The registered `SwitchTrade` distro still had the exact transaction-owned
+BasePath, but Repair rejected the missing marker as foreign. Recovery now distinguishes missing from
+malformed markers and may bootstrap ownership only while the original schema-3 transaction is still
+at `importing_distro`, had no prior distro, and the current Lxss BasePath exactly matches the recorded
+dedicated path. Malformed markers, changed paths, prior distros, and later phases remain fail-closed.
+Package construction also rejects rootfs archives that omit the generic installer marker.

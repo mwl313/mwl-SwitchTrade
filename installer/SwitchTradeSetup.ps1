@@ -242,12 +242,16 @@ function Get-SwitchTradeDistroMarker {
     param([Parameter(Mandatory)][string]$Name)
     try {
         $result = Invoke-BoundedNativeProcess -FilePath 'wsl.exe' `
-            -Arguments @('-d', $Name, '-u', 'root', '--', 'cat', '/etc/switchtrade-distro.json') `
+            -Arguments @('-d', $Name, '-u', 'root', '--', 'sh', '-c',
+                'if [ ! -e /etc/switchtrade-distro.json ]; then exit 44; fi; exec cat /etc/switchtrade-distro.json') `
             -TimeoutSeconds 20
-    } catch { return [pscustomobject]@{ Valid = $false; InstallId = '' } }
+    } catch { return [pscustomobject]@{ Missing = $false; Valid = $false; InstallId = '' } }
+    if ($result.ExitCode -eq 44) {
+        return [pscustomobject]@{ Missing = $true; Valid = $false; InstallId = '' }
+    }
     $raw = $result.Output.Trim()
     if ($result.ExitCode -ne 0 -or -not $raw) {
-        return [pscustomobject]@{ Valid = $false; InstallId = '' }
+        return [pscustomobject]@{ Missing = $false; Valid = $false; InstallId = '' }
     }
     try {
         $marker = $raw | ConvertFrom-Json
@@ -256,8 +260,11 @@ function Get-SwitchTradeDistroMarker {
             [string]$marker.owner -ceq 'switchtrade-installer' -and
             [string]$marker.product -ceq 'SwitchTrade' -and
             (-not $installId -or $installId -match '^[0-9a-f]{32}$')
-        return [pscustomobject]@{ Valid = $valid; InstallId = $(if ($valid) { $installId } else { '' }) }
-    } catch { return [pscustomobject]@{ Valid = $false; InstallId = '' } }
+        return [pscustomobject]@{
+            Missing = $false; Valid = $valid
+            InstallId = $(if ($valid) { $installId } else { '' })
+        }
+    } catch { return [pscustomobject]@{ Missing = $false; Valid = $false; InstallId = '' } }
 }
 
 function Convert-ToWslPath([string]$Path) {
@@ -625,28 +632,16 @@ function Repair-SwitchTradeInterruptedTransaction {
     $stage = Assert-SwitchTradeRecordedStagePath -Recorded ([string]$Transaction.windows_stage) `
         -InstallRoot $InstallRoot
 
-    if (-not [string]$Transaction.prior_release_id -and
-            (Test-Path -LiteralPath $PreviousInstall)) {
-        $orphan = Move-SwitchTradeOrphanedWindowsTree -Path $PreviousInstall `
-            -RecoveryRoot (Join-Path $StateRoot 'recovery')
-        Write-SwitchTradeSetupLog -Path $SetupLog -Stage $SetupStage `
-            -Message "preserved unrelated legacy Windows tree at $orphan"
-    }
-
     $distroExists = (Get-Distros) -contains $Distro
     $registration = Get-SwitchTradeDistroRegistration -Name $Distro
     if ($distroExists -ne [bool]$registration.Exists) {
         throw 'WSL_DISTRO_ENUMERATION_UNKNOWN: CLI and Lxss registration disagree'
     }
     $marker = if ($distroExists) { Get-SwitchTradeDistroMarker -Name $Distro } else {
-        [pscustomobject]@{ Valid = $false; InstallId = '' }
+        [pscustomobject]@{ Missing = $false; Valid = $false; InstallId = '' }
     }
-    if ($distroExists -and $marker.Valid -and -not $marker.InstallId -and
-            -not [bool]$Transaction.distro_existed_before -and
-            [string]$Transaction.phase -eq 'importing_distro' -and
-            [string]::Equals($registration.BasePath,
-                [IO.Path]::GetFullPath([string]$Transaction.distro_base_path).TrimEnd('\'),
-                [StringComparison]::OrdinalIgnoreCase)) {
+    if ($distroExists -and (Test-SwitchTradeFreshImportMarkerBootstrap `
+            -Transaction $Transaction -Registration $registration -Marker $marker)) {
         Set-SwitchTradeDistroInstallId -Name $Distro -InstallId ([string]$Transaction.install_id)
         $marker = Get-SwitchTradeDistroMarker -Name $Distro
     }
@@ -804,6 +799,13 @@ function Repair-SwitchTradeInterruptedTransaction {
         KernelRelease = if ($kernelState) { [string]$kernelState.package_release_id } else { '' }
     }
     $plan = Resolve-SwitchTradeTransactionRecovery -Transaction $Transaction -Actual $actual
+    if (-not [string]$Transaction.prior_release_id -and
+            (Test-Path -LiteralPath $PreviousInstall)) {
+        $orphan = Move-SwitchTradeOrphanedWindowsTree -Path $PreviousInstall `
+            -RecoveryRoot (Join-Path $StateRoot 'recovery')
+        Write-SwitchTradeSetupLog -Path $SetupLog -Stage $SetupStage `
+            -Message "preserved unrelated legacy Windows tree at $orphan"
+    }
     if ($plan.Disposition -eq 'finalize') {
         $provision = Convert-ToWslPath (Join-Path $PackageRoot 'installer\provision-wsl.sh')
         Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'bash', $provision,

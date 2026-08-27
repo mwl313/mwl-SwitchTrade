@@ -526,6 +526,26 @@ function Test-SwitchTradeEarlyFreshInstallRecovery {
             'distro_imported')
 }
 
+function Test-SwitchTradeFreshImportMarkerBootstrap {
+    param(
+        [Parameter(Mandatory)]$Transaction,
+        [Parameter(Mandatory)]$Registration,
+        [Parameter(Mandatory)]$Marker
+    )
+    return [int]$Transaction.schema -eq 3 -and
+        [string]$Transaction.phase -eq 'importing_distro' -and
+        -not [string]$Transaction.prior_release_id -and
+        -not [bool]$Transaction.distro_existed_before -and
+        -not [bool]$Transaction.distro_owned_before -and
+        [bool]$Registration.Exists -and
+        [string]::Equals(
+            [IO.Path]::GetFullPath([string]$Registration.BasePath).TrimEnd('\'),
+            [IO.Path]::GetFullPath([string]$Transaction.distro_base_path).TrimEnd('\'),
+            [StringComparison]::OrdinalIgnoreCase) -and
+        -not [string]$Marker.InstallId -and
+        ([bool]$Marker.Missing -or [bool]$Marker.Valid)
+}
+
 function Move-SwitchTradeOrphanedWindowsTree {
     param(
         [Parameter(Mandatory)][string]$Path,

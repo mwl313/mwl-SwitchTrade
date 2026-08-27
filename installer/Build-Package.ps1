@@ -76,6 +76,23 @@ if ($Release -or $UnsignedPrivateBeta) {
     if ($missing) { throw "distribution package inputs are missing: $($missing -join ', ')" }
 }
 
+$resolvedRootfs = ''
+if ($Rootfs) {
+    $resolvedRootfs = (Resolve-Path -LiteralPath $Rootfs).Path
+    $rootfsMarkerText = (& tar -xOf $resolvedRootfs './etc/switchtrade-distro.json' 2>$null) -join "`n"
+    if ($LASTEXITCODE -ne 0 -or -not $rootfsMarkerText) {
+        throw 'ROOTFS_IDENTITY_MARKER_MISSING: rootfs cannot be recovered safely after import interruption'
+    }
+    try { $rootfsMarker = $rootfsMarkerText | ConvertFrom-Json }
+    catch { throw 'ROOTFS_IDENTITY_MARKER_INVALID: rootfs ownership marker is not valid JSON' }
+    if ([int]$rootfsMarker.schema -ne 1 -or
+            [string]$rootfsMarker.owner -cne 'switchtrade-installer' -or
+            [string]$rootfsMarker.product -cne 'SwitchTrade' -or
+            $rootfsMarker.PSObject.Properties.Name -contains 'install_id') {
+        throw 'ROOTFS_IDENTITY_MARKER_INVALID: rootfs ownership marker is not the generic installer marker'
+    }
+}
+
 if (Test-Path -LiteralPath $Stage) { throw "package stage already exists: $Stage" }
 New-Item -ItemType Directory -Force -Path (Join-Path $Stage 'payload\app') | Out-Null
 Copy-Item -LiteralPath (Join-Path $Repo 'README.md') -Destination (Join-Path $Stage 'README.md')
@@ -141,7 +158,6 @@ if ($LASTEXITCODE -ne 0) { throw 'could not extract installer source' }
 Remove-Item -LiteralPath $installerArchive
 
 if ($Rootfs) {
-    $resolvedRootfs = (Resolve-Path -LiteralPath $Rootfs).Path
     $packagedRootfs = Join-Path $Stage 'payload\switchtrade-rootfs.tar.gz'
     Copy-Item -LiteralPath $resolvedRootfs -Destination $packagedRootfs
     $rootfsHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $packagedRootfs).Hash.ToLowerInvariant()

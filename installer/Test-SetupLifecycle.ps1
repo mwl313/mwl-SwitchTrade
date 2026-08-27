@@ -336,6 +336,31 @@ $newDistroTransaction.distro_existed_before = $false
 $newDistroTransaction.distro_owned_before = $false
 $newDistroTransaction | Add-Member -NotePropertyName action -NotePropertyValue Install
 $newDistroTransaction.phase = 'importing_distro'
+$freshRegistration = [pscustomobject]@{
+    Exists = $true; BasePath = [string]$newDistroTransaction.distro_base_path
+}
+$missingFreshMarker = [pscustomobject]@{ Missing = $true; Valid = $false; InstallId = '' }
+if (-not (Test-SwitchTradeFreshImportMarkerBootstrap -Transaction $newDistroTransaction `
+        -Registration $freshRegistration -Marker $missingFreshMarker)) {
+    throw 'markerless distro imported by the interrupted fresh transaction was not adoptable'
+}
+$genericFreshMarker = [pscustomobject]@{ Missing = $false; Valid = $true; InstallId = '' }
+if (-not (Test-SwitchTradeFreshImportMarkerBootstrap -Transaction $newDistroTransaction `
+        -Registration $freshRegistration -Marker $genericFreshMarker)) {
+    throw 'generic-marker distro imported by the interrupted fresh transaction was not adoptable'
+}
+$invalidFreshMarker = [pscustomobject]@{ Missing = $false; Valid = $false; InstallId = '' }
+if (Test-SwitchTradeFreshImportMarkerBootstrap -Transaction $newDistroTransaction `
+        -Registration $freshRegistration -Marker $invalidFreshMarker) {
+    throw 'malformed distro ownership marker was overwritten during recovery'
+}
+$wrongFreshRegistration = [pscustomobject]@{
+    Exists = $true; BasePath = Join-Path $TestRoot 'foreign-wsl'
+}
+if (Test-SwitchTradeFreshImportMarkerBootstrap -Transaction $newDistroTransaction `
+        -Registration $wrongFreshRegistration -Marker $missingFreshMarker) {
+    throw 'markerless distro at a foreign BasePath was adopted during recovery'
+}
 $newDistroActual = New-RecoveryActual -Changes @{
     WindowsActiveExists = $false; WindowsActiveRelease = ''; KernelRelease = ''
     WslActiveRelease = ''; WslCandidateExists = $false; WslCandidateRelease = ''
