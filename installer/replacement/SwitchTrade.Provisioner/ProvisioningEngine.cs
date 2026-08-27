@@ -91,7 +91,7 @@ internal sealed partial class ProvisioningEngine(
         new KernelManager(paths).Restore();
         await wsl.ShutdownAsync(cancellationToken);
         RemoveOwnedTree(paths.RuntimeRoot, paths.DataRoot);
-        RemoveOwnedTree(paths.KernelRoot, paths.DataRoot);
+        RemoveOwnedTree(paths.KernelRoot, Path.GetDirectoryName(paths.KernelRoot));
         RemoveOwnedTree(Path.Combine(paths.DataRoot, "logs"), paths.DataRoot);
         RemoveOwnedTree(paths.StateRoot, paths.DataRoot);
         RemoveLegacyArtifacts(removeOrphanedRuntime: true);
@@ -142,6 +142,7 @@ internal sealed partial class ProvisioningEngine(
             Progress(action, "runtime_install", 35, "Installing a fresh isolated SwitchTrade runtime");
             await wsl.InstallAsync(runtime, name, location, cancellationToken);
             await VerifyOwnedAsync(name, manifest.ReleaseId, manifest.RuntimeContentId, location, cancellationToken);
+            await VerifyKernelAsync(name, manifest.Kernel.Release, cancellationToken);
 
             Progress(action, "software_health", 65, "Checking the local SwitchTrade service");
             await health.CheckAsync(name, manifest.ReleaseId, manifest.ControlContract, cancellationToken);
@@ -174,6 +175,16 @@ internal sealed partial class ProvisioningEngine(
             }
             throw;
         }
+    }
+
+    private async Task VerifyKernelAsync(string name, string expectedRelease,
+        CancellationToken cancellationToken)
+    {
+        var result = await wsl.RunAsync(name, ["uname", "-r"], TimeSpan.FromSeconds(30),
+            cancellationToken);
+        if (result.ExitCode != 0 || !result.Output.Equals(expectedRelease, StringComparison.Ordinal))
+            throw ProvisionerException.Kernel("KERNEL_RUNTIME_MISMATCH",
+                $"The SwitchTrade runtime booted kernel '{result.Output}' instead of '{expectedRelease}'.");
     }
 
     private async Task RecoverInterruptedAsync(ReleaseManifest manifest, CancellationToken cancellationToken)

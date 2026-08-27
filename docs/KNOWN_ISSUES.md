@@ -1,6 +1,6 @@
 # SwitchTrade beta bug register
 
-Last updated: 2026-08-27
+Last updated: 2026-08-28
 
 This is the field-validation register for the four release blockers observed during private-beta
 testing. It separates observed evidence from suspected causes. An issue remains open until its
@@ -44,6 +44,13 @@ The following observed failures are closed in source and remain part of clean-ho
   though the outer build result named the new release. Release builds now force WiX `Rebuild`, extract
   the finished Setup EXE, and compare the embedded release, provisioner, and payload hashes before
   accepting the artifact.
+- Candidate `beta-9a58b1a82612` reached the real WSL runtime stage but failed with
+  `WSL_E_CUSTOM_KERNEL_NOT_FOUND` when the custom kernel was stored below a non-ASCII Windows user
+  profile. The earlier disposable lifecycle used a fake profile path, so WSL ignored that test
+  `.wslconfig` and silently booted its stock kernel. The provisioner now keeps the verified kernel in
+  SID-scoped, ACL-protected ASCII ProgramData storage. The package lifecycle gate uses the real user
+  `.wslconfig`, proves the packaged custom kernel boots, and restores the prior file exactly. Direct
+  default-path Repair, backend health, and Uninstall now pass on the affected Korean-profile host.
 
 ## Status and priority
 

@@ -161,12 +161,24 @@ try {
     if ($RunDisposableWslLifecycle) {
         $provisioner = $embeddedProvisioner
         $data = Join-Path $validationRoot 'lifecycle\data'
-        $profile = Join-Path $validationRoot 'lifecycle\사용자 profile'
+        $profile = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+        $kernelValidationParent = Join-Path ([Environment]::GetFolderPath(
+            [Environment+SpecialFolder]::CommonApplicationData)) (
+            'SwitchTradeValidation\' + [Guid]::NewGuid().ToString('N'))
+        $kernelRoot = Join-Path $kernelValidationParent 'kernel'
+        if ($kernelRoot.ToCharArray() | Where-Object { [int]$_ -gt 127 }) {
+            throw 'The WSL lifecycle gate requires an ASCII common application-data path.'
+        }
         $runtimeLog = Join-Path $validationRoot 'lifecycle\SwitchTradeRuntime.log'
+        $wslConfig = Join-Path $profile '.wslconfig'
+        $originalWslConfigExists = Test-Path -LiteralPath $wslConfig -PathType Leaf
+        $originalWslConfigHash = if ($originalWslConfigExists) {
+            (Get-FileHash -LiteralPath $wslConfig -Algorithm SHA256).Hash
+        } else { $null }
         $before = @((@(& wsl.exe --list --quiet) -replace ([char]0), '') | Where-Object { $_ })
         function Invoke-Provisioner([string]$Action) {
             $arguments = @($Action, '--json', '--burn', '--log', $runtimeLog,
-                '--data-root', $data, '--user-profile', $profile)
+                '--data-root', $data, '--user-profile', $profile, '--kernel-root', $kernelRoot)
             $start = [Diagnostics.ProcessStartInfo]::new()
             $start.FileName = $provisioner
             $start.UseShellExecute = $false
@@ -182,6 +194,18 @@ try {
             Invoke-Provisioner 'repair'
         } finally {
             Invoke-Provisioner 'uninstall'
+            if (Test-Path -LiteralPath $kernelValidationParent) {
+                $resolvedKernelValidationParent = [IO.Path]::GetFullPath($kernelValidationParent)
+                $commonApplicationData = [Environment]::GetFolderPath(
+                    [Environment+SpecialFolder]::CommonApplicationData)
+                $expectedKernelPrefix = [IO.Path]::GetFullPath(
+                    (Join-Path $commonApplicationData 'SwitchTradeValidation')).TrimEnd('\') + '\'
+                if (-not $resolvedKernelValidationParent.StartsWith(
+                        $expectedKernelPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                    throw 'Kernel validation cleanup escaped its dedicated root.'
+                }
+                Remove-Item -LiteralPath $resolvedKernelValidationParent -Recurse -Force
+            }
         }
         $after = @((@(& wsl.exe --list --quiet) -replace ([char]0), '') | Where-Object { $_ })
         $distroDifference = $before.Count -ne $after.Count
@@ -189,7 +213,12 @@ try {
             $distroDifference = @(Compare-Object -ReferenceObject $before -DifferenceObject $after).Count -ne 0
         }
         if ($distroDifference) { throw 'Disposable lifecycle changed unrelated WSL distributions.' }
-        if (Test-Path -LiteralPath (Join-Path $profile '.wslconfig')) {
+        if ($originalWslConfigExists) {
+            if (-not (Test-Path -LiteralPath $wslConfig -PathType Leaf) -or
+                (Get-FileHash -LiteralPath $wslConfig -Algorithm SHA256).Hash -ne $originalWslConfigHash) {
+                throw 'Disposable lifecycle did not restore the original .wslconfig bytes.'
+            }
+        } elseif (Test-Path -LiteralPath $wslConfig) {
             throw 'Disposable lifecycle did not restore the absent .wslconfig state.'
         }
     }

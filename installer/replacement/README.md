@@ -38,8 +38,10 @@ pwsh -NoProfile -File installer/replacement/Test-ReplacementPackage.ps1 `
 ```
 
 On a development machine with current Store WSL, add `-RunDisposableWslLifecycle` to install,
-health-check, same-version Repair, and Uninstall an isolated Unicode-path runtime. The harness records
-the WSL distribution list before and after and refuses changes to unrelated distributions.
+health-check, same-version Repair, and Uninstall an isolated Unicode-path runtime. This gate writes
+the temporary kernel setting to the real user `.wslconfig`, keeps the kernel in a protected ASCII
+ProgramData path, proves the packaged custom kernel actually boots, restores the original config,
+and refuses changes to unrelated distributions.
 
 ## Lifecycle invariants
 
@@ -53,6 +55,10 @@ the WSL distribution list before and after and refuses changes to unrelated dist
   unregistering. It restores the prior `.wslconfig`, then removes SwitchTrade-owned local state.
 - WSL, unrelated distributions, and usbipd-win remain installed.
 - Hardware is configured after installation; no adapter is needed for Install or Repair.
+- WSL cannot resolve a custom-kernel path below some non-ASCII Windows profile names. Runtime and
+  user state remain per-user under LocalAppData, while the hash-verified kernel is stored under the
+  current SID in protected ASCII ProgramData storage readable only by that user, SYSTEM, and
+  administrators.
 
 The appliance is assembled from a SHA-256-pinned Canonical Ubuntu Base image and pinned Ubuntu
 package snapshot, exact wheel hashes, pinned firmware, and a matching kernel/modules bundle. User

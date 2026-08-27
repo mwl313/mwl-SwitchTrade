@@ -29,12 +29,13 @@ internal static class Program
             var packageRoot = Option(args, "--package-root") ?? AppContext.BaseDirectory;
             var dataRoot = Option(args, "--data-root");
             var userProfile = Option(args, "--user-profile");
-            if ((dataRoot is not null || userProfile is not null) &&
+            var kernelRoot = Option(args, "--kernel-root");
+            if ((dataRoot is not null || userProfile is not null || kernelRoot is not null) &&
                 Environment.GetEnvironmentVariable("SWITCHTRADE_PROVISIONER_TEST_ROOTS") != "1")
                 throw new ProvisionerException("TEST_ROOT_OVERRIDE_DENIED", "arguments",
                     "Custom data and profile roots are available only to the isolated test harness.",
                     false, "Remove the custom root arguments", 2);
-            paths = new ProvisionerPaths(dataRoot, userProfile);
+            paths = new ProvisionerPaths(dataRoot, userProfile, kernelRoot);
             var wsl = new WslPlatform();
             var engine = new ProvisioningEngine(paths, wsl, new WslRuntimeHealth(wsl), correlationId, Emit);
             switch (command)
@@ -123,6 +124,7 @@ internal static partial class ProvisionerLog
         if (value is null) return null;
         return SecretPattern().Replace(value
             .Replace(paths.UserProfile, "%USERPROFILE%", StringComparison.OrdinalIgnoreCase)
+            .Replace(paths.KernelRoot, "%SWITCHTRADE_KERNEL%", StringComparison.OrdinalIgnoreCase)
             .Replace(paths.DataRoot, "%SWITCHTRADE_DATA%", StringComparison.OrdinalIgnoreCase),
             "$1=[redacted]");
     }

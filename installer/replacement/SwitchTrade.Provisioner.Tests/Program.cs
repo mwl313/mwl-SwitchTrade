@@ -7,6 +7,8 @@ Directory.CreateDirectory(root);
 try
 {
     WslConfigPreservesUnrelatedSettings();
+    ProductionKernelStorageIsAsciiAndUserScoped();
+    ProcessOutputDecodesWindowsAndLinuxStreams();
     KernelApplyAndRestorePreserveUserChanges();
     KernelRestoreFailsClosedAfterOwnershipChange();
     ReleaseManifestVerifiesPayloadsAndRejectsEscape();
@@ -41,6 +43,25 @@ void WslConfigPreservesUnrelatedSettings()
     Assert(merged.Contains("autoMemoryReclaim=gradual", StringComparison.Ordinal), "experimental setting changed");
     Assert(merged.Contains("kernel=C:\\\\new\\\\kernel", StringComparison.Ordinal), "kernel not replaced");
     Assert(!merged.Contains("old", StringComparison.Ordinal), "old kernel retained");
+}
+
+void ProductionKernelStorageIsAsciiAndUserScoped()
+{
+    var path = ProvisionerPaths.ProductionKernelRoot("C:\\ProgramData", "S-1-5-21-123-456-789-1001");
+    Assert(path == "C:\\ProgramData\\SwitchTrade\\users\\S-1-5-21-123-456-789-1001\\kernel",
+        "production kernel storage is not stable and user-scoped");
+    Assert(path.All(character => character <= 0x7f),
+        "production kernel storage unexpectedly depends on a Unicode profile path");
+}
+
+void ProcessOutputDecodesWindowsAndLinuxStreams()
+{
+    const string windowsText = "WSL 커스텀 커널을 찾을 수 없습니다.";
+    const string linuxText = "{\"owner\":\"switchtrade-provisioner\"}";
+    Assert(ProcessRunner.Decode(Encoding.Unicode.GetBytes(windowsText)) == windowsText,
+        "UTF-16 WSL diagnostics were not decoded");
+    Assert(ProcessRunner.Decode(Encoding.UTF8.GetBytes(linuxText)) == linuxText,
+        "UTF-8 Linux output was not decoded");
 }
 
 void KernelApplyAndRestorePreserveUserChanges()
@@ -137,10 +158,11 @@ void ProvisionerLogsAreSanitized()
     var correlation = Guid.Parse("44444444-4444-4444-4444-444444444444");
     ProvisionerLog.Write(paths, new ProvisionerEvent(1, "error", correlation, "repair",
         "test", Status: "failed", Code: "TEST", Message:
-        $"path={paths.UserProfile}; token=do-not-log; data={paths.DataRoot}"));
+        $"path={paths.UserProfile}; token=do-not-log; data={paths.DataRoot}; kernel={paths.KernelRoot}"));
     var text = File.ReadAllText(Path.Combine(paths.LogRoot, correlation.ToString("N") + ".jsonl"));
     Assert(text.Contains("%USERPROFILE%", StringComparison.Ordinal) &&
-           text.Contains("%SWITCHTRADE_DATA%", StringComparison.Ordinal),
+           text.Contains("%SWITCHTRADE_DATA%", StringComparison.Ordinal) &&
+           text.Contains("%SWITCHTRADE_KERNEL%", StringComparison.Ordinal),
         "provisioner log did not pseudonymize owned paths");
     Assert(!text.Contains("do-not-log", StringComparison.Ordinal),
         "provisioner log retained a token");
@@ -155,7 +177,7 @@ void ProvisionerLogsAreSanitized()
 
 async Task LifecycleFaultsConverge()
 {
-    foreach (var fault in new[] { "install", "marker", "health" })
+    foreach (var fault in new[] { "install", "marker", "kernel", "health" })
     {
         var test = Path.Combine(root, "fault-" + fault);
         var data = Path.Combine(test, "data");
@@ -466,6 +488,15 @@ sealed class FakeWsl(string releaseId, string contentId, string fault) : IWslPla
     public Task<ProcessResult> RunAsync(string name, IEnumerable<string> arguments, TimeSpan timeout,
         CancellationToken cancellationToken)
     {
+        if (arguments.SequenceEqual(["uname", "-r"]))
+        {
+            if (fault == "kernel" && !_failed)
+            {
+                _failed = true;
+                return Task.FromResult(new ProcessResult(0, "stock-kernel", ""));
+            }
+            return Task.FromResult(new ProcessResult(0, "test-kernel", ""));
+        }
         if (fault == "marker" && !_failed)
         {
             _failed = true;

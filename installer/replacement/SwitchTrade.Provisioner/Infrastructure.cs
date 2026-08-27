@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.ComponentModel;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Win32;
@@ -26,12 +27,12 @@ internal static class ProcessRunner
         };
         foreach (var argument in arguments) start.ArgumentList.Add(argument);
         using var process = Process.Start(start) ?? throw new InvalidOperationException($"Could not start {fileName}.");
-        var stdout = process.StandardOutput.ReadToEndAsync(deadline.Token);
-        var stderr = process.StandardError.ReadToEndAsync(deadline.Token);
+        var stdout = ReadBytesAsync(process.StandardOutput.BaseStream, deadline.Token);
+        var stderr = ReadBytesAsync(process.StandardError.BaseStream, deadline.Token);
         try
         {
             await process.WaitForExitAsync(deadline.Token);
-            return new ProcessResult(process.ExitCode, Clean(await stdout), Clean(await stderr));
+            return new ProcessResult(process.ExitCode, Decode(await stdout), Decode(await stderr));
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -40,19 +41,71 @@ internal static class ProcessRunner
         }
     }
 
-    private static string Clean(string value) => value.Replace("\0", "", StringComparison.Ordinal).Trim();
+    private static async Task<byte[]> ReadBytesAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        using var buffer = new MemoryStream();
+        await stream.CopyToAsync(buffer, cancellationToken);
+        return buffer.ToArray();
+    }
+
+    internal static string Decode(byte[] bytes)
+    {
+        if (bytes.Length == 0) return "";
+        var offset = 0;
+        Encoding encoding;
+        if (bytes.AsSpan().StartsWith(Encoding.Unicode.GetPreamble()))
+        {
+            encoding = Encoding.Unicode;
+            offset = Encoding.Unicode.GetPreamble().Length;
+        }
+        else if (bytes.AsSpan().StartsWith(Encoding.BigEndianUnicode.GetPreamble()))
+        {
+            encoding = Encoding.BigEndianUnicode;
+            offset = Encoding.BigEndianUnicode.GetPreamble().Length;
+        }
+        else if (LooksLikeUtf16LittleEndian(bytes))
+        {
+            encoding = Encoding.Unicode;
+        }
+        else
+        {
+            encoding = new UTF8Encoding(false, false);
+        }
+        return encoding.GetString(bytes, offset, bytes.Length - offset).Trim();
+    }
+
+    private static bool LooksLikeUtf16LittleEndian(byte[] bytes)
+    {
+        var sample = Math.Min(bytes.Length, 256);
+        var pairs = sample / 2;
+        if (pairs < 2) return false;
+        var evenNulls = 0;
+        var oddNulls = 0;
+        for (var index = 0; index < pairs * 2; index += 2)
+        {
+            if (bytes[index] == 0) evenNulls++;
+            if (bytes[index + 1] == 0) oddNulls++;
+        }
+        return oddNulls >= 2 && oddNulls * 5 >= pairs && oddNulls > evenNulls * 2;
+    }
 }
 
 internal sealed class ProvisionerPaths
 {
-    internal ProvisionerPaths(string? dataRoot = null, string? userProfile = null)
+    internal ProvisionerPaths(string? dataRoot = null, string? userProfile = null,
+        string? kernelRoot = null)
     {
         DataRoot = Path.GetFullPath(dataRoot ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SwitchTrade"));
         UserProfile = Path.GetFullPath(userProfile ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
         StateRoot = Path.Combine(DataRoot, "state");
         RuntimeRoot = Path.Combine(DataRoot, "runtimes");
-        KernelRoot = Path.Combine(DataRoot, "kernel");
+        KernelRoot = Path.GetFullPath(kernelRoot ?? (dataRoot is not null
+            ? Path.Combine(DataRoot, "kernel")
+            : ProductionKernelRoot(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                CurrentUserSid())));
+        EnforceAsciiKernelPath = dataRoot is null || kernelRoot is not null;
         LogRoot = Path.Combine(DataRoot, "logs", "setup");
     }
 
@@ -61,6 +114,7 @@ internal sealed class ProvisionerPaths
     internal string StateRoot { get; }
     internal string RuntimeRoot { get; }
     internal string KernelRoot { get; }
+    internal bool EnforceAsciiKernelPath { get; }
     internal string LogRoot { get; }
     internal string ActivePath => Path.Combine(StateRoot, "active-runtime.json");
     internal string JournalPath => Path.Combine(StateRoot, "operation.json");
@@ -69,6 +123,17 @@ internal sealed class ProvisionerPaths
     internal string WslConfigPath => Path.Combine(UserProfile, ".wslconfig");
 
     internal void Ensure() => Directory.CreateDirectory(StateRoot);
+
+    internal static string ProductionKernelRoot(string commonApplicationData, string userSid) =>
+        Path.Combine(Path.GetFullPath(commonApplicationData), "SwitchTrade", "users", userSid, "kernel");
+
+    private static string CurrentUserSid()
+    {
+        using var identity = WindowsIdentity.GetCurrent();
+        return identity.User?.Value ?? throw ProvisionerException.State(
+            "WINDOWS_IDENTITY_UNAVAILABLE", "The current Windows user SID could not be determined.",
+            "Sign out and sign in, then retry Setup");
+    }
 }
 
 internal static class AtomicFile

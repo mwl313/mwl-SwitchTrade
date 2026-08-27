@@ -1,4 +1,6 @@
 using System.Security.Cryptography;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -128,12 +130,16 @@ internal sealed class KernelManager(ProvisionerPaths paths)
     internal KernelState Apply(ReleaseManifest manifest, string packageRoot)
     {
         var source = manifest.PayloadPath(packageRoot, "kernel");
-        Directory.CreateDirectory(paths.KernelRoot);
+        PrepareKernelDirectory(paths.KernelRoot);
         Directory.CreateDirectory(Path.Combine(paths.StateRoot, "backups"));
         var identity = Contract.HashFile(source)[..12];
         var safeRelease = Regex.Replace(manifest.Kernel.Release, "[^A-Za-z0-9._-]", "_");
         var installed = Path.Combine(paths.KernelRoot, $"kernel-{safeRelease}-{identity}");
+        if (paths.EnforceAsciiKernelPath && installed.Any(character => character > 0x7f))
+            throw ProvisionerException.Kernel("KERNEL_PATH_NOT_WSL_COMPATIBLE",
+                "The custom-kernel storage path contains characters that this WSL build cannot resolve.", false);
         if (!File.Exists(installed)) File.Copy(source, installed);
+        SecureKernelFile(installed);
         if (Contract.HashFile(installed) != Contract.HashFile(source))
             throw ProvisionerException.Kernel("KERNEL_COPY_HASH_MISMATCH", "The installed custom kernel does not match the package.");
 
@@ -170,6 +176,61 @@ internal sealed class KernelManager(ProvisionerPaths paths)
             Contract.HashFile(installed), manifest.Kernel.Release, appliedValue);
         AtomicFile.Write(paths.KernelStatePath, state);
         return state;
+    }
+
+    private static void PrepareKernelDirectory(string path)
+    {
+        try
+        {
+            Directory.CreateDirectory(path);
+            using var identity = WindowsIdentity.GetCurrent();
+            var user = identity.User ?? throw new InvalidOperationException("Current user SID is unavailable.");
+            var inheritance = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
+            var security = new DirectorySecurity();
+            security.SetOwner(user);
+            security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            security.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl,
+                inheritance, PropagationFlags.None, AccessControlType.Allow));
+            security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(
+                    WellKnownSidType.LocalSystemSid, null), FileSystemRights.FullControl,
+                inheritance, PropagationFlags.None, AccessControlType.Allow));
+            security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(
+                    WellKnownSidType.BuiltinAdministratorsSid, null), FileSystemRights.FullControl,
+                inheritance, PropagationFlags.None, AccessControlType.Allow));
+            new DirectoryInfo(path).SetAccessControl(security);
+        }
+        catch (Exception error) when (error is UnauthorizedAccessException or IOException or
+                                      InvalidOperationException or SystemException)
+        {
+            throw ProvisionerException.Kernel("KERNEL_STORAGE_SECURITY_FAILED",
+                $"The protected custom-kernel directory could not be prepared: {error.Message}", false);
+        }
+    }
+
+    private static void SecureKernelFile(string path)
+    {
+        try
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            var user = identity.User ?? throw new InvalidOperationException("Current user SID is unavailable.");
+            var security = new FileSecurity();
+            security.SetOwner(user);
+            security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            security.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl,
+                AccessControlType.Allow));
+            security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(
+                    WellKnownSidType.LocalSystemSid, null), FileSystemRights.FullControl,
+                AccessControlType.Allow));
+            security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(
+                    WellKnownSidType.BuiltinAdministratorsSid, null), FileSystemRights.FullControl,
+                AccessControlType.Allow));
+            new FileInfo(path).SetAccessControl(security);
+        }
+        catch (Exception error) when (error is SystemException)
+        {
+            throw ProvisionerException.Kernel("KERNEL_STORAGE_SECURITY_FAILED",
+                $"The custom-kernel file permissions could not be secured: {error.Message}", false);
+        }
     }
 
     internal void Restore()
