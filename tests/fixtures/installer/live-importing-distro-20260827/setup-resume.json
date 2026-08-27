@@ -1,0 +1,20 @@
+{
+  "usb_instance_id": "",
+  "defer_hardware_setup": true,
+  "accept_prerequisite_changes": true,
+  "install_root": "C:\\Users\\<USER>\\AppData\\Local\\Programs\\SwitchTrade",
+  "accept_vmware_release": true,
+  "invoking_user_sid": "S-1-5-21-<REDACTED>-1001",
+  "no_shortcut": false,
+  "package_root": "C:\\Users\\<USER>\\Desktop\\SwitchTrade-unsigned-private-beta-ccc7e96",
+  "schema": 3,
+  "action": "Install",
+  "distro": "SwitchTrade",
+  "bus_id": "",
+  "usb_id": "",
+  "user_profile_root": "C:\\Users\\<USER>",
+  "accept_global_kernel_change": true,
+  "desktop_root": "C:\\Users\\<USER>\\Desktop",
+  "local_app_data_root": "C:\\Users\\<USER>\\AppData\\Local",
+  "distro_root": "C:\\Users\\<USER>\\AppData\\Local\\SwitchTrade\\wsl"
+}
