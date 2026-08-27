@@ -49,6 +49,9 @@ def test_release_manifest_and_zip_are_reproducible():
 
 def test_packaging_and_provisioning_fail_closed_to_verified_offline_inputs():
     builder = (ROOT / "installer" / "Build-Package.ps1").read_text(encoding="utf-8")
+    setup_project = (ROOT / "installer" / "bootstrap" / "SwitchTrade.Setup.csproj").read_text(
+        encoding="utf-8"
+    )
     provision = (ROOT / "installer" / "provision-wsl.sh").read_text(encoding="utf-8")
     rootfs = (ROOT / "installer" / "Build-Rootfs.sh").read_text(encoding="utf-8")
     assert "Wheelhouse = $Wheelhouse" in builder
@@ -56,6 +59,7 @@ def test_packaging_and_provisioning_fail_closed_to_verified_offline_inputs():
     assert "create-deterministic-zip.py" in builder
     assert "ContinuousIntegrationBuild=true" in builder
     assert "--no-restore" in builder
+    assert "<RuntimeIdentifier>win-x64</RuntimeIdentifier>" in setup_project
     assert "--no-index" in provision
     assert "OFFLINE_WHEELHOUSE_MISSING" in provision
     assert "apt-get update" not in provision
