@@ -44,6 +44,14 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertNotIn('if (installed) action.Items.Add("Uninstall")', dialog)
         self.assertIn("ProgressBarStyle.Marquee", progress)
         self.assertIn("WaitForExitAsync", progress)
+        self.assertIn('action == "resume"', program)
+        self.assertIn('start.Environment["SWITCHTRADE_SETUP_PROGRESS"] = "1"', program)
+        self.assertIn('"resume" => "Continuing SwitchTrade setup"', progress)
+        self.assertIn("SWITCHTRADE_SETUP_PROGRESS: ", progress)
+        self.assertIn("ReadLinesAsync(process.StandardOutput", progress)
+        self.assertIn("Set-SwitchTradeSetupStage 'prerequisites_enable'", setup)
+        self.assertIn("Set-SwitchTradeSetupStage 'wsl_update'", setup)
+        self.assertIn("Set-SwitchTradeSetupStage 'usbipd_install'", setup)
         self.assertIn("You can now delete the extracted setup folder and ZIP", program)
         self.assertIn("$UsbId.ToLowerInvariant()", setup)
         self.assertIn("wslHealthArguments", setup)
@@ -242,6 +250,17 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("WindowsBuild", result.stdout)
         self.assertIn("Distro", result.stdout)
+
+    def test_setup_audit_does_not_launch_the_windows_wsl_install_stub(self):
+        setup = (ROOT / "installer" / "SwitchTradeSetup.ps1").read_text(encoding="utf-8")
+        self.assertIn("function Test-SwitchTradeWslRuntimeLaunchSafe", setup)
+        self.assertIn("System32\\wsl.exe remains as an installation stub", setup)
+        self.assertIn("if ($wslCommandPresent -and $wslRuntimeLaunchSafe)", setup)
+        self.assertIn("$distros = Get-Distros -AllowUnavailable", setup)
+        self.assertLess(
+            setup.index("if ($wslCommandPresent -and $wslRuntimeLaunchSafe)"),
+            setup.index("$distros = Get-Distros -AllowUnavailable", setup.index("function Test-Setup")),
+        )
 
     @unittest.skipUnless(shutil.which("powershell"), "Windows PowerShell is required")
     def test_setup_failure_has_a_stable_bootstrap_marker(self):

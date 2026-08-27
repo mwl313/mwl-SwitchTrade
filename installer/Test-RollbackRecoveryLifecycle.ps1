@@ -19,7 +19,7 @@ $parseErrors = $null
 $setupAst = [Management.Automation.Language.Parser]::ParseFile(
     (Join-Path $PSScriptRoot 'SwitchTradeSetup.ps1'), [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw 'could not parse SwitchTradeSetup.ps1 for lifecycle test' }
-foreach ($functionName in @('Repair-SwitchTradeInterruptedRollback',
+foreach ($functionName in @('Set-SwitchTradeSetupStage', 'Repair-SwitchTradeInterruptedRollback',
         'Repair-SwitchTradeInterruptedTransaction')) {
     $functionAst = $setupAst.Find({
         param($node)

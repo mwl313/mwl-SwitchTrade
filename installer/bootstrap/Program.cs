@@ -58,6 +58,7 @@ internal static class Program
         var choice = requestedAction is null ? SetupDialog.Show(AppContext.BaseDirectory) : null;
         if (requestedAction is null && choice is null) return 0;
         var action = requestedAction ?? choice!.Action.ToLowerInvariant();
+        var interactive = requestedAction is null || action == "resume";
         var script = Path.Combine(AppContext.BaseDirectory, "installer", "SwitchTradeSetup.ps1");
         if (!File.Exists(script))
         {
@@ -131,16 +132,17 @@ internal static class Program
                 start.ArgumentList.Add(choice.Radio.InstanceId);
             }
         }
+        if (interactive) start.Environment["SWITCHTRADE_SETUP_PROGRESS"] = "1";
 
         try
         {
-            var result = requestedAction is null
+            var result = interactive
                 ? SetupProgressDialog.Run(start, action)
                 : RunHeadless(start);
             var restartRequired = result.ExitCode == 3010;
             var success = result.ExitCode == 0 || restartRequired;
             var message = success ? result.Output.Trim() : result.Error.Trim();
-            if (requestedAction is not null)
+            if (!interactive)
             {
                 if (success) Console.Out.WriteLine(message);
                 else Console.Error.WriteLine(message);

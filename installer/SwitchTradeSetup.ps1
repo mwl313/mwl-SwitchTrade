@@ -78,6 +78,14 @@ $PreviousInstall = "$InstallRoot.previous"
 . (Join-Path $PSScriptRoot 'HostCompatibility.ps1')
 . (Join-Path $PSScriptRoot 'SetupLifecycle.ps1')
 
+function Set-SwitchTradeSetupStage([string]$Stage) {
+    $script:SetupStage = $Stage
+    if ($env:SWITCHTRADE_SETUP_PROGRESS -eq '1') {
+        [Console]::Out.WriteLine("SWITCHTRADE_SETUP_PROGRESS: $Stage")
+        [Console]::Out.Flush()
+    }
+}
+
 $ResumeStatePath = Join-Path $StateRoot 'setup-resume.json'
 $TransactionPath = Join-Path $StateRoot 'setup-transaction.json'
 $SetupLog = Join-Path $StateRoot 'logs\setup.jsonl'
@@ -170,6 +178,18 @@ function Get-Distros {
         throw "WSL_DISTRO_ENUMERATION_UNKNOWN: $($result.Error)"
     }
     return @(($result.Output -split "`r?`n") | ForEach-Object { $_.Trim([char]0).Trim() } | Where-Object { $_ })
+}
+
+function Test-SwitchTradeWslRuntimeLaunchSafe {
+    # System32\wsl.exe remains as an installation stub after WSL is removed. Invoking
+    # that stub is interactive and may begin installing WSL, so command discovery is
+    # not sufficient evidence that a usable runtime exists.
+    $programFilesRuntime = Join-Path $env:ProgramFiles 'WSL\wsl.exe'
+    if (Test-Path -LiteralPath $programFilesRuntime -PathType Leaf) { return $true }
+    if (Get-Service WslService -ErrorAction SilentlyContinue) { return $true }
+    if (Get-AppxPackage -Name MicrosoftCorporationII.WindowsSubsystemForLinux `
+            -ErrorAction SilentlyContinue) { return $true }
+    return $false
 }
 
 function Get-SwitchTradeDistroRegistration {
@@ -290,7 +310,7 @@ function Invoke-LoggedWsl {
         [Parameter(Mandatory)][string]$FailureCode,
         [Parameter(Mandatory)][string]$Stage
     )
-    $script:SetupStage = $Stage
+    Set-SwitchTradeSetupStage $Stage
     $result = Invoke-BoundedNativeProcess -FilePath 'wsl.exe' -Arguments $Arguments -TimeoutSeconds 600
     $output = @($result.Output, $result.Error | Where-Object { $_ })
     foreach ($line in (($output -join "`n") -split "`r?`n")) {
@@ -547,7 +567,7 @@ function Repair-SwitchTradeInterruptedRollback {
 
 function Repair-SwitchTradeInterruptedTransaction {
     param([Parameter(Mandatory)]$Transaction)
-    $script:SetupStage = 'transaction_recovery'
+    Set-SwitchTradeSetupStage 'transaction_recovery'
     if ($Action -ne 'Repair') {
         throw "SETUP_TRANSACTION_INCOMPLETE: transaction $($Transaction.transaction_id) stopped at $($Transaction.phase); run the matching package Repair"
     }
@@ -883,7 +903,7 @@ function Repair-SwitchTradeInterruptedTransaction {
 
 function Resolve-StableUsbBusId {
     if (-not $UsbInstanceId) { return $BusId }
-    $script:SetupStage = 'usb_identity'
+    Set-SwitchTradeSetupStage 'usb_identity'
     $result = Invoke-BoundedNativeProcess -FilePath 'usbipd.exe' -Arguments @('state') -TimeoutSeconds 15
     $raw = ($result.Output + $result.Error).Trim()
     if ($result.ExitCode -ne 0) { throw "USBIPD_STATE_FAILED: $raw" }
@@ -894,7 +914,7 @@ function Resolve-StableUsbBusId {
 
 function Assert-SwitchTradeHostCapabilities {
     param([switch]$SkipUsbipd)
-    $script:SetupStage = 'host_capabilities'
+    Set-SwitchTradeSetupStage 'host_capabilities'
     $wslVersion = Invoke-BoundedNativeProcess -FilePath 'wsl.exe' -Arguments @('--version') -TimeoutSeconds 15
     $wslHelp = Invoke-BoundedNativeProcess -FilePath 'wsl.exe' -Arguments @('--help') -TimeoutSeconds 15
     if ($wslVersion.ExitCode -ne 0 -or $wslHelp.ExitCode -ne 0) { throw 'WSL_CAPABILITY_PROBE_FAILED' }
@@ -919,7 +939,7 @@ function Assert-SwitchTradeHostCapabilities {
 
 function Test-StagedControlReadiness {
     param([Parameter(Mandatory)][string]$ExpectedReleaseId)
-    $script:SetupStage = 'control_readiness'
+    Set-SwitchTradeSetupStage 'control_readiness'
     $port = 18787
     $arguments = @(
         '-d', $Distro, '-u', 'root', '--cd', '/opt/switchtrade.candidate', '--',
@@ -949,12 +969,12 @@ function Test-StagedControlReadiness {
 }
 
 function Test-Setup {
-    $distros = Get-Distros -AllowUnavailable
     $vmware = Get-Service VMUSBArbService -ErrorAction SilentlyContinue
     $computer = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
     $operatingSystem = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
     $processors = @(Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue)
     $wslCommandPresent = [bool](Get-Command wsl.exe -ErrorAction SilentlyContinue)
+    $wslRuntimeLaunchSafe = Test-SwitchTradeWslRuntimeLaunchSafe
     $wslFeature = $null
     $vmFeature = $null
     try {
@@ -970,8 +990,10 @@ function Test-Setup {
     $wslVersionExit = 1
     $wslVersion = 'Absent'
     $wslCapabilityReady = $false
-    if ($wslCommandPresent) {
+    $distros = @()
+    if ($wslCommandPresent -and $wslRuntimeLaunchSafe) {
         try {
+            $distros = Get-Distros -AllowUnavailable
             $statusProbe = Invoke-BoundedNativeProcess -FilePath 'wsl.exe' -Arguments @('--status') -TimeoutSeconds 15
             $versionProbe = Invoke-BoundedNativeProcess -FilePath 'wsl.exe' -Arguments @('--version') -TimeoutSeconds 15
             $wslStatusExit = $statusProbe.ExitCode
@@ -1001,7 +1023,7 @@ function Test-Setup {
         WindowsSupported = Test-SwitchTradeWindowsHost -Build $windowsBuild `
             -ProductType $productType -Architecture $architecture
         WindowsProductType = $productType
-        WslInstalled = $wslCommandPresent -and ($wslFeaturesEnabled -or $wslStatusExit -eq 0)
+        WslInstalled = $wslRuntimeLaunchSafe -or $wslFeaturesEnabled
         WslFeaturesEnabled = [bool]$wslFeaturesEnabled
         WslModern = $wslCapabilityReady
         WslVersion = $wslVersion
@@ -1032,13 +1054,13 @@ if ($Action -eq 'Audit') {
 $ReleaseId = ''
 $PackageManifestSha256 = ''
 if ($Action -in @('Install', 'Repair', 'Update', 'Rollback')) {
-    $SetupStage = 'package_integrity'
+    Set-SwitchTradeSetupStage 'package_integrity'
     Test-SwitchTradePackage -PackageRoot $PackageRoot -AllowUnsignedPackage:$AllowUnsignedPackage | Out-Null
     $ReleaseId = Get-SwitchTradeReleaseId -ManifestPath (Join-Path $PackageRoot 'manifest.json')
     $PackageManifestSha256 = Get-FileSha256 (Join-Path $PackageRoot 'manifest.json')
 }
 
-$SetupStage = 'mutex'
+Set-SwitchTradeSetupStage 'mutex'
 $SetupMutex = Enter-SwitchTradeSetupMutex
 Write-SwitchTradeSetupLog -Path $SetupLog -Stage $SetupStage -Message "setup action=$Action acquired the mutation mutex"
 $namedDistroExists = if (($Action -eq 'Uninstall' -and $PurgeDistro) -or
@@ -1119,7 +1141,7 @@ if ($Action -eq 'Rollback') {
         throw 'ROLLBACK_WINDOWS_MISSING: no retained SwitchTrade application version is available'
     }
     if (-not $namedDistroExists) { throw 'ROLLBACK_DISTRO_MISSING: the owned SwitchTrade distro is absent' }
-    $SetupStage = 'rollback_validate'
+    Set-SwitchTradeSetupStage 'rollback_validate'
     $rollbackRelease = Get-InstalledWindowsReleaseId -Root $PreviousInstall
     $activeRelease = Get-InstalledWindowsReleaseId -Root $InstallRoot
     Test-WindowsReleaseTree -Root $PreviousInstall -ExpectedReleaseId $rollbackRelease | Out-Null
@@ -1147,7 +1169,7 @@ if ($Action -eq 'Rollback') {
     $kernelRolledBack = $false
     $windowsRolledBack = $false
     try {
-        $SetupStage = 'rollback_commit'
+        Set-SwitchTradeSetupStage 'rollback_commit'
         Invoke-BoundedNativeProcess -FilePath 'wsl.exe' -Arguments @('--terminate', $Distro) `
             -TimeoutSeconds 30 | Out-Null
         Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'bash', $runtimeProvision,
@@ -1231,6 +1253,7 @@ if (-not $audit.WslInstalled) {
     if (-not (Test-Path -LiteralPath (Join-Path $PackageRoot 'SwitchTradeSetup.exe') -PathType Leaf)) {
         throw 'SETUP_RESUME_UNAVAILABLE: use the complete native setup package before enabling WSL'
     }
+    Set-SwitchTradeSetupStage 'prerequisites_enable'
     $dismWsl = Invoke-BoundedNativeProcess -FilePath 'dism.exe' -Arguments @('/online', '/enable-feature',
         '/featurename:Microsoft-Windows-Subsystem-Linux', '/all', '/norestart') -TimeoutSeconds 600
     if ($dismWsl.ExitCode -notin @(0, 3010)) { throw 'WSL_FEATURE_ENABLE_FAILED' }
@@ -1245,6 +1268,7 @@ if (-not $audit.WslModern) {
     if (-not $AcceptPrerequisiteChanges) {
         throw 'The current Microsoft Store version of WSL 2 is required. Rerun after accepting prerequisite changes.'
     }
+    Set-SwitchTradeSetupStage 'wsl_update'
     $wslUpdate = Invoke-BoundedNativeProcess -FilePath 'wsl.exe' `
         -Arguments @('--update', '--web-download') -TimeoutSeconds 600
     if ($wslUpdate.ExitCode -ne 0) {
@@ -1278,6 +1302,7 @@ if ($usbipdNeedsInstall) {
         ([string]$usbipdMetadata.sha256).ToLowerInvariant()) {
         throw 'usbipd-win installer checksum verification failed'
     }
+    Set-SwitchTradeSetupStage 'usbipd_install'
     $msi = Invoke-BoundedNativeProcess -FilePath 'msiexec.exe' `
         -Arguments @('/i', $UsbipdMsi, '/qn', '/norestart') -TimeoutSeconds 600
     if ($msi.ExitCode -notin @(0, 3010)) { throw "USBIPD_INSTALL_FAILED: exit $($msi.ExitCode) $($msi.Error)" }
@@ -1385,7 +1410,7 @@ $transaction = New-SwitchTradeTransaction -Path $TransactionPath -Action $Action
     -WindowsPriorIntegritySha256 $windowsPriorIntegritySha256 `
     -WslPriorIntegritySha256 $wslPriorIntegritySha256
 try {
-    $SetupStage = 'windows_stage'
+    Set-SwitchTradeSetupStage 'windows_stage'
     New-Item -ItemType Directory -Path $stage | Out-Null
     Copy-Item -LiteralPath (Join-Path $PackageRoot 'installer') -Destination $stage -Recurse
     Copy-Item -LiteralPath $Payload -Destination $stage -Recurse
@@ -1403,7 +1428,7 @@ try {
     Set-SwitchTradeTransactionPhase -Path $TransactionPath -Phase 'windows_staged' `
         -Fields @{ windows_integrity_sha256 = $windowsIntegritySha256 } | Out-Null
 
-    $SetupStage = 'distro_identity'
+    Set-SwitchTradeSetupStage 'distro_identity'
     if (-not $namedDistroExists) {
         if (-not $audit.RootfsPresent) { throw "ROOTFS_MISSING: $Rootfs" }
         if (-not (Test-Path -LiteralPath $RootfsHash -PathType Leaf)) { throw "ROOTFS_HASH_MISSING: $RootfsHash" }
@@ -1456,7 +1481,7 @@ try {
 
     if ((Test-Path -LiteralPath $Kernel -PathType Leaf) -and
         (Test-Path -LiteralPath $KernelManifest -PathType Leaf)) {
-        $SetupStage = 'kernel_apply'
+        Set-SwitchTradeSetupStage 'kernel_apply'
         if ($priorReleaseId) {
             $kernelHadManagedPrior = Initialize-SwitchTradeKernelReleaseIdentity -StateRoot $StateRoot `
                 -CurrentReleaseId $priorReleaseId
@@ -1507,7 +1532,7 @@ try {
         }
     }
 
-    $SetupStage = 'commit'
+    Set-SwitchTradeSetupStage 'commit'
     $wslCommitAttempted = $true
     Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'bash', $provision,
         '--commit', '--release-id', $ReleaseId, '--integrity-sha256', $wslIntegritySha256) `
@@ -1523,7 +1548,7 @@ try {
         -Fields @{ windows_committed = $true } | Out-Null
 } catch {
     $transactionFailure = $_
-    $SetupStage = 'compensate'
+    Set-SwitchTradeSetupStage 'compensate'
     try {
         if ($wslStageAttempted -and -not $wslStaged) {
             Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'bash', $provision,
@@ -1596,7 +1621,7 @@ try {
 }
 
 if ($audit.VmwareUsbArbitrator -eq 'Running') {
-    $SetupStage = 'hardware_ownership'
+    Set-SwitchTradeSetupStage 'hardware_ownership'
     if (-not $AcceptVmwareRelease) {
         throw 'VMWARE_USB_OWNERSHIP_REQUIRED: run Setup Repair after accepting the temporary VMware USB release'
     }
@@ -1605,7 +1630,7 @@ if ($audit.VmwareUsbArbitrator -eq 'Running') {
 if ($DeferHardwareSetup) {
     Write-Host 'Wi-Fi adapter setup was deferred. Software release committed coherently; use Setup Repair for hardware readiness.'
 } else {
-    $SetupStage = 'hardware_readiness'
+    Set-SwitchTradeSetupStage 'hardware_readiness'
     $BusId = Resolve-StableUsbBusId
     $radioPreflight = Join-Path $Payload 'scripts\windows\wsl-radio-preflight.ps1'
     $profileFile = Join-Path $Payload 'config\wsl-radio-hardware.tsv'

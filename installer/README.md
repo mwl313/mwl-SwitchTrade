@@ -90,7 +90,8 @@ The retired web/demo frontend is not bundled into the WSL runtime or required by
   binding and fails with an exact repair action if administrator work is required.
 - If enabling WSL or installing `usbipd-win` requires a restart, setup persists only non-secret setup
   options and registers a per-user RunOnce continuation. The same package is re-verified when setup
-  resumes after sign-in.
+  resumes after sign-in. Resume reopens the native progress window and reports the current prerequisite,
+  WSL, runtime, kernel, commit, or hardware stage until setup succeeds or shows a targeted failure.
 - Windows 10 compatibility is qualified against build 19045 with current Microsoft Store WSL. Merely
   having an old `wsl.exe` stub is not treated as a complete WSL installation.
 - A managed-PC policy denial while starting the custom kernel restores the previous `.wslconfig` and
