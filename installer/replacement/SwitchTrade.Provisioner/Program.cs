@@ -10,18 +10,22 @@ internal static class Program
         var correlationId = Guid.NewGuid();
         var command = args.FirstOrDefault()?.ToLowerInvariant() ?? "";
         var json = args.Contains("--json", StringComparer.OrdinalIgnoreCase) || command == "status";
+        var burn = args.Contains("--burn", StringComparer.OrdinalIgnoreCase);
+        string? externalLog = null;
         ProvisionerPaths? paths = null;
         void Emit(ProvisionerEvent value)
         {
             var text = JsonSerializer.Serialize(value, Contract.Json);
             Console.Out.WriteLine(text.Replace(Environment.NewLine, "", StringComparison.Ordinal));
             if (paths is not null && command != "uninstall") ProvisionerLog.Write(paths, value);
+            if (paths is not null && externalLog is not null) ProvisionerLog.Write(paths, value, externalLog);
         }
         try
         {
+            externalLog = Option(args, "--log");
             if (command is not ("inspect" or "install" or "repair" or "uninstall" or "verify-software" or "status"))
                 throw new ProvisionerException("USAGE", "arguments",
-                    "Usage: SwitchTradeProvisioner <inspect|install|repair|uninstall|verify-software|status --json> [--package-root PATH]", false, "Use a supported Setup package", 2);
+                    "Usage: SwitchTradeProvisioner <inspect|install|repair|uninstall|verify-software|status --json> [--package-root PATH] [--log PATH]", false, "Use a supported Setup package", 2);
             var packageRoot = Option(args, "--package-root") ?? AppContext.BaseDirectory;
             var dataRoot = Option(args, "--data-root");
             var userProfile = Option(args, "--user-profile");
@@ -67,7 +71,7 @@ internal static class Program
             if (paths is not null && command == "uninstall") ProvisionerLog.Write(paths, value);
             if (json) Emit(value);
             else Console.Error.WriteLine($"[{error.Code}] {error.Message}{Environment.NewLine}Recovery: {error.PrimaryAction}{Environment.NewLine}Correlation: {correlationId}");
-            return error.ExitCode;
+            return burn ? 1603 : error.ExitCode;
         }
         catch (Exception error)
         {
@@ -76,7 +80,7 @@ internal static class Program
                 Recoverable: true, PrimaryAction: "Run Setup Repair");
             if (paths is not null && command == "uninstall") ProvisionerLog.Write(paths, value);
             if (json) Emit(value); else Console.Error.WriteLine($"[PROVISIONER_UNEXPECTED] {error.Message}{Environment.NewLine}Correlation: {correlationId}");
-            return 70;
+            return burn ? 1603 : 70;
         }
     }
 
@@ -96,15 +100,16 @@ internal static partial class ProvisionerLog
         RegexOptions.CultureInvariant)]
     private static partial Regex SecretPattern();
 
-    internal static void Write(ProvisionerPaths paths, ProvisionerEvent value)
+    internal static void Write(ProvisionerPaths paths, ProvisionerEvent value, string? destination = null)
     {
         try
         {
-            Directory.CreateDirectory(paths.LogRoot);
+            var path = destination ?? Path.Combine(paths.LogRoot, value.CorrelationId.ToString("N") + ".jsonl");
+            if (!Path.IsPathFullyQualified(path)) return;
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             var message = Sanitize(value.Message, paths);
             var action = Sanitize(value.PrimaryAction, paths);
             var safe = value with { Message = message, PrimaryAction = action };
-            var path = Path.Combine(paths.LogRoot, value.CorrelationId.ToString("N") + ".jsonl");
             File.AppendAllText(path, JsonSerializer.Serialize(safe, Contract.Json) + Environment.NewLine);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)

@@ -93,13 +93,17 @@ if ($layoutBundle.Count -ne 1 -or
 }
 
 if ($RunDisposableWslLifecycle) {
-    $provisioner = Join-Path $root 'publish\provisioner\SwitchTradeProvisioner.exe'
+    $cache = Join-Path $root 'validation-lifecycle\burn-cache'
+    New-Item -ItemType Directory -Force -Path $cache | Out-Null
+    Copy-Item -LiteralPath (Join-Path $root 'package\release-manifest.json') -Destination $cache
+    Copy-Item -LiteralPath (Join-Path $root 'package\payload') -Destination $cache -Recurse
+    Copy-Item -LiteralPath (Join-Path $root 'publish\provisioner\SwitchTradeProvisioner.exe') -Destination $cache
+    $provisioner = Join-Path $cache 'SwitchTradeProvisioner.exe'
     $data = Join-Path $root 'validation-lifecycle\data'
     $profile = Join-Path $root 'validation-lifecycle\사용자 profile'
     $before = @((@(& wsl.exe --list --quiet) -replace ([char]0), '') | Where-Object { $_ })
     function Invoke-Provisioner([string]$Action) {
-        $arguments = @($Action, '--json', '--package-root', (Join-Path $root 'package'),
-            '--data-root', $data, '--user-profile', $profile)
+        $arguments = @($Action, '--json', '--data-root', $data, '--user-profile', $profile)
         $start = [Diagnostics.ProcessStartInfo]::new()
         $start.FileName = $provisioner
         $start.UseShellExecute = $false

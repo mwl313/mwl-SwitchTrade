@@ -29,8 +29,9 @@
       <ExePackage Id="SwitchTradeRuntime" SourceFile="$(var.ProvisionerExe)"
                   Name="SwitchTradeProvisioner.exe" PerMachine="no" Vital="yes"
                   DetectCondition="InstalledRelease = &quot;$(var.ReleaseId)&quot;"
-                  InstallArguments="repair --json" RepairArguments="repair --json"
-                  UninstallArguments="uninstall --json">
+                  InstallArguments="repair --json --burn --package-root &quot;[WixBundleExecutePackageCacheFolder]&quot; --log &quot;[WixBundleLog_SwitchTradeRuntime]&quot;"
+                  RepairArguments="repair --json --burn --package-root &quot;[WixBundleExecutePackageCacheFolder]&quot; --log &quot;[WixBundleLog_SwitchTradeRuntime]&quot;"
+                  UninstallArguments="uninstall --json --burn --log &quot;[WixBundleLog_SwitchTradeRuntime]&quot;">
         <Payload SourceFile="$(var.ReleaseManifest)" Name="release-manifest.json" />
         <Payload SourceFile="$(var.RuntimeWsl)" Name="payload\$(var.RuntimeFileName)" />
         <Payload SourceFile="$(var.KernelFile)" Name="payload\kernel\kernel" />

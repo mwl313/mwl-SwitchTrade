@@ -33,6 +33,11 @@ The following observed failures are closed in source and remain part of clean-ho
   published as compensated.
 - Setup actions are derived from the invoking user's committed/transaction state. Standard uninstall
   removes the owned isolated distro and publishes `uninstalled`, allowing a clean later Install.
+- Burn's package-cache directory ends with a separator. The replacement provisioner previously
+  appended another separator during containment checks and falsely returned `PAYLOAD_PATH_ESCAPE`
+  as Windows error `0x8007001e`. Package roots are now normalized, Burn passes the cache root
+  explicitly, and a Burn-layout lifecycle regression test covers the exact execution path. Burn also
+  receives a sanitized structured provisioner log and a standard installer failure code.
 
 ## Status and priority
 

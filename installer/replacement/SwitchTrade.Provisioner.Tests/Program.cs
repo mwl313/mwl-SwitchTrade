@@ -100,6 +100,8 @@ void ReleaseManifestVerifiesPayloadsAndRejectsEscape()
         new Dictionary<string, PayloadDescriptor> { ["runtime"] = new("payload/runtime.wsl", new FileInfo(file).Length, Contract.HashFile(file)) });
     File.WriteAllText(Path.Combine(package, "release-manifest.json"), JsonSerializer.Serialize(manifest, Contract.Json));
     Assert(ReleaseManifest.LoadVerified(package).ReleaseId == "beta-test", "valid manifest failed");
+    Assert(ReleaseManifest.LoadVerified(package + Path.DirectorySeparatorChar).ReleaseId == "beta-test",
+        "valid manifest with a trailing directory separator failed");
     var escaped = manifest with { Payloads = new Dictionary<string, PayloadDescriptor> { ["runtime"] = new("../outside", 1, new string('0', 64)) } };
     File.WriteAllText(Path.Combine(package, "release-manifest.json"), JsonSerializer.Serialize(escaped, Contract.Json));
     try { ReleaseManifest.LoadVerified(package); throw new InvalidOperationException("path escape accepted"); }
@@ -142,6 +144,13 @@ void ProvisionerLogsAreSanitized()
         "provisioner log did not pseudonymize owned paths");
     Assert(!text.Contains("do-not-log", StringComparison.Ordinal),
         "provisioner log retained a token");
+    var external = Path.Combine(root, "external-log", "burn.log");
+    ProvisionerLog.Write(paths, new ProvisionerEvent(1, "error", correlation, "repair",
+        "test", Status: "failed", Code: "TEST", Message: $"token=do-not-log; data={paths.DataRoot}"), external);
+    var externalText = File.ReadAllText(external);
+    Assert(externalText.Contains("%SWITCHTRADE_DATA%", StringComparison.Ordinal) &&
+           !externalText.Contains("do-not-log", StringComparison.Ordinal),
+        "external provisioner log was not sanitized");
 }
 
 async Task LifecycleFaultsConverge()

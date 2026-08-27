@@ -49,7 +49,10 @@ internal sealed record ReleaseManifest(
 {
     internal static ReleaseManifest LoadVerified(string packageRoot)
     {
-        var root = Path.GetFullPath(packageRoot);
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(packageRoot));
+        var rootPrefix = Path.EndsInDirectorySeparator(root)
+            ? root
+            : root + Path.DirectorySeparatorChar;
         var path = Path.Combine(root, "release-manifest.json");
         if (!File.Exists(path))
             throw ProvisionerException.Integrity("RELEASE_MANIFEST_MISSING", "The release manifest is missing.");
@@ -79,7 +82,7 @@ internal sealed record ReleaseManifest(
                 !Regex.IsMatch(payload.Sha256, "^[0-9a-f]{64}$", RegexOptions.CultureInvariant))
                 throw ProvisionerException.Integrity("RELEASE_MANIFEST_INVALID", $"Payload metadata is invalid: {name}");
             var full = Path.GetFullPath(Path.Combine(root, payload.Path));
-            if (!full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            if (!full.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
                 throw ProvisionerException.Integrity("PAYLOAD_PATH_ESCAPE", $"Payload escapes the package: {name}");
             var info = new FileInfo(full);
             if (!info.Exists || info.Length != payload.Size || Contract.HashFile(full) != payload.Sha256)
