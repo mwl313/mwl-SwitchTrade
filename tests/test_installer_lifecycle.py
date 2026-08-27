@@ -261,6 +261,13 @@ class InstallerLifecycleTests(unittest.TestCase):
             setup.index("if ($wslCommandPresent -and $wslRuntimeLaunchSafe)"),
             setup.index("$distros = Get-Distros -AllowUnavailable", setup.index("function Test-Setup")),
         )
+        get_distros = setup.split("function Get-Distros", 1)[1].split(
+            "function Test-SwitchTradeWslRuntimeLaunchSafe", 1)[0]
+        self.assertIn("-not (Test-SwitchTradeWslRuntimeLaunchSafe)", get_distros)
+        initial_enumeration = setup.split("$namedDistroExists = if", 1)[1].split(
+            "$recoveredCommitted", 1)[0]
+        self.assertIn("Test-SwitchTradeWslRuntimeLaunchSafe", initial_enumeration)
+        self.assertNotIn("Get-Command wsl.exe", initial_enumeration)
 
     @unittest.skipUnless(shutil.which("powershell"), "Windows PowerShell is required")
     def test_setup_failure_has_a_stable_bootstrap_marker(self):

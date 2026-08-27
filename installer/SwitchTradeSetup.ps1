@@ -164,9 +164,10 @@ if ($WasResume) {
 
 function Get-Distros {
     param([switch]$AllowUnavailable)
-    if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue) -or
+            -not (Test-SwitchTradeWslRuntimeLaunchSafe)) {
         if ($AllowUnavailable) { return @() }
-        throw 'WSL_DISTRO_ENUMERATION_UNKNOWN: wsl.exe is unavailable'
+        throw 'WSL_DISTRO_ENUMERATION_UNKNOWN: the WSL runtime is unavailable'
     }
     try { $result = Invoke-BoundedNativeProcess -FilePath 'wsl.exe' -Arguments @('--list', '--quiet') -TimeoutSeconds 15 }
     catch {
@@ -1064,7 +1065,7 @@ Set-SwitchTradeSetupStage 'mutex'
 $SetupMutex = Enter-SwitchTradeSetupMutex
 Write-SwitchTradeSetupLog -Path $SetupLog -Stage $SetupStage -Message "setup action=$Action acquired the mutation mutex"
 $namedDistroExists = if (($Action -eq 'Uninstall' -and $PurgeDistro) -or
-        (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
+        (Test-SwitchTradeWslRuntimeLaunchSafe)) {
     (Get-Distros) -contains $Distro
 } else { $false }
 $recoveredCommitted = $false
