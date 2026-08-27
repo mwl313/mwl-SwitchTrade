@@ -67,6 +67,8 @@ function ConvertTo-SwitchTradeVersion {
 
 function Test-SwitchTradeWslCapabilities {
     param([string]$VersionText, [string]$HelpText)
+    $VersionText = $VersionText.Replace([string][char]0, '')
+    $HelpText = $HelpText.Replace([string][char]0, '')
     $version = ConvertTo-SwitchTradeVersion -Text $VersionText -FailureCode 'WSL_VERSION_INVALID'
     if ($version -lt $script:SwitchTradeMinimumWslVersion) {
         throw "WSL_VERSION_UNSUPPORTED: WSL $version is older than $($script:SwitchTradeMinimumWslVersion)"
@@ -81,6 +83,8 @@ function Test-SwitchTradeWslCapabilities {
 
 function Test-SwitchTradeUsbipdCapabilities {
     param([string]$VersionText, [version]$MinimumVersion, [string]$HelpText, $State)
+    $VersionText = $VersionText.Replace([string][char]0, '')
+    $HelpText = $HelpText.Replace([string][char]0, '')
     $version = ConvertTo-SwitchTradeVersion -Text $VersionText -FailureCode 'USBIPD_VERSION_INVALID'
     if ($version -lt $MinimumVersion) {
         throw "USBIPD_VERSION_UNSUPPORTED: usbipd-win $version is older than $MinimumVersion"

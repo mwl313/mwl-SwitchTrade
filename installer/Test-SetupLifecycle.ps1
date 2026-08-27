@@ -507,6 +507,15 @@ if ([string]$savedSelection.instance_id -ne 'USB\VID_0BDA&PID_818B\RADIO-A' -or
 
 Test-SwitchTradeWslCapabilities -VersionText 'WSL version: 2.6.1.0' `
     -HelpText '--import --distribution --cd --version' | Out-Null
+$nulSeparatedVersion = [string]::Join([char]0, 'WSL version: 2.7.12.0'.ToCharArray())
+$nulSeparatedHelp = [string]::Join([char]0, '--import --distribution --cd --version'.ToCharArray())
+Test-SwitchTradeWslCapabilities -VersionText $nulSeparatedVersion -HelpText $nulSeparatedHelp | Out-Null
+$missingWslCapabilityRejected = $false
+try {
+    Test-SwitchTradeWslCapabilities -VersionText 'WSL version: 2.7.12.0' `
+        -HelpText '--import --distribution --version' | Out-Null
+} catch { $missingWslCapabilityRejected = [string]$_.Exception.Message -match '^WSL_CAPABILITY_MISSING: --cd' }
+if (-not $missingWslCapabilityRejected) { throw 'WSL capability validation did not fail closed' }
 Test-SwitchTradeUsbipdCapabilities -VersionText '5.3.0' -MinimumVersion ([version]'5.3.0') `
     -HelpText 'attach bind state --wsl --busid' -State ($usbState) | Out-Null
 

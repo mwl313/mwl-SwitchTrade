@@ -42,9 +42,15 @@ trap {
     $manualRecovery = $code -match '^SETUP_TRANSACTION_(LEGACY_AMBIGUOUS|.*_AMBIGUOUS|.*_MISMATCH|.*_INVALID|DISTRO_OWNERSHIP_CHANGED)' -or
         $code -match '^INSTALLED_(DISTRO_IDENTITY_MISSING|INTEGRITY_ANCHOR_MISSING)'
     $manualRecovery = $manualRecovery -or $code -match '^(INSTALL_INTEGRITY_|INSTALLED_WSL_INTEGRITY_)'
+    $knownTransactionPath = Get-Variable TransactionPath -ValueOnly -ErrorAction SilentlyContinue
+    $transactionExists = $knownTransactionPath -and
+        (Test-Path -LiteralPath $knownTransactionPath -PathType Leaf)
     $primaryAction = if ($code -eq 'SETUP_TRANSACTION_PACKAGE_MISMATCH') {
         'Run Repair from the package that started the transaction'
-    } elseif ($manualRecovery) { 'Contact SwitchTrade support' } else { 'Run Setup Repair' }
+    } elseif ($manualRecovery) { 'Contact SwitchTrade support'
+    } elseif ($Action -eq 'Install' -and -not $transactionExists) {
+        'Run Setup Install again'
+    } else { 'Run Setup Repair' }
     $recoverable = $code -eq 'SETUP_TRANSACTION_PACKAGE_MISMATCH' -or -not $manualRecovery
     $failure = [ordered]@{
         code = $code; message = Redact-SwitchTradeSetupText $message; stage = $SetupStage
@@ -918,8 +924,9 @@ function Assert-SwitchTradeHostCapabilities {
     Set-SwitchTradeSetupStage 'host_capabilities'
     $wslVersion = Invoke-BoundedNativeProcess -FilePath 'wsl.exe' -Arguments @('--version') -TimeoutSeconds 15
     $wslHelp = Invoke-BoundedNativeProcess -FilePath 'wsl.exe' -Arguments @('--help') -TimeoutSeconds 15
-    if ($wslVersion.ExitCode -ne 0 -or $wslHelp.ExitCode -ne 0) { throw 'WSL_CAPABILITY_PROBE_FAILED' }
-    Test-SwitchTradeWslCapabilities -VersionText $wslVersion.Output -HelpText $wslHelp.Output | Out-Null
+    if ($wslVersion.ExitCode -ne 0) { throw 'WSL_CAPABILITY_PROBE_FAILED' }
+    Test-SwitchTradeWslCapabilities -VersionText ($wslVersion.Output + "`n" + $wslVersion.Error) `
+        -HelpText ($wslHelp.Output + "`n" + $wslHelp.Error) | Out-Null
 
     if ($SkipUsbipd) { return }
 
@@ -930,12 +937,13 @@ function Assert-SwitchTradeHostCapabilities {
     $usbipdHelp = Invoke-BoundedNativeProcess -FilePath $usbipdCommand.Source -Arguments @('--help') -TimeoutSeconds 15
     $attachHelp = Invoke-BoundedNativeProcess -FilePath $usbipdCommand.Source -Arguments @('attach', '--help') -TimeoutSeconds 15
     $stateResult = Invoke-BoundedNativeProcess -FilePath $usbipdCommand.Source -Arguments @('state') -TimeoutSeconds 15
-    if ($usbipdHelp.ExitCode -ne 0 -or $attachHelp.ExitCode -ne 0 -or $stateResult.ExitCode -ne 0) {
+    if ($stateResult.ExitCode -ne 0) {
         throw 'USBIPD_CAPABILITY_PROBE_FAILED'
     }
     $state = $stateResult.Output | ConvertFrom-Json
     Test-SwitchTradeUsbipdCapabilities -VersionText $usbipdVersion -MinimumVersion $minimumUsbipd `
-        -HelpText ($usbipdHelp.Output + "`n" + $attachHelp.Output) -State $state | Out-Null
+        -HelpText ($usbipdHelp.Output + "`n" + $usbipdHelp.Error + "`n" +
+            $attachHelp.Output + "`n" + $attachHelp.Error) -State $state | Out-Null
 }
 
 function Test-StagedControlReadiness {
@@ -1000,15 +1008,13 @@ function Test-Setup {
             $wslStatusExit = $statusProbe.ExitCode
             $wslVersionExit = $versionProbe.ExitCode
             if ($wslVersionExit -eq 0) {
-                $wslVersion = $versionProbe.Output.Replace([string][char]0, '').Trim()
+                $wslVersion = ($versionProbe.Output + "`n" + $versionProbe.Error).Replace([string][char]0, '').Trim()
                 $helpProbe = Invoke-BoundedNativeProcess -FilePath 'wsl.exe' -Arguments @('--help') -TimeoutSeconds 15
-                if ($helpProbe.ExitCode -eq 0) {
-                    try {
-                        Test-SwitchTradeWslCapabilities -VersionText $wslVersion `
-                            -HelpText $helpProbe.Output | Out-Null
-                        $wslCapabilityReady = $true
-                    } catch { }
-                }
+                try {
+                    Test-SwitchTradeWslCapabilities -VersionText $wslVersion `
+                        -HelpText ($helpProbe.Output + "`n" + $helpProbe.Error) | Out-Null
+                    $wslCapabilityReady = $true
+                } catch { }
             }
         } catch { }
     }

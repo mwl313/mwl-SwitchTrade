@@ -13,6 +13,7 @@ class InstallerLifecycleTests(unittest.TestCase):
     def test_native_bootstrap_and_lifecycle_modes_are_present(self):
         program = (ROOT / "installer" / "bootstrap" / "Program.cs").read_text(encoding="utf-8")
         setup = (ROOT / "installer" / "SwitchTradeSetup.ps1").read_text(encoding="utf-8")
+        lifecycle = (ROOT / "installer" / "SetupLifecycle.ps1").read_text(encoding="utf-8")
         self.assertIn("SwitchTradeSetup", program)
         for action in ("Audit", "Install", "Repair", "Update", "Resume", "Rollback", "Uninstall"):
             self.assertIn(action, setup)
@@ -52,6 +53,10 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertIn("Set-SwitchTradeSetupStage 'prerequisites_enable'", setup)
         self.assertIn("Set-SwitchTradeSetupStage 'wsl_update'", setup)
         self.assertIn("Set-SwitchTradeSetupStage 'usbipd_install'", setup)
+        self.assertNotIn("$wslHelp.ExitCode -ne 0", setup)
+        self.assertNotIn("$helpProbe.ExitCode -eq 0", setup)
+        self.assertIn("$VersionText.Replace([string][char]0, '')", lifecycle)
+        self.assertIn("'Run Setup Install again'", setup)
         self.assertIn("You can now delete the extracted setup folder and ZIP", program)
         self.assertIn("$UsbId.ToLowerInvariant()", setup)
         self.assertIn("wslHealthArguments", setup)
