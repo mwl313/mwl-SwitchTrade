@@ -385,6 +385,38 @@ tests/fixtures/installer/live-importing-distro-20260827/.
   UAC cancellation, and low-disk validation remain external gates; no simulation may be
   reported as physical or clean-VM evidence.
 
+## Resolution status after the overhaul pass (2026-08-27)
+
+- I-01 RESOLVED: all WSL calls route through PlatformOps; data-bearing commands use --exec with
+  positional arguments (constant scripts only); live argv round trips prove quotes/Unicode/
+  spaces/$/backslash/empty/JSON survive. Regression: Test-EngineBoundary.ps1 (real wsl.exe).
+- I-02 RESOLVED: one bounded subprocess runner with cancellation, timeout, captured
+  stdout/stderr, working-directory and environment handoff; control-readiness polling bounded
+  with kill; radio health routed through the boundary.
+- I-03 PARTIALLY RESOLVED: the engine emits the full contract (code, message, stage,
+  recoverable, primary_action, correlation_id, technical_detail_log_path); the native EXE still
+  renders only code/message/stage/action/primary_action (UI slice deferred; fields are logged).
+- I-04 RESOLVED: resume/RunOnce logic preserved in the entry point; stale resume state is
+  fail-closed and documented; UAC-decline UX remains an EXE-side item.
+- I-05/I-06 RESOLVED: inspection/planning/execution split into StateInspector/Planner/Executor;
+  all functions consume an explicit Context object (no script-level variables).
+- I-07 RESOLVED (fail-closed preserved): stale resume package mismatch is rejected; fixture
+  records the inconsistency.
+- I-09 RESOLVED: deferred-hardware installs no longer require usbipd at software-commit time;
+  usbipd is installed when absent and its state is exercised by the hardware preflight.
+  Deep capability re-validation after install remains a hardening item (validation report).
+- I-10 RESOLVED: windows commit keeps its self-recovering swap; recovery plans persist explicit
+  compensation; rollback journal phases checkpoint each axis swap.
+- I-11 RESOLVED: Audit reports the normalized state (identity classification, transaction
+  phase/id/release, release axes) read-only.
+- I-12 RESOLVED: source-string tests updated to engine files; behavioral tests added
+  (planner parity, boundary with real wsl.exe, rollback process-death through the engine).
+- I-13 RESOLVED: the inspector carries enumeration unknown vs absent through the snapshot;
+  unknown fail-closes in every destructive gate.
+- I-14 RESOLVED: -PurgeDistro remains accepted but unused (dead plumbing not carried into the
+  planner surface); removing the switch from the EXE is a UI-slice item.
+- I-15..I-22, I-23..I-27: tracked for the UI slice / later slices (see validation report).
+
 ## Required regression tests (per P0/P1)
 
 - I-01: real argv round-trip via wsl.exe --exec (Unicode/spaces/quotes/$/backslash/empty),

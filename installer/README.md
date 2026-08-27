@@ -75,6 +75,17 @@ for Update, Repair, Rollback, or Uninstall; daily SwitchTrade use does not read 
 
 The retired web/demo frontend is not bundled into the WSL runtime or required by the native beta.
 
+## Installer engine
+
+SwitchTradeSetup.ps1 is a thin dispatcher over the layered engine in installer/engine/:
+
+- PlatformOps.ps1 - the single audited native/WSL subprocess boundary. Exact argv (no data in shell strings), bounded processes with cancellation, UTF-16 NUL normalization, distro marker probes/writes, runtime-location probes, kernel module archive/ABI operations.
+- StateInspector.ps1 - one read-only normalized snapshot (host, WSL runtime/capabilities, distro identity classification, transaction, Windows/WSL/kernel releases, resume, usbipd). Never repairs while inspecting; unknown enumeration never means absent.
+- Planner.ps1 - deterministic pure planner: action + verified package identity + snapshot -> an explicit step plan or a structured blocker (stage, code, recovery action, evidence). Recovery and rollback decisions are parity-tested against the legacy resolvers.
+- Executor.ps1 - applies validated plans. Every mutating step persists its checkpoint before mutation and completion after success; compensation is explicit persisted recovery work; identity gates precede every destructive operation; the failure contract carries code/message/stage/recoverable/primary_action/correlation_id/technical_detail_log_path.
+
+The schema-3 transaction, phase vocabulary, distro marker, rollback journal, and RunOnce continuation are unchanged on disk, so interrupted installations from previous versions remain recoverable.
+
 ## Setup safety
 
 - `SwitchTradeSetup.ps1 -Action Audit` is read-only.
@@ -92,10 +103,11 @@ The retired web/demo frontend is not bundled into the WSL runtime or required by
   options and registers a per-user RunOnce continuation. The same package is re-verified when setup
   resumes after sign-in. Resume reopens the native progress window and reports the current prerequisite,
   WSL, runtime, kernel, commit, or hardware stage until setup succeeds or shows a targeted failure.
-- Reopening the same action or choosing Repair resumes one interrupted transaction. New transactions
-  bind the package manifest SHA-256, so a byte-identical re-extraction is accepted while a modified
-  package is rejected. Early fresh-install state may be safely compensated by a verified successor
-  package before any runtime data was staged.
+- Reopening the same action or choosing Repair resumes one interrupted transaction through the
+  recovery planner. New transactions bind the package manifest SHA-256, so a byte-identical
+  re-extraction is accepted while a modified package is rejected. Early fresh-install state
+  (including the markerless fresh-import state) is recognized, marker-bootstrapped, and safely
+  continued or compensated by a verified package before any runtime data was staged.
 - Windows 10 compatibility is qualified against build 19045 with current Microsoft Store WSL. Merely
   having an old `wsl.exe` stub is not treated as a complete WSL installation.
 - A managed-PC policy denial while starting the custom kernel restores the previous `.wslconfig` and
