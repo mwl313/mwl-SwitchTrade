@@ -1,5 +1,7 @@
 # SwitchTrade beta package
 
+> **Legacy implementation notice (2026-08-27):** The PowerShell installer engine documented below is frozen for migration evidence and is not the target of further release development. New installer work follows [`docs/installer/REPLACEMENT-INSTALLER-EXECUTION-PLAN-20260827.md`](../docs/installer/REPLACEMENT-INSTALLER-EXECUTION-PLAN-20260827.md). The supported action names remain Install, Repair, and Uninstall; Repair means a verified fresh replacement.
+
 The installer accepts Windows 10 22H2 x64 build 19045 and Windows 11 x64. It rejects older Windows,
 Windows Server, and ARM64 because the packaged application and rootfs are x64. A successful
 `wsl --version` probe is required; with prerequisite consent, Setup updates legacy inbox WSL through
