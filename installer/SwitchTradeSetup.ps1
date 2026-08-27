@@ -52,8 +52,11 @@ trap {
         'Run Setup Install again'
     } else { 'Run Setup Repair' }
     $recoverable = $code -eq 'SETUP_TRANSACTION_PACKAGE_MISMATCH' -or -not $manualRecovery
+    $displayMessage = if ($message.StartsWith("${code}: ", [StringComparison]::Ordinal)) {
+        $message.Substring($code.Length + 2)
+    } else { $message }
     $failure = [ordered]@{
-        code = $code; message = Redact-SwitchTradeSetupText $message; stage = $SetupStage
+        code = $code; message = Redact-SwitchTradeSetupText $displayMessage; stage = $SetupStage
         recoverable = $recoverable; primary_action = $primaryAction; action = $Action
         correlation_id = [guid]::NewGuid().ToString('N')
     }
@@ -86,6 +89,10 @@ $PreviousInstall = "$InstallRoot.previous"
 
 function Set-SwitchTradeSetupStage([string]$Stage) {
     $script:SetupStage = $Stage
+    if ($script:SetupLog) {
+        try { Write-SwitchTradeSetupLog -Path $script:SetupLog -Stage $Stage -Message 'entered setup stage' }
+        catch { }
+    }
     if ($env:SWITCHTRADE_SETUP_PROGRESS -eq '1') {
         [Console]::Out.WriteLine("SWITCHTRADE_SETUP_PROGRESS: $Stage")
         [Console]::Out.Flush()
@@ -575,14 +582,18 @@ function Repair-SwitchTradeInterruptedRollback {
 function Repair-SwitchTradeInterruptedTransaction {
     param([Parameter(Mandatory)]$Transaction)
     Set-SwitchTradeSetupStage 'transaction_recovery'
-    if ($Action -ne 'Repair') {
-        throw "SETUP_TRANSACTION_INCOMPLETE: transaction $($Transaction.transaction_id) stopped at $($Transaction.phase); run the matching package Repair"
-    }
+    Assert-SwitchTradeInterruptedTransactionAction -RequestedAction $Action `
+        -Transaction $Transaction | Out-Null
     if ([int]$Transaction.schema -ne 3) {
         throw 'SETUP_TRANSACTION_LEGACY_AMBIGUOUS: legacy transaction lacks pre-mutation ownership facts; contact support'
     }
-    Assert-SwitchTradeTransactionPackage -Transaction $Transaction -PackageRoot $PackageRoot `
-        -ReleaseId $ReleaseId
+    if (Test-SwitchTradeEarlyFreshInstallRecovery -Transaction $Transaction) {
+        Write-SwitchTradeSetupLog -Path $SetupLog -Stage $SetupStage `
+            -Message 'recovering pre-runtime fresh-install state before applying the verified current package'
+    } else {
+        Assert-SwitchTradeTransactionPackage -Transaction $Transaction -PackageRoot $PackageRoot `
+            -ReleaseId $ReleaseId
+    }
     Assert-SwitchTradeRecordedPath -Recorded ([string]$Transaction.install_root) `
         -Expected $InstallRoot -Code 'SETUP_TRANSACTION_INSTALL_PATH_MISMATCH' | Out-Null
     Assert-SwitchTradeRecordedPath -Recorded ([string]$Transaction.previous_install) `
@@ -613,6 +624,14 @@ function Repair-SwitchTradeInterruptedTransaction {
     }
     $stage = Assert-SwitchTradeRecordedStagePath -Recorded ([string]$Transaction.windows_stage) `
         -InstallRoot $InstallRoot
+
+    if (-not [string]$Transaction.prior_release_id -and
+            (Test-Path -LiteralPath $PreviousInstall)) {
+        $orphan = Move-SwitchTradeOrphanedWindowsTree -Path $PreviousInstall `
+            -RecoveryRoot (Join-Path $StateRoot 'recovery')
+        Write-SwitchTradeSetupLog -Path $SetupLog -Stage $SetupStage `
+            -Message "preserved unrelated legacy Windows tree at $orphan"
+    }
 
     $distroExists = (Get-Distros) -contains $Distro
     $registration = Get-SwitchTradeDistroRegistration -Name $Distro
@@ -1070,7 +1089,7 @@ if ($Action -in @('Install', 'Repair', 'Update', 'Rollback')) {
 Set-SwitchTradeSetupStage 'mutex'
 $SetupMutex = Enter-SwitchTradeSetupMutex
 Write-SwitchTradeSetupLog -Path $SetupLog -Stage $SetupStage -Message "setup action=$Action acquired the mutation mutex"
-$namedDistroExists = if (($Action -eq 'Uninstall' -and $PurgeDistro) -or
+$namedDistroExists = if (($Action -eq 'Uninstall') -or
         (Test-SwitchTradeWslRuntimeLaunchSafe)) {
     (Get-Distros) -contains $Distro
 } else { $false }
@@ -1078,7 +1097,7 @@ $recoveredCommitted = $false
 $staleTransaction = $null
 if (Test-Path -LiteralPath $TransactionPath -PathType Leaf) {
     $staleTransaction = Get-Content -Raw -LiteralPath $TransactionPath | ConvertFrom-Json
-    if ([string]$staleTransaction.phase -notin @('completed', 'compensated')) {
+    if ([string]$staleTransaction.phase -notin @('completed', 'compensated', 'uninstalled')) {
         $recoveryDisposition = Repair-SwitchTradeInterruptedTransaction -Transaction $staleTransaction
         $recoveredCommitted = $recoveryDisposition -eq 'finalize'
         $staleTransaction = Get-Content -Raw -LiteralPath $TransactionPath | ConvertFrom-Json
@@ -1091,7 +1110,7 @@ if (Test-Path -LiteralPath $TransactionPath -PathType Leaf) {
 }
 $installedTransaction = if ($staleTransaction -and [int]$staleTransaction.schema -eq 3 -and
         [string]$staleTransaction.phase -eq 'completed') { $staleTransaction } else { $null }
-if ($Action -eq 'Uninstall' -and $PurgeDistro) {
+if ($Action -eq 'Uninstall' -and $namedDistroExists) {
     if (-not $installedTransaction) {
         throw 'INSTALLED_DISTRO_IDENTITY_MISSING: destructive distro actions require a completed identity transaction'
     }
@@ -1112,7 +1131,7 @@ if ($Action -eq 'Uninstall' -and $PurgeDistro) {
 }
 
 if ($Action -eq 'Uninstall') {
-    if ($PurgeDistro -and $PSCmdlet.ShouldProcess($Distro,
+    if ($namedDistroExists -and $PSCmdlet.ShouldProcess($Distro,
             'Unregister only the named SwitchTrade WSL distribution')) {
         Assert-SwitchTradeCurrentDistroMutationIdentity -Transaction $installedTransaction
         $unregister = Invoke-BoundedNativeProcess -FilePath 'wsl.exe' `
@@ -1139,7 +1158,10 @@ if ($Action -eq 'Uninstall') {
             Remove-Item -LiteralPath $shortcutPath -Force
         }
     }
-    Write-Host "SwitchTrade application removed.$(if ($PurgeDistro) { ' Distro purge requested.' })"
+    if ($installedTransaction) {
+        Set-SwitchTradeTransactionPhase -Path $TransactionPath -Phase 'uninstalled' | Out-Null
+    }
+    Write-Host 'SwitchTrade was uninstalled. Its isolated WSL distribution was removed when present.'
     exit
 }
 
@@ -1328,9 +1350,22 @@ $priorReleaseId = ''
 if (Test-Path -LiteralPath $InstallRoot -PathType Container) {
     $priorReleaseId = Get-InstalledWindowsReleaseId -Root $InstallRoot
     if (-not $priorReleaseId) {
-        throw 'INSTALLED_RELEASE_ID_MISSING: existing application files are not a committed SwitchTrade release'
+        if ($staleTransaction -and [string]$staleTransaction.phase -eq 'completed') {
+            throw 'INSTALLED_RELEASE_ID_MISSING: the committed application tree is missing its release identity'
+        }
+        $orphan = Move-SwitchTradeOrphanedWindowsTree -Path $InstallRoot `
+            -RecoveryRoot (Join-Path $StateRoot 'recovery')
+        Write-SwitchTradeSetupLog -Path $SetupLog -Stage 'windows_stage' `
+            -Message "preserved uncommitted Windows tree at $orphan"
+    } else {
+        Test-WindowsReleaseTree -Root $InstallRoot -ExpectedReleaseId $priorReleaseId | Out-Null
     }
-    Test-WindowsReleaseTree -Root $InstallRoot -ExpectedReleaseId $priorReleaseId | Out-Null
+}
+if (-not $priorReleaseId -and (Test-Path -LiteralPath $PreviousInstall)) {
+    $orphan = Move-SwitchTradeOrphanedWindowsTree -Path $PreviousInstall `
+        -RecoveryRoot (Join-Path $StateRoot 'recovery')
+    Write-SwitchTradeSetupLog -Path $SetupLog -Stage 'windows_stage' `
+        -Message "preserved unrelated legacy Windows tree at $orphan"
 }
 $distroExistedBefore = $namedDistroExists
 $installId = if ($namedDistroExists -and $staleTransaction -and
@@ -1397,6 +1432,7 @@ if ($kernelPriorReleaseId -and $priorReleaseId -and $kernelPriorReleaseId -ne $p
 $kernelChangeExpected = (Test-Path -LiteralPath $Kernel -PathType Leaf) -and
     (Test-Path -LiteralPath $KernelManifest -PathType Leaf)
 $distroImported = $false
+$distroImportAttempted = $false
 $kernelApplied = $false
 $kernelHadManagedPrior = $false
 $kernelApplyAttempted = $false
@@ -1414,6 +1450,7 @@ $transaction = New-SwitchTradeTransaction -Path $TransactionPath -Action $Action
     -KernelPriorReleaseId $kernelPriorReleaseId -KernelStatePath $kernelStatePath `
     -KernelPriorPath $kernelPriorPath -KernelPriorModulesPath $kernelPriorModulesPath `
     -KernelChangeExpected $kernelChangeExpected -InstallId $installId -DistroBasePath $DistroRoot `
+    -PackageManifestSha256 $PackageManifestSha256 `
     -WindowsPriorIntegritySha256 $windowsPriorIntegritySha256 `
     -WslPriorIntegritySha256 $wslPriorIntegritySha256
 try {
@@ -1447,6 +1484,8 @@ try {
         New-Item -ItemType Directory -Force -Path $DistroRoot | Out-Null
         $transaction = Set-SwitchTradeTransactionPhase -Path $TransactionPath `
             -Phase 'importing_distro'
+        $distroImportAttempted = $true
+        Set-SwitchTradeSetupStage 'distro_import'
         $import = Invoke-BoundedNativeProcess -FilePath 'wsl.exe' `
             -Arguments @('--import', $Distro, $DistroRoot, $Rootfs, '--version', '2') -TimeoutSeconds 600
         if ($import.ExitCode -ne 0) { throw "DISTRO_IMPORT_FAILED: $($import.Error)" }
@@ -1555,6 +1594,12 @@ try {
         -Fields @{ windows_committed = $true } | Out-Null
 } catch {
     $transactionFailure = $_
+    if ($distroImportAttempted -and -not $distroImported) {
+        Write-SwitchTradeSetupLog -Path $SetupLog -Stage 'distro_import' `
+            -Message 'import completion was not confirmed; preserving the transaction for deterministic recovery' `
+            -Level error
+        throw $transactionFailure
+    }
     Set-SwitchTradeSetupStage 'compensate'
     try {
         if ($wslStageAttempted -and -not $wslStaged) {

@@ -334,6 +334,8 @@ $newDistroTransaction.kernel_prior_release_id = ''
 $newDistroTransaction.kernel_change_expected = $false
 $newDistroTransaction.distro_existed_before = $false
 $newDistroTransaction.distro_owned_before = $false
+$newDistroTransaction | Add-Member -NotePropertyName action -NotePropertyValue Install
+$newDistroTransaction.phase = 'importing_distro'
 $newDistroActual = New-RecoveryActual -Changes @{
     WindowsActiveExists = $false; WindowsActiveRelease = ''; KernelRelease = ''
     WslActiveRelease = ''; WslCandidateExists = $false; WslCandidateRelease = ''
@@ -342,6 +344,41 @@ $newDistroPlan = Resolve-SwitchTradeTransactionRecovery -Transaction $newDistroT
     -Actual $newDistroActual
 if ($newDistroPlan.WslAction -ne 'unregister_new') {
     throw 'death between distro import and phase persistence was not compensated from recorded pre-state'
+}
+
+Assert-SwitchTradeInterruptedTransactionAction -RequestedAction Install `
+    -Transaction $newDistroTransaction | Out-Null
+Assert-SwitchTradeInterruptedTransactionAction -RequestedAction Repair `
+    -Transaction $newDistroTransaction | Out-Null
+$wrongRecoveryActionFailed = $false
+try {
+    Assert-SwitchTradeInterruptedTransactionAction -RequestedAction Update `
+        -Transaction $newDistroTransaction | Out-Null
+} catch { $wrongRecoveryActionFailed = [string]$_.Exception.Message -match 'SETUP_TRANSACTION_INCOMPLETE' }
+if (-not $wrongRecoveryActionFailed) {
+    throw 'an unrelated setup action was allowed to take over an interrupted transaction'
+}
+if (-not (Test-SwitchTradeEarlyFreshInstallRecovery -Transaction $newDistroTransaction)) {
+    throw 'pre-runtime fresh install was not eligible for verified successor-package recovery'
+}
+$newDistroTransaction.phase = 'staging_wsl'
+if (Test-SwitchTradeEarlyFreshInstallRecovery -Transaction $newDistroTransaction) {
+    throw 'a transaction that may contain staged runtime data bypassed package identity'
+}
+$newDistroTransaction.phase = 'importing_distro'
+
+$orphanSource = Join-Path $TestRoot 'Programs\SwitchTrade.previous'
+$orphanRecovery = Join-Path $TestRoot 'state\recovery'
+New-Item -ItemType Directory -Force -Path $orphanSource | Out-Null
+'legacy' | Set-Content -LiteralPath (Join-Path $orphanSource 'legacy.txt') -Encoding UTF8
+$orphanTarget = Move-SwitchTradeOrphanedWindowsTree -Path $orphanSource `
+    -RecoveryRoot $orphanRecovery
+if ((Test-Path -LiteralPath $orphanSource) -or
+        -not (Test-Path -LiteralPath (Join-Path $orphanTarget 'legacy.txt') -PathType Leaf) -or
+        -not [IO.Path]::GetFullPath($orphanTarget).StartsWith(
+            [IO.Path]::GetFullPath($orphanRecovery).TrimEnd('\') + '\',
+            [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'unrelated legacy Windows tree was not preserved outside the reserved rollback path'
 }
 
 $legacyFailedClosed = $false
@@ -357,6 +394,26 @@ try {
         -PackageRoot (Join-Path $TestRoot 'package-b') -ReleaseId 'release-b'
 } catch { $mismatchFailedClosed = [string]$_.Exception.Message -match 'PACKAGE_MISMATCH' }
 if (-not $mismatchFailedClosed) { throw 'mismatched Repair package was accepted' }
+
+$boundPackage = Join-Path $TestRoot 'bound-package'
+$reextractedPackage = Join-Path $TestRoot 'reextracted-package'
+New-Item -ItemType Directory -Force -Path $boundPackage, $reextractedPackage | Out-Null
+'{"release_id":"release-b"}' | Set-Content -LiteralPath (Join-Path $boundPackage 'manifest.json') -Encoding UTF8
+Copy-Item -LiteralPath (Join-Path $boundPackage 'manifest.json') `
+    -Destination (Join-Path $reextractedPackage 'manifest.json')
+$manifestBoundTransaction = $recoveryTransaction.PSObject.Copy()
+$manifestBoundTransaction.package_root = $boundPackage
+$manifestBoundTransaction | Add-Member -NotePropertyName package_manifest_sha256 `
+    -NotePropertyValue (Get-FileSha256 (Join-Path $boundPackage 'manifest.json'))
+Assert-SwitchTradeTransactionPackage -Transaction $manifestBoundTransaction `
+    -PackageRoot $reextractedPackage -ReleaseId release-b
+'tampered' | Set-Content -LiteralPath (Join-Path $reextractedPackage 'manifest.json') -Encoding UTF8
+$manifestMismatchFailed = $false
+try {
+    Assert-SwitchTradeTransactionPackage -Transaction $manifestBoundTransaction `
+        -PackageRoot $reextractedPackage -ReleaseId release-b
+} catch { $manifestMismatchFailed = [string]$_.Exception.Message -match 'PACKAGE_MISMATCH' }
+if (-not $manifestMismatchFailed) { throw 'changed manifest was accepted as the interrupted package' }
 
 $foreignFailedClosed = $false
 try {

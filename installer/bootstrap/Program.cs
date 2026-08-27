@@ -55,7 +55,12 @@ internal static class Program
                 "Unsigned SwitchTrade Private Beta", MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning) != DialogResult.Yes)
             return 0;
-        var choice = requestedAction is null ? SetupDialog.Show(AppContext.BaseDirectory) : null;
+        var invokingLocalAppData = DecodeInvokingArgument(args,
+            "--invoking-local-app-data-b64=", requireRooted: true) ??
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var choice = requestedAction is null
+            ? SetupDialog.Show(AppContext.BaseDirectory, invokingLocalAppData)
+            : null;
         if (requestedAction is null && choice is null) return 0;
         var action = requestedAction ?? choice!.Action.ToLowerInvariant();
         var interactive = requestedAction is null || action == "resume";
@@ -201,8 +206,16 @@ internal static class Program
     private static void AddInvokingUserArgument(
         string[] args, ProcessStartInfo start, string prefix, string parameter, bool requireRooted)
     {
+        var value = DecodeInvokingArgument(args, prefix, requireRooted);
+        if (value is null) return;
+        start.ArgumentList.Add(parameter);
+        start.ArgumentList.Add(value);
+    }
+
+    private static string? DecodeInvokingArgument(string[] args, string prefix, bool requireRooted)
+    {
         var encoded = args.LastOrDefault(value => value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
-        if (encoded is null) return;
+        if (encoded is null) return null;
         string value;
         try { value = Encoding.UTF8.GetString(Convert.FromBase64String(encoded[prefix.Length..])); }
         catch (FormatException) { throw new InvalidDataException("INVOKING_USER_CONTEXT_INVALID"); }
@@ -210,8 +223,7 @@ internal static class Program
             (requireRooted && !Path.IsPathFullyQualified(value)) ||
             (!requireRooted && !System.Text.RegularExpressions.Regex.IsMatch(value, @"^S-1-5-21-(?:\d+-){3}\d+$")))
             throw new InvalidDataException("INVOKING_USER_CONTEXT_INVALID");
-        start.ArgumentList.Add(parameter);
-        start.ArgumentList.Add(requireRooted ? Path.GetFullPath(value) : value);
+        return requireRooted ? Path.GetFullPath(value) : value;
     }
 
     private static string FirstErrorLine(string error)

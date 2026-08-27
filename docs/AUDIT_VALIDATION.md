@@ -18,7 +18,7 @@ uv pip install --python .audit-venv\Scripts\python.exe -r test-requirements.txt
 .\.audit-venv\Scripts\python.exe -m pytest -q
 ```
 
-Observed result at `33712f3`: **310 passed, 3 skipped**. The Windows skips require native Linux/WSL
+Latest installer checkpoint result: **311 passed, 3 skipped**. The Windows skips require native Linux/WSL
 `nl80211` or native POSIX process/lock behavior; Ubuntu CI owns those paths.
 
 ## Repeated authority and restart matrix
@@ -52,6 +52,12 @@ All six invocations passed. The rollback test launches separate processes and fo
 after WSL, kernel, and Windows transitions and before metadata publication. Fresh Repair enters the
 real package gate and lifecycle wrapper, converges, and supports reverse Rollback. It also rejects a
 same-release replacement package without changing transaction state.
+
+The installer entry matrix additionally covers same-action and explicit-Repair recovery, rejection
+of unrelated actions, process death between distro import and phase persistence, non-destructive
+quarantine of legacy Windows trees, manifest-bound recovery from a re-extracted identical package,
+tampered-manifest rejection, and the terminal `uninstalled` state. The native Setup dialog derives
+its available actions from the invoking user's committed release and transaction state.
 
 ## Native builds and scripts
 

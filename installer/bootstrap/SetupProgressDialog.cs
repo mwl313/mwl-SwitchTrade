@@ -125,6 +125,7 @@ internal static class SetupProgressDialog
         "installed_integrity" => "Checking the current SwitchTrade installation...",
         "windows_stage" => "Staging the SwitchTrade desktop application...",
         "distro_identity" => "Preparing the isolated SwitchTrade environment...",
+        "distro_import" => "Creating the isolated SwitchTrade WSL environment...",
         "wsl_stage" => "Installing the SwitchTrade backend...",
         "wsl_validate" => "Validating the SwitchTrade backend...",
         "control_readiness" => "Checking the local SwitchTrade service...",

@@ -13,6 +13,13 @@ internal sealed record RadioChoice(string BusId, string UsbId, string InstanceId
         $"{Name} · USB {BusId}" + (Experimental ? " · Experimental" : "");
 }
 
+internal sealed record SetupActionChoice(string Action, string Label)
+{
+    public override string ToString() => Label;
+}
+
+internal sealed record SetupState(bool Installed, bool RollbackAvailable, bool Interrupted);
+
 internal sealed record SetupChoice(
     string Action,
     bool AcceptPrerequisiteChanges,
@@ -24,15 +31,10 @@ internal sealed record SetupChoice(
 
 internal static class SetupDialog
 {
-    public static SetupChoice? Show(string packageRoot)
+    public static SetupChoice? Show(string packageRoot, string localAppDataRoot)
     {
         var kernelPresent = File.Exists(Path.Combine(packageRoot, "payload", "kernel", "kernel"));
-        var installed = Directory.Exists(Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Programs", "SwitchTrade"));
-        var rollbackPresent = Directory.Exists(Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Programs", "SwitchTrade.previous"));
+        var state = DetectSetupState(localAppDataRoot);
         var radios = DetectRadios(packageRoot);
         using var form = new Form
         {
@@ -63,18 +65,32 @@ internal static class SetupDialog
             ForeColor = Color.FromArgb(25, 34, 48),
             Margin = new Padding(0, 0, 0, 6),
         };
-        var intro = Label(
-            "SwitchTrade installs one isolated WSL distribution and connects a supported USB Wi-Fi adapter. " +
-            "It does not reset or remove your other WSL distributions. Keep all extracted setup files " +
-            "together until Setup finishes.");
+        var intro = Label(state.Interrupted
+            ? "Setup found an interrupted SwitchTrade operation. Repair will safely finish it or restore " +
+              "the last coherent state before continuing. Keep this exact extracted setup package together."
+            : "SwitchTrade installs one isolated WSL distribution and connects a supported USB Wi-Fi adapter. " +
+              "It does not reset or remove your other WSL distributions. Keep all extracted setup files " +
+              "together until Setup finishes.");
         intro.Margin = new Padding(0, 0, 0, 20);
 
         var actionLabel = Heading("Setup action");
         var action = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 280 };
-        action.Items.Add(installed ? "Update" : "Install");
-        action.Items.Add("Repair");
-        if (rollbackPresent) action.Items.Add("Rollback");
-        action.Items.Add("Uninstall");
+        if (state.Interrupted)
+        {
+            action.Items.Add(new SetupActionChoice("Repair", "Repair interrupted setup"));
+        }
+        else if (state.Installed)
+        {
+            action.Items.Add(new SetupActionChoice("Update", "Update"));
+            action.Items.Add(new SetupActionChoice("Repair", "Repair / reinstall"));
+            if (state.RollbackAvailable)
+                action.Items.Add(new SetupActionChoice("Rollback", "Rollback"));
+            action.Items.Add(new SetupActionChoice("Uninstall", "Uninstall"));
+        }
+        else
+        {
+            action.Items.Add(new SetupActionChoice("Install", "Install"));
+        }
         action.SelectedIndex = 0;
 
         var prerequisites = new CheckBox
@@ -110,8 +126,10 @@ internal static class SetupDialog
         radioNote.Margin = new Padding(0, 6, 0, 12);
         var purge = new CheckBox
         {
-            Text = "Also remove the named SwitchTrade WSL distribution during uninstall",
+            Text = "The isolated SwitchTrade WSL environment will also be removed",
             AutoSize = true,
+            Checked = true,
+            Enabled = false,
             Visible = false,
             Margin = new Padding(0, 0, 0, 12),
         };
@@ -155,7 +173,7 @@ internal static class SetupDialog
 
         void Refresh()
         {
-            var selected = action.SelectedItem?.ToString() ?? "Install";
+            var selected = (action.SelectedItem as SetupActionChoice)?.Action ?? "Install";
             var mutatingInstall = selected is "Install" or "Update" or "Repair";
             prerequisites.Visible = mutatingInstall;
             kernel.Visible = mutatingInstall && kernelPresent;
@@ -174,11 +192,65 @@ internal static class SetupDialog
         Refresh();
 
         if (form.ShowDialog() != DialogResult.OK) return null;
-        var selectedAction = action.SelectedItem?.ToString() ?? "Install";
+        var selectedAction = (action.SelectedItem as SetupActionChoice)?.Action ?? "Install";
         var selectedRadio = radio.SelectedItem as RadioChoice;
         return new SetupChoice(
             selectedAction, prerequisites.Checked, kernel.Checked, vmware.Checked,
             selectedRadio is null, purge.Checked, selectedRadio);
+    }
+
+    internal static SetupState DetectSetupState(string localAppDataRoot)
+    {
+        var installRoot = Path.Combine(localAppDataRoot, "Programs", "SwitchTrade");
+        var previousRoot = installRoot + ".previous";
+        var transactionPath = Path.Combine(localAppDataRoot, "SwitchTrade", "setup-transaction.json");
+        var installedRelease = GetCommittedRelease(installRoot);
+        var previousRelease = GetCommittedRelease(previousRoot);
+        var installed = installedRelease is not null;
+        var interrupted = Directory.Exists(installRoot) && !installed;
+        try
+        {
+            if (File.Exists(transactionPath))
+            {
+                using var transaction = JsonDocument.Parse(File.ReadAllBytes(transactionPath));
+                var phase = transaction.RootElement.TryGetProperty("phase", out var value)
+                    ? value.GetString() ?? ""
+                    : "";
+                interrupted = interrupted || phase is not ("completed" or "compensated" or "uninstalled") ||
+                              (phase == "completed" && !installed);
+            }
+        }
+        catch (IOException) { interrupted = true; }
+        catch (UnauthorizedAccessException) { interrupted = true; }
+        catch (JsonException) { interrupted = true; }
+        return new SetupState(
+            installed,
+            previousRelease is not null && previousRelease != installedRelease,
+            interrupted);
+    }
+
+    private static string? GetCommittedRelease(string root)
+    {
+        if (!Directory.Exists(root)) return null;
+        var markerPath = Path.Combine(root, ".switchtrade-release.json");
+        var integrityPath = Path.Combine(root, ".switchtrade-integrity.json");
+        var manifestPath = Path.Combine(root, "manifest.json");
+        if (!File.Exists(markerPath) || !File.Exists(integrityPath) || !File.Exists(manifestPath))
+            return null;
+        try
+        {
+            using var marker = JsonDocument.Parse(File.ReadAllBytes(markerPath));
+            using var manifest = JsonDocument.Parse(File.ReadAllBytes(manifestPath));
+            var markerRelease = marker.RootElement.GetProperty("release_id").GetString();
+            var manifestRelease = manifest.RootElement.GetProperty("release_id").GetString();
+            return !string.IsNullOrWhiteSpace(markerRelease) && markerRelease == manifestRelease
+                ? markerRelease
+                : null;
+        }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
+        catch (JsonException) { return null; }
+        catch (KeyNotFoundException) { return null; }
     }
 
     private static List<RadioChoice> DetectRadios(string packageRoot)

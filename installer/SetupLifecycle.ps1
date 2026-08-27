@@ -262,7 +262,8 @@ function New-SwitchTradeTransaction {
         [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{32}$')][string]$InstallId,
         [Parameter(Mandatory)][string]$DistroBasePath,
         [string]$WindowsPriorIntegritySha256 = '',
-        [string]$WslPriorIntegritySha256 = ''
+        [string]$WslPriorIntegritySha256 = '',
+        [ValidatePattern('^$|^[0-9a-fA-F]{64}$')][string]$PackageManifestSha256 = ''
     )
     $state = [ordered]@{
         schema = 3
@@ -273,6 +274,7 @@ function New-SwitchTradeTransaction {
         phase = 'created'
         windows_stage = $WindowsStage
         package_root = $PackageRoot
+        package_manifest_sha256 = $PackageManifestSha256.ToLowerInvariant()
         install_root = $InstallRoot
         previous_install = $PreviousInstall
         distro_name = $DistroName
@@ -359,23 +361,25 @@ function Assert-SwitchTradeTransactionPackage {
     )
     $expectedRelease = [string]$Transaction.release_id
     $expectedRoot = [string]$Transaction.package_root
-    $expectedManifestSha256 = ''
+    $expectedManifestSha256 = if ($Transaction.PSObject.Properties.Name -contains 'package_manifest_sha256') {
+        [string]$Transaction.package_manifest_sha256
+    } else { '' }
     if ([string]$Transaction.phase -match '^rollback_') {
         $rollbackPackage = (Assert-SwitchTradeRollbackJournal -Transaction $Transaction).initiating_package
         $expectedRelease = [string]$rollbackPackage.release_id
         $expectedRoot = [string]$rollbackPackage.root
         $expectedManifestSha256 = [string]$rollbackPackage.manifest_sha256
     }
-    if ($expectedRelease -ne $ReleaseId -or
-            -not [string]::Equals(
+    $rootMatches = [string]::Equals(
                 [IO.Path]::GetFullPath($expectedRoot).TrimEnd('\'),
                 [IO.Path]::GetFullPath($PackageRoot).TrimEnd('\'),
-                [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'SETUP_TRANSACTION_PACKAGE_MISMATCH: rerun Repair from the exact package that started the transaction'
+                [StringComparison]::OrdinalIgnoreCase)
+    if ($expectedRelease -ne $ReleaseId -or (-not $expectedManifestSha256 -and -not $rootMatches)) {
+        throw 'SETUP_TRANSACTION_PACKAGE_MISMATCH: rerun Repair from the same verified package version that started the transaction'
     }
     if ($expectedManifestSha256 -and
             (Get-FileSha256 (Join-Path $PackageRoot 'manifest.json')) -ne $expectedManifestSha256) {
-        throw 'SETUP_TRANSACTION_PACKAGE_MISMATCH: rollback package manifest identity changed'
+        throw 'SETUP_TRANSACTION_PACKAGE_MISMATCH: package manifest identity changed'
     }
 }
 
@@ -499,6 +503,44 @@ function Resolve-SwitchTradeTransactionRecovery {
         Disposition = 'compensate'; WindowsAction = $windowsAction; WslAction = $wslAction
         KernelAction = $kernelAction; RemoveStage = [bool]$Actual.WindowsStageExists
     }
+}
+
+function Assert-SwitchTradeInterruptedTransactionAction {
+    param(
+        [Parameter(Mandatory)][string]$RequestedAction,
+        [Parameter(Mandatory)]$Transaction
+    )
+    if ($RequestedAction -eq 'Repair' -or
+            $RequestedAction -eq [string]$Transaction.action) {
+        return $true
+    }
+    throw "SETUP_TRANSACTION_INCOMPLETE: transaction $($Transaction.transaction_id) stopped at $($Transaction.phase); rerun the same action or choose Repair from the package that started it"
+}
+
+function Test-SwitchTradeEarlyFreshInstallRecovery {
+    param([Parameter(Mandatory)]$Transaction)
+    return [int]$Transaction.schema -eq 3 -and
+        -not [string]$Transaction.prior_release_id -and
+        -not [bool]$Transaction.distro_existed_before -and
+        [string]$Transaction.phase -in @('created', 'windows_staged', 'importing_distro',
+            'distro_imported')
+}
+
+function Move-SwitchTradeOrphanedWindowsTree {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$RecoveryRoot
+    )
+    if (-not (Test-Path -LiteralPath $Path)) { return '' }
+    $item = Get-Item -LiteralPath $Path -Force
+    if (-not $item.PSIsContainer -or
+            ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw 'ORPHANED_INSTALL_PATH_INVALID: reserved recovery path is not a regular directory'
+    }
+    New-Item -ItemType Directory -Force -Path $RecoveryRoot | Out-Null
+    $target = Join-Path $RecoveryRoot ("windows-orphan-$([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))-$([guid]::NewGuid().ToString('N'))")
+    Move-Item -LiteralPath $Path -Destination $target
+    return $target
 }
 
 function Set-SwitchTradeTransactionPhase {

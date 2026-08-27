@@ -39,10 +39,15 @@ class InstallerLifecycleTests(unittest.TestCase):
         progress = (ROOT / "installer" / "bootstrap" / "SetupProgressDialog.cs").read_text(encoding="utf-8")
         self.assertIn("DeferHardwareSetup", dialog)
         self.assertIn("global WSL 2 kernel selection", dialog)
-        self.assertIn('action.Items.Add("Repair")', dialog)
-        self.assertIn('action.Items.Add("Uninstall")', dialog)
-        self.assertNotIn('if (installed) action.Items.Add("Repair")', dialog)
-        self.assertNotIn('if (installed) action.Items.Add("Uninstall")', dialog)
+        self.assertIn('new SetupActionChoice("Repair", "Repair interrupted setup")', dialog)
+        self.assertIn('new SetupActionChoice("Repair", "Repair / reinstall")', dialog)
+        self.assertIn('new SetupActionChoice("Uninstall", "Uninstall")', dialog)
+        self.assertIn("DetectSetupState(localAppDataRoot)", dialog)
+        self.assertIn("GetCommittedRelease", dialog)
+        self.assertIn("previousRelease != installedRelease", dialog)
+        self.assertIn("DecodeInvokingArgument", program)
+        self.assertIn('phase is not ("completed" or "compensated" or "uninstalled")', dialog)
+        self.assertIn("The isolated SwitchTrade WSL environment will also be removed", dialog)
         self.assertIn("ProgressBarStyle.Marquee", progress)
         self.assertIn("WaitForExitAsync", progress)
         self.assertIn('action == "resume"', program)
@@ -53,6 +58,9 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertIn("Set-SwitchTradeSetupStage 'prerequisites_enable'", setup)
         self.assertIn("Set-SwitchTradeSetupStage 'wsl_update'", setup)
         self.assertIn("Set-SwitchTradeSetupStage 'usbipd_install'", setup)
+        self.assertIn("Set-SwitchTradeSetupStage 'distro_import'", setup)
+        self.assertIn("$distroImportAttempted -and -not $distroImported", setup)
+        self.assertIn("preserving the transaction for deterministic recovery", setup)
         self.assertNotIn("$wslHelp.ExitCode -ne 0", setup)
         self.assertNotIn("$helpProbe.ExitCode -eq 0", setup)
         self.assertIn("$VersionText.Replace([string][char]0, '')", lifecycle)
@@ -166,6 +174,8 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertLess(unregister, first_other_mutation)
         self.assertGreaterEqual(
             setup.count("Assert-SwitchTradeCurrentDistroMutationIdentity"), 2)
+        self.assertIn("-Phase 'uninstalled'", uninstall)
+        self.assertIn("$namedDistroExists -and $PSCmdlet.ShouldProcess", uninstall)
 
     def test_release_transaction_and_owned_identity_gates_are_present(self):
         setup = (ROOT / "installer" / "SwitchTradeSetup.ps1").read_text(encoding="utf-8")
@@ -173,9 +183,12 @@ class InstallerLifecycleTests(unittest.TestCase):
         rootfs = (ROOT / "installer" / "Build-Rootfs.sh").read_text(encoding="utf-8")
         control = (ROOT / "switchtrade" / "control.py").read_text(encoding="utf-8")
         dialog = (ROOT / "installer" / "bootstrap" / "SetupDialog.cs").read_text(encoding="utf-8")
-        for value in ("DISTRO_NAME_COLLISION", "SETUP_TRANSACTION_INCOMPLETE",
-                      "Test-StagedControlReadiness", "UsbInstanceId"):
+        for value in ("DISTRO_NAME_COLLISION", "Test-StagedControlReadiness", "UsbInstanceId"):
             self.assertIn(value, setup)
+        self.assertIn("SETUP_TRANSACTION_INCOMPLETE", lifecycle)
+        self.assertIn("package_manifest_sha256", lifecycle)
+        self.assertIn("Test-SwitchTradeEarlyFreshInstallRecovery", lifecycle)
+        self.assertIn("-PackageManifestSha256 $PackageManifestSha256", setup)
         self.assertIn("Global\\SwitchTrade.Setup", lifecycle)
         self.assertLess(setup.index("Enter-SwitchTradeSetupMutex"),
                         setup.index("if ($Action -eq 'Uninstall')"))
@@ -279,9 +292,18 @@ class InstallerLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             package = Path(temporary)
             shutil.copytree(ROOT / "installer", package / "installer")
+            profile = package / "profile"
+            local_app_data = profile / "AppData" / "Local"
+            desktop = profile / "Desktop"
+            local_app_data.mkdir(parents=True)
+            desktop.mkdir(parents=True)
             result = subprocess.run([
                 "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                 str(package / "installer" / "SwitchTradeSetup.ps1"), "-Action", "Install",
+                "-UserProfileRoot", str(profile),
+                "-LocalAppDataRoot", str(local_app_data),
+                "-DesktopRoot", str(desktop),
+                "-InvokingUserSid", "S-1-5-21-1-2-3-1001",
             ], cwd=package, capture_output=True, text=True, timeout=30)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("SWITCHTRADE_SETUP_ERROR: PACKAGE_MANIFEST_MISSING", result.stderr)

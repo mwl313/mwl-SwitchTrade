@@ -11,6 +11,23 @@ The 2026-08-27 software audit closed the reproducible code-level causes and adde
 The four entries remain here because their final acceptance requires clean-host, physical-radio, or
 two-PC evidence. See `docs/AUDIT_REPORT.md` for the reviewed software finding register.
 
+## Resolved installer lifecycle defects
+
+The following observed failures are closed in source and remain part of clean-host qualification:
+
+- Reopening the same Install after interruption now performs deterministic recovery instead of
+  returning `SETUP_TRANSACTION_INCOMPLETE`; explicit Repair uses the same path.
+- A verified newer package may compensate only an early fresh-install transaction that cannot yet
+  contain committed runtime data. Later phases still require the exact manifest identity.
+- Unrelated legacy `SwitchTrade.previous` or uncommitted application trees are preserved under the
+  local recovery directory instead of blocking Setup or being deleted.
+- New transactions bind the package manifest SHA-256, so moving or re-extracting byte-identical setup
+  files does not prevent Repair; a changed manifest is rejected.
+- An unconfirmed WSL import remains nonterminal for the next recovery pass instead of being falsely
+  published as compensated.
+- Setup actions are derived from the invoking user's committed/transaction state. Standard uninstall
+  removes the owned isolated distro and publishes `uninstalled`, allowing a clean later Install.
+
 ## Status and priority
 
 - **Confirmed**: reproduced or proven from runtime evidence and source inspection.

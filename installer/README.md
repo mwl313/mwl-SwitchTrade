@@ -82,8 +82,8 @@ The retired web/demo frontend is not bundled into the WSL runtime or required by
   runtime for rollback.
 - WSL provisioning builds and self-checks a complete staged runtime from its own application root
   before replacing `/opt/switchtrade`; Setup's Windows or WSL working directory is irrelevant.
-- `Uninstall` removes application files only.
-- The distro is unregistered only when `Uninstall -PurgeDistro` is explicitly requested.
+- `Uninstall` removes the application files and unregisters only the UUID/BasePath-verified isolated
+  `SwitchTrade` distro; unrelated WSL distributions are never selected by name alone.
 - Setup changes global WSL kernel selection only when a verified kernel bundle is present and the user
   supplies `--accept-global-kernel-change`; it preserves the prior `.wslconfig` for exact rollback.
 - Ordinary launch never self-elevates. Setup/Repair performs binding; daily attach uses that retained
@@ -92,6 +92,10 @@ The retired web/demo frontend is not bundled into the WSL runtime or required by
   options and registers a per-user RunOnce continuation. The same package is re-verified when setup
   resumes after sign-in. Resume reopens the native progress window and reports the current prerequisite,
   WSL, runtime, kernel, commit, or hardware stage until setup succeeds or shows a targeted failure.
+- Reopening the same action or choosing Repair resumes one interrupted transaction. New transactions
+  bind the package manifest SHA-256, so a byte-identical re-extraction is accepted while a modified
+  package is rejected. Early fresh-install state may be safely compensated by a verified successor
+  package before any runtime data was staged.
 - Windows 10 compatibility is qualified against build 19045 with current Microsoft Store WSL. Merely
   having an old `wsl.exe` stub is not treated as a complete WSL installation.
 - A managed-PC policy denial while starting the custom kernel restores the previous `.wslconfig` and
