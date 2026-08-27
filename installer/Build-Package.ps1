@@ -79,8 +79,13 @@ if ($Release -or $UnsignedPrivateBeta) {
 $resolvedRootfs = ''
 if ($Rootfs) {
     $resolvedRootfs = (Resolve-Path -LiteralPath $Rootfs).Path
-    $rootfsMarkerText = (& tar -xOf $resolvedRootfs './etc/switchtrade-distro.json' 2>$null) -join "`n"
-    if ($LASTEXITCODE -ne 0 -or -not $rootfsMarkerText) {
+    $priorErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $rootfsMarkerText = (& tar -xOf $resolvedRootfs './etc/switchtrade-distro.json' 2>$null) -join "`n"
+        $rootfsMarkerExitCode = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $priorErrorActionPreference }
+    if ($rootfsMarkerExitCode -ne 0 -or -not $rootfsMarkerText) {
         throw 'ROOTFS_IDENTITY_MARKER_MISSING: rootfs cannot be recovered safely after import interruption'
     }
     try { $rootfsMarker = $rootfsMarkerText | ConvertFrom-Json }
