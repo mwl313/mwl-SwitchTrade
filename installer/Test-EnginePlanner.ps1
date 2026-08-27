@@ -385,6 +385,11 @@ $stateLegacy = New-TestState -Identity $absent -Transaction $legacyTx
 $stateLegacy.Transaction = [pscustomobject]@{ Classification = 'legacy'; Transaction = $legacyTx; Phase = 'windows_staged'; Schema = 2; TransactionId = 'x'; ReleaseId = 'beta-test' }
 $blockerLegacy = Resolve-SwitchTradePlan -Context ([pscustomobject]@{ Action = 'Repair' }) -State $stateLegacy -Package ([pscustomobject]@{})
 Assert-Equal $blockerLegacy.Code 'SETUP_TRANSACTION_LEGACY_AMBIGUOUS' 'legacy transaction must block'
+$futureTx = New-TestTransaction | ForEach-Object { $_.schema = 4; $_ }
+$stateFuture = New-TestState -Identity $absent -Transaction $futureTx
+$stateFuture.Transaction = [pscustomobject]@{ Classification = 'future_schema'; Transaction = $futureTx; Phase = 'windows_staged'; Schema = 4; TransactionId = 'x'; ReleaseId = 'beta-test' }
+$blockerFuture = Resolve-SwitchTradePlan -Context ([pscustomobject]@{ Action = 'Repair' }) -State $stateFuture -Package ([pscustomobject]@{})
+Assert-Equal $blockerFuture.Code 'SETUP_TRANSACTION_FUTURE_SCHEMA' 'future-schema transaction must block'
 
 # 11. Determinism: identical inputs produce identical plans.
 $planA = Resolve-SwitchTradeInstallPlan -Context ([pscustomobject]@{ Action = 'Repair' }) -State $state8 -Package ([pscustomobject]@{ ReleaseId = 'beta-test'; ManifestSha256 = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' })
