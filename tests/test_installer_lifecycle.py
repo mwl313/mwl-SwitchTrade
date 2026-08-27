@@ -207,6 +207,17 @@ class InstallerLifecycleTests(unittest.TestCase):
         first_swap = setup.index("--rollback', '--release-id'", rollback)
         self.assertLess(validation, first_swap)
 
+    def test_inline_wsl_shells_use_the_exec_argument_boundary(self):
+        setup = (ROOT / "installer" / "SwitchTradeSetup.ps1").read_text(encoding="utf-8")
+        install_id_writer = setup[
+            setup.index("function Set-SwitchTradeDistroInstallId"):
+            setup.index("function Invoke-LoggedWsl")
+        ]
+        self.assertIn("'--exec', 'sh', '-c'", install_id_writer)
+        self.assertIn("DISTRO_INSTALL_ID_WRITE_FAILED: $detail", install_id_writer)
+        self.assertNotIn("'--', 'sh', '-c'", setup)
+        self.assertNotIn("'--', 'sh', '-lc'", setup)
+
     @unittest.skipUnless(shutil.which("powershell"), "Windows PowerShell is required")
     def test_temp_rooted_setup_transaction_fails_closed_before_swap(self):
         with tempfile.TemporaryDirectory() as temporary:

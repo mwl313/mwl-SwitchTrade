@@ -242,7 +242,7 @@ function Get-SwitchTradeDistroMarker {
     param([Parameter(Mandatory)][string]$Name)
     try {
         $result = Invoke-BoundedNativeProcess -FilePath 'wsl.exe' `
-            -Arguments @('-d', $Name, '-u', 'root', '--', 'sh', '-c',
+            -Arguments @('-d', $Name, '-u', 'root', '--exec', 'sh', '-c',
                 'if [ ! -e /etc/switchtrade-distro.json ]; then exit 44; fi; exec cat /etc/switchtrade-distro.json') `
             -TimeoutSeconds 20
     } catch { return [pscustomobject]@{ Missing = $false; Valid = $false; InstallId = '' } }
@@ -319,9 +319,13 @@ function Set-SwitchTradeDistroInstallId {
         $InstallId + '"}'
     $command = 'set -eu; p=/etc/switchtrade-distro.json.tmp; printf ''%s\n'' "$1" >"$p"; chmod 0644 "$p"; mv -f -- "$p" /etc/switchtrade-distro.json'
     $result = Invoke-BoundedNativeProcess -FilePath 'wsl.exe' `
-        -Arguments @('-d', $Name, '-u', 'root', '--', 'sh', '-c', $command, 'switchtrade-id', $document) `
+        -Arguments @('-d', $Name, '-u', 'root', '--exec', 'sh', '-c', $command, 'switchtrade-id', $document) `
         -TimeoutSeconds 20
-    if ($result.ExitCode -ne 0) { throw 'DISTRO_INSTALL_ID_WRITE_FAILED' }
+    if ($result.ExitCode -ne 0) {
+        $detail = (($result.Error + [Environment]::NewLine + $result.Output).Trim())
+        if ($detail) { throw "DISTRO_INSTALL_ID_WRITE_FAILED: $detail" }
+        throw 'DISTRO_INSTALL_ID_WRITE_FAILED'
+    }
     Assert-SwitchTradeDistroOwned -Name $Name -ExpectedInstallId $InstallId
 }
 
@@ -358,7 +362,7 @@ function Get-SwitchTradeWslRuntimeState {
     $probe = 'p="{0}"; if [ ! -e "$p" ]; then printf ''absent''; elif [ ! -d "$p" ] || [ ! -f "$p/.switchtrade-release.json" ] || [ ! -f "$p/.switchtrade-integrity.json" ]; then printf ''invalid''; else cat "$p/.switchtrade-release.json"; printf ''\n''; sha256sum "$p/.switchtrade-integrity.json" | cut -d'' '' -f1; fi' -f $path
     try {
         $result = Invoke-BoundedNativeProcess -FilePath 'wsl.exe' `
-            -Arguments @('-d', $Name, '-u', 'root', '--', 'sh', '-lc', $probe) -TimeoutSeconds 30
+            -Arguments @('-d', $Name, '-u', 'root', '--exec', 'sh', '-lc', $probe) -TimeoutSeconds 30
     } catch {
         return [pscustomobject]@{ Exists = $true; Valid = $false; ReleaseId = ''; IntegritySha256 = '' }
     }
@@ -1561,7 +1565,7 @@ try {
             $modulesWsl = Convert-ToWslPath $KernelModules
             $extractCommand = 'set -eu; command -v depmod >/dev/null 2>&1 && command -v modinfo >/dev/null 2>&1 || { echo "RUNTIME_OS_DEPENDENCY_MISSING: kmod" >&2; exit 1; }; mkdir -p /lib/modules; tar -xzf "{0}" -C /lib/modules; depmod -a "{1}"' -f `
                 $modulesWsl, [string]$kernelState.kernel_release
-            Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'sh', '-lc', $extractCommand) `
+            Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--exec', 'sh', '-lc', $extractCommand) `
                 -FailureCode 'KERNEL_MODULE_INSTALL_FAILED' -Stage 'kernel_modules' | Out-Null
         }
         if ($KernelModules) {
@@ -1575,7 +1579,7 @@ try {
             } else {
                 'set -eu; test "$(uname -r)" = "{0}"; test "$(modinfo -F vermagic rtl8xxxu | awk ''{{print $1}}'')" = "{0}"; modinfo -F firmware rtl8xxxu | while IFS= read -r fw; do test -z "$fw" || test -f "/lib/firmware/$fw"; done' -f [string]$kernelState.kernel_release
             }
-            Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'sh', '-lc', $moduleVerify) `
+            Invoke-LoggedWsl -Arguments @('-d', $Distro, '-u', 'root', '--exec', 'sh', '-lc', $moduleVerify) `
                 -FailureCode 'KERNEL_ABI_OR_FIRMWARE_MISMATCH' -Stage 'kernel_verify' | Out-Null
         }
     }
