@@ -124,13 +124,17 @@ class RunLogger:
         self.event("run_finished", outcome=outcome)
 
     def support_bundle(self, destination: str | Path | None = None,
-                       summary: dict | None = None) -> Path:
+                       summary: dict | None = None,
+                       related_run_ids: list[str] | None = None) -> Path:
         destination = Path(destination) if destination else self.root / f"support-{self.run_id}.zip"
-        contents = ["metadata.json", "events.jsonl", "console.log"]
+        entries: list[tuple[str, Path]] = [
+            (name, self.run_dir / name)
+            for name in ("metadata.json", "events.jsonl", "console.log")
+        ]
         for path in sorted(self.run_dir.glob("diagnostic-*.txt")):
-            contents.append(path.name)
+            entries.append((path.name, path))
         if (self.run_dir / "diagnostic-report.json").is_file():
-            contents.append("diagnostic-report.json")
+            entries.append(("diagnostic-report.json", self.run_dir / "diagnostic-report.json"))
         diagnostic_root = self.run_dir / "hardware-diagnostics"
         if diagnostic_root.is_dir():
             for run_dir in sorted(diagnostic_root.iterdir()):
@@ -141,19 +145,28 @@ class RunLogger:
                              "diagnostic-report.json"):
                     path = run_dir / name
                     if path.is_file() and not path.is_symlink():
-                        contents.append(path.relative_to(self.run_dir).as_posix())
+                        entries.append((path.relative_to(self.run_dir).as_posix(), path))
                 for path in sorted(run_dir.glob("diagnostic-*.txt")):
                     if path.is_file() and not path.is_symlink():
-                        contents.append(path.relative_to(self.run_dir).as_posix())
+                        entries.append((path.relative_to(self.run_dir).as_posix(), path))
+        for run_id in dict.fromkeys(related_run_ids or []):
+            if not RUN_ID.fullmatch(run_id) or run_id == self.run_id:
+                continue
+            run_dir = self.root / run_id
+            if not run_dir.is_dir() or run_dir.is_symlink():
+                continue
+            for name in ("metadata.json", "events.jsonl", "console.log"):
+                path = run_dir / name
+                if path.is_file() and not path.is_symlink():
+                    entries.append((f"related-runs/{run_id}/{name}", path))
         manifest = {
             "run_id": self.run_id,
             "created_utc": _utc_now().isoformat(),
-            "contents": contents,
+            "contents": [name for name, _path in entries],
             "privacy": "Known secret fields are redacted. Review before sharing.",
         }
         with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
-            for name in manifest["contents"]:
-                path = self.run_dir / name
+            for name, path in entries:
                 if path.is_file():
                     bundle.writestr(name, redact_text(path.read_text(encoding="utf-8", errors="replace")))
             bundle.writestr("privacy-manifest.json", json.dumps(manifest, indent=2) + "\n")

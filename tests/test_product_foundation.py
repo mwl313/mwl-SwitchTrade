@@ -9,7 +9,7 @@ from unittest import mock
 import zipfile
 
 from switchtrade.diagnostics import RunLogger, redact_text
-from switchtrade.endpoint import cleanup_resources, runtime_phy, runtime_plan
+from switchtrade.endpoint import cleanup_resources, run_endpoint, runtime_phy, runtime_plan
 from switchtrade.hardware import HardwarePolicyError, load_profiles, require_host_engine
 from switchtrade.hardware_diagnostics import (
     classify_output, diagnose_hardware, parse_iw_capabilities,
@@ -90,6 +90,31 @@ class HardwarePolicyTests(unittest.TestCase):
             "observer", "observer", "simulation", "simulation", "transport", "tunnel",
         ])
         self.assertEqual(errors, ["observer: blocked", "simulation: blocked"])
+
+    def test_invalid_member_credential_is_reported_before_tunnel_start(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            credential = root / "member-token"
+            credential.write_text("too-short", encoding="utf-8")
+            state_file = root / "endpoint-state.json"
+            args = SimpleNamespace(
+                tunnel_seat="member_a", role=None, usb_id="0bda:818b",
+                switch_room_role="creator", allow_experimental_hardware=False,
+                dry_run=False, phy="phy0", runs_root=str(root / "runs"),
+                session_id="ABC123", relay_url="https://relay.invalid", channel=6,
+                state_file=str(state_file), attempt_id="attempt-1",
+                launch_nonce="1" * 32, member_token_file=str(credential),
+            )
+            with mock.patch("switchtrade.endpoint.runtime_phy", return_value="phy0"), \
+                    mock.patch("switchtrade.endpoint.signal.signal"):
+                result = run_endpoint(args)
+
+            self.assertEqual(result, 1)
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+            self.assertEqual(state["state"], "failed")
+            self.assertEqual(state["error_code"], "relay.failed")
+            self.assertFalse(state["radio_checked"])
+            self.assertTrue(state["endpoint_run_id"])
 
     def test_in_development_engines_are_not_selectable(self):
         self.assertEqual(require_host_engine("ldn"), "ldn")
@@ -250,6 +275,21 @@ class DiagnosticsTests(unittest.TestCase):
                 expected = (f"hardware-diagnostics/{report['run_id']}/"
                             "diagnostic-report.json")
                 self.assertIn(expected, archive.namelist())
+
+    def test_support_bundle_includes_related_endpoint_run_and_rejects_traversal(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            control = RunLogger("control", temporary)
+            endpoint = RunLogger("endpoint", temporary)
+            endpoint.event("radio_failed", detail="Authorization: Bearer endpoint-secret")
+
+            bundle = control.support_bundle(related_run_ids=[
+                endpoint.run_id, "../not-a-run", endpoint.run_id,
+            ])
+            with zipfile.ZipFile(bundle) as archive:
+                related = f"related-runs/{endpoint.run_id}/events.jsonl"
+                self.assertIn(related, archive.namelist())
+                self.assertNotIn(b"endpoint-secret", archive.read(related))
+                self.assertFalse(any("not-a-run" in name for name in archive.namelist()))
 
     def test_process_lock_rejects_a_duplicate_and_releases_cleanly(self):
         with tempfile.TemporaryDirectory() as temporary:

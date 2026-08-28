@@ -50,7 +50,7 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
     public bool ShowRoleChoices => _coordinator.ConnectionState == LegacyConnectionState.Idle;
     public bool ShowEndConnection => !ShowRoleChoices;
     public bool HasRecovery => !string.IsNullOrWhiteSpace(_coordinator.RecoveryMessage);
-    public bool HasAdapterRepair => HasRecovery && RecoveryStage is
+    public bool HasAdapterRepair => HasRecovery && RecoveryCode != "radio.switch_room_not_found" && RecoveryStage is
         "hardware_share" or "hardware_attach" or "radio";
     public string AdapterRecoveryLabel => RecoveryCode == "adapter_not_shared"
         ? "Authorize adapter"

@@ -48,6 +48,10 @@ PROTO_UDP = 17
 PIA_PORT = 12345
 
 
+class LdnRoomNotFoundError(RuntimeError):
+    """The radio scanned successfully but found no joinable Switch room."""
+
+
 # ---------------------------------------------------------------------------
 # STEP 8-fix (docs/16): hostapd-style BEACON_HEAD for the HOST path.
 #
@@ -867,7 +871,10 @@ class LiveTransport:
                          f"(attempt {attempt + 1}/{attempts})...")
                 time.sleep(settle)                      # let the radio settle before retrying
         light_cleanup(self.log)                         # remove any vif a failed attempt leaked
-        raise RuntimeError(f"LDN join failed after {attempts} attempt(s):\n{last_err}")
+        error_type = LdnRoomNotFoundError if (
+            last_err and "no joinable FRLG network" in last_err
+        ) else RuntimeError
+        raise error_type(f"LDN join failed after {attempts} attempt(s):\n{last_err}")
 
     def _run_ldn(self):
         try:

@@ -383,6 +383,52 @@ class AuthoritativeRoomTests(unittest.TestCase):
         self.assertEqual(failed["attempt"]["phase"], "failed")
         self.assertEqual(failed["attempt"]["recoverable_error"], "relay.peer_lost")
 
+    def test_endpoint_failure_code_is_preserved_for_the_partner(self):
+        first = self._create()
+        second = self._join(first["room"]["room_code"])
+        room_id = first["room"]["room_id"]
+        for credential, role in ((first, "creator"), (second, "finder")):
+            room = self._mutate(room_id, credential["member_token"], "/ready", {
+                "ready": True, "switch_room_role": role,
+            }).json()
+        attempt_id = room["attempt"]["attempt_id"]
+
+        failed = self._mutate(
+            room_id, first["member_token"], f"/attempts/{attempt_id}:phase", {
+                "phase": "failed", "failure_code": "radio.switch_room_not_found",
+            })
+        self.assertEqual(failed.status_code, 200, failed.text)
+        self.assertEqual(
+            failed.json()["attempt"]["recoverable_error"],
+            "radio.switch_room_not_found",
+        )
+        partner = relay_server.authority.snapshot(room_id, second["member_token"])
+        self.assertEqual(
+            partner["attempt"]["recoverable_error"],
+            "radio.switch_room_not_found",
+        )
+
+    def test_endpoint_failure_code_rejects_unstructured_input(self):
+        first = self._create()
+        second = self._join(first["room"]["room_code"])
+        room_id = first["room"]["room_id"]
+        for credential, role in ((first, "creator"), (second, "finder")):
+            room = self._mutate(room_id, credential["member_token"], "/ready", {
+                "ready": True, "switch_room_role": role,
+            }).json()
+        attempt_id = room["attempt"]["attempt_id"]
+
+        rejected = self._mutate(
+            room_id, first["member_token"], f"/attempts/{attempt_id}:phase", {
+                "phase": "failed", "failure_code": "invalid failure code!",
+            })
+        self.assertEqual(rejected.status_code, 400, rejected.text)
+        self.assertEqual(
+            relay_server.authority.snapshot(room_id, first["member_token"])
+            ["attempt"]["phase"],
+            "connecting_switches",
+        )
+
     def test_concurrent_peer_loss_and_stale_phase_cannot_reactivate_attempt(self):
         first = self._create()
         second = self._join(first["room"]["room_code"])

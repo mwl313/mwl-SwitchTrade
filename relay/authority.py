@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import sqlite3
 import string
@@ -745,6 +746,11 @@ class AuthorityStore:
                 phase = str(payload.get("phase", ""))
                 if phase not in ATTEMPT_PHASE_ORDER or not room.get("attempt"):
                     raise AuthorityError(400, "invalid attempt phase")
+                failure_code = None
+                if phase == "failed":
+                    failure_code = str(payload.get("failure_code") or "session.failed")
+                    if not re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", failure_code):
+                        raise AuthorityError(400, "invalid attempt failure code")
                 current_phase = str(room["attempt"].get("phase", ""))
                 if current_phase == phase:
                     response = self._public(room, member_id)
@@ -754,6 +760,8 @@ class AuthorityStore:
                         ATTEMPT_PHASE_ORDER.get(current_phase, -1) > ATTEMPT_PHASE_ORDER[phase]):
                     raise AuthorityError(409, "attempt phase cannot move backward")
                 room["attempt"]["phase"] = phase
+                if failure_code is not None:
+                    room["attempt"]["recoverable_error"] = failure_code
                 room["attempt"]["updated_at"] = _utc()
                 if phase == "trading_room":
                     room["state"] = "trading"

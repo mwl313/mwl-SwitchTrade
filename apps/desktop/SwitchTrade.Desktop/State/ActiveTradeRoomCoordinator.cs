@@ -198,14 +198,21 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
             case "failed":
                 ConnectionState = LegacyConnectionState.NeedsRecovery;
                 StatusText = "This connection needs attention.";
-                RecoveryMessage = status.FailureStage switch
+                RecoveryCode = status.FailureCode;
+                RecoveryMessage = status.FailureCode switch
                 {
-                    "relay" => "Check this PC’s internet connection, end this attempt, and try again. Export a support bundle if it repeats.",
-                    "radio" => "Run Repair adapter below. End this attempt before reattaching USB or starting another room.",
-                    "session" => "End this attempt and try once more. Export a support bundle if the same session failure repeats.",
-                    "decoder" => "End this attempt and repair or update SwitchTrade; the installed decoder does not match this app.",
-                    "control" => "Close SwitchTrade and run the latest SwitchTradeSetup.exe with Repair. Do not reset WSL.",
-                    _ => status.Error ?? "End this attempt and try again. Export a support bundle if it repeats.",
+                    "radio.switch_room_not_found" =>
+                        "No Group Leader Switch room was found on supported 2.4 GHz channels. Recreate the group on the Switch and try again.",
+                    _ => status.FailureStage switch
+                    {
+                        "relay" => "Check this PC’s internet connection, end this attempt, and try again. Export a support bundle if it repeats.",
+                        "radio" => "Run the adapter check. End this attempt before reattaching USB or starting another room.",
+                        "session" => "End this attempt and try once more. Export a support bundle if the same session failure repeats.",
+                        "cleanup" => "Restart SwitchTrade before trying another connection. Export a support bundle if it repeats.",
+                        "decoder" => "End this attempt and repair or update SwitchTrade; the installed decoder does not match this app.",
+                        "control" => "Close SwitchTrade and run the latest SwitchTradeSetup.exe with Repair. Do not reset WSL.",
+                        _ => status.Error ?? "End this attempt and try again. Export a support bundle if it repeats.",
+                    },
                 };
                 break;
             case "completed":
@@ -262,6 +269,8 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
                 "relay.restart" => "The online relay restarted. End this attempt and try again.",
                 "relay.peer_lost" => "The partner connection was lost. End this attempt and try again.",
                 "member.reconnect_expired" => "Your partner did not reconnect in time.",
+                "radio.switch_room_not_found" =>
+                    "No Group Leader Switch room was found on supported 2.4 GHz channels. Recreate the group on the Switch and try again.",
                 _ => "End this attempt and try again. Export a support bundle if it repeats.",
             };
         }

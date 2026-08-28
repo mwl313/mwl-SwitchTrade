@@ -1,4 +1,5 @@
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 import base64
 import io
 import json
@@ -974,7 +975,10 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 runtime.last_authority_heartbeat = time.monotonic()
                 room = {
                     "room_id": "room-1", "room_code": "ABC123", "room_version": 7,
-                    "attempt": {"attempt_id": "attempt-1", "phase": "failed"},
+                    "attempt": {
+                        "attempt_id": "attempt-1", "phase": "failed",
+                        "recoverable_error": "radio.switch_room_not_found",
+                    },
                     "members": [],
                 }
 
@@ -990,6 +994,14 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 running.assert_called_once_with()
                 stop.assert_called_once_with()
                 self.assertIsNone(runtime.endpoint_session)
+                failure = runtime.read_endpoint()
+                self.assertEqual(failure["state"], "failed")
+                self.assertEqual(failure["error_code"], "radio.switch_room_not_found")
+                self.assertEqual(failure["recovery_action"], "recreate_switch_room")
+                with patch.object(runtime, "authoritative_room", return_value=room), patch.object(
+                        runtime.relay, "room_command") as publish:
+                    runtime.sync_authoritative_phase(failure, {})
+                publish.assert_not_called()
 
     def test_windows_control_rejects_endpoint_from_another_wsl_distro(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1203,6 +1215,78 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                     persisted = client.app.state.runtime.read_hardware_selection()
                     self.assertEqual(persisted["instance_id"], instance_id)
                     self.assertEqual(persisted["bus_id"], "9-7")
+
+    def test_parallel_room_poll_and_connect_attach_and_launch_once(self):
+        instance_id = r"USB\VID_0BDA&PID_818B\RADIO-B"
+        attached = [False]
+        attach_calls = []
+
+        def run(command, **_kwargs):
+            result = MagicMock(returncode=0, stdout="", stderr="")
+            if command[:2] == ["usbipd.exe", "attach"]:
+                attach_calls.append(command)
+                time.sleep(0.05)
+                attached[0] = True
+            elif command[:2] == ["usbipd.exe", "state"]:
+                result.stdout = json.dumps({"Devices": [{
+                    "BusId": "2-4",
+                    "ClientIPAddress": "172.20.0.1" if attached[0] else None,
+                    "PersistedGuid": "shared-radio",
+                    "Description": "Realtek RTL8192EU",
+                    "InstanceId": instance_id,
+                }]})
+            return result
+
+        room = {
+            "contract_version": "room-control.v1",
+            "room_id": "room-1", "room_code": "ABC123", "room_version": 7,
+            "state": "connection_attempt",
+            "attempt": {
+                "attempt_id": "attempt-1", "phase": "connecting_switches",
+                "role_locked": True, "local_switch_role": "finder",
+            },
+            "members": [{"is_local": True, "seat": "member_b"}],
+        }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                runtime = client.app.state.runtime
+                runtime.write_hardware_selection("0bda:818b", instance_id, "2-4")
+                runtime.authority_state.write_text(json.dumps({
+                    "room_id": "room-1", "room_code": "ABC123",
+                    "member_token": "member-token", "reconnect_token": "reconnect-token",
+                }), encoding="utf-8")
+                runtime.member_token_file.write_text("member-token", encoding="utf-8")
+                runtime.relay_capabilities = {"manual-switch-role.v1"}
+                runtime.next_capability_probe = time.monotonic() + 60
+                runtime.last_authority_heartbeat = time.monotonic()
+                process = MagicMock(pid=8765)
+                process.poll.return_value = None
+
+                def acknowledge_launch(command, **_kwargs):
+                    nonce = command[command.index("--launch-nonce") + 1]
+                    runtime.endpoint_launch_ack.write_text(json.dumps({
+                        "schema": 1, "launch_nonce": nonce, "launcher_pid": 8765,
+                    }), encoding="utf-8")
+                    return process
+
+                with patch.object(runtime, "authoritative_room", return_value=room), patch.object(
+                        runtime.relay, "room_command", return_value=room), patch(
+                        "switchtrade.control.subprocess.run", side_effect=run), patch(
+                        "switchtrade.control.subprocess.Popen",
+                        side_effect=acknowledge_launch) as popen:
+                    with ThreadPoolExecutor(max_workers=2) as executor:
+                        poll = executor.submit(client.get, "/api/v1/trade-room")
+                        connect = executor.submit(
+                            client.post, "/api/v1/trade-room/connect",
+                            json={"switch_room_role": "finder"},
+                        )
+                        responses = [poll.result(timeout=5), connect.result(timeout=5)]
+
+                self.assertEqual([response.status_code for response in responses], [200, 200])
+                self.assertEqual(len(attach_calls), 1)
+                popen.assert_called_once()
+                self.assertEqual(runtime.endpoint_session, "ABC123")
 
     def test_unshared_adapter_reports_authorization_gate_without_attach(self):
         instance_id = r"USB\VID_0BDA&PID_818B\RADIO-A"

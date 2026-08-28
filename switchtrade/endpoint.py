@@ -57,7 +57,7 @@ def cleanup_resources(observer, sim, transport, tunnel, logger) -> list[str]:
         ("observer", (lambda: observer.stop(clear=True)) if observer is not None else None),
         ("simulation", sim.close if sim is not None else None),
         ("transport", transport.stop if transport is not None else None),
-        ("tunnel", tunnel.stop),
+        ("tunnel", tunnel.stop if tunnel is not None else None),
     ):
         if cleanup is None:
             continue
@@ -203,30 +203,23 @@ def run_endpoint(args) -> int:
 
     args.phy = runtime_phy(args.phy)
 
+    logger = RunLogger("rfu-endpoint", args.runs_root, {
+        **plan, "session_id": args.session_id, "relay_url": args.relay_url,
+        "phy": args.phy, "channel": args.channel,
+    })
     state = StateReporter(args.state_file, {
         "session_id": args.session_id,
         "attempt_id": args.attempt_id or args.session_id,
+        "endpoint_run_id": logger.run_id,
         "wsl_distro": os.environ.get("WSL_DISTRO_NAME"),
         "launch_nonce": args.launch_nonce,
         "process_start_ticks": process_start_ticks(),
     })
     state.write("initializing", radio_checked=False, tunnel_connected=False,
                 failure_stage=None, recovery_action=None, **plan)
-    logger = RunLogger("rfu-endpoint", args.runs_root, {
-        **plan, "session_id": args.session_id, "relay_url": args.relay_url,
-        "phy": args.phy, "channel": args.channel,
-    })
     log = EndpointLog(logger)
-    member_token = None
-    if args.member_token_file:
-        member_token = Path(args.member_token_file).read_text(encoding="utf-8").strip()
-        if len(member_token) < 32:
-            raise ValueError("member credential file is invalid")
-    tunnel = TunnelClient(
-        args.relay_url, args.session_id, plan["tunnel_role"], log=log,
-        member_token=member_token, attempt_id=args.attempt_id,
-    ).start()
-    transport = sim = observer = None
+    tunnel = transport = sim = observer = None
+    radio_ready = False
     outcome = "failed"
     failure_stage = "relay"
     stopping = False
@@ -240,6 +233,15 @@ def run_endpoint(args) -> int:
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
     try:
+        member_token = None
+        if args.member_token_file:
+            member_token = Path(args.member_token_file).read_text(encoding="utf-8").strip()
+            if len(member_token) < 32:
+                raise ValueError("member credential file is invalid")
+        tunnel = TunnelClient(
+            args.relay_url, args.session_id, plan["tunnel_role"], log=log,
+            member_token=member_token, attempt_id=args.attempt_id,
+        ).start()
         if not tunnel.wait_connected(args.connect_timeout):
             raise TimeoutError(f"relay connection failed: {tunnel.last_error or 'timeout'}")
         state.write("relay_connected", radio_checked=False, tunnel_connected=True,
@@ -274,6 +276,7 @@ def run_endpoint(args) -> int:
             )
             transport.start(timeout=args.radio_timeout)
 
+        radio_ready = True
         state.write("radio_ready", radio_checked=True, tunnel_connected=True,
                     failure_stage=None, recovery_action=None, **plan)
 
@@ -325,26 +328,35 @@ def run_endpoint(args) -> int:
         return 0
     except InterruptedError:
         outcome = "completed"
-        state.write("completed", radio_checked=transport is not None,
+        state.write("completed", radio_checked=radio_ready,
                     tunnel_connected=False, decoder_status="stopped",
                     failure_stage=None, recovery_action=None, **plan)
         return 0
     except Exception as error:
+        error_code = (
+            "radio.switch_room_not_found"
+            if isinstance(error, transportmod.LdnRoomNotFoundError)
+            else f"{failure_stage}.failed"
+        )
         log(f"[endpoint] fatal: {error}")
-        logger.event("endpoint_failed", level="error", error=str(error))
-        state.write("failed", radio_checked=transport is not None,
-                    tunnel_connected=tunnel.connected.is_set(), error=str(error),
-                    failure_stage=failure_stage, recovery_action=(
-                        "retry" if failure_stage in {"relay", "session"} else "recheck_adapter"
-                    ), **plan)
+        logger.event("endpoint_failed", level="error", code=error_code, error=str(error))
+        recovery_action = (
+            "recreate_switch_room" if error_code == "radio.switch_room_not_found" else
+            "retry" if failure_stage in {"relay", "session"} else "recheck_adapter"
+        )
+        state.write("failed", radio_checked=radio_ready,
+                    tunnel_connected=bool(tunnel and tunnel.connected.is_set()),
+                    error_code=error_code,
+                    error=str(error),
+                    failure_stage=failure_stage, recovery_action=recovery_action, **plan)
         return 1
     finally:
         cleanup_errors = cleanup_resources(observer, sim, transport, tunnel, logger)
         if cleanup_errors:
             message = "; ".join(cleanup_errors)
             state.write(
-                "failed", radio_checked=transport is not None, tunnel_connected=False,
-                error_code="ENDPOINT_CLEANUP_FAILED", error=message,
+                "failed", radio_checked=radio_ready, tunnel_connected=False,
+                error_code="cleanup.failed", error=message,
                 failure_stage="cleanup", recovery_action="restart_backend", **plan,
             )
             logger.close("failed")

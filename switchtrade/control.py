@@ -40,7 +40,25 @@ ATTEMPT_FAILURES = {
     "relay.peer_lost": ("relay", True, "retry"),
     "relay.restart": ("relay", True, "retry"),
     "member.reconnect_expired": ("coordination", True, "wait_for_partner"),
+    "radio.switch_room_not_found": ("radio", True, "recreate_switch_room"),
+    "radio.failed": ("radio", True, "recheck_adapter"),
+    "session.failed": ("session", True, "retry"),
+    "cleanup.failed": ("cleanup", True, "restart_backend"),
 }
+
+ATTEMPT_FAILURE_MESSAGES = {
+    "relay.peer_lost": "The partner connection was lost.",
+    "relay.restart": "The online relay restarted during the connection.",
+    "member.reconnect_expired": "The partner did not reconnect in time.",
+    "radio.switch_room_not_found": (
+        "The Group Leader's Switch room was not found on the supported 2.4 GHz channels."
+    ),
+    "radio.failed": "The partner's local Switch radio failed.",
+    "session.failed": "The partner's Switch connection failed.",
+    "cleanup.failed": "The partner's local connection did not shut down cleanly.",
+}
+
+TERMINAL_ATTEMPT_PHASES = {"completed", "canceled", "failed"}
 
 LOCAL_ERROR_CODES = {
     "no active trade room": ("room_not_active", "room", False, "return_home"),
@@ -198,6 +216,8 @@ class Runtime:
         self.profiles = load_profiles(profile_path)
         self.groups: dict[str, Group] = {}
         self.lock = threading.RLock()
+        self.hardware_lock = threading.Lock()
+        self.attempt_lock = threading.Lock()
         self.log = RunLogger("control-api", runs_root, {"profile_path": str(profile_path)})
         self.relay_url = relay_url
         self.relay = RelayClient(relay_url)
@@ -389,18 +409,47 @@ class Runtime:
             room = self.authoritative_room(terminal_cleanup=False)
             credentials = self.read_authority()
             attempt = room.get("attempt")
-            if not attempt or attempt.get("phase") == phase:
+            if (not attempt or attempt.get("phase") == phase or
+                    attempt.get("phase") in TERMINAL_ATTEMPT_PHASES):
                 self.last_published_phase = phase
                 return
+            payload = {"phase": phase}
+            if phase == "failed":
+                payload["failure_code"] = endpoint.get("error_code") or (
+                    f"{endpoint.get('failure_stage') or 'session'}.failed")
             self.relay.room_command(
                 room["room_id"], credentials["member_token"],
-                f"/attempts/{attempt['attempt_id']}:phase", {"phase": phase},
+                f"/attempts/{attempt['attempt_id']}:phase", payload,
                 expected_version=room["room_version"],
             )
             self.last_published_phase = phase
         except RelayError as error:
             self.log.event("authority_phase_sync_failed", level="warning", phase=phase,
-                           error=type(error).__name__)
+                           error=type(error).__name__, code=error.code,
+                           correlation_id=error.correlation_id)
+
+    def record_authoritative_failure(self, attempt: dict) -> None:
+        code = str(attempt.get("recoverable_error") or "session.failed")
+        stage, _recoverable, action = ATTEMPT_FAILURES.get(
+            code, ("session", True, "retry"))
+        with self.lock:
+            current = self.read_endpoint()
+            if current.get("state") == "failed" and current.get("error_code") == code:
+                return
+            current.update({
+                "state": "failed",
+                "updated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "tunnel_connected": False,
+                "error_code": code,
+                "error": ATTEMPT_FAILURE_MESSAGES.get(
+                    code, "The partner's Switch connection failed."),
+                "failure_stage": stage,
+                "recovery_action": action,
+            })
+            temporary = self.endpoint_state.with_suffix(".tmp")
+            temporary.write_text(json.dumps(current, separators=(",", ":")) + "\n",
+                                 encoding="utf-8")
+            temporary.replace(self.endpoint_state)
 
     def endpoint_running(self) -> bool:
         if self.endpoint and self.endpoint.poll() is None:
@@ -805,8 +854,12 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 failure_action if failure_stage == "relay" else None),
             "radio": readiness_axis(
                 "ready" if radio_checked else ("failed" if failed and failure_stage == "radio" else "unknown"),
-                "The Switch radio is ready." if radio_checked else "The adapter is checked when a connection starts.",
-                "radio.ready" if radio_checked else "radio.not_checked",
+                "The Switch radio is ready." if radio_checked else
+                endpoint.get("error", "The Switch radio failed.") if failed and failure_stage == "radio" else
+                "The adapter is checked when a connection starts.",
+                "radio.ready" if radio_checked else
+                endpoint.get("error_code", "radio.failed") if failed and failure_stage == "radio" else
+                "radio.not_checked",
                 failure_action if failure_stage == "radio" else None),
             "session": readiness_axis(
                 "ready" if endpoint_status == "session_ready" else
@@ -835,7 +888,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             "states": axes,
             "failure": None if not failed else {
                 "stage": failure_stage or "session",
-                "code": f"{failure_stage or 'session'}.failed",
+                "code": endpoint.get("error_code") or f"{failure_stage or 'session'}.failed",
                 "message": endpoint.get("error") or "The connection failed.",
                 "recoverable": bool(failure_action),
                 "primary_action": failure_action,
@@ -898,7 +951,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             })
         return inventory
 
-    def attach_selected_hardware(state: Runtime) -> str | None:
+    def _attach_selected_hardware(state: Runtime) -> str | None:
         selected = state.read_hardware_selection()
         if not selected:
             return None
@@ -987,14 +1040,18 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             )
         return device["usb_id"]
 
+    def attach_selected_hardware(state: Runtime) -> str | None:
+        # usbipd bus ownership changes while attach is running. A single process-wide lock keeps
+        # polling and button requests from issuing competing attach commands for the same device.
+        with state.hardware_lock:
+            return _attach_selected_hardware(state)
+
     def launch_session(state: Runtime, *, code: str, tunnel_seat: str,
                        switch_room_role: str, usb_id: str | None,
                        attempt_id: str | None = None,
                        member_token_file: Path | None = None,
                        allow_experimental_hardware: bool = False) -> dict:
         try:
-            if member_token_file is None:
-                state.relay.status(code)
             plan = runtime_plan(
                 tunnel_seat, usb_id, switch_room_role=switch_room_role,
                 allow_experimental_hardware=allow_experimental_hardware,
@@ -1005,7 +1062,23 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             raise HTTPException(status_code=400, detail=str(error)) from error
         with state.lock:
             if state.endpoint_running():
-                raise HTTPException(status_code=409, detail="a session is already running")
+                current = state.read_endpoint()
+                same_attempt = (
+                    state.endpoint_session == code and
+                    (attempt_id is None or current.get("attempt_id") in {None, attempt_id})
+                )
+                if same_attempt:
+                    return {"status": "starting", "session_id": code, "hardware": plan,
+                            "run_id": state.log.run_id}
+                raise ControlApiError(
+                    409, "session_active", "a different Switch endpoint session is already running",
+                    stage="session", recoverable=True, primary_action="end_session",
+                )
+            try:
+                if member_token_file is None:
+                    state.relay.status(code)
+            except RelayError as error:
+                raise relay_api_error(error) from error
             state.endpoint_state.unlink(missing_ok=True)
             state.party_state.unlink(missing_ok=True)
             launch_nonce = secrets.token_hex(16)
@@ -1067,35 +1140,39 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 "run_id": state.log.run_id}
 
     def launch_authoritative_attempt(state: Runtime, room: dict) -> dict | None:
-        attempt = room.get("attempt") or {}
-        endpoint_running = state.endpoint_running()
-        if attempt.get("phase") in {"completed", "canceled", "failed"}:
-            if state.endpoint_session == room.get("room_code"):
-                state.stop_endpoint()
-            return None
-        if not attempt.get("role_locked") or attempt.get("phase") is None:
-            return None
-        switch_role = attempt.get("local_switch_role")
-        local = next((member for member in room.get("members", []) if member.get("is_local")), None)
-        if switch_role not in {"creator", "finder"} or local is None:
-            raise ControlApiError(
-                409, "role_choice_conflict", "the two Switch role choices do not match",
-                stage="coordination", recoverable=True, primary_action="choose_role",
+        with state.attempt_lock:
+            attempt = room.get("attempt") or {}
+            endpoint_running = state.endpoint_running()
+            if attempt.get("phase") in TERMINAL_ATTEMPT_PHASES:
+                if state.endpoint_session == room.get("room_code"):
+                    state.stop_endpoint()
+                if attempt.get("phase") == "failed":
+                    state.record_authoritative_failure(attempt)
+                return None
+            if not attempt.get("role_locked") or attempt.get("phase") is None:
+                return None
+            switch_role = attempt.get("local_switch_role")
+            local = next(
+                (member for member in room.get("members", []) if member.get("is_local")), None)
+            if switch_role not in {"creator", "finder"} or local is None:
+                raise ControlApiError(
+                    409, "role_choice_conflict", "the two Switch role choices do not match",
+                    stage="coordination", recoverable=True, primary_action="choose_role",
+                )
+            if endpoint_running:
+                if state.endpoint_session == room.get("room_code"):
+                    return {"status": "starting", "session_id": room.get("room_code"),
+                            "run_id": state.log.run_id}
+                raise ControlApiError(
+                    409, "session_active", "a different Switch endpoint session is already running",
+                    stage="session", recoverable=True, primary_action="end_session",
+                )
+            selected_usb_id = attach_selected_hardware(state)
+            return launch_session(
+                state, code=room["room_code"], tunnel_seat=local["seat"],
+                switch_room_role=switch_role, usb_id=selected_usb_id,
+                attempt_id=attempt["attempt_id"], member_token_file=state.member_token_file,
             )
-        if endpoint_running:
-            if state.endpoint_session == room.get("room_code"):
-                return {"status": "starting", "session_id": room.get("room_code"),
-                        "run_id": state.log.run_id}
-            raise ControlApiError(
-                409, "session_active", "a different Switch endpoint session is already running",
-                stage="session", recoverable=True, primary_action="end_session",
-            )
-        selected_usb_id = attach_selected_hardware(state)
-        return launch_session(
-            state, code=room["room_code"], tunnel_seat=local["seat"],
-            switch_room_role=switch_role, usb_id=selected_usb_id,
-            attempt_id=attempt["attempt_id"], member_token_file=state.member_token_file,
-        )
 
     def authoritative_command(state: Runtime, path: str, payload: dict | None = None,
                               method: str = "POST") -> dict:
@@ -1657,6 +1734,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     def support_bundle(request: Request) -> dict:
         state = runtime(request)
         summary = readiness_payload(state)
+        endpoint = state.read_endpoint()
         try:
             inventory = usbipd_inventory(state)
             selected = next((device for device in inventory if device["selected"]), None)
@@ -1674,7 +1752,9 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 "inventory_status": "unavailable",
                 "error": str(error.detail),
             }
-        path = state.log.support_bundle(summary=summary)
+        endpoint_run_id = endpoint.get("endpoint_run_id")
+        related_run_ids = [endpoint_run_id] if isinstance(endpoint_run_id, str) else []
+        path = state.log.support_bundle(summary=summary, related_run_ids=related_run_ids)
         upload = publish_diagnostic(state, "support-bundle", path)
         return {
             "status": "created", "path": str(path),

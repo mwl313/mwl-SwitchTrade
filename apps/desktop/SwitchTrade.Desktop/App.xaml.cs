@@ -185,7 +185,18 @@ public partial class App : Application
                 memberCoordinator.LocalTrainerDisplayName == "Red" &&
                 memberCoordinator.PartnerTrainerDisplayName == "Leaf";
             memberCoordinator.ApplyRoom(new AuthoritativeRoomProjection(
-                5, 0, "closed", RoomMembershipRole.Member,
+                5, 2, "ready_check", RoomMembershipRole.Member,
+                SwitchRoomRole.Finder, true, false, "failed", true,
+                FailureCode: "radio.switch_room_not_found", FailureStage: "radio",
+                FailureRecoverable: true, FailureAction: "recreate_switch_room"));
+            var missingSwitchRoomMapsToRecovery =
+                memberCoordinator.ConnectionState == LegacyConnectionState.NeedsRecovery &&
+                memberCoordinator.RecoveryCode == "radio.switch_room_not_found" &&
+                memberCoordinator.RecoveryAction == "recreate_switch_room" &&
+                memberCoordinator.RecoveryMessage?.Contains(
+                    "No Group Leader Switch room", StringComparison.Ordinal) == true;
+            memberCoordinator.ApplyRoom(new AuthoritativeRoomProjection(
+                6, 0, "closed", RoomMembershipRole.Member,
                 SwitchRoomRole.Unassigned, false, false, "none", false));
             var remoteCloseClearsRoom = !memberCoordinator.HasRoom;
             var inventoryGateway = new SelfTestGateway
@@ -306,6 +317,7 @@ public partial class App : Application
                       highContrastResourcesLoad && capabilityGateWorks && exactReleaseGateWorks &&
                       coordinatorWorks && memberReleaseWorks && authoritativeProjectionWorks &&
                       attemptFailureContractWorks && attemptFailureMapsToRecovery &&
+                      missingSwitchRoomMapsToRecovery &&
                       remoteCloseClearsRoom && startupResumeWorks && deadlineEnvelopeSurvives &&
                       deadlineRecoveryVisible && deadlineReturnHomeWorks &&
                       unmatchedEnvelopeSurvives &&

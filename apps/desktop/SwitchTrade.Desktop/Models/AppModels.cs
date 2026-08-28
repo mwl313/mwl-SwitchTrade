@@ -15,7 +15,8 @@ public sealed record ControlStatus(
     string? FailureStage = null,
     string? RecoveryAction = null,
     IReadOnlyList<string>? Capabilities = null,
-    string? ReleaseId = null)
+    string? ReleaseId = null,
+    string? FailureCode = null)
 {
     public ReadinessAxis Axis(string name) => States is not null && States.TryGetValue(name, out var axis)
         ? axis

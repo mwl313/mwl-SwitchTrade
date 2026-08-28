@@ -106,7 +106,8 @@ public sealed class ControlApiClient : IControlGateway
                 states.TryGetValue("relay", out var relay) && relay.Status == "ready",
                 dto.SessionId, dto.Failure?.Message,
                 dto.ContractVersion ?? "unknown", compatible, states,
-                dto.Failure?.Stage, dto.Failure?.PrimaryAction, dto.Capabilities ?? [], dto.ReleaseId);
+                dto.Failure?.Stage, dto.Failure?.PrimaryAction, dto.Capabilities ?? [], dto.ReleaseId,
+                dto.Failure?.Code);
         }
         catch (HttpRequestException) { return null; }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return null; }
@@ -794,6 +795,10 @@ public sealed class ControlApiClient : IControlGateway
             "relay_unavailable" or "relay_internal_error" or "control_unavailable" =>
                 "Online rooms are temporarily unavailable.",
             "room_version_conflict" or "state_conflict" => "The Trade Room changed. Refresh it and try again.",
+            "session_active" => "This Switch connection is already starting.",
+            "endpoint_start_failed" => "The local Switch connection could not start. Try again.",
+            "radio.switch_room_not_found" =>
+                "No Group Leader Switch room was found on supported 2.4 GHz channels. Recreate the group on the Switch and try again.",
             _ => "SwitchTrade couldn’t complete that action. Try again.",
         };
         return new UserFacingException(

@@ -163,6 +163,7 @@ class PhasePayload(StrictPayload):
         "trading_room", "reconnecting", "recovering", "closing", "completed",
         "canceled", "failed",
     ]
+    failure_code: str | None = Field(default=None, max_length=128)
 
 
 class RemoveOfflinePayload(StrictPayload):
