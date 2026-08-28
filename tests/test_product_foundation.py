@@ -173,6 +173,25 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertNotIn("DRIVER_PROBE_FAILED",
                          [item["code"] for item in report["incompatibilities"]])
 
+    def test_missing_usb_is_reported_before_cascading_driver_failures(self):
+        from subprocess import CompletedProcess
+
+        def runner(command, timeout):
+            if command[0] == "lsusb":
+                return CompletedProcess(command, 1, "", "")
+            if command[0] == "bash" and command[-2] == "switchtrade-driver":
+                return CompletedProcess(command, 3, "", "")
+            if command[0] == "iw":
+                return CompletedProcess(command, 1, "", "nl80211 not found")
+            return self._healthy_runner(command, timeout)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            report, _ = diagnose_hardware(
+                "0bda:818b", runs_root=temporary, runner=runner)
+
+        self.assertEqual(report["incompatibilities"][0]["code"], "USB_NOT_FOUND")
+        self.assertIn("Authorize and attach", report["incompatibilities"][0]["action"])
+
     def test_quick_diagnostic_scopes_fallback_profile_to_the_bound_driver(self):
         from subprocess import CompletedProcess
 

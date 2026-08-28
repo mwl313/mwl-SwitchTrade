@@ -11,12 +11,89 @@ using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using SwitchTrade.Desktop.Models;
 
 namespace SwitchTrade.Desktop.Services;
 
 public sealed record BackendLaunchResult(
     bool Succeeded, string Details, string? Code = null, string? Stage = null,
     string? PrimaryAction = null, string? CorrelationId = null);
+
+public interface IHardwareAuthorizationService
+{
+    Task AuthorizeAsync(HardwareDeviceViewData device, CancellationToken cancellationToken = default);
+}
+
+public sealed class WindowsHardwareAuthorizationService : IHardwareAuthorizationService
+{
+    public async Task AuthorizeAsync(
+        HardwareDeviceViewData device, CancellationToken cancellationToken = default)
+    {
+        var provisioner = Path.Combine(AppContext.BaseDirectory, "SwitchTradeProvisioner.exe");
+        if (!File.Exists(provisioner))
+            throw Failure("The installed adapter authorization helper is missing.",
+                "hardware_authorizer_missing", "Run Setup Repair");
+        var start = new ProcessStartInfo
+        {
+            FileName = provisioner,
+            UseShellExecute = true,
+            Verb = "runas",
+            WindowStyle = ProcessWindowStyle.Hidden,
+        };
+        foreach (var argument in new[]
+        {
+            "authorize-hardware", "--instance-id", device.InstanceId,
+            "--usb-id", device.UsbId,
+        })
+            start.ArgumentList.Add(argument);
+        try
+        {
+            using var process = Process.Start(start) ?? throw Failure(
+                "Windows could not start adapter authorization.",
+                "hardware_authorizer_start_failed", "Try again");
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(TimeSpan.FromSeconds(60));
+            try { await process.WaitForExitAsync(deadline.Token); }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw Failure("Windows adapter authorization took too long.",
+                    "hardware_authorizer_timeout", "Reconnect the adapter and try again");
+            }
+            if (process.ExitCode == 0) return;
+            throw process.ExitCode switch
+            {
+                61 or 68 or 69 => Failure(
+                    "The selected adapter changed or was disconnected.",
+                    "adapter_identity_changed", "Reconnect and select the adapter again"),
+                62 => Failure(
+                    "Windows administrator approval is required to authorize this adapter.",
+                    "adapter_authorization_required", "Approve the Windows prompt and try again"),
+                63 or 64 => Failure(
+                    "Windows could not authorize the selected adapter.",
+                    "adapter_bind_failed", "Reconnect the adapter and try again"),
+                65 or 66 or 67 => Failure(
+                    "Windows USB support is unavailable or incompatible.",
+                    "usbipd_unavailable", "Run Setup Repair"),
+                _ => Failure(
+                    "Windows could not authorize the selected adapter.",
+                    "adapter_authorization_failed", "Export a support file and try again"),
+            };
+        }
+        catch (Win32Exception error) when (error.NativeErrorCode == 1223)
+        {
+            throw Failure("Adapter authorization was canceled.",
+                "adapter_authorization_canceled", "Approve the Windows prompt and try again");
+        }
+        catch (Win32Exception error)
+        {
+            throw Failure($"Windows could not start adapter authorization: {error.Message}",
+                "hardware_authorizer_start_failed", "Run Setup Repair");
+        }
+    }
+
+    private static UserFacingException Failure(string message, string code, string action) =>
+        new(message, code, "hardware_share", recoverable: true, primaryAction: action);
+}
 
 public sealed class BackendLauncher
 {

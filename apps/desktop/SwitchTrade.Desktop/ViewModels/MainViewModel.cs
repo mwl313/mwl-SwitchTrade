@@ -10,6 +10,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private readonly BackendLauncher _launcher;
     private readonly IDialogService _dialogs;
     private readonly IClipboardService _clipboard;
+    private readonly IHardwareAuthorizationService _hardwareAuthorization;
     private CancellationTokenSource? _startupCancellation;
     private bool _starting;
     private bool _refreshing;
@@ -37,12 +38,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         IControlGateway gateway,
         BackendLauncher launcher,
         IDialogService dialogs,
-        IClipboardService clipboard)
+        IClipboardService clipboard,
+        IHardwareAuthorizationService? hardwareAuthorization = null)
     {
         Gateway = gateway;
         _launcher = launcher;
         _dialogs = dialogs;
         _clipboard = clipboard;
+        _hardwareAuthorization = hardwareAuthorization ?? new WindowsHardwareAuthorizationService();
         RoomCoordinator = new ActiveTradeRoomCoordinator(gateway);
         _currentScreen = new StartupScreenViewModel(this);
         BackCommand = new AsyncCommand(GoBackAsync, () => CanGoBack);
@@ -463,10 +466,23 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     internal string ReadClipboard() => _clipboard.TryGetText(out var text) ? text : "";
 
+    internal Task AuthorizeHardwareAsync(
+        HardwareDeviceViewData device, CancellationToken cancellationToken = default) =>
+        device.IsShared
+            ? Task.CompletedTask
+            : _hardwareAuthorization.AuthorizeAsync(device, cancellationToken);
+
     internal async Task<bool> RepairAdapterAsync()
     {
         try
         {
+            var selected = (await Gateway.GetHardwareDevicesAsync())
+                .SingleOrDefault(device => device.IsSelected);
+            if (selected is { IsShared: false })
+            {
+                Announce("Approve the Windows prompt to authorize this adapter.");
+                await AuthorizeHardwareAsync(selected);
+            }
             await Gateway.RepairAdapterAsync();
             Announce("The adapter health check passed. End the failed connection and try again.");
             await RefreshAsync();

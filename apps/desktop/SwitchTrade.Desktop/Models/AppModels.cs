@@ -116,15 +116,19 @@ public sealed record HardwareDeviceViewData(
     string SupportLabel,
     bool IsSelectable,
     bool IsExperimental,
+    bool IsShared,
     bool IsAttached,
     bool IsSelected)
 {
     public string DisplayLabel => $"USB {BusId} · {FriendlyName} · {SupportLabel}";
+    public string ConnectionGate => IsAttached ? "Attached to WSL" : IsShared
+        ? "Authorized by Windows"
+        : "Windows authorization required";
     public string Disclaimer => !IsSelectable
         ? "Quarantined — available for diagnostics only and blocked from trading."
         : IsExperimental
-            ? "Experimental — untested with SwitchTrade and may not work reliably."
-            : "Supported hardware profile.";
+            ? $"Experimental — untested with SwitchTrade and may not work reliably. {ConnectionGate}."
+            : $"Supported hardware profile. {ConnectionGate}.";
 }
 
 public enum PublicRoomAvailability { Open, Full }

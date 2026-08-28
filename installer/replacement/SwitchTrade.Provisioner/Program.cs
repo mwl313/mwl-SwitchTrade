@@ -23,9 +23,9 @@ internal static class Program
         try
         {
             externalLog = Option(args, "--log");
-            if (command is not ("inspect" or "install" or "repair" or "uninstall" or "verify-software" or "status"))
+            if (command is not ("inspect" or "install" or "repair" or "uninstall" or "verify-software" or "status" or "authorize-hardware"))
                 throw new ProvisionerException("USAGE", "arguments",
-                    "Usage: SwitchTradeProvisioner <inspect|install|repair|uninstall|verify-software|status --json> [--package-root PATH] [--log PATH]", false, "Use a supported Setup package", 2);
+                    "Usage: SwitchTradeProvisioner <inspect|install|repair|uninstall|verify-software|status --json|authorize-hardware --instance-id ID --usb-id VID:PID> [--package-root PATH] [--log PATH]", false, "Use a supported Setup package", 2);
             var packageRoot = Option(args, "--package-root") ?? AppContext.BaseDirectory;
             var dataRoot = Option(args, "--data-root");
             var userProfile = Option(args, "--user-profile");
@@ -56,12 +56,29 @@ internal static class Program
                 case "verify-software":
                     await engine.VerifySoftwareAsync(CancellationToken.None);
                     break;
+                case "authorize-hardware":
+                    Emit(new ProvisionerEvent(1, "progress", correlationId, command,
+                        "hardware_share", 25, "running", Message: "Requesting Windows USB authorization."));
+                    await HardwareAuthorization.AuthorizeAsync(
+                        Option(args, "--instance-id") ?? throw new ProvisionerException(
+                            "USAGE", "arguments", "--instance-id requires a value.", false,
+                            "Select the adapter again", 2),
+                        Option(args, "--usb-id") ?? throw new ProvisionerException(
+                            "USAGE", "arguments", "--usb-id requires a value.", false,
+                            "Select the adapter again", 2),
+                        (arguments, token) => ProcessRunner.RunAsync(
+                            "usbipd.exe", arguments, TimeSpan.FromSeconds(30), token),
+                        HardwareAuthorization.IsAdministrator,
+                        CancellationToken.None);
+                    break;
             }
             var removed = command == "uninstall";
             Emit(new ProvisionerEvent(1, "result", correlationId, command, "complete", 100,
                 "succeeded", !removed, Message: removed
                     ? "SwitchTrade-owned software was removed."
-                    : "SwitchTrade software is ready."));
+                    : command == "authorize-hardware"
+                        ? "The selected adapter is authorized."
+                        : "SwitchTrade software is ready."));
             return 0;
         }
         catch (ProvisionerException error)

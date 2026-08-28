@@ -256,6 +256,13 @@ Every capture and session workflow must pass `scripts/radio-health-gate.sh` firs
 USB presence, WSL attachment, kernel/driver binding, phy/interface state, channel configuration, and
 real receive activity. A stale interface that merely exists is not healthy.
 
+Windows hardware onboarding is deliberately separate from software installation. The control API
+reports `detected`, `shared`, and `attached` independently. Selecting a new card causes the native
+client to elevate the installed provisioner for one non-forced `usbipd bind`; the helper resolves the
+saved Windows InstanceId to its current bus ID immediately before mutation and verifies the final
+shared state. Normal connection then performs an unprivileged attach to the active isolated runtime.
+Linux-only diagnostics cannot infer a driver defect when the preceding USB-visible gate failed.
+
 The staged diagnostic pipeline is in `switchtrade/hardware_diagnostics.py`. It redacts MAC addresses,
 tokens, and common secret fields. Experimental adapters may be selected without per-attempt consent,
 but the UI must keep the untested disclaimer and diagnostic action visible.
@@ -368,7 +375,7 @@ model before increasing worker or replica count.
 | --- | --- | --- |
 | App cannot start | local control absent vs WSL startup failure | Retry once; then run Setup Repair. Do not manually unregister WSL. |
 | Public rooms unavailable | relay unreachable vs missing directory capability | Check readiness and relay `/health`; a private room cannot repair relay availability. |
-| No USB adapter | Windows ownership vs WSL attachment | Open Settings, refresh devices, attach the correct bus ID, then run diagnostics. |
+| No USB adapter | detected vs authorized/shared vs attached vs WSL-visible | Open Settings, select the exact adapter, approve **Authorize adapter**, then run diagnostics. Do not manually reuse an old bus ID. |
 | Room not visible on Switch | wrong band/channel vs failed LDN advertisement | Pass health gate, recreate the Switch room, scan all supported 2.4 GHz channels for diagnosis. |
 | Adapter stops receiving | driver/phy receive death | Stop the session, free the radio, reattach, and rerun health gate. Do not continue from stale monitor state. |
 | Leave/close reports relay unavailable | local teardown vs authority result conflated | Local cleanup must finish idempotently; relay failure is reported separately and can be retried. |

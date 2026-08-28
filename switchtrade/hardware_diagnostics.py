@@ -167,6 +167,11 @@ def diagnose_hardware(usb_id: str, *, mode: str = "quick", role: str = "host",
         "The adapter is visible inside WSL." if usb_present else
         "The requested adapter is not visible inside WSL.",
     ))
+    if not usb_present:
+        incompatibilities.append({
+            "code": "USB_NOT_FOUND",
+            "action": "Authorize and attach the selected Windows USB adapter before checking its Linux driver.",
+        })
 
     binding_command = [
         "bash", "-c",

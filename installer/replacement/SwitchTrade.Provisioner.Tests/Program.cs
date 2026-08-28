@@ -15,6 +15,7 @@ try
     RuntimeNamesAlwaysRetainUniqueGeneration();
     ProvisionerLogsAreSanitized();
     AtomicStateRoundTrip();
+    await HardwareAuthorizationUsesStableIdentity();
     await LifecycleFaultsConverge();
     await ConcurrentOperationsAreRejected();
     await InterruptedOlderReleaseConvergesWithNewPackage();
@@ -62,6 +63,48 @@ void ProcessOutputDecodesWindowsAndLinuxStreams()
         "UTF-16 WSL diagnostics were not decoded");
     Assert(ProcessRunner.Decode(Encoding.UTF8.GetBytes(linuxText)) == linuxText,
         "UTF-8 Linux output was not decoded");
+}
+
+async Task HardwareAuthorizationUsesStableIdentity()
+{
+    const string instanceId = "USB\\VID_0BDA&PID_818B\\RADIO-A";
+    var shared = false;
+    var commands = new List<string[]>();
+    Task<ProcessResult> Run(IReadOnlyList<string> arguments, CancellationToken _)
+    {
+        commands.Add(arguments.ToArray());
+        if (arguments.SequenceEqual(["bind", "--busid", "9-7"]))
+        {
+            shared = true;
+            return Task.FromResult(new ProcessResult(0, "", ""));
+        }
+        if (arguments.SequenceEqual(["state"]))
+            return Task.FromResult(new ProcessResult(0, $$"""
+                {"Devices":[{"BusId":"9-7","InstanceId":"{{instanceId.Replace("\\", "\\\\", StringComparison.Ordinal)}}",
+                "PersistedGuid":{{(shared ? "\"shared-guid\"" : "null")}},"StubInstanceId":null}]}
+                """, ""));
+        return Task.FromResult(new ProcessResult(1, "", "unexpected command"));
+    }
+
+    await HardwareAuthorization.AuthorizeAsync(
+        instanceId, "0bda:818b", Run, () => true, CancellationToken.None);
+    Assert(commands.Any(command => command.SequenceEqual(["bind", "--busid", "9-7"])),
+        "hardware authorization did not bind the current bus for the stable identity");
+    Assert(commands.Count(command => command.SequenceEqual(["state"])) == 2,
+        "hardware authorization did not verify the final shared state");
+
+    var changedIdentityRejected = false;
+    try
+    {
+        await HardwareAuthorization.AuthorizeAsync(
+            instanceId, "0e8d:7610", Run, () => true, CancellationToken.None);
+    }
+    catch (ProvisionerException error)
+    {
+        changedIdentityRejected = error.Code == "ADAPTER_IDENTITY_CHANGED";
+    }
+    Assert(changedIdentityRejected,
+        "hardware authorization did not fail closed when the USB identity changed");
 }
 
 void KernelApplyAndRestorePreserveUserChanges()

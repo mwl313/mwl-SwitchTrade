@@ -445,7 +445,8 @@ public sealed class ControlApiClient : IControlGateway
                     "upstream-candidate" or "driver-candidate" => "Experimental",
                     _ => "Blocked",
                 },
-                device.Selectable, device.Experimental, device.Attached, device.Selected)).ToArray();
+                device.Selectable, device.Experimental, device.Shared,
+                device.Attached, device.Selected)).ToArray();
         }
         catch (HttpRequestException)
         {
@@ -678,7 +679,13 @@ public sealed class ControlApiClient : IControlGateway
             "adapter_disconnected" => "The selected adapter is no longer connected.",
             "adapter_quarantined" => "This adapter is quarantined and cannot trade.",
             "adapter_selection_required" => "Select an available Wi-Fi adapter in Settings.",
+            "adapter_not_shared" =>
+                "Windows must authorize this adapter before SwitchTrade can use it.",
             "adapter_attach_failed" => "The selected adapter could not be attached. Run Repair adapter and try again.",
+            "adapter_attach_unavailable" or "adapter_attach_verification_failed" =>
+                "Windows could not finish attaching the selected adapter to WSL.",
+            "duplicate_adapter_attached" =>
+                "Another identical Wi-Fi adapter is already attached to WSL.",
             "waiting_for_partner_role" => "Waiting for your partner to choose their Switch role.",
             "complementary_role_required" or "role_choice_conflict" =>
                 "Choose opposite Switch roles: one Group Leader and one Joining.",
@@ -863,6 +870,7 @@ public sealed class ControlApiClient : IControlGateway
         string? Status,
         bool Selectable,
         bool Experimental,
+        bool Shared,
         bool Attached,
         bool Selected);
     private sealed record SupportBundleResponse(string? Path);

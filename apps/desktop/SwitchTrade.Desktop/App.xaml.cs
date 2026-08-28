@@ -75,7 +75,8 @@ public partial class App : Application
                     return JsonResponse("""
                         {"devices":[{"bus_id":"9-7","instance_id":"USB\\VID_0BDA&PID_818B\\RADIO-A",
                         "usb_id":"0bda:818b","description":"RTL8192EU","status":"beta-candidate",
-                        "selectable":true,"experimental":false,"attached":false,"selected":true}]}
+                        "selectable":true,"experimental":false,"shared":false,
+                        "attached":false,"selected":true}]}
                         """);
                 selectionBody = await request.Content!.ReadAsStringAsync();
                 return JsonResponse("{}");
@@ -84,6 +85,7 @@ public partial class App : Application
             contractClient.SelectHardwareDeviceAsync(
                 hardware.UsbId, hardware.InstanceId, hardware.BusId).GetAwaiter().GetResult();
             var hardwareContractWorks = hardware.InstanceId.EndsWith("RADIO-A", StringComparison.Ordinal) &&
+                                        !hardware.IsShared &&
                                         selectionBody.Contains("instance_id", StringComparison.Ordinal);
             using var roomContractClient = new ControlApiClient(new SelfTestHttpHandler(_ =>
                 Task.FromResult(JsonResponse("""
@@ -190,7 +192,7 @@ public partial class App : Application
                     "0bda:818b", "RTL8192EU", "Beta candidate", "", "", true, false, "ldn")],
                 HardwareDevices = [new HardwareDeviceViewData(
                     "9-7", "USB\\VID_0BDA&PID_818B\\RADIO-A", "0bda:818b", "RTL8192EU",
-                    "Beta candidate", true, false, false, true)],
+                    "Beta candidate", true, false, false, false, true)],
             };
             using var inventoryShell = new MainViewModel(
                 inventoryGateway, new BackendLauncher(), new WindowsDialogService(),
@@ -207,6 +209,20 @@ public partial class App : Application
                                                 "RADIO-A", StringComparison.Ordinal) == true &&
                                             settings.InventoryErrorCode == "usb_inventory_timeout" &&
                                             settings.InventoryRecoveryAction == "run_hardware_diagnostics";
+            var authorizationGateway = new SelfTestGateway
+            {
+                Status = ReadyStatus(),
+                HardwareDevices = [new HardwareDeviceViewData(
+                    "9-7", "USB\\VID_0BDA&PID_818B\\RADIO-A", "0bda:818b", "RTL8192EU",
+                    "Beta candidate", true, false, false, false, true)],
+            };
+            var authorization = new SelfTestHardwareAuthorizationService();
+            using var authorizationShell = new MainViewModel(
+                authorizationGateway, new BackendLauncher(), new WindowsDialogService(),
+                new WindowsClipboardService(), authorization);
+            var adapterAuthorizationRecoveryWorks =
+                authorizationShell.RepairAdapterAsync().GetAwaiter().GetResult() &&
+                authorization.AuthorizationCount == 1 && authorizationGateway.RepairAdapterCount == 1;
             var resumedRoom = new TradeRoomInfo(
                 "Resumed Room", "ABC123", "private", 1, "authoritative", "Leaf",
                 GameVersionChoice.LeafGreen, GameLanguage.English);
@@ -293,7 +309,7 @@ public partial class App : Application
                       unmatchedRecoveryVisible && confirmedAbandonWorks &&
                       canceledAbandonPreservesAuthority && hardwareContractWorks &&
                       malformedInventoryContained && timedOutInventoryContained &&
-                      lastGoodInventorySurvives ? 0 : 1);
+                      lastGoodInventorySurvives && adapterAuthorizationRecoveryWorks ? 0 : 1);
             return;
         }
         _singleInstance = new Mutex(true, "Local\\SwitchTrade.Desktop", out var createdNew);
@@ -343,6 +359,7 @@ public partial class App : Application
         public AuthoritativeRoomProjection? ActiveRoom { get; init; }
         public int RoomProbeCount { get; private set; }
         public int AbandonCount { get; private set; }
+        public int RepairAdapterCount { get; private set; }
         public SwitchRoomRole? LastSwitchRole { get; private set; }
         public RoomMembershipRole? LastMembershipRole { get; private set; }
         public Task<ControlStatus?> TryGetStatusAsync(CancellationToken cancellationToken = default) =>
@@ -395,7 +412,11 @@ public partial class App : Application
             Task.FromResult(new HardwareDiagnosticViewData("self-test", "partial", "Self-test", ""));
         public Task<LivePartyProjection?> TryGetPartiesAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<LivePartyProjection?>(null);
-        public Task RepairAdapterAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task RepairAdapterAsync(CancellationToken cancellationToken = default)
+        {
+            RepairAdapterCount++;
+            return Task.CompletedTask;
+        }
         public Task<string> CreateSupportBundleAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult("");
         public void Dispose() { }
@@ -415,6 +436,17 @@ public partial class App : Application
         {
             LastRequest = request;
             return choice;
+        }
+    }
+
+    private sealed class SelfTestHardwareAuthorizationService : IHardwareAuthorizationService
+    {
+        public int AuthorizationCount { get; private set; }
+        public Task AuthorizeAsync(
+            HardwareDeviceViewData device, CancellationToken cancellationToken = default)
+        {
+            AuthorizationCount++;
+            return Task.CompletedTask;
         }
     }
 

@@ -280,6 +280,32 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 self.assertIn('"error_type":"RuntimeError"', events)
                 self.assertNotIn("CANARY_INTERNAL_DETAIL", events)
 
+    def test_support_bundle_records_selected_shared_and_attached_gates(self):
+        import zipfile
+
+        instance_id = r"USB\VID_0BDA&PID_818B\RADIO-A"
+        usbipd_state = {"Devices": [{
+            "BusId": "2-4", "ClientIPAddress": None, "PersistedGuid": None,
+            "StubInstanceId": None, "Description": "Realtek RTL8192EU",
+            "InstanceId": instance_id,
+        }]}
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                with patch("switchtrade.control.subprocess.run") as run:
+                    run.return_value = MagicMock(
+                        returncode=0, stdout=json.dumps(usbipd_state), stderr="")
+                    client.post("/api/v1/hardware/selection", json={
+                        "usb_id": "0bda:818b", "bus_id": "2-4",
+                        "instance_id": instance_id,
+                    })
+                    bundle = client.post("/api/v1/support-bundle").json()["path"]
+                with zipfile.ZipFile(bundle) as archive:
+                    summary = json.loads(archive.read("runtime-summary.json"))
+        self.assertEqual(summary["hardware"]["selected"]["usb_id"], "0bda:818b")
+        self.assertFalse(summary["hardware"]["selected"]["shared"])
+        self.assertFalse(summary["hardware"]["selected"]["attached"])
+        self.assertNotIn("instance_id", summary["hardware"]["selected"])
+
     def test_party_api_fails_neutral_when_session_is_inactive(self):
         with tempfile.TemporaryDirectory() as temporary:
             with TestClient(create_app(runs_root=temporary)) as client:
@@ -1105,19 +1131,25 @@ class Gate4RuntimeContractTests(unittest.TestCase):
         instance_id = r"USB\VID_0BDA&PID_818B\RADIO-B"
         other_instance = r"USB\VID_0BDA&PID_818B\RADIO-A"
         current_bus = ["9-7"]
+        attached = [False]
         commands = []
 
         def run(command, **_kwargs):
             commands.append(command)
             result = MagicMock(returncode=0, stdout="", stderr="")
+            if command[:2] == ["usbipd.exe", "attach"]:
+                attached[0] = True
             if command[:2] == ["usbipd.exe", "state"]:
                 result.stdout = json.dumps({"Devices": [
                     {
                         "BusId": "4-20", "ClientIPAddress": None,
+                        "PersistedGuid": "shared-a",
                         "Description": "Realtek RTL8192EU", "InstanceId": other_instance,
                     },
                     {
-                        "BusId": current_bus[0], "ClientIPAddress": None,
+                        "BusId": current_bus[0],
+                        "ClientIPAddress": "172.20.0.1" if attached[0] else None,
+                        "PersistedGuid": "shared-b",
                         "Description": "Realtek RTL8192EU", "InstanceId": instance_id,
                     },
                 ]})
@@ -1143,6 +1175,32 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                     persisted = client.app.state.runtime.read_hardware_selection()
                     self.assertEqual(persisted["instance_id"], instance_id)
                     self.assertEqual(persisted["bus_id"], "9-7")
+
+    def test_unshared_adapter_reports_authorization_gate_without_attach(self):
+        instance_id = r"USB\VID_0BDA&PID_818B\RADIO-A"
+        usbipd_state = {"Devices": [{
+            "BusId": "2-4", "ClientIPAddress": None, "PersistedGuid": None,
+            "StubInstanceId": None, "Description": "Realtek RTL8192EU",
+            "InstanceId": instance_id,
+        }]}
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client:
+                with patch("switchtrade.control.subprocess.run") as run:
+                    run.return_value = MagicMock(
+                        returncode=0, stdout=json.dumps(usbipd_state), stderr="")
+                    selected = client.post("/api/v1/hardware/selection", json={
+                        "usb_id": "0bda:818b", "bus_id": "2-4",
+                        "instance_id": instance_id,
+                    })
+                    self.assertEqual(selected.status_code, 200, selected.text)
+                    repaired = client.post(
+                        "/api/v1/app/repair", json={"action": "recheck_adapter"})
+                self.assertEqual(repaired.status_code, 409, repaired.text)
+                self.assertEqual(repaired.json()["code"], "adapter_not_shared")
+                self.assertEqual(repaired.json()["stage"], "hardware_share")
+                self.assertEqual(repaired.json()["primary_action"], "authorize_adapter")
+                self.assertFalse(any(call.args[0][:2] == ["usbipd.exe", "attach"]
+                                     for call in run.call_args_list))
 
     def test_inventory_does_not_present_unpersisted_fallback_as_selected(self):
         usbipd_state = {"Devices": [{

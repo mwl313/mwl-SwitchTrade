@@ -140,7 +140,14 @@ public sealed class SettingsScreenViewModel : ScreenViewModel
         {
             await Shell.Gateway.SelectHardwareDeviceAsync(
                 SelectedDevice.UsbId, SelectedDevice.InstanceId, SelectedDevice.BusId);
-            StatusMessage = $"{SelectedDevice.FriendlyName} will be used for the next connection.";
+            if (!SelectedDevice.IsShared)
+            {
+                StatusMessage = "Approve the Windows prompt to authorize this adapter.";
+                Shell.Announce(StatusMessage);
+                await Shell.AuthorizeHardwareAsync(SelectedDevice);
+                await LoadAsync();
+            }
+            StatusMessage = $"{SelectedDevice.FriendlyName} is authorized and will be used for the next connection.";
             Shell.Announce(StatusMessage);
         }
         catch (UserFacingException error) { StatusMessage = error.UserMessage; }

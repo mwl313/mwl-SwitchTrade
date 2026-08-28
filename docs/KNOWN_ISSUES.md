@@ -66,7 +66,7 @@ The following observed failures are closed in source and remain part of clean-ho
 ### STB-001 — Connect reports a full/in-use room when the partner is absent
 
 - **Priority:** P0
-- **Status:** Fix ready for validation
+- **Status:** Root cause confirmed; software fix implemented; physical validation pending
 - **Scope:** Windows 10 and Windows 11 desktop clients; creator and joiner paths must both be tested.
 - **Observed build:** `0.2.0-beta.1`
 
@@ -125,12 +125,13 @@ authority/control tests pass; real two-PC validation is still required before cl
 
 ---
 
-### STB-002 — Windows 10 detects an RTL8192EU but cannot attach it when connection starts
+### STB-002 — A post-install RTL8192EU is detected but cannot attach when connection starts
 
 - **Priority:** P0
 - **Status:** Fix ready for validation
-- **Scope:** Observed on the Windows 10 22H2 qualification machine with RTL8192EU `0bda:818b`.
-- **Observed build:** `v0.2.0-win10test.3` lineage
+- **Scope:** Product-wide when RTL8192EU `0bda:818b` is selected before Windows has shared it.
+- **Observed builds:** `v0.2.0-win10test.3` lineage and replacement release
+  `beta-ebe588645b48`.
 
 #### User-visible behavior
 
@@ -143,26 +144,40 @@ This is not evidence that WSL is absent: the installed client reached the runnin
 service and hardware-selection path. It is a failure between Windows USB ownership, `usbipd-win`, the
 isolated SwitchTrade distro, and Linux driver/radio readiness.
 
-#### Known evidence and remaining uncertainty
+#### Confirmed evidence (2026-08-28 laptop support bundle)
 
-- The adapter was detected and selected by the app.
-- The failure occurred at connection-time attachment, after installation and restart.
-- The exact Windows 10 `usbipd list` state and post-attach Linux driver state were not preserved, so
-  it is not yet proven whether Setup failed to bind/share the device, runtime attach used stale
-  identity, or Linux received the USB device but failed to bind the wireless driver.
+- The control service selected exact Windows InstanceId `USB\\VID_0BDA&PID_818B\\...` at current
+  bus `2-4`; the relay and local control service were both ready.
+- Two independent quick diagnostics, at 02:19 and 02:37 UTC, produced the same result: WSL
+  `lsusb -d 0bda:818b` returned no device and no USB driver-binding path existed.
+- The packaged custom kernel was running as `6.18.35.2-microsoft-standard-WSL2+`.
+- The kernel contained and could inspect `rtl8xxxu.ko`; its aliases explicitly included
+  `usb:v0BDAp818B`, and the matching `rtl8192eu_nic.bin` firmware declaration was present.
+- Therefore this incident failed before Linux driver binding. It is not evidence of receive death,
+  missing firmware, a bad RTL8192EU, or an absent WSL backend.
 - A similarly worded error must not be treated as one condition: **detected**, **shared**, **attached**,
   **USB-visible in WSL**, **driver-bound**, and **radio-ready** are separate gates.
 
+#### Confirmed software root cause
+
+The replacement installer correctly permits installation without a radio and installs
+`usbipd-win`, but the post-install UI only persisted the selected adapter. The local control service
+then ran `usbipd attach` without first checking or performing the administrator-only `usbipd bind`.
+Its Repair endpoint called the same attach function, so an unshared card entered a deterministic
+repair loop. The attach subprocess output was discarded, which is why the support bundle could prove
+that USB never reached WSL but could not preserve the Windows error explaining why.
+
 #### Temporary recovery
 
-Run the matching Setup package's **Repair** action once with the RTL8192EU connected, then reselect the
-adapter. If it still fails, preserve a support bundle and `usbipd list` output before unplugging,
-restarting, resetting WSL, or changing drivers.
+For builds before this fix, run elevated `usbipd bind --busid <CURRENT_BUSID>` once, then retry the
+connection. Do not use `--force`. The current bus ID must be read from `usbipd list` immediately before
+binding. New builds expose this as **Authorize adapter** and re-resolve the exact InstanceId before
+mutation.
 
 #### Required fix
 
-1. During Install/Repair, bind/share the selected physical device with elevation and verify the final
-   `usbipd-win` state instead of assuming the command succeeded.
+1. Authorize a selected physical device on demand with elevation and verify the final `usbipd-win`
+   state. Install remains independent of hardware availability.
 2. Resolve devices by stable USB identity and current bus ID at action time; never reuse an obsolete
    bus ID after restart or replug.
 3. Make normal launch attach an already-shared adapter to the isolated `SwitchTrade` distro and report
@@ -190,12 +205,15 @@ restarting, resetting WSL, or changing drivers.
   Linux driver or RX-health failure.
 - The same package retains the existing Windows 11 lifecycle behavior.
 
-#### Candidate implementation
+#### Implemented correction
 
-The audit candidate now persists the Windows USB InstanceId, resolves its current bus ID after reboot
-or replug, and keeps detected/shared/attached/USB-visible/driver/PHY/RX as separate gates. Setup resume
-never trusts a saved transient bus ID. Automated re-enumeration and lifecycle simulations pass; this
-issue remains open until clean Windows 10 and Windows 11 RTL8192EU tests pass.
+The control API now publishes separate `shared` and `attached` gates and returns stable
+`adapter_not_shared`, `adapter_attach_failed`, and `adapter_attach_verification_failed` envelopes.
+The native client presents **Authorize adapter**, elevates the installed native provisioner, and the
+provisioner re-resolves the exact InstanceId and current bus ID before non-forced bind. It verifies the
+shared state before the unprivileged control service attaches to WSL. Attach exit details are now
+redacted into the support log. Automated unshared, changed-bus, identity-mismatch, final-verification,
+and desktop recovery tests pass; clean Windows 10/11 physical RTL8192EU repetition remains required.
 
 ---
 

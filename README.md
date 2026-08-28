@@ -26,7 +26,9 @@ The Realtek RTL8192EU (`0bda:818b`) is the current beta adapter. Other adapters 
 3. Run `SwitchTradeSetup.exe` and choose **Install**.
 4. Accept the requested WSL, USB/IP, and custom-kernel setup steps. Restart Windows if Setup asks,
    then sign in to let installation continue.
-5. Select or defer the USB Wi-Fi adapter, finish Setup, and open **SwitchTrade**.
+5. Finish Setup and open **SwitchTrade**. A Wi-Fi adapter may be added later.
+6. In **Settings → Connection**, select the adapter and approve the one-time Windows authorization
+   prompt. SwitchTrade resolves the device again after replug or reboot before using it.
 
 The ZIP contents must stay together while Setup runs. After a successful installation, the extracted
 folder and ZIP may be deleted. Daily use starts the installed native app and its isolated WSL service
@@ -53,8 +55,9 @@ Both players install SwitchTrade and connect one USB Wi-Fi adapter.
 6. Return to the trade menu or leave the room. SwitchTrade closes the radio session and online room
    in order.
 
-If the adapter or local service needs attention, open **Settings**, refresh the device list, run
-**Diagnostics**, or launch `SwitchTradeSetup.exe` and choose **Repair**.
+If the adapter or local service needs attention, open **Settings**, refresh the device list, authorize
+the selected adapter if requested, and run **Diagnostics**. Setup **Repair** replaces the installed
+software; it is not required merely to authorize a newly added adapter.
 
 ## How it works
 

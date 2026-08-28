@@ -62,8 +62,10 @@ LOCAL_ERROR_CODES = {
         "adapter_quarantined", "hardware", False, "select_adapter"),
     "End the current connection before changing adapters": (
         "session_active", "hardware", True, "end_session"),
-    "The selected adapter could not be attached. Run SwitchTrade Setup Repair once if it is not shared.": (
-        "adapter_attach_failed", "hardware", True, "repair_adapter"),
+    "Windows must authorize the selected adapter before SwitchTrade can use it": (
+        "adapter_not_shared", "hardware_share", True, "authorize_adapter"),
+    "The selected adapter could not be attached to WSL": (
+        "adapter_attach_failed", "hardware_attach", True, "repair_adapter"),
 }
 
 
@@ -872,6 +874,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 "description": device.get("Description") or profile.model,
                 "model": profile.model, "status": profile.status,
                 "selectable": public["selectable"], "experimental": public["experimental"],
+                "shared": bool(device.get("PersistedGuid") or device.get("StubInstanceId")),
                 "attached": bool(device.get("ClientIPAddress")),
                 "selected": is_selected,
             })
@@ -893,21 +896,77 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 device["usb_id"], device["instance_id"], device["bus_id"])
         if any(item["attached"] and item["usb_id"] == device["usb_id"] and
                item["bus_id"] != device["bus_id"] for item in inventory):
-            raise HTTPException(
-                status_code=409,
-                detail="Detach the other identical Wi-Fi adapter from WSL, then try again.",
+            raise ControlApiError(
+                409, "duplicate_adapter_attached",
+                "Another identical Wi-Fi adapter is already attached to WSL",
+                stage="hardware_attach", recoverable=True,
+                primary_action="detach_other_adapter",
+            )
+        if not device["shared"]:
+            state.log.event(
+                "hardware_gate_failed", level="error", gate="shared",
+                code="adapter_not_shared", usb_id=device["usb_id"],
+                bus_id=device["bus_id"],
+            )
+            raise ControlApiError(
+                409, "adapter_not_shared",
+                "Windows must authorize the selected adapter before SwitchTrade can use it",
+                stage="hardware_share", recoverable=True,
+                primary_action="authorize_adapter",
             )
         if not device["attached"]:
             distro = os.environ.get("SWITCHTRADE_WSL_DISTRO", "SwitchTrade")
-            result = subprocess.run(
-                ["usbipd.exe", "attach", f"--wsl={distro}", "--busid", device["bus_id"]],
-                capture_output=True, text=True, timeout=15, check=False,
-            )
-            if result.returncode != 0:
-                raise HTTPException(
-                    status_code=409,
-                    detail="The selected adapter could not be attached. Run SwitchTrade Setup Repair once if it is not shared.",
+            try:
+                result = subprocess.run(
+                    ["usbipd.exe", "attach", f"--wsl={distro}", "--busid", device["bus_id"]],
+                    capture_output=True, text=True, timeout=15, check=False,
                 )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                state.log.event(
+                    "hardware_attach_failed", level="error", usb_id=device["usb_id"],
+                    bus_id=device["bus_id"], error_type=type(error).__name__,
+                )
+                raise ControlApiError(
+                    503, "adapter_attach_unavailable",
+                    "Windows USB attachment did not complete",
+                    stage="hardware_attach", recoverable=True,
+                    primary_action="retry_attach",
+                ) from error
+            if result.returncode != 0:
+                state.log.event(
+                    "hardware_attach_failed", level="error", usb_id=device["usb_id"],
+                    bus_id=device["bus_id"], exit_code=result.returncode,
+                    output=result.stdout[-2000:], error=result.stderr[-2000:],
+                )
+                raise ControlApiError(
+                    409, "adapter_attach_failed",
+                    "The selected adapter could not be attached to WSL",
+                    stage="hardware_attach", recoverable=True,
+                    primary_action="repair_adapter",
+                )
+            attached = False
+            for _attempt in range(20):
+                current = next((item for item in usbipd_inventory(state)
+                                if item["instance_id"].casefold() == device["instance_id"].casefold()), None)
+                if current and current["attached"]:
+                    attached = True
+                    break
+                time.sleep(0.1)
+            if not attached:
+                state.log.event(
+                    "hardware_attach_failed", level="error", usb_id=device["usb_id"],
+                    bus_id=device["bus_id"], code="adapter_attach_verification_failed",
+                )
+                raise ControlApiError(
+                    409, "adapter_attach_verification_failed",
+                    "Windows did not confirm that the selected adapter reached WSL",
+                    stage="hardware_attach", recoverable=True,
+                    primary_action="retry_attach",
+                )
+            state.log.event(
+                "hardware_gate_passed", gate="attached", usb_id=device["usb_id"],
+                bus_id=device["bus_id"],
+            )
         return device["usb_id"]
 
     def launch_session(state: Runtime, *, code: str, tunnel_seat: str,
@@ -1575,7 +1634,25 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     @app.post("/api/support-bundle")
     def support_bundle(request: Request) -> dict:
         state = runtime(request)
-        path = state.log.support_bundle(summary=readiness_payload(state))
+        summary = readiness_payload(state)
+        try:
+            inventory = usbipd_inventory(state)
+            selected = next((device for device in inventory if device["selected"]), None)
+            summary["hardware"] = {
+                "inventory_status": "ready",
+                "selected": None if selected is None else {
+                    name: selected[name] for name in (
+                        "usb_id", "bus_id", "model", "status", "experimental",
+                        "shared", "attached",
+                    )
+                },
+            }
+        except HTTPException as error:
+            summary["hardware"] = {
+                "inventory_status": "unavailable",
+                "error": str(error.detail),
+            }
+        path = state.log.support_bundle(summary=summary)
         return {"status": "created", "path": str(path), "run_id": state.log.run_id}
 
     @app.post("/api/v1/support-bundle")
