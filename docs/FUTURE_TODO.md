@@ -5,15 +5,21 @@ section. None should be presented as a current beta capability.
 
 ## 1. Post-installer application stabilization
 
-1. Validate the replacement installer on clean Windows 10 22H2 and Windows 11 systems.
-2. Deploy and verify a relay supporting `rfu-tunnel.v1` and `manual-switch-role.v1`.
-3. Create one shared API contract source for Python and C#.
-4. Build a real WPF ↔ local control ↔ relay integration harness.
-5. Split the oversized backend orchestration module along existing responsibility boundaries.
-6. Split the oversized frontend API and state classes without changing the frozen contracts.
-7. Add WPF UI Automation for dropdowns, navigation, room state, reconnect, leave/close, and stale
+1. **Before the next installer upload, stop Repair from reconfiguring healthy external prerequisites.**
+   Microsoft WSL and `usbipd-win` must be installed or upgraded only when absent or below the pinned
+   minimum; SwitchTrade Repair must replace only SwitchTrade-owned desktop, runtime, kernel, and
+   configuration state. Add a regression for a healthy WSL MSI whose registered original source name
+   differs from Burn's cached payload name (for example `wsl.2.7.12.0.x64 (2).msi` versus
+   `wsl.2.7.12.0.x64.msi`) and prove Repair never invokes MSI maintenance for that prerequisite.
+2. Validate the replacement installer on clean Windows 10 22H2 and Windows 11 systems.
+3. Deploy and verify a relay supporting `rfu-tunnel.v1` and `manual-switch-role.v1`.
+4. Create one shared API contract source for Python and C#.
+5. Build a real WPF ↔ local control ↔ relay integration harness.
+6. Split the oversized backend orchestration module along existing responsibility boundaries.
+7. Split the oversized frontend API and state classes without changing the frozen contracts.
+8. Add WPF UI Automation for dropdowns, navigation, room state, reconnect, leave/close, and stale
    errors.
-8. Run complete two-PC/two-Switch RTL8192EU qualification.
+9. Run complete two-PC/two-Switch RTL8192EU qualification.
 
 ## 2. Post-release qualification
 
