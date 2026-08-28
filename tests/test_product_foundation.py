@@ -172,6 +172,25 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertIn("SWITCH_ASSOCIATION_NOT_TESTED",
                           [stage["code"] for stage in report["stages"]])
 
+    def test_active_adapter_check_runs_production_rx_before_driver_inspection(self):
+        commands = []
+
+        def runner(command, timeout):
+            commands.append(command)
+            return self._healthy_runner(command, timeout)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            report, _ = diagnose_hardware(
+                "0e8d:7610", active_check=True, runs_root=temporary, runner=runner)
+
+        actual_rx = next(stage for stage in report["stages"] if stage["name"] == "actual_rx")
+        self.assertEqual(actual_rx["status"], "passed")
+        prepare_index = next(index for index, command in enumerate(commands)
+                             if command[0].endswith("wsl-radio-prepare.sh"))
+        binding_index = next(index for index, command in enumerate(commands)
+                             if command[0] == "bash" and "USB_PATH" in " ".join(command))
+        self.assertLess(prepare_index, binding_index)
+
     def test_quick_diagnostic_ignores_another_usb_devices_historical_failure(self):
         from subprocess import CompletedProcess
 
@@ -256,11 +275,14 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertEqual(event["member_token"], "<redacted>")
             self.assertEqual(event["reconnect_token"], "<redacted>")
             self.assertEqual(event["packets"], 4)
-            bundle = logger.support_bundle(summary={"session_id": "ABC123", "packets": 4})
+            bundle = logger.support_bundle(summary={
+                "session_id": None, "previous_session_id": "ABC123", "packets": 4,
+            })
             with zipfile.ZipFile(bundle) as archive:
                 self.assertIn("privacy-manifest.json", archive.namelist())
                 summary = json.loads(archive.read("runtime-summary.json"))
-                self.assertEqual(summary["session_id"], "<redacted>")
+                self.assertIsNone(summary["session_id"])
+                self.assertEqual(summary["previous_session_id"], "<redacted>")
                 combined = b"\n".join(archive.read(name) for name in archive.namelist())
                 self.assertNotIn(b"hidden-event-token", combined)
                 self.assertNotIn(b"hidden-file-token", combined)
@@ -275,6 +297,28 @@ class DiagnosticsTests(unittest.TestCase):
                 expected = (f"hardware-diagnostics/{report['run_id']}/"
                             "diagnostic-report.json")
                 self.assertIn(expected, archive.namelist())
+
+    def test_support_bundle_includes_bounded_redacted_endpoint_launcher_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            logger = RunLogger("control", temporary)
+            launches = logger.run_dir / "endpoint-launches"
+            launches.mkdir()
+            nonce = "a" * 32
+            (launches / f"{nonce}.json").write_text(
+                json.dumps({"schema": 1, "status": "failed"}), encoding="utf-8")
+            (launches / f"{nonce}.err.log").write_text(
+                "x" * 300_000 + "\nAuthorization: Bearer launcher-secret\n",
+                encoding="utf-8")
+
+            with zipfile.ZipFile(logger.support_bundle()) as archive:
+                record = f"endpoint-launches/{nonce}.json"
+                error = f"endpoint-launches/{nonce}.err.log"
+                self.assertIn(record, archive.namelist())
+                self.assertIn(error, archive.namelist())
+                evidence = archive.read(error)
+                self.assertLessEqual(len(evidence), 257_000)
+                self.assertIn(b"[truncated ", evidence)
+                self.assertNotIn(b"launcher-secret", evidence)
 
     def test_support_bundle_includes_related_endpoint_run_and_rejects_traversal(self):
         with tempfile.TemporaryDirectory() as temporary:

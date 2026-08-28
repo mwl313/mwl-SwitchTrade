@@ -104,6 +104,30 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
         }
     }
 
+    public async Task EnsureAuthorizedLaunchAsync(CancellationToken cancellationToken = default)
+    {
+        if (Context is null || ConnectionState != LegacyConnectionState.Starting ||
+            !RoleLocked || Context.SwitchRole == SwitchRoomRole.Unassigned)
+            return;
+        try
+        {
+            await _gateway.StartConnectionAsync(
+                Context.SwitchRole, Context.MembershipRole, Context.Room.RoomCode,
+                cancellationToken);
+        }
+        catch (UserFacingException error)
+        {
+            ConnectionState = LegacyConnectionState.NeedsRecovery;
+            StatusText = error.UserMessage;
+            RecoveryMessage = error.UserMessage;
+            RecoveryCode = error.TechnicalCode;
+            RecoveryStage = error.Stage;
+            RecoveryRecoverable = error.Recoverable;
+            RecoveryAction = error.PrimaryAction;
+            RaiseChanged();
+        }
+    }
+
     public async Task<bool> StopConnectionAsync(CancellationToken cancellationToken = default)
     {
         if (Context is null || ConnectionState == LegacyConnectionState.Idle) return true;
@@ -198,8 +222,12 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
             case "failed":
                 ConnectionState = LegacyConnectionState.NeedsRecovery;
                 StatusText = "This connection needs attention.";
-                RecoveryCode = status.FailureCode;
-                RecoveryMessage = status.FailureCode switch
+                if (KeepExistingFailure(status.FailureCode)) break;
+                RecoveryCode = status.FailureCode ?? "session.failed";
+                RecoveryStage = status.FailureStage ?? "session";
+                RecoveryRecoverable = status.RecoveryAction is not null;
+                RecoveryAction = status.RecoveryAction ?? "retry";
+                RecoveryMessage = RecoveryCode switch
                 {
                     "radio.switch_room_not_found" =>
                         "No Group Leader Switch room was found on supported 2.4 GHz channels. Recreate the group on the Switch and try again.",
@@ -260,19 +288,27 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
         {
             ConnectionState = LegacyConnectionState.NeedsRecovery;
             StatusText = "This connection needs attention.";
-            RecoveryCode = room.FailureCode ?? "session.failed";
-            RecoveryStage = room.FailureStage ?? "session";
-            RecoveryRecoverable = room.FailureRecoverable;
-            RecoveryAction = room.FailureAction ?? "retry";
-            RecoveryMessage = RecoveryCode switch
+            if (!KeepExistingFailure(room.FailureCode))
             {
-                "relay.restart" => "The online relay restarted. End this attempt and try again.",
-                "relay.peer_lost" => "The partner connection was lost. End this attempt and try again.",
-                "member.reconnect_expired" => "Your partner did not reconnect in time.",
-                "radio.switch_room_not_found" =>
-                    "No Group Leader Switch room was found on supported 2.4 GHz channels. Recreate the group on the Switch and try again.",
-                _ => "End this attempt and try again. Export a support bundle if it repeats.",
-            };
+                RecoveryCode = room.FailureCode ?? "session.failed";
+                RecoveryStage = room.FailureStage ?? "session";
+                RecoveryRecoverable = room.FailureRecoverable;
+                RecoveryAction = room.FailureAction ?? "retry";
+                RecoveryMessage = RecoveryCode switch
+                {
+                    "relay.restart" => "The online relay restarted. End this attempt and try again.",
+                    "relay.peer_lost" => "The partner connection was lost. End this attempt and try again.",
+                    "member.reconnect_expired" => "Your partner did not reconnect in time.",
+                    "radio.switch_room_not_found" =>
+                        "No Group Leader Switch room was found on supported 2.4 GHz channels. Recreate the group on the Switch and try again.",
+                    _ => "End this attempt and try again. Export a support bundle if it repeats.",
+                };
+            }
+        }
+        else if (!room.RoleLocked && ConnectionState == LegacyConnectionState.NeedsRecovery)
+        {
+            ConnectionState = LegacyConnectionState.Idle;
+            ClearRecovery();
         }
         else if (ConnectionState == LegacyConnectionState.Idle && room.RoleLocked)
         {
@@ -314,6 +350,10 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
     }
 
     private void RaiseChanged() => Changed?.Invoke(this, EventArgs.Empty);
+
+    private bool KeepExistingFailure(string? incomingCode) =>
+        incomingCode == "relay.peer_lost" &&
+        RecoveryCode is not null && RecoveryCode != "relay.peer_lost";
 
     private void ClearRecovery()
     {

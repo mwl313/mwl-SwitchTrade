@@ -15,6 +15,7 @@ import time
 import signal
 import secrets
 import sys
+from typing import Callable
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -23,7 +24,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
 
 from switchtrade import __version__
-from switchtrade.diagnostics import RunLogger, default_runs_root
+from switchtrade.diagnostics import RunLogger, default_runs_root, redact_text
 from switchtrade.endpoint import runtime_plan
 from switchtrade.hardware import DEFAULT_PROFILE_PATH, host_engines_public, load_profiles
 from switchtrade.process_guard import AlreadyRunningError, SingleInstanceLock
@@ -59,6 +60,7 @@ ATTEMPT_FAILURE_MESSAGES = {
 }
 
 TERMINAL_ATTEMPT_PHASES = {"completed", "canceled", "failed"}
+ENDPOINT_STARTUP_TIMEOUT_SECONDS = 45.0
 
 LOCAL_ERROR_CODES = {
     "no active trade room": ("room_not_active", "room", False, "return_home"),
@@ -216,8 +218,11 @@ class Runtime:
         self.profiles = load_profiles(profile_path)
         self.groups: dict[str, Group] = {}
         self.lock = threading.RLock()
-        self.hardware_lock = threading.Lock()
+        self.hardware_lock = threading.RLock()
+        self.release_hardware: Callable[[], None] = lambda: None
         self.attempt_lock = threading.Lock()
+        self.launch_lock = threading.Lock()
+        self.launch_cancel_generation = 0
         self.log = RunLogger("control-api", runs_root, {"profile_path": str(profile_path)})
         self.relay_url = relay_url
         self.relay = RelayClient(relay_url)
@@ -236,7 +241,11 @@ class Runtime:
         self.member_token_file = runtime_root / "member-token"
         self.client_id_file = runtime_root / "client-id"
         self.hardware_selection_file = runtime_root / "hardware-selection.json"
+        self.hardware_attachment_file = runtime_root / "hardware-attachment.json"
+        self.owned_hardware = self.read_hardware_attachment()
         self.endpoint_launch_ack = runtime_root / "endpoint-launch-ack.json"
+        self.endpoint_launches = self.log.run_dir / "endpoint-launches"
+        self.endpoint_launches.mkdir(exist_ok=True)
         try:
             self.client_id = self.client_id_file.read_text(encoding="utf-8").strip()
         except OSError:
@@ -244,7 +253,7 @@ class Runtime:
             self.client_id_file.write_text(self.client_id + "\n", encoding="utf-8")
             os.chmod(self.client_id_file, 0o600)
         self.shutdown_requested = False
-        self.last_published_phase: str | None = None
+        self.last_published_phase: tuple[str | None, str] | None = None
         self.last_authority_heartbeat = 0.0
         previous = self.read_endpoint()
         if self._verified_endpoint_pid(previous) is not None:
@@ -300,12 +309,55 @@ class Runtime:
                 "instance_id": instance_id, "bus_id": bus_id,
             }) + "\n", encoding="utf-8")
 
+    def read_hardware_attachment(self) -> dict | None:
+        try:
+            value = json.loads(self.hardware_attachment_file.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            return None
+        required = ("usb_id", "instance_id", "bus_id")
+        return value if (
+            isinstance(value, dict) and value.get("schema") == 1 and
+            all(isinstance(value.get(name), str) and value[name] for name in required)
+        ) else None
+
+    def write_hardware_attachment(self, usb_id: str, instance_id: str, bus_id: str) -> None:
+        value = {
+            "schema": 1, "usb_id": usb_id.lower(), "instance_id": instance_id,
+            "bus_id": bus_id, "owner_run_id": self.log.run_id,
+        }
+        temporary = self.hardware_attachment_file.with_suffix(".tmp")
+        temporary.write_text(json.dumps(value) + "\n", encoding="utf-8")
+        temporary.replace(self.hardware_attachment_file)
+        self.owned_hardware = value
+
+    def clear_hardware_attachment(self) -> None:
+        self.hardware_attachment_file.unlink(missing_ok=True)
+        self.owned_hardware = None
+
     def read_endpoint(self) -> dict:
         try:
             value = json.loads(self.endpoint_state.read_text(encoding="utf-8"))
             return value if isinstance(value, dict) else {}
         except (OSError, ValueError):
             return {}
+
+    def write_endpoint(self, value: dict) -> None:
+        temporary = self.endpoint_state.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps(value, separators=(",", ":")) + "\n", encoding="utf-8")
+        temporary.replace(self.endpoint_state)
+
+    def current_launch_generation(self) -> int:
+        with self.lock:
+            return self.launch_cancel_generation
+
+    def cancel_launch(self) -> None:
+        with self.lock:
+            self.launch_cancel_generation += 1
+
+    def launch_was_canceled(self, generation: int) -> bool:
+        with self.lock:
+            return generation != self.launch_cancel_generation
 
     def read_parties(self) -> dict:
         try:
@@ -352,6 +404,7 @@ class Runtime:
             self.member_token_file.unlink(missing_ok=True)
 
     def transition_terminal_authority(self, credentials: dict) -> None:
+        release_hardware = False
         with self.lock:
             current = self.read_authority()
             if any(current.get(key) != credentials.get(key) for key in (
@@ -364,7 +417,10 @@ class Runtime:
             self.endpoint_running()
             if self.endpoint_session == credentials.get("room_code"):
                 self.stop_endpoint()
+                release_hardware = True
             self.clear_authority()
+        if release_hardware:
+            self.release_hardware()
 
     def authoritative_room(self, *, terminal_cleanup: bool = True) -> dict:
         credentials = self.read_authority()
@@ -403,26 +459,38 @@ class Runtime:
             "failed" if endpoint.get("state") == "failed" else
             "completed" if endpoint.get("state") == "completed" else None
         )
-        if phase is None or phase == self.last_published_phase:
+        attempt_id = endpoint.get("attempt_id")
+        published = (attempt_id if isinstance(attempt_id, str) else None, phase)
+        if phase is None or published == self.last_published_phase:
+            return
+        if not self.read_authority().get("member_token"):
             return
         try:
             room = self.authoritative_room(terminal_cleanup=False)
             credentials = self.read_authority()
             attempt = room.get("attempt")
-            if (not attempt or attempt.get("phase") == phase or
-                    attempt.get("phase") in TERMINAL_ATTEMPT_PHASES):
-                self.last_published_phase = phase
+            failure_code = str(endpoint.get("error_code") or (
+                f"{endpoint.get('failure_stage') or 'session'}.failed"))
+            same_failure_needs_refinement = (
+                phase == "failed" and attempt and attempt.get("phase") == "failed" and
+                attempt.get("recoverable_error") == "relay.peer_lost" and
+                failure_code != "relay.peer_lost"
+            )
+            if (not attempt or
+                    (attempt.get("phase") == phase and not same_failure_needs_refinement) or
+                    (attempt.get("phase") in TERMINAL_ATTEMPT_PHASES and
+                     not same_failure_needs_refinement)):
+                self.last_published_phase = published
                 return
             payload = {"phase": phase}
             if phase == "failed":
-                payload["failure_code"] = endpoint.get("error_code") or (
-                    f"{endpoint.get('failure_stage') or 'session'}.failed")
+                payload["failure_code"] = failure_code
             self.relay.room_command(
                 room["room_id"], credentials["member_token"],
                 f"/attempts/{attempt['attempt_id']}:phase", payload,
                 expected_version=room["room_version"],
             )
-            self.last_published_phase = phase
+            self.last_published_phase = published
         except RelayError as error:
             self.log.event("authority_phase_sync_failed", level="warning", phase=phase,
                            error=type(error).__name__, code=error.code,
@@ -434,8 +502,13 @@ class Runtime:
             code, ("session", True, "retry"))
         with self.lock:
             current = self.read_endpoint()
-            if current.get("state") == "failed" and current.get("error_code") == code:
-                return
+            if current.get("state") == "failed":
+                existing_code = str(current.get("error_code") or "session.failed")
+                same_attempt = current.get("attempt_id") == attempt.get("attempt_id")
+                if existing_code == code or (
+                        same_attempt and code == "relay.peer_lost" and
+                        existing_code != "relay.peer_lost"):
+                    return
             current.update({
                 "state": "failed",
                 "updated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -446,10 +519,7 @@ class Runtime:
                 "failure_stage": stage,
                 "recovery_action": action,
             })
-            temporary = self.endpoint_state.with_suffix(".tmp")
-            temporary.write_text(json.dumps(current, separators=(",", ":")) + "\n",
-                                 encoding="utf-8")
-            temporary.replace(self.endpoint_state)
+            self.write_endpoint(current)
 
     def endpoint_running(self) -> bool:
         if self.endpoint and self.endpoint.poll() is None:
@@ -608,6 +678,7 @@ class Runtime:
         return True
 
     def stop_endpoint(self) -> None:
+        self.cancel_launch()
         process = self.endpoint
         if process and process.poll() is None:
             process.terminate()
@@ -631,6 +702,13 @@ class Runtime:
                 self._signal_endpoint_pid(pid, "KILL", self.read_endpoint())
         self.endpoint = None
         self.endpoint_session = None
+
+    def clear_session_state(self) -> None:
+        self.endpoint_state.unlink(missing_ok=True)
+        self.party_state.unlink(missing_ok=True)
+        self.endpoint_launch_ack.unlink(missing_ok=True)
+        self.endpoint_session = None
+        self.last_published_phase = None
 
 def _wsl_path(path: Path) -> str:
     value = str(path.resolve())
@@ -681,7 +759,8 @@ def endpoint_command(identity: str, passcode: str, relay_url: str,
 
 def hardware_diagnostic_command(usb_id: str, mode: str, role: str,
                                 runs_root: Path,
-                                *, allow_experimental_hardware: bool = False) -> list[str]:
+                                *, allow_experimental_hardware: bool = False,
+                                active_check: bool = False) -> list[str]:
     args = [
         "-m", "switchtrade.hardware_diagnostics", "--usb-id", usb_id.lower(),
         "--mode", mode, "--role", role, "--runs-root",
@@ -689,6 +768,8 @@ def hardware_diagnostic_command(usb_id: str, mode: str, role: str,
     ]
     if allow_experimental_hardware:
         args.append("--allow-experimental-hardware")
+    if active_check:
+        args.append("--active-check")
     if os.name == "nt":
         distro = os.environ.get("SWITCHTRADE_WSL_DISTRO", "SwitchTrade")
         root = os.environ.get("SWITCHTRADE_WSL_ROOT", "/opt/switchtrade")
@@ -706,9 +787,23 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     async def lifespan(app: FastAPI):
         runtime = Runtime(profile_path, run_path, relay_url or os.environ.get(
             "SWITCHTRADE_RELAY_URL", "http://127.0.0.1:8788"))
+        runtime.release_hardware = lambda: release_owned_hardware(runtime)
+        if runtime.owned_hardware is not None and not runtime.endpoint_running():
+            try:
+                runtime.release_hardware()
+            except ControlApiError as error:
+                runtime.log.event(
+                    "hardware_startup_cleanup_failed", level="error", code=error.code,
+                )
         app.state.runtime = runtime
         yield
         runtime.stop_endpoint()
+        try:
+            runtime.release_hardware()
+        except ControlApiError as error:
+            runtime.log.event(
+                "hardware_shutdown_cleanup_failed", level="error", code=error.code,
+            )
         runtime.log.close("api_stopped")
 
     app = FastAPI(title="SwitchTrade Control API", version=__version__, lifespan=lifespan)
@@ -849,8 +944,10 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 "ready", "The local SwitchTrade service is ready.", "control.ready"),
             "relay": readiness_axis(
                 "failed" if failed and failure_stage == "relay" else relay_status,
-                relay_message,
-                "relay.failed" if failed and failure_stage == "relay" else relay_code,
+                endpoint.get("error", "The relay connection failed.")
+                if failed and failure_stage == "relay" else relay_message,
+                endpoint.get("error_code", "relay.failed")
+                if failed and failure_stage == "relay" else relay_code,
                 failure_action if failure_stage == "relay" else None),
             "radio": readiness_axis(
                 "ready" if radio_checked else ("failed" if failed and failure_stage == "radio" else "unknown"),
@@ -865,6 +962,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 "ready" if endpoint_status == "session_ready" else
                 ("checking" if running and not failed else "failed" if failed else "unavailable"),
                 "Both endpoint layers are active." if endpoint_status == "session_ready" else
+                endpoint.get("error", "The Switch connection failed.") if failed else
                 "No Switch connection is active." if not running else "The Switch connection is being prepared.",
                 f"session.{endpoint_status}", failure_action if failed else None),
             "decoder": readiness_axis(
@@ -951,6 +1049,106 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             })
         return inventory
 
+    def linux_usb_enumerated(usb_id: str) -> bool:
+        script = (
+            "wanted=$1; for vendor in /sys/bus/usb/devices/*/idVendor; do "
+            "[ -r \"$vendor\" ] || continue; dev=${vendor%/idVendor}; "
+            "id=$(cat \"$vendor\"):$(cat \"$dev/idProduct\" 2>/dev/null); "
+            "[ \"${id,,}\" = \"$wanted\" ] && exit 0; done; exit 3"
+        )
+        command = ["bash", "-c", script, "switchtrade-usb", usb_id]
+        if os.name == "nt":
+            command = [
+                "wsl.exe", "-d", os.environ.get("SWITCHTRADE_WSL_DISTRO", "SwitchTrade"),
+                "--", *command,
+            ]
+        try:
+            return subprocess.run(
+                command, capture_output=True, text=True, timeout=2, check=False,
+            ).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+
+    def release_owned_hardware(state: Runtime) -> None:
+        if state.owned_hardware is None:
+            return
+        with state.hardware_lock:
+            owned = state.owned_hardware
+            if owned is None:
+                return
+            try:
+                inventory = usbipd_inventory(state)
+            except HTTPException as error:
+                raise ControlApiError(
+                    503, "adapter_detach_unavailable",
+                    "Windows USB inventory is unavailable while returning the adapter",
+                    stage="hardware_cleanup", recoverable=True,
+                    primary_action="retry_cleanup",
+                ) from error
+            device = next((item for item in inventory if
+                           item["instance_id"].casefold() == owned["instance_id"].casefold()), None)
+            if device is None or not device["attached"]:
+                state.clear_hardware_attachment()
+                state.log.event(
+                    "hardware_attachment_released", usb_id=owned["usb_id"],
+                    bus_id=owned["bus_id"], already_detached=True,
+                )
+                return
+            try:
+                result = subprocess.run(
+                    ["usbipd.exe", "detach", "--busid", device["bus_id"]],
+                    capture_output=True, text=True, timeout=15, check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                state.log.event(
+                    "hardware_detach_failed", level="error", usb_id=owned["usb_id"],
+                    bus_id=device["bus_id"], error_type=type(error).__name__,
+                )
+                raise ControlApiError(
+                    503, "adapter_detach_unavailable",
+                    "Windows USB detachment did not complete",
+                    stage="hardware_cleanup", recoverable=True,
+                    primary_action="retry_cleanup",
+                ) from error
+            if result.returncode != 0:
+                state.log.event(
+                    "hardware_detach_failed", level="error", usb_id=owned["usb_id"],
+                    bus_id=device["bus_id"], exit_code=result.returncode,
+                    output=result.stdout[-2000:], error=result.stderr[-2000:],
+                )
+                raise ControlApiError(
+                    503, "adapter_detach_failed",
+                    "The selected adapter could not be returned to Windows",
+                    stage="hardware_cleanup", recoverable=True,
+                    primary_action="retry_cleanup",
+                )
+            for _attempt in range(40):
+                try:
+                    current_inventory = usbipd_inventory(state)
+                except HTTPException as error:
+                    raise ControlApiError(
+                        503, "adapter_detach_unavailable",
+                        "Windows USB inventory is unavailable while verifying adapter cleanup",
+                        stage="hardware_cleanup", recoverable=True,
+                        primary_action="retry_cleanup",
+                    ) from error
+                current = next((item for item in current_inventory if
+                                item["instance_id"].casefold() == owned["instance_id"].casefold()), None)
+                if current is None or not current["attached"]:
+                    state.clear_hardware_attachment()
+                    state.log.event(
+                        "hardware_attachment_released", usb_id=owned["usb_id"],
+                        bus_id=device["bus_id"], already_detached=False,
+                    )
+                    return
+                time.sleep(0.1)
+            raise ControlApiError(
+                503, "adapter_detach_verification_failed",
+                "Windows did not confirm that the selected adapter returned from WSL",
+                stage="hardware_cleanup", recoverable=True,
+                primary_action="retry_cleanup",
+            )
+
     def _attach_selected_hardware(state: Runtime) -> str | None:
         selected = state.read_hardware_selection()
         if not selected:
@@ -987,12 +1185,25 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             )
         if not device["attached"]:
             distro = os.environ.get("SWITCHTRADE_WSL_DISTRO", "SwitchTrade")
+            # Persist the exact-device ownership intent before invoking usbipd. If the control
+            # process dies after usbipd succeeds, the next launch can safely return only this
+            # physical adapter to Windows.
+            state.write_hardware_attachment(
+                device["usb_id"], device["instance_id"], device["bus_id"])
             try:
                 result = subprocess.run(
                     ["usbipd.exe", "attach", f"--wsl={distro}", "--busid", device["bus_id"]],
                     capture_output=True, text=True, timeout=15, check=False,
                 )
             except (OSError, subprocess.TimeoutExpired) as error:
+                try:
+                    release_owned_hardware(state)
+                except ControlApiError as cleanup_error:
+                    state.log.event(
+                        "hardware_attach_cleanup_failed", level="error",
+                        code=cleanup_error.code, usb_id=device["usb_id"],
+                        bus_id=device["bus_id"],
+                    )
                 state.log.event(
                     "hardware_attach_failed", level="error", usb_id=device["usb_id"],
                     bus_id=device["bus_id"], error_type=type(error).__name__,
@@ -1004,6 +1215,14 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                     primary_action="retry_attach",
                 ) from error
             if result.returncode != 0:
+                try:
+                    release_owned_hardware(state)
+                except ControlApiError as cleanup_error:
+                    state.log.event(
+                        "hardware_attach_cleanup_failed", level="error",
+                        code=cleanup_error.code, usb_id=device["usb_id"],
+                        bus_id=device["bus_id"],
+                    )
                 state.log.event(
                     "hardware_attach_failed", level="error", usb_id=device["usb_id"],
                     bus_id=device["bus_id"], exit_code=result.returncode,
@@ -1024,6 +1243,14 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                     break
                 time.sleep(0.1)
             if not attached:
+                try:
+                    release_owned_hardware(state)
+                except ControlApiError as cleanup_error:
+                    state.log.event(
+                        "hardware_attach_cleanup_failed", level="error",
+                        code=cleanup_error.code, usb_id=device["usb_id"],
+                        bus_id=device["bus_id"],
+                    )
                 state.log.event(
                     "hardware_attach_failed", level="error", usb_id=device["usb_id"],
                     bus_id=device["bus_id"], code="adapter_attach_verification_failed",
@@ -1038,6 +1265,29 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 "hardware_gate_passed", gate="attached", usb_id=device["usb_id"],
                 bus_id=device["bus_id"],
             )
+        enumerated = False
+        for _attempt in range(80):
+            if linux_usb_enumerated(device["usb_id"]):
+                enumerated = True
+                break
+            time.sleep(0.1)
+        if not enumerated:
+            state.log.event(
+                "hardware_attach_failed", level="error", usb_id=device["usb_id"],
+                bus_id=device["bus_id"], code="adapter_linux_enumeration_timeout",
+            )
+            if state.owned_hardware is not None:
+                release_owned_hardware(state)
+            raise ControlApiError(
+                503, "adapter_linux_enumeration_timeout",
+                "Linux did not enumerate the selected adapter before the deadline",
+                stage="hardware_attach", recoverable=True,
+                primary_action="retry_attach",
+            )
+        state.log.event(
+            "hardware_gate_passed", gate="linux_enumerated", usb_id=device["usb_id"],
+            bus_id=device["bus_id"],
+        )
         return device["usb_id"]
 
     def attach_selected_hardware(state: Runtime) -> str | None:
@@ -1046,11 +1296,41 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         with state.hardware_lock:
             return _attach_selected_hardware(state)
 
+    def end_local_session(state: Runtime) -> None:
+        with state.lock:
+            state.stop_endpoint()
+            state.clear_session_state()
+        state.release_hardware()
+
+    def launch_output_tail(path: Path, limit: int = 4096) -> str:
+        try:
+            with path.open("rb") as stream:
+                stream.seek(0, os.SEEK_END)
+                size = stream.tell()
+                stream.seek(max(0, size - limit))
+                value = stream.read().decode("utf-8", errors="replace")
+        except OSError:
+            return ""
+        return redact_text(value)
+
+    def launch_failure_detail(stdout_path: Path, stderr_path: Path) -> str:
+        stderr_lines = [
+            line.strip() for line in launch_output_tail(stderr_path).splitlines()
+            if line.strip()
+        ]
+        lines = stderr_lines or [
+            line.strip() for line in launch_output_tail(stdout_path).splitlines()
+            if line.strip()
+        ]
+        return lines[-1][:500] if lines else ""
+
     def launch_session(state: Runtime, *, code: str, tunnel_seat: str,
                        switch_room_role: str, usb_id: str | None,
                        attempt_id: str | None = None,
                        member_token_file: Path | None = None,
-                       allow_experimental_hardware: bool = False) -> dict:
+                       allow_experimental_hardware: bool = False,
+                       retry: bool = False,
+                       launch_generation: int | None = None) -> dict:
         try:
             plan = runtime_plan(
                 tunnel_seat, usb_id, switch_room_role=switch_room_role,
@@ -1060,94 +1340,307 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             raise relay_api_error(error) from error
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
-        with state.lock:
-            if state.endpoint_running():
-                current = state.read_endpoint()
-                same_attempt = (
-                    state.endpoint_session == code and
-                    (attempt_id is None or current.get("attempt_id") in {None, attempt_id})
-                )
-                if same_attempt:
-                    return {"status": "starting", "session_id": code, "hardware": plan,
-                            "run_id": state.log.run_id}
+        launch_key = attempt_id or code
+        generation = (state.current_launch_generation()
+                      if launch_generation is None else launch_generation)
+
+        with state.launch_lock:
+            if state.launch_was_canceled(generation):
                 raise ControlApiError(
-                    409, "session_active", "a different Switch endpoint session is already running",
-                    stage="session", recoverable=True, primary_action="end_session",
-                )
-            try:
-                if member_token_file is None:
-                    state.relay.status(code)
-            except RelayError as error:
-                raise relay_api_error(error) from error
-            state.endpoint_state.unlink(missing_ok=True)
-            state.party_state.unlink(missing_ok=True)
-            launch_nonce = secrets.token_hex(16)
-            state.endpoint_launch_ack.unlink(missing_ok=True)
-            command = endpoint_command(
-                plan["tunnel_seat"], code, state.relay_url, plan["usb_id"],
-                state.endpoint_state, switch_room_role=plan["switch_room_role"],
-                party_state_file=state.party_state, attempt_id=attempt_id or code,
-                member_token_file=member_token_file,
-                allow_experimental_hardware=allow_experimental_hardware,
-                launch_nonce=launch_nonce,
-                launch_ack_file=state.endpoint_launch_ack,
-            )
-            try:
-                state.endpoint = subprocess.Popen(command, cwd=Path(__file__).resolve().parents[1])
-            except OSError as error:
-                raise HTTPException(status_code=503, detail=f"endpoint launch failed: {error}") from error
-            deadline = time.monotonic() + 2
-            acknowledged = False
-            while time.monotonic() < deadline:
-                if state.endpoint.poll() is not None:
-                    break
-                try:
-                    acknowledgement = json.loads(
-                        state.endpoint_launch_ack.read_text(encoding="utf-8-sig"))
-                    acknowledged = (
-                        acknowledgement.get("schema") == 1 and
-                        acknowledgement.get("launch_nonce") == launch_nonce and
-                        isinstance(acknowledgement.get("launcher_pid"), int)
-                    )
-                except (OSError, json.JSONDecodeError):
-                    pass
-                if acknowledged:
-                    break
-                time.sleep(0.025)
-            state.endpoint_launch_ack.unlink(missing_ok=True)
-            if not acknowledged:
-                if state.endpoint.poll() is None:
-                    state.endpoint.terminate()
-                    try:
-                        state.endpoint.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
-                        state.endpoint.kill()
-                        state.endpoint.wait(timeout=2)
-                state.endpoint = None
-                raise ControlApiError(
-                    503, "endpoint_start_failed", "the Switch endpoint could not acquire its launch lock",
+                    409, "endpoint_start_canceled", "the Switch endpoint start was canceled",
                     stage="endpoint", recoverable=True, primary_action="retry",
                 )
-            state.endpoint_session = code
-        state.log.event(
-            "session_started", passcode=code, tunnel_seat=plan["tunnel_seat"],
-            switch_room_role=plan["switch_room_role"], usb_id=plan["usb_id"],
-            host_engine=plan["host_engine"],
-            experimental_hardware=plan["experimental_hardware"],
-            pid=state.endpoint.pid,
-        )
-        return {"status": "starting", "session_id": code, "hardware": plan,
-                "run_id": state.log.run_id}
+            with state.lock:
+                if state.endpoint_running():
+                    current = state.read_endpoint()
+                    same_attempt = (
+                        state.endpoint_session == code and
+                        current.get("attempt_id") in {None, launch_key}
+                    )
+                    if same_attempt:
+                        return {"status": current.get("state", "starting"),
+                                "session_id": code, "hardware": plan,
+                                "run_id": state.log.run_id}
+                    raise ControlApiError(
+                        409, "session_active",
+                        "a different Switch endpoint session is already running",
+                        stage="session", recoverable=True, primary_action="end_session",
+                    )
 
-    def launch_authoritative_attempt(state: Runtime, room: dict) -> dict | None:
+                current = state.read_endpoint()
+                if not retry and current.get("attempt_id") == launch_key:
+                    failure_code = str(current.get("error_code") or "endpoint_retry_required")
+                    failure_stage = str(current.get("failure_stage") or "endpoint")
+                    failure_action = str(current.get("recovery_action") or "retry")
+                    failure_message = str(current.get("error") or
+                                          "This connection attempt already launched. Select Retry to start again.")
+                    if current.get("state") == "launching":
+                        failure_code = "endpoint_start_incomplete"
+                        failure_message = (
+                            "The previous endpoint start did not reach initialization. "
+                            "Select Retry to start a new attempt."
+                        )
+                        state.write_endpoint({
+                            **current, "state": "failed",
+                            "updated_utc": time.strftime(
+                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            "error_code": failure_code, "error": failure_message,
+                            "failure_stage": "endpoint", "recovery_action": "retry",
+                        })
+                    raise ControlApiError(
+                        409, failure_code, failure_message, stage=failure_stage,
+                        recoverable=True, primary_action=failure_action,
+                    )
+
+                try:
+                    if member_token_file is None:
+                        state.relay.status(code)
+                except RelayError as error:
+                    raise relay_api_error(error) from error
+
+                state.endpoint_state.unlink(missing_ok=True)
+                state.party_state.unlink(missing_ok=True)
+                launch_nonce = secrets.token_hex(16)
+                state.endpoint_launch_ack.unlink(missing_ok=True)
+                stdout_path = state.endpoint_launches / f"{launch_nonce}.out.log"
+                stderr_path = state.endpoint_launches / f"{launch_nonce}.err.log"
+                record_path = state.endpoint_launches / f"{launch_nonce}.json"
+                launch_record = {
+                    "schema": 1, "launch_nonce": launch_nonce,
+                    "attempt_id": launch_key, "status": "launching",
+                    "tunnel_seat": plan["tunnel_seat"],
+                    "switch_room_role": plan["switch_room_role"],
+                    "usb_id": plan["usb_id"],
+                    "started_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "stdout": stdout_path.name, "stderr": stderr_path.name,
+                }
+
+                def write_launch_record(**updates) -> None:
+                    launch_record.update(updates)
+                    temporary = record_path.with_suffix(".json.tmp")
+                    temporary.write_text(
+                        json.dumps(launch_record, separators=(",", ":")) + "\n",
+                        encoding="utf-8",
+                    )
+                    temporary.replace(record_path)
+
+                write_launch_record()
+                state.write_endpoint({
+                    "state": "launching",
+                    "updated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "process_kind": "endpoint-launch",
+                    "session_id": code, "attempt_id": launch_key,
+                    "launch_nonce": launch_nonce,
+                    "tunnel_seat": plan["tunnel_seat"],
+                    "switch_room_role": plan["switch_room_role"],
+                    "usb_id": plan["usb_id"],
+                    "allow_experimental_hardware": allow_experimental_hardware,
+                    "radio_checked": False, "tunnel_connected": False,
+                    "failure_stage": None, "recovery_action": None,
+                })
+                command = endpoint_command(
+                    plan["tunnel_seat"], code, state.relay_url, plan["usb_id"],
+                    state.endpoint_state, switch_room_role=plan["switch_room_role"],
+                    party_state_file=state.party_state, attempt_id=launch_key,
+                    member_token_file=member_token_file,
+                    allow_experimental_hardware=allow_experimental_hardware,
+                    launch_nonce=launch_nonce,
+                    launch_ack_file=state.endpoint_launch_ack,
+                )
+                try:
+                    with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+                        process = subprocess.Popen(
+                            command, cwd=Path(__file__).resolve().parents[1],
+                            stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
+                        )
+                except OSError as error:
+                    message = f"The Switch endpoint process could not be launched: {error}"
+                    state.write_endpoint({
+                        **state.read_endpoint(), "state": "failed",
+                        "updated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "error_code": "endpoint_start_failed", "error": message,
+                        "failure_stage": "endpoint", "recovery_action": "retry",
+                    })
+                    write_launch_record(status="failed", error_code="endpoint_start_failed")
+                    state.log.event(
+                        "endpoint_launch_failed", level="error", attempt_id=launch_key,
+                        launch_nonce=launch_nonce, error=type(error).__name__,
+                    )
+                    state.release_hardware()
+                    raise ControlApiError(
+                        503, "endpoint_start_failed", message, stage="endpoint",
+                        recoverable=True, primary_action="retry",
+                    ) from error
+                state.endpoint = process
+                state.endpoint_session = code
+                state.write_endpoint({
+                    **state.read_endpoint(), "launcher_pid": process.pid,
+                })
+                write_launch_record(launcher_pid=process.pid)
+
+            def stop_process() -> None:
+                if process.poll() is not None:
+                    return
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
+
+            def fail_start(code_value: str, message: str, *, stage: str = "endpoint",
+                           action: str = "retry", exit_code: int | None = None) -> None:
+                stop_process()
+                detail = launch_failure_detail(stdout_path, stderr_path)
+                if detail and detail.casefold() not in message.casefold():
+                    message = f"{message} {detail}"
+                with state.lock:
+                    current_state = state.read_endpoint()
+                    if (current_state.get("launch_nonce") == launch_nonce and
+                            current_state.get("state") == "failed" and
+                            current_state.get("process_kind") == "rfu-endpoint"):
+                        code_value = str(current_state.get("error_code") or code_value)
+                        message = str(current_state.get("error") or message)
+                        stage = str(current_state.get("failure_stage") or stage)
+                        action = str(current_state.get("recovery_action") or action)
+                    else:
+                        state.write_endpoint({
+                            **current_state, "state": "failed",
+                            "updated_utc": time.strftime(
+                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            "process_kind": "endpoint-launch",
+                            "session_id": code, "attempt_id": launch_key,
+                            "launch_nonce": launch_nonce, "launcher_pid": process.pid,
+                            "error_code": code_value, "error": message,
+                            "failure_stage": stage, "recovery_action": action,
+                            "launcher_exit_code": exit_code,
+                            "radio_checked": False, "tunnel_connected": False,
+                        })
+                    if state.endpoint is process:
+                        state.endpoint = None
+                write_launch_record(
+                    status="failed", error_code=code_value,
+                    exit_code=exit_code, finished_utc=time.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                )
+                state.log.event(
+                    "endpoint_launch_failed", level="error", attempt_id=launch_key,
+                    launch_nonce=launch_nonce, launcher_pid=process.pid,
+                    exit_code=exit_code, code=code_value, stage=stage,
+                    output=detail,
+                )
+                state.endpoint_launch_ack.unlink(missing_ok=True)
+                state.release_hardware()
+                raise ControlApiError(
+                    503, code_value, message, stage=stage,
+                    recoverable=True, primary_action=action,
+                )
+
+            # usbipd publishes a hot-attached USB device before some firmware-backed
+            # Wi-Fi drivers finish probing. Keep this outer budget longer than the
+            # radio wrapper's bounded 30-second probe gate, while still containing a
+            # genuinely stuck endpoint launch.
+            deadline = time.monotonic() + ENDPOINT_STARTUP_TIMEOUT_SECONDS
+            acknowledgement = None
+            initialized = None
+            while time.monotonic() < deadline:
+                if state.launch_was_canceled(generation):
+                    fail_start(
+                        "endpoint_start_canceled", "The Switch endpoint start was canceled.",
+                        exit_code=process.poll(),
+                    )
+                try:
+                    candidate = json.loads(
+                        state.endpoint_launch_ack.read_text(encoding="utf-8-sig"))
+                    if (
+                        candidate.get("schema") == 2 and
+                        candidate.get("stage") == "radio_gate_passed" and
+                        candidate.get("launch_nonce") == launch_nonce and
+                        isinstance(candidate.get("launcher_pid"), int)
+                    ):
+                        acknowledgement = candidate
+                except (OSError, json.JSONDecodeError):
+                    pass
+
+                candidate_state = state.read_endpoint()
+                if (
+                    candidate_state.get("process_kind") == "rfu-endpoint" and
+                    candidate_state.get("launch_nonce") == launch_nonce and
+                    candidate_state.get("session_id") == code and
+                    candidate_state.get("attempt_id") == launch_key and
+                    isinstance(candidate_state.get("pid"), int) and
+                    isinstance(candidate_state.get("process_start_ticks"), int)
+                ):
+                    initialized = candidate_state
+
+                exit_code = process.poll()
+                if initialized and initialized.get("state") == "failed":
+                    fail_start(
+                        str(initialized.get("error_code") or "endpoint_start_failed"),
+                        str(initialized.get("error") or
+                            "The Switch endpoint failed during initialization."),
+                        stage=str(initialized.get("failure_stage") or "endpoint"),
+                        action=str(initialized.get("recovery_action") or "retry"),
+                        exit_code=exit_code,
+                    )
+                if acknowledgement and initialized and exit_code is None:
+                    break
+                if exit_code is not None:
+                    if state.launch_was_canceled(generation):
+                        fail_start(
+                            "endpoint_start_canceled",
+                            "The Switch endpoint start was canceled.",
+                            exit_code=exit_code,
+                        )
+                    stage = "radio" if acknowledgement is None else "endpoint"
+                    action = "recheck_adapter" if stage == "radio" else "retry"
+                    fail_start(
+                        "endpoint_start_failed",
+                        "The Switch endpoint exited before initialization.",
+                        stage=stage, action=action, exit_code=exit_code,
+                    )
+                time.sleep(0.025)
+            else:
+                fail_start(
+                    "endpoint_start_failed",
+                    "The Switch endpoint did not initialize before the startup deadline.",
+                    stage="endpoint" if acknowledgement else "radio",
+                    action="retry" if acknowledgement else "recheck_adapter",
+                    exit_code=process.poll(),
+                )
+
+            state.endpoint_launch_ack.unlink(missing_ok=True)
+            write_launch_record(
+                status="initialized", endpoint_pid=initialized["pid"],
+                gate_launcher_pid=acknowledgement["launcher_pid"],
+                initialized_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            )
+            state.log.event(
+                "session_started", passcode=code, attempt_id=launch_key,
+                launch_nonce=launch_nonce, tunnel_seat=plan["tunnel_seat"],
+                switch_room_role=plan["switch_room_role"], usb_id=plan["usb_id"],
+                host_engine=plan["host_engine"],
+                experimental_hardware=plan["experimental_hardware"],
+                launcher_pid=process.pid, endpoint_pid=initialized["pid"],
+            )
+            return {"status": initialized.get("state", "initializing"),
+                    "session_id": code, "hardware": plan,
+                    "run_id": state.log.run_id}
+
+    def launch_authoritative_attempt(state: Runtime, room: dict, *,
+                                     allow_launch: bool = True,
+                                     retry: bool = False,
+                                     prepared_usb_id: str | None = None,
+                                     launch_generation: int | None = None) -> dict | None:
         with state.attempt_lock:
             attempt = room.get("attempt") or {}
             endpoint_running = state.endpoint_running()
             if attempt.get("phase") in TERMINAL_ATTEMPT_PHASES:
-                if state.endpoint_session == room.get("room_code"):
-                    state.stop_endpoint()
                 if attempt.get("phase") == "failed":
                     state.record_authoritative_failure(attempt)
+                if state.endpoint_session == room.get("room_code"):
+                    state.stop_endpoint()
+                    state.release_hardware()
                 return None
             if not attempt.get("role_locked") or attempt.get("phase") is None:
                 return None
@@ -1167,12 +1660,23 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                     409, "session_active", "a different Switch endpoint session is already running",
                     stage="session", recoverable=True, primary_action="end_session",
                 )
-            selected_usb_id = attach_selected_hardware(state)
-            return launch_session(
-                state, code=room["room_code"], tunnel_seat=local["seat"],
-                switch_room_role=switch_role, usb_id=selected_usb_id,
-                attempt_id=attempt["attempt_id"], member_token_file=state.member_token_file,
-            )
+            if not allow_launch:
+                return None
+            generation = (state.current_launch_generation() if launch_generation is None
+                          else launch_generation)
+            selected_usb_id = (attach_selected_hardware(state) if prepared_usb_id is None
+                               else prepared_usb_id)
+            try:
+                return launch_session(
+                    state, code=room["room_code"], tunnel_seat=local["seat"],
+                    switch_room_role=switch_role, usb_id=selected_usb_id,
+                    attempt_id=attempt["attempt_id"], member_token_file=state.member_token_file,
+                    retry=retry, launch_generation=generation,
+                )
+            except Exception:
+                if not state.endpoint_running():
+                    state.release_hardware()
+                raise
 
     def authoritative_command(state: Runtime, path: str, payload: dict | None = None,
                               method: str = "POST") -> dict:
@@ -1375,7 +1879,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                     expected_version=room["room_version"])
                 state.last_authority_heartbeat = time.monotonic()
             room = control_room(room)
-            launch_authoritative_attempt(state, room)
+            launch_authoritative_attempt(state, room, allow_launch=False)
             return room
         except RelayError as error:
             raise relay_api_error(error) from error
@@ -1402,6 +1906,21 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 "the online room service must be updated for manual Switch roles",
                 stage="relay", recoverable=False, primary_action="update",
             )
+        launch_generation = state.current_launch_generation()
+        selected_usb_id = attach_selected_hardware(state)
+        if selected_usb_id is None:
+            raise ControlApiError(
+                409, "adapter_selection_required",
+                "Select an available Wi-Fi adapter in Settings",
+                stage="hardware", recoverable=True, primary_action="select_adapter",
+            )
+        if state.launch_was_canceled(launch_generation):
+            state.release_hardware()
+            raise ControlApiError(
+                409, "endpoint_start_canceled", "the Switch endpoint start was canceled",
+                stage="endpoint", recoverable=True, primary_action="retry",
+            )
+        ready_published = False
         try:
             room = state.authoritative_room()
             credentials = state.read_authority()
@@ -1409,17 +1928,51 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 room["room_id"], credentials["member_token"], "/ready", {
                     "ready": True, "switch_room_role": payload.switch_room_role,
                 }, expected_version=room["room_version"])
-            result = launch_authoritative_attempt(state, room) or {
+            ready_published = True
+            result = launch_authoritative_attempt(
+                state, room, prepared_usb_id=selected_usb_id,
+                launch_generation=launch_generation,
+            ) or {
                 "status": room.get("state", "waiting_for_complementary_role"),
                 "run_id": state.log.run_id,
             }
             return {**result, "room": room}
         except RelayError as error:
+            state.release_hardware()
             raise relay_api_error(error) from error
+        except Exception as error:
+            # Once both members become ready, a failed local launch must become the one
+            # authoritative terminal failure. Publishing that phase also rolls both readiness
+            # flags back without immediately erasing the failure that the partner must see.
+            if ready_published:
+                try:
+                    current_room = state.authoritative_room(terminal_cleanup=False)
+                    attempt = current_room.get("attempt")
+                    if attempt and attempt.get("phase") not in TERMINAL_ATTEMPT_PHASES:
+                        credentials = state.read_authority()
+                        failure_code = (
+                            error.code if isinstance(error, ControlApiError) else
+                            str(state.read_endpoint().get("error_code") or "session.failed")
+                        )
+                        state.relay.room_command(
+                            current_room["room_id"], credentials["member_token"],
+                            f"/attempts/{attempt['attempt_id']}:phase", {
+                                "phase": "failed", "failure_code": failure_code,
+                            }, expected_version=current_room["room_version"],
+                        )
+                except RelayError as rollback_error:
+                    state.log.event(
+                        "authoritative_launch_failure_sync_failed", level="warning",
+                        code=rollback_error.code,
+                        correlation_id=rollback_error.correlation_id,
+                    )
+            state.release_hardware()
+            raise
 
     @app.delete("/api/v1/trade-room/members/me")
     def leave_trade_room(request: Request) -> dict:
         state = runtime(request)
+        end_local_session(state)
         room = release_authoritative_room(state, "/members/me")
         state.clear_authority()
         return {"status": "left", "room_version": room.get("room_version"),
@@ -1428,6 +1981,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     @app.delete("/api/v1/trade-room")
     def close_trade_room(request: Request) -> dict:
         state = runtime(request)
+        end_local_session(state)
         room = release_authoritative_room(state, "")
         state.clear_authority()
         return {"status": "closed", "room_version": room.get("room_version"),
@@ -1436,8 +1990,8 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     @app.delete("/api/v1/trade-room/local-authority")
     def abandon_local_authority(request: Request) -> dict:
         state = runtime(request)
+        end_local_session(state)
         with state.lock:
-            state.stop_endpoint()
             state.clear_authority()
         return {"status": "abandoned", "run_id": state.log.run_id}
 
@@ -1475,57 +2029,89 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     @app.post("/api/v1/hardware/diagnostics")
     def hardware_diagnostics(payload: HardwareDiagnosticRequest, request: Request) -> dict:
         state = runtime(request)
-        usb_id = payload.usb_id.lower() if payload.usb_id else next(
-            profile.usb_id for profile in state.profiles if profile.auto_select)
-        diagnostic_root = state.log.run_dir / "hardware-diagnostics"
-        command = hardware_diagnostic_command(
-            usb_id, payload.mode, payload.role, diagnostic_root,
-            allow_experimental_hardware=payload.allow_experimental_hardware,
-        )
-        state.log.event(
-            "hardware_diagnostic_started", usb_id=usb_id, mode=payload.mode,
-            experimental_hardware=payload.allow_experimental_hardware,
-        )
+        if state.endpoint_running():
+            raise ControlApiError(
+                409, "session_active", "End the current connection before checking the adapter",
+                stage="hardware", recoverable=True, primary_action="end_session",
+            )
+        requested_usb_id = payload.usb_id.lower() if payload.usb_id else None
+        selected_usb_id = attach_selected_hardware(state)
+        release_after = state.owned_hardware is not None
         try:
-            result = subprocess.run(
-                command, cwd=Path(__file__).resolve().parents[1], capture_output=True,
-                text=True, timeout={"quick": 35, "certify": 70, "full": 130}[payload.mode],
-                check=False,
+            if selected_usb_id is None:
+                raise ControlApiError(
+                    409, "adapter_selection_required",
+                    "Select an available Wi-Fi adapter in Settings",
+                    stage="hardware", recoverable=True, primary_action="select_adapter",
+                )
+            if requested_usb_id and requested_usb_id != selected_usb_id:
+                raise ControlApiError(
+                    409, "adapter_selection_mismatch",
+                    "The diagnostic profile does not match the selected Windows adapter",
+                    stage="hardware", recoverable=True, primary_action="select_adapter",
+                )
+            usb_id = selected_usb_id
+            diagnostic_root = state.log.run_dir / "hardware-diagnostics"
+            command = hardware_diagnostic_command(
+                usb_id, payload.mode, payload.role, diagnostic_root,
+                allow_experimental_hardware=payload.allow_experimental_hardware,
+                active_check=True,
             )
-        except (OSError, subprocess.TimeoutExpired) as error:
             state.log.event(
-                "hardware_diagnostic_failed", level="error", usb_id=usb_id,
-                error=type(error).__name__,
+                "hardware_diagnostic_started", usb_id=usb_id, mode=payload.mode,
+                experimental_hardware=payload.allow_experimental_hardware,
             )
-            raise HTTPException(status_code=503, detail="hardware diagnostics did not complete") from error
-        report = None
-        for line in reversed(result.stdout.splitlines()):
             try:
-                candidate = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(candidate, dict) and candidate.get("contract_version") == "hardware-diagnostic.v1":
-                report = candidate
-                break
-        if report is None:
+                result = subprocess.run(
+                    command, cwd=Path(__file__).resolve().parents[1], capture_output=True,
+                    text=True, timeout={"quick": 35, "certify": 70, "full": 130}[payload.mode],
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                state.log.event(
+                    "hardware_diagnostic_failed", level="error", usb_id=usb_id,
+                    error=type(error).__name__,
+                )
+                raise ControlApiError(
+                    503, "hardware_diagnostic_unavailable",
+                    "The adapter check did not complete",
+                    stage="hardware", recoverable=True, primary_action="retry",
+                ) from error
+            report = None
+            for line in reversed(result.stdout.splitlines()):
+                try:
+                    candidate = json.loads(line)
+                except ValueError:
+                    continue
+                if (isinstance(candidate, dict) and
+                        candidate.get("contract_version") == "hardware-diagnostic.v1"):
+                    report = candidate
+                    break
+            if report is None:
+                state.log.event(
+                    "hardware_diagnostic_failed", level="error", usb_id=usb_id,
+                    exit_code=result.returncode, output=result.stdout[-2000:],
+                    error=result.stderr[-2000:],
+                )
+                raise ControlApiError(
+                    503, "hardware_diagnostic_invalid",
+                    "The adapter check produced no machine-readable report",
+                    stage="hardware", recoverable=True,
+                    primary_action="export_support_bundle",
+                )
+            report_path = diagnostic_root / report["run_id"] / "diagnostic-report.json"
             state.log.event(
-                "hardware_diagnostic_failed", level="error", usb_id=usb_id,
-                exit_code=result.returncode,
+                "hardware_diagnostic_completed", usb_id=usb_id,
+                diagnostic_run_id=report["run_id"], outcome=report["overall_status"],
             )
-            raise HTTPException(
-                status_code=503,
-                detail="hardware diagnostics produced no machine-readable report",
-            )
-        report_path = diagnostic_root / report["run_id"] / "diagnostic-report.json"
-        state.log.event(
-            "hardware_diagnostic_completed", usb_id=usb_id,
-            diagnostic_run_id=report["run_id"], outcome=report["overall_status"],
-        )
-        upload = publish_diagnostic(state, "hardware-diagnostic", report_path)
-        return {
-            "report": report, "report_path": str(report_path),
-            "relay_upload": upload, "run_id": state.log.run_id,
-        }
+            upload = publish_diagnostic(state, "hardware-diagnostic", report_path)
+            return {
+                "report": report, "report_path": str(report_path),
+                "relay_upload": upload, "run_id": state.log.run_id,
+            }
+        finally:
+            if release_after:
+                state.release_hardware()
 
     @app.post("/api/hardware/diagnostics")
     def hardware_diagnostics_legacy(payload: HardwareDiagnosticRequest, request: Request) -> dict:
@@ -1599,8 +2185,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     def stop_session(request: Request) -> dict:
         state = runtime(request)
         state.log.event("session_stop_requested")
-        with state.lock:
-            state.stop_endpoint()
+        end_local_session(state)
         try:
             room = state.authoritative_room()
             credentials = state.read_authority()
@@ -1616,7 +2201,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             state.relay.room_command(
                 room["room_id"], credentials["member_token"], "/ready", {"ready": False},
                 expected_version=room["room_version"])
-            state.last_published_phase = "canceled"
+            state.last_published_phase = None
         except RelayError:
             state.log.event("authority_teardown_sync_failed", level="warning")
         return {"status": "stopped", "run_id": state.log.run_id}
@@ -1667,7 +2252,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         if state.read_authority().get("member_token"):
             try:
                 room = state.authoritative_room()
-                if result := launch_authoritative_attempt(state, room):
+                if result := launch_authoritative_attempt(state, room, retry=True):
                     return {**result, "room": room}
                 local = next(
                     (member for member in room.get("members", []) if member.get("is_local")), {})
@@ -1690,45 +2275,78 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             switch_room_role=previous["switch_room_role"], usb_id=previous.get("usb_id"),
             attempt_id=previous.get("attempt_id"),
             allow_experimental_hardware=bool(previous.get("allow_experimental_hardware")),
+            retry=True,
         )
 
     @app.post("/api/v1/app/repair")
     def repair_app(payload: RepairRequest, request: Request) -> dict:
         state = runtime(request)
+        if state.endpoint_running():
+            raise ControlApiError(
+                409, "session_active", "End the current connection before checking the adapter",
+                stage="hardware", recoverable=True, primary_action="end_session",
+            )
         previous = state.read_endpoint()
         switch_role = previous.get("switch_room_role", "creator")
         selected_usb_id = attach_selected_hardware(state)
+        release_after = state.owned_hardware is not None
         try:
-            plan = runtime_plan(
-                previous.get("tunnel_seat", "member_a"),
-                payload.usb_id or previous.get("usb_id") or selected_usb_id,
-                switch_room_role=switch_role,
-                allow_experimental_hardware=payload.allow_experimental_hardware,
-            )
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        prepare = Path(__file__).resolve().parents[1] / "scripts" / "wsl-radio-prepare.sh"
-        command = [str(prepare), "--usb-id", plan["usb_id"], "--role", plan["radio_role"],
-                   "--reset-on-rx-failure"]
-        if payload.allow_experimental_hardware:
-            command.append("--allow-experimental-hardware")
-        state.log.event("repair_started", action=payload.action, usb_id=plan["usb_id"])
-        try:
+            if selected_usb_id is None:
+                raise ControlApiError(
+                    409, "adapter_selection_required",
+                    "Select an available Wi-Fi adapter in Settings",
+                    stage="hardware", recoverable=True, primary_action="select_adapter",
+                )
+            if payload.usb_id and payload.usb_id.lower() != selected_usb_id:
+                raise ControlApiError(
+                    409, "adapter_selection_mismatch",
+                    "The adapter check does not match the selected Windows adapter",
+                    stage="hardware", recoverable=True, primary_action="select_adapter",
+                )
+            try:
+                plan = runtime_plan(
+                    previous.get("tunnel_seat", "member_a"),
+                    payload.usb_id or previous.get("usb_id") or selected_usb_id,
+                    switch_room_role=switch_role,
+                    allow_experimental_hardware=payload.allow_experimental_hardware,
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            prepare = Path(__file__).resolve().parents[1] / "scripts" / "wsl-radio-prepare.sh"
+            command = [str(prepare), "--usb-id", plan["usb_id"], "--role", plan["radio_role"],
+                       "--reset-on-rx-failure"]
+            if payload.allow_experimental_hardware:
+                command.append("--allow-experimental-hardware")
+            state.log.event("repair_started", action=payload.action, usb_id=plan["usb_id"])
             result = subprocess.run(
                 command, cwd=prepare.parent.parent, capture_output=True, text=True,
                 timeout=45, check=False,
             )
+            if result.returncode != 0:
+                state.log.event(
+                    "repair_failed", level="error", action=payload.action,
+                    exit_code=result.returncode, output=result.stdout[-2000:],
+                    error=result.stderr[-2000:],
+                )
+                raise ControlApiError(
+                    503, "adapter_health_gate_failed",
+                    "The adapter health gate did not pass",
+                    stage="radio", recoverable=True,
+                    primary_action="export_support_bundle",
+                )
+            state.log.event("repair_completed", action=payload.action, usb_id=plan["usb_id"])
+            return {"status": "repaired", "action": payload.action,
+                    "usb_id": plan["usb_id"], "run_id": state.log.run_id}
         except (OSError, subprocess.TimeoutExpired) as error:
             state.log.event("repair_failed", level="error", action=payload.action,
                             error=type(error).__name__)
-            raise HTTPException(status_code=503, detail="adapter repair did not complete") from error
-        if result.returncode != 0:
-            state.log.event("repair_failed", level="error", action=payload.action,
-                            exit_code=result.returncode)
-            raise HTTPException(status_code=503, detail="adapter health gate did not pass")
-        state.log.event("repair_completed", action=payload.action, usb_id=plan["usb_id"])
-        return {"status": "repaired", "action": payload.action,
-                "usb_id": plan["usb_id"], "run_id": state.log.run_id}
+            raise ControlApiError(
+                503, "adapter_check_unavailable", "The adapter check did not complete",
+                stage="radio", recoverable=True, primary_action="retry",
+            ) from error
+        finally:
+            if release_after:
+                state.release_hardware()
 
     @app.post("/api/support-bundle")
     def support_bundle(request: Request) -> dict:
@@ -1770,8 +2388,15 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     @app.post("/api/v1/app/shutdown")
     def shutdown_app(request: Request, background_tasks: BackgroundTasks) -> dict:
         state = runtime(request)
+        cleanup_code = None
+        try:
+            end_local_session(state)
+        except ControlApiError as error:
+            cleanup_code = error.code
+            state.log.event(
+                "hardware_shutdown_cleanup_failed", level="error", code=error.code,
+            )
         with state.lock:
-            state.stop_endpoint()
             state.shutdown_requested = True
         state.log.event("full_shutdown_requested")
         if state.relay.base_url in {"http://127.0.0.1:8788", "http://localhost:8788"}:
@@ -1781,7 +2406,8 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 state.log.event("development_relay_shutdown_skipped", reason=str(error))
         if os.environ.get("SWITCHTRADE_ALLOW_PROCESS_SHUTDOWN") == "1":
             background_tasks.add_task(lambda: (time.sleep(0.1), os.kill(os.getpid(), 15)))
-        return {"status": "stopping", "run_id": state.log.run_id}
+        return {"status": "stopping", "cleanup_code": cleanup_code,
+                "run_id": state.log.run_id}
 
     return app
 

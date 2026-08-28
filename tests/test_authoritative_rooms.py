@@ -408,6 +408,33 @@ class AuthoritativeRoomTests(unittest.TestCase):
             "radio.switch_room_not_found",
         )
 
+    def test_specific_endpoint_failure_refines_peer_loss_and_end_retires_attempt(self):
+        first = self._create()
+        second = self._join(first["room"]["room_code"])
+        room_id = first["room"]["room_id"]
+        for credential, role in ((first, "creator"), (second, "finder")):
+            room = self._mutate(room_id, credential["member_token"], "/ready", {
+                "ready": True, "switch_room_role": role,
+            }).json()
+        attempt_id = room["attempt"]["attempt_id"]
+
+        self.assertTrue(relay_server.authority.fail_transport_attempt(
+            room_id, attempt_id, "relay.peer_lost"))
+        refined = self._mutate(
+            room_id, first["member_token"], f"/attempts/{attempt_id}:phase", {
+                "phase": "failed", "failure_code": "radio.switch_room_not_found",
+            })
+        self.assertEqual(refined.status_code, 200, refined.text)
+        self.assertEqual(
+            refined.json()["attempt"]["recoverable_error"],
+            "radio.switch_room_not_found",
+        )
+
+        ended = self._mutate(room_id, first["member_token"], "/ready", {"ready": False})
+        self.assertEqual(ended.status_code, 200, ended.text)
+        self.assertIsNone(ended.json()["attempt"])
+        self.assertEqual(ended.json()["state"], "ready_check")
+
     def test_endpoint_failure_code_rejects_unstructured_input(self):
         first = self._create()
         second = self._join(first["room"]["room_code"])

@@ -116,6 +116,7 @@ public partial class MainWindow : Window
         if (_allowClose) return;
         e.Cancel = true;
         if (!await _viewModel.CanCloseAsync()) return;
+        await BackendLauncher.StopAsync();
         _allowClose = true;
         Close();
     }

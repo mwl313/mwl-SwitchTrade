@@ -190,6 +190,39 @@ public sealed class BackendLauncher
         finally { if (ownsMutex) launchMutex.ReleaseMutex(); }
     }
 
+    public static async Task StopAsync(CancellationToken cancellationToken = default)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(20));
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(18) };
+            using var content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+            using var response = await client.PostAsync(
+                "http://127.0.0.1:8787/api/v1/app/shutdown", content, deadline.Token);
+        }
+        catch (HttpRequestException) { }
+        catch (TaskCanceledException) { }
+
+        foreach (var process in RunningProcesses.Values.ToArray())
+        {
+            try
+            {
+                if (!process.HasExited)
+                    await process.WaitForExitAsync(deadline.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                try
+                {
+                    if (!process.HasExited) process.Kill(entireProcessTree: true);
+                }
+                catch (InvalidOperationException) { }
+            }
+            catch (InvalidOperationException) { }
+        }
+    }
+
     private static async Task<ProcessResult> RunAsync(
         string fileName, IEnumerable<string> arguments, TimeSpan timeout, CancellationToken cancellationToken)
     {

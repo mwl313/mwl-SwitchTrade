@@ -235,10 +235,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 if (CurrentScreen is RecoveryScreenViewModel unavailableRecovery) unavailableRecovery.NotifyRecoveryChanged();
                 return;
             }
-            ApplyStatus(status);
+            AuthoritativeRoomProjection? room = null;
             if (_activeTradeRoom is not null)
             {
-                AuthoritativeRoomProjection? room;
                 try
                 {
                     room = await Gateway.TryGetTradeRoomAsync();
@@ -248,6 +247,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                     ShowAuthorityRecovery(error);
                     return;
                 }
+            }
+            ApplyStatus(status);
+            if (_activeTradeRoom is not null)
+            {
                 if (room?.State is "closed" or "expired")
                 {
                     RoomCoordinator.ForceClear();
@@ -256,7 +259,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                     ShowHome();
                     Announce("This Trade Room was closed remotely.");
                 }
-                else if (room is not null) RoomCoordinator.ApplyRoom(room);
+                else if (room is not null)
+                {
+                    RoomCoordinator.ApplyRoom(room);
+                    if (room.RoleLocked && !status.EndpointProcessRunning)
+                        await RoomCoordinator.EnsureAuthorizedLaunchAsync();
+                }
             }
             await RefreshPartiesAsync();
         }

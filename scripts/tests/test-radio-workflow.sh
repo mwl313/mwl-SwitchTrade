@@ -106,6 +106,35 @@ run_prepare "$cold" -- bash -c \
 assert_contains "$cold/output" "cold-loading in-tree module rtl8xxxu"
 assert_contains "$cold/output" "wlan7 0bda:818b phy7"
 
+probing="$(new_case probing)"
+probing_dev="$probing/sys/bus/usb/devices/1-1"
+mkdir -p "$probing/sys/class/ieee80211/phy7"
+ln -sfn "$probing_dev/1-1:1.0" "$probing/sys/class/ieee80211/phy7/device"
+ln -sfn "$probing/sys/drivers/rtl8xxxu" "$probing_dev/1-1:1.0/driver"
+(
+    sleep 0.3
+    mkdir -p "$probing/sys/class/net/wlan7"
+    ln -sfn "$probing_dev/1-1:1.0" "$probing/sys/class/net/wlan7/device"
+    ln -sfn "$probing/sys/class/ieee80211/phy7" "$probing/sys/class/net/wlan7/phy80211"
+    printf '02:00:00:00:00:07\n' > "$probing/sys/class/net/wlan7/address"
+) &
+probe_pid=$!
+# usbipd can publish the USB device and driver binding before probe creates the netdev.
+run_prepare "$probing" -- true > "$probing/output" 2>&1
+wait "$probe_pid"
+assert_contains "$probing/output" "waiting for in-progress rtl8xxxu probe"
+assert_contains "$probing/output" "driver=rtl8xxxu iface=wlan7"
+
+stuck_probe="$(new_case stuck-probe)"
+stuck_probe_dev="$stuck_probe/sys/bus/usb/devices/1-1"
+ln -sfn "$stuck_probe/sys/drivers/rtl8xxxu" "$stuck_probe_dev/1-1:1.0/driver"
+if RADIO_DRIVER_PROBE_TIMEOUT=1 run_prepare "$stuck_probe" -- true \
+    > "$stuck_probe/output" 2>&1; then
+    fail "a bound driver with no PHY or netdev unexpectedly passed"
+fi
+assert_contains "$stuck_probe/output" "DRIVER_PROBE_TIMEOUT"
+assert_contains "$stuck_probe/output" "did not create a PHY or interface within 1s"
+
 quiet="$(new_case quiet)"
 if RX_MODE=fail run_prepare "$quiet" -- true > "$quiet/output" 2>&1; then
     fail "packetless normal launch unexpectedly passed"

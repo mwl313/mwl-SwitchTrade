@@ -682,6 +682,10 @@ class AuthorityStore:
                 event = "member.ready" if ready else "member.not_ready"
                 active = [m for m in room["members"] if m["online_state"] != "left"]
                 current = room.get("attempt")
+                if (not ready and current and
+                        current.get("phase") in TERMINAL_ATTEMPT_PHASES):
+                    room["attempt"] = None
+                    current = None
                 if current and current.get("phase") not in {"completed", "canceled", "failed"}:
                     if (member["ready_state"] != "ready" or
                             member["switch_room_role"] != self._public(room, member_id)["attempt"]["local_switch_role"]):
@@ -753,25 +757,33 @@ class AuthorityStore:
                         raise AuthorityError(400, "invalid attempt failure code")
                 current_phase = str(room["attempt"].get("phase", ""))
                 if current_phase == phase:
-                    response = self._public(room, member_id)
-                    self._remember(scope, command_id, response)
-                    return response
-                if (current_phase in TERMINAL_ATTEMPT_PHASES or
+                    if (phase == "failed" and
+                            room["attempt"].get("recoverable_error") == "relay.peer_lost" and
+                            failure_code != "relay.peer_lost"):
+                        room["attempt"]["recoverable_error"] = failure_code
+                        room["attempt"]["updated_at"] = _utc()
+                        event = "attempt.failure_refined"
+                    else:
+                        response = self._public(room, member_id)
+                        self._remember(scope, command_id, response)
+                        return response
+                elif (current_phase in TERMINAL_ATTEMPT_PHASES or
                         ATTEMPT_PHASE_ORDER.get(current_phase, -1) > ATTEMPT_PHASE_ORDER[phase]):
                     raise AuthorityError(409, "attempt phase cannot move backward")
-                room["attempt"]["phase"] = phase
-                if failure_code is not None:
-                    room["attempt"]["recoverable_error"] = failure_code
-                room["attempt"]["updated_at"] = _utc()
-                if phase == "trading_room":
-                    room["state"] = "trading"
-                elif phase in {"completed", "canceled", "failed"}:
-                    room["state"] = "ready_check"
-                    for active_member in room["members"]:
-                        if active_member["online_state"] != "left":
-                            active_member["ready_state"] = "not_ready"
-                            active_member["switch_room_role"] = None
-                event = f"attempt.{phase}"
+                else:
+                    room["attempt"]["phase"] = phase
+                    if failure_code is not None:
+                        room["attempt"]["recoverable_error"] = failure_code
+                    room["attempt"]["updated_at"] = _utc()
+                    if phase == "trading_room":
+                        room["state"] = "trading"
+                    elif phase in {"completed", "canceled", "failed"}:
+                        room["state"] = "ready_check"
+                        for active_member in room["members"]:
+                            if active_member["online_state"] != "left":
+                                active_member["ready_state"] = "not_ready"
+                                active_member["switch_room_role"] = None
+                    event = f"attempt.{phase}"
             elif action == "leave":
                 if room["owner_member_id"] == member_id:
                     raise AuthorityError(409, "the room owner must close the room")

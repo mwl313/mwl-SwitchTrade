@@ -46,6 +46,8 @@ def _utc_now() -> datetime:
 
 
 def _redact(value: Any, name: str = "") -> Any:
+    if value is None:
+        return None
     if any(fragment in name.lower() for fragment in SENSITIVE_NAMES):
         return "<redacted>"
     if isinstance(value, dict):
@@ -66,6 +68,20 @@ def redact_text(value: str) -> str:
     for pattern, replacement in TEXT_SECRETS:
         value = pattern.sub(replacement, value)
     return value
+
+
+def _bounded_support_text(path: Path, limit: int = 256_000) -> str:
+    """Read a bounded UTF-8 tail so a noisy child cannot inflate a support bundle."""
+    try:
+        with path.open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            size = stream.tell()
+            stream.seek(max(0, size - limit))
+            data = stream.read(limit)
+    except OSError:
+        return ""
+    prefix = f"[truncated {size - len(data)} bytes]\n" if size > len(data) else ""
+    return redact_text(prefix + data.decode("utf-8", errors="replace"))
 
 
 def _git_commit(repo: Path) -> str:
@@ -149,6 +165,14 @@ class RunLogger:
                 for path in sorted(run_dir.glob("diagnostic-*.txt")):
                     if path.is_file() and not path.is_symlink():
                         entries.append((path.relative_to(self.run_dir).as_posix(), path))
+        launch_root = self.run_dir / "endpoint-launches"
+        if launch_root.is_dir() and not launch_root.is_symlink():
+            allowed_launch_file = re.compile(
+                r"^[0-9a-f]{32}\.(?:json|out\.log|err\.log)$")
+            for path in sorted(launch_root.iterdir()):
+                if (path.is_file() and not path.is_symlink() and
+                        allowed_launch_file.fullmatch(path.name)):
+                    entries.append((path.relative_to(self.run_dir).as_posix(), path))
         for run_id in dict.fromkeys(related_run_ids or []):
             if not RUN_ID.fullmatch(run_id) or run_id == self.run_id:
                 continue
@@ -168,7 +192,7 @@ class RunLogger:
         with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
             for name, path in entries:
                 if path.is_file():
-                    bundle.writestr(name, redact_text(path.read_text(encoding="utf-8", errors="replace")))
+                    bundle.writestr(name, _bounded_support_text(path))
             bundle.writestr("privacy-manifest.json", json.dumps(manifest, indent=2) + "\n")
             if summary is not None:
                 bundle.writestr(

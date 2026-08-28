@@ -107,6 +107,7 @@ def _capture(logger: RunLogger, name: str, command: list[str],
 
 def diagnose_hardware(usb_id: str, *, mode: str = "quick", role: str = "host",
                       allow_experimental: bool = False,
+                      active_check: bool = False,
                       profile_path: str | Path = DEFAULT_PROFILE_PATH,
                       runs_root: str | Path | None = None,
                       runner: Callable = _default_runner) -> tuple[dict, RunLogger]:
@@ -122,7 +123,7 @@ def diagnose_hardware(usb_id: str, *, mode: str = "quick", role: str = "host",
     profile = profiles.get(usb_id)
     logger = RunLogger("hardware-diagnostic", runs_root, {
         "usb_id": usb_id, "mode": mode, "role": role,
-        "known_profile": profile is not None,
+        "known_profile": profile is not None, "active_check": active_check,
     })
     stages: list[dict] = []
     incompatibilities: list[dict] = []
@@ -147,6 +148,7 @@ def diagnose_hardware(usb_id: str, *, mode: str = "quick", role: str = "host",
             "The profile is eligible for this diagnostic mode.", profile_status=profile.status,
             host_engine=profile.host_engine,
         ))
+    can_mutate = profile is not None and profile.status not in BLOCKED_STATUSES
 
     uname_rc, uname = _capture(logger, "platform", ["uname", "-r"], runner)
     is_wsl = uname_rc == 0 and "microsoft" in uname.lower()
@@ -172,6 +174,15 @@ def diagnose_hardware(usb_id: str, *, mode: str = "quick", role: str = "host",
             "code": "USB_NOT_FOUND",
             "action": "Authorize and attach the selected Windows USB adapter before checking its Linux driver.",
         })
+
+    active_rx: tuple[int, str] | None = None
+    if active_check and usb_present and can_mutate:
+        command = [str(PREPARE), "--usb-id", usb_id, "--role", role,
+                   "--reset-on-rx-failure"]
+        if allow_experimental:
+            command.append("--allow-experimental-hardware")
+        command += ["--", "true"]
+        active_rx = _capture(logger, "actual-rx", command, runner, timeout=50)
 
     binding_command = [
         "bash", "-c",
@@ -293,8 +304,18 @@ def diagnose_hardware(usb_id: str, *, mode: str = "quick", role: str = "host",
         additional_codes=[item["code"] for item in known[1:]],
     ))
 
-    can_mutate = profile is not None and profile.status not in BLOCKED_STATUSES
-    if mode in {"certify", "full"} and can_mutate:
+    if active_rx is not None:
+        rx_rc, rx = active_rx
+        stages.append(_stage(
+            "actual_rx", "passed" if rx_rc == 0 else "failed",
+            "ACTUAL_RX_PASSED" if rx_rc == 0 else "ACTUAL_RX_FAILED",
+            "The production multi-channel actual-RX gate passed." if rx_rc == 0 else
+            "The actual-RX gate failed; inspect diagnostic-actual-rx.txt.",
+        ))
+        for item in classify_output(rx):
+            if item not in incompatibilities:
+                incompatibilities.append(item)
+    elif mode in {"certify", "full"} and can_mutate:
         command = [str(PREPARE), "--usb-id", usb_id, "--role", role]
         command += ["--", "true"]
         rx_rc, rx = _capture(logger, "actual-rx", command, runner, timeout=50)
@@ -355,6 +376,7 @@ def diagnose_hardware(usb_id: str, *, mode: str = "quick", role: str = "host",
         "usb_id": usb_id,
         "mode": mode,
         "role": role,
+        "active_check": active_check,
         "overall_status": overall,
         "profile": profile.public() if profile else None,
         "stages": stages,
@@ -396,6 +418,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", choices=("quick", "certify", "full"), default="quick")
     parser.add_argument("--role", choices=("host", "guest", "relay"), default="host")
     parser.add_argument("--allow-experimental-hardware", action="store_true")
+    parser.add_argument("--active-check", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--profile-file", default=str(DEFAULT_PROFILE_PATH))
     parser.add_argument("--runs-root")
     parser.add_argument("--ldn-smoke-worker", action="store_true", help=argparse.SUPPRESS)
@@ -409,6 +432,7 @@ def main() -> None:
     report, _ = diagnose_hardware(
         args.usb_id, mode=args.mode, role=args.role,
         allow_experimental=args.allow_experimental_hardware,
+        active_check=args.active_check,
         profile_path=args.profile_file, runs_root=args.runs_root,
     )
     print(json.dumps(report, separators=(",", ":")))

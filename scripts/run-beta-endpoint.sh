@@ -56,10 +56,6 @@ mkdir -p -- "$runtime_dir" "$(dirname -- "$launch_ack_file")"
 exec {endpoint_lock_fd}>"$runtime_dir/switchtrade-endpoint.lock"
 flock -n "$endpoint_lock_fd" || die "SwitchTrade endpoint is already running"
 export SWITCHTRADE_ENDPOINT_LOCK_HELD=1
-ack_tmp="$launch_ack_file.$$.tmp"
-umask 077
-printf '{"schema":1,"launch_nonce":"%s","launcher_pid":%d}\n' "$launch_nonce" "$$" >"$ack_tmp"
-mv -f -- "$ack_tmp" "$launch_ack_file"
 
 # Online host sits beside the leader Switch and joins its room; online guest
 # hosts the mirrored room beside the joining Switch.
@@ -72,5 +68,17 @@ gate=("$PREP")
 gate+=(--role "$radio_role" --target-channel "$channel" --)
 
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
-exec "${gate[@]}" timeout --foreground -k 15 "$WATCHDOG" \
-    "$PYTHON_BIN" -m switchtrade.endpoint "${args[@]}"
+exec "${gate[@]}" bash -c '
+    ack_file=$1
+    nonce=$2
+    watchdog=$3
+    python_bin=$4
+    shift 4
+    ack_tmp="$ack_file.$$.tmp"
+    umask 077
+    printf '\''{"schema":2,"stage":"radio_gate_passed","launch_nonce":"%s","launcher_pid":%d}\n'\'' \
+        "$nonce" "$$" >"$ack_tmp"
+    mv -f -- "$ack_tmp" "$ack_file"
+    exec timeout --foreground -k 15 "$watchdog" \
+        "$python_bin" -m switchtrade.endpoint "$@"
+' switchtrade-gated-launch "$launch_ack_file" "$launch_nonce" "$WATCHDOG" "$PYTHON_BIN" "${args[@]}"

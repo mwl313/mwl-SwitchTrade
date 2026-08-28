@@ -196,7 +196,20 @@ public partial class App : Application
                 memberCoordinator.RecoveryMessage?.Contains(
                     "No Group Leader Switch room", StringComparison.Ordinal) == true;
             memberCoordinator.ApplyRoom(new AuthoritativeRoomProjection(
-                6, 0, "closed", RoomMembershipRole.Member,
+                6, 2, "ready_check", RoomMembershipRole.Member,
+                SwitchRoomRole.Finder, true, false, "failed", true,
+                FailureCode: "relay.peer_lost", FailureStage: "relay",
+                FailureRecoverable: true, FailureAction: "retry"));
+            var peerLossDoesNotMaskLocalFailure =
+                memberCoordinator.RecoveryCode == "radio.switch_room_not_found";
+            memberCoordinator.ApplyRoom(new AuthoritativeRoomProjection(
+                7, 2, "ready_check", RoomMembershipRole.Member,
+                SwitchRoomRole.Unassigned, true, false, "none", false));
+            var endedAttemptStaysIdle =
+                memberCoordinator.ConnectionState == LegacyConnectionState.Idle &&
+                memberCoordinator.RecoveryCode is null;
+            memberCoordinator.ApplyRoom(new AuthoritativeRoomProjection(
+                8, 0, "closed", RoomMembershipRole.Member,
                 SwitchRoomRole.Unassigned, false, false, "none", false));
             var remoteCloseClearsRoom = !memberCoordinator.HasRoom;
             var inventoryGateway = new SelfTestGateway
@@ -318,6 +331,7 @@ public partial class App : Application
                       coordinatorWorks && memberReleaseWorks && authoritativeProjectionWorks &&
                       attemptFailureContractWorks && attemptFailureMapsToRecovery &&
                       missingSwitchRoomMapsToRecovery &&
+                      peerLossDoesNotMaskLocalFailure && endedAttemptStaysIdle &&
                       remoteCloseClearsRoom && startupResumeWorks && deadlineEnvelopeSurvives &&
                       deadlineRecoveryVisible && deadlineReturnHomeWorks &&
                       unmatchedEnvelopeSurvives &&

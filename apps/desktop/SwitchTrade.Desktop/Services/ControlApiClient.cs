@@ -70,7 +70,7 @@ public sealed class ControlApiClient : IControlGateway
     {
         _http = handler is null ? new HttpClient() : new HttpClient(handler, disposeHandler: true);
         _http.BaseAddress = new Uri(ApiBase);
-        _http.Timeout = TimeSpan.FromSeconds(30);
+        _http.Timeout = TimeSpan.FromSeconds(60);
         _expectedReleaseId = expectedReleaseId ?? InstalledReleaseId();
     }
 
@@ -796,7 +796,11 @@ public sealed class ControlApiClient : IControlGateway
                 "Online rooms are temporarily unavailable.",
             "room_version_conflict" or "state_conflict" => "The Trade Room changed. Refresh it and try again.",
             "session_active" => "This Switch connection is already starting.",
-            "endpoint_start_failed" => "The local Switch connection could not start. Try again.",
+            "endpoint_start_failed" => problem.Message ??
+                "The local Switch connection could not start. Try again.",
+            "endpoint_start_incomplete" or "endpoint_retry_required" => problem.Message ??
+                "The previous connection attempt ended. Select Retry to start again.",
+            "endpoint_start_canceled" => "The local Switch connection start was canceled.",
             "radio.switch_room_not_found" =>
                 "No Group Leader Switch room was found on supported 2.4 GHz channels. Recreate the group on the Switch and try again.",
             _ => "SwitchTrade couldn’t complete that action. Try again.",

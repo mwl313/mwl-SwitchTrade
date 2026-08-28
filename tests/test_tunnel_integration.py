@@ -455,6 +455,23 @@ class TunnelIntegrationTest(unittest.TestCase):
                 self.assertNotIn("token", created.text.lower())
                 self.assertNotIn("token", joined.text.lower())
 
+                instance_id = r"USB\VID_0BDA&PID_818B\ROLE-TEST"
+                first_api.app.state.runtime.write_hardware_selection(
+                    "0bda:818b", instance_id, "2-4")
+                second_api.app.state.runtime.write_hardware_selection(
+                    "0bda:818b", instance_id, "2-4")
+
+                def hardware(command, **_kwargs):
+                    result = MagicMock(returncode=0, stdout="", stderr="")
+                    if command[:2] == ["usbipd.exe", "state"]:
+                        result.stdout = json.dumps({"Devices": [{
+                            "BusId": "2-4", "ClientIPAddress": "172.20.0.1",
+                            "PersistedGuid": "shared-radio",
+                            "Description": "Realtek RTL8192EU",
+                            "InstanceId": instance_id,
+                        }]})
+                    return result
+
                 processes = []
                 def process(command, **_kwargs):
                     value = MagicMock()
@@ -467,14 +484,33 @@ class TunnelIntegrationTest(unittest.TestCase):
                     ack_path = Path(ack_value)
                     ack_path.parent.mkdir(parents=True, exist_ok=True)
                     ack_path.write_text(json.dumps({
-                        "schema": 1, "launch_nonce": nonce, "launcher_pid": value.pid,
+                        "schema": 2, "stage": "radio_gate_passed",
+                        "launch_nonce": nonce, "launcher_pid": value.pid,
+                    }), encoding="utf-8")
+                    state_value = command[command.index("--state-file") + 1]
+                    if state_value.startswith("/mnt/"):
+                        state_value = f"{state_value[5].upper()}:\\" + state_value[7:].replace("/", "\\")
+                    Path(state_value).write_text(json.dumps({
+                        "state": "initializing", "pid": value.pid + 10000,
+                        "process_kind": "rfu-endpoint",
+                        "session_id": command[command.index("--session-id") + 1],
+                        "attempt_id": command[command.index("--attempt-id") + 1],
+                        "launch_nonce": nonce, "process_start_ticks": 12345,
                     }), encoding="utf-8")
                     processes.append(value)
                     return value
 
-                with patch("switchtrade.control.subprocess.Popen", side_effect=process):
+                with patch("switchtrade.control.subprocess.run", side_effect=hardware), patch(
+                        "switchtrade.control.subprocess.Popen", side_effect=process):
                     with ThreadPoolExecutor(max_workers=2) as executor:
                         responses = list(executor.map(
+                            lambda pair: pair[0].post(
+                                "/api/v1/trade-room/connect",
+                                json={"switch_room_role": pair[1]}),
+                            ((first_api, "creator"), (second_api, "finder")),
+                        ))
+                    with ThreadPoolExecutor(max_workers=2) as executor:
+                        reconciled = list(executor.map(
                             lambda pair: pair[0].post(
                                 "/api/v1/trade-room/connect",
                                 json={"switch_room_role": pair[1]}),
@@ -486,6 +522,8 @@ class TunnelIntegrationTest(unittest.TestCase):
                     ]
                 self.assertTrue(all(response.status_code == 200 for response in responses),
                                 [response.text for response in responses])
+                self.assertTrue(all(response.status_code == 200 for response in reconciled),
+                                [response.text for response in reconciled])
                 self.assertTrue(all(response.status_code == 200 for response in snapshots),
                                 [response.text for response in snapshots])
                 roles = {response.json()["attempt"]["local_switch_role"]

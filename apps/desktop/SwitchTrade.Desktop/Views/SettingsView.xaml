@@ -31,10 +31,12 @@
             <Button Content="Use selected adapter" Command="{Binding SelectDeviceCommand}"
                     Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" Margin="0,10,0,22" />
             <TextBlock Text="Adapter diagnostics" FontWeight="SemiBold" Margin="0,0,0,6" />
+            <TextBlock Text="This check temporarily attaches the selected adapter to SwitchTrade, verifies its Linux driver, and returns it to its prior Windows state."
+                       Style="{StaticResource SecondaryText}" TextWrapping="Wrap" Margin="0,0,0,6" />
             <ComboBox ItemsSource="{Binding Adapters}" SelectedItem="{Binding SelectedAdapter}"
                       DisplayMemberPath="FriendlyName" MaxWidth="420" HorizontalAlignment="Left"
                       automation:AutomationProperties.Name="Diagnostic adapter profile" />
-            <Button Content="Run read-only diagnostics" Command="{Binding DiagnosticCommand}"
+            <Button Content="Run adapter check" Command="{Binding DiagnosticCommand}"
                     Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left" Margin="0,10,0,0" />
             <TextBlock Text="{Binding DiagnosticFilePath}" FontFamily="{StaticResource MonoFontFamily}"
                        FontSize="12" TextWrapping="Wrap" Margin="0,8,0,0" />

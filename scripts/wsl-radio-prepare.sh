@@ -13,6 +13,7 @@ MODULE_DIR="${SWITCHTRADE_MODULE_DIR:-}"
 HEALTH_CHANNELS="${RADIO_HEALTH_CHANNELS:-1,6,11}"
 TARGET_CHANNEL="${RADIO_TARGET_CHANNEL:-6}"
 RX_TIMEOUT="${RADIO_HEALTH_TIMEOUT:-2}"
+DRIVER_PROBE_TIMEOUT="${RADIO_DRIVER_PROBE_TIMEOUT:-30}"
 REQUIRED_ROLE="${RADIO_ROLE:-}"
 RESET_ON_RX_FAILURE=0
 MODE=ensure
@@ -167,6 +168,26 @@ driver_allowed() {
     return 1
 }
 
+wait_for_bound_iface() {
+    local device=$1 expected_driver=$2 iface observed_driver
+    local deadline=$((SECONDS + DRIVER_PROBE_TIMEOUT))
+    # usbipd exposes the USB sysfs device before an already-loaded Wi-Fi driver has
+    # finished probing it.  RTL8192EU commonly needs several seconds to read EFuse,
+    # load firmware, register its PHY, and finally create the netdev.  Treat that as
+    # an in-progress probe, not as a missing interface that needs recreation.
+    while ((SECONDS < deadline)); do
+        iface="$(preferred_iface_for_device "$device" 2>/dev/null || true)"
+        if [[ -n $iface ]]; then
+            printf '%s\n' "$iface"
+            return 0
+        fi
+        observed_driver="$(driver_for_device "$device" 2>/dev/null || true)"
+        [[ $observed_driver == "$expected_driver" ]] || return 1
+        sleep 0.2
+    done
+    return 1
+}
+
 role_allowed() {
     local role=$1 allowed=$2 item
     IFS=',' read -ra items <<< "$allowed"
@@ -273,6 +294,8 @@ case $MODE in
 esac
 
 ((EUID == 0)) || [[ $SYSFS_ROOT != /sys ]] || die "run as root"
+[[ $DRIVER_PROBE_TIMEOUT =~ ^[1-9][0-9]*$ ]] || \
+    die "RADIO_DRIVER_PROBE_TIMEOUT must be a positive integer"
 [[ -x $HEALTH_GATE ]] || die "health gate not executable: $HEALTH_GATE"
 
 selection="$(select_device)"
@@ -299,6 +322,15 @@ if [[ -n $REQUIRED_ROLE ]]; then
 fi
 iface="$(preferred_iface_for_device "$DEVICE" 2>/dev/null || true)"
 driver="$(driver_for_device "$DEVICE" 2>/dev/null || true)"
+
+if [[ -z $iface && -n $driver ]]; then
+    msg "[driver] waiting for in-progress $driver probe to create its interface"
+    iface="$(wait_for_bound_iface "$DEVICE" "$driver" 2>/dev/null || true)"
+    driver="$(driver_for_device "$DEVICE" 2>/dev/null || true)"
+    if [[ -z $iface && -n $driver ]] && ! phy_for_device "$DEVICE" >/dev/null 2>&1; then
+        die "DRIVER_PROBE_TIMEOUT: $driver did not create a PHY or interface within ${DRIVER_PROBE_TIMEOUT}s"
+    fi
+fi
 
 if [[ -z $iface && -n $driver ]]; then
     iface="$(recreate_monitor_iface "$DEVICE")" || \

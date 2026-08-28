@@ -119,6 +119,11 @@ flowchart TD
 `BackendLauncher` starts the installed WSL launcher when the control service is absent. Views render
 only real API state; they do not substitute sample rooms, readiness, trainers, or parties.
 
+On a confirmed desktop close, `BackendLauncher` asks the local control service to shut down and waits
+for the launcher it owns. If graceful shutdown misses its bounded deadline, only that tracked process
+tree is terminated. Endpoint launcher stdout/stderr never inherits the desktop's pipes; it is written
+to backend-owned evidence files so an abnormal desktop exit cannot break a later radio gate write.
+
 Important UI invariants:
 
 - the room authority, not the UI, decides membership and attempt state;
@@ -182,6 +187,28 @@ The maintained v1 surface is:
 
 The service exposes four separate readiness dimensions: local control, relay, radio, and trade
 session. Do not collapse them into a single generic “offline” state; each has different recovery.
+
+### Endpoint launch invariant
+
+One authoritative connection attempt permits at most one automatic endpoint launch. The room-status
+`GET` may reconcile observed authority state but is launch-free. A launch is authorized only by an
+explicit connection `POST` after the user has selected a Switch role; when the complementary role is
+locked later, the desktop performs one explicit `POST` reconciliation for that prior user action.
+After a failed start, another process requires the explicit Retry endpoint.
+
+Control writes a durable `launching` state before spawning the wrapper and serializes all launches.
+The wrapper acquires its process lock, prepares the selected radio, and passes the actual-RX health
+gate before writing a nonce-bound `radio_gate_passed` acknowledgement. Control publishes
+`session_started` only after it has both that acknowledgement and a nonce-, attempt-, session-, PID-,
+and process-start-matched Python `rfu-endpoint` state. An early exit or startup deadline becomes one
+terminal, user-visible failure rather than an absent state that polling can replace. Stop increments a
+cancellation generation before teardown, so a concurrent hardware attach or initialization cannot
+spawn or adopt an endpoint afterward.
+
+Every launch has a small JSON record plus separate stdout/stderr files under the control run's
+`endpoint-launches` directory. Support bundles include bounded and redacted copies, including failures
+that happen before Python starts. The launcher uses file-backed standard streams whose lifetime is
+independent of the WPF process.
 
 Legacy `/api/groups*` and `/api/session*` aliases remain only for compatibility during the beta.
 New client work should use `/api/v1`.
@@ -294,6 +321,8 @@ Rules for new diagnostics:
 - never commit support bundles, packet captures, or live player data;
 - make diagnostic failures non-destructive and keep Repair explicit;
 - make every logged error map to one user-safe recovery action.
+- treat a launch acknowledgement as a stage marker, never as proof that the endpoint initialized;
+- preserve launch nonce, authoritative attempt ID, launcher PID, endpoint PID, and terminal exit state.
 
 The passive party observer is fail-closed. It publishes a safe projection only after complete,
 checksum-valid records. A trade commit requires the expected link-command sequence, save barriers,
