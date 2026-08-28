@@ -25,6 +25,11 @@ The supported release command is:
 pwsh -NoProfile -File installer/replacement/Build-ReplacementPackage.ps1
 ```
 
+`switchtrade/VERSION` is the only application and installer version source. The builder derives the
+three-part MSI/Burn version and GitHub release tag from it, rejects a version lower than repository
+history, and the package validator checks the MSI, Burn bundle, manifest, Python runtime, and WPF
+assembly against that value.
+
 Release builds require a clean tracked worktree. Internal-only builds may explicitly pass
 `-AllowDirtyForDevelopment`. The builder verifies pinned WSL and usbipd MSI hashes, exact firmware
 and wheel hashes, the immutable appliance metadata, every release payload, all native self-tests,

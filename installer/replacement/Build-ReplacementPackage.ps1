@@ -1,7 +1,6 @@
 [CmdletBinding()]
 param(
     [string]$ReleaseId = '',
-    [string]$ProductVersion = '0.2.0',
     [string]$OutputDirectory = '',
     [string]$RuntimeWsl = '',
     [string]$CertificateThumbprint = '',
@@ -20,9 +19,32 @@ if (-not $AllowDirtyForDevelopment) {
         throw 'Release builds require a clean tracked worktree. Commit changes or use -AllowDirtyForDevelopment for an internal build.'
     }
 }
+$versionFile = Join-Path $repo 'switchtrade\VERSION'
+$applicationVersion = (Get-Content -Raw -LiteralPath $versionFile).Trim()
+$versionMatch = [regex]::Match(
+    $applicationVersion, '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)?$')
+if (-not $versionMatch.Success) { throw 'switchtrade/VERSION is not a valid application version.' }
+$ProductVersion = "$($versionMatch.Groups[1].Value).$($versionMatch.Groups[2].Value).$($versionMatch.Groups[3].Value)"
+$parsedProductVersion = [version]$ProductVersion
+if ($parsedProductVersion.Major -gt 255 -or $parsedProductVersion.Minor -gt 255 -or
+    $parsedProductVersion.Build -gt 65535) {
+    throw 'switchtrade/VERSION cannot be represented by MSI.'
+}
+$historicalVersion = [version]'0.0.0'
+foreach ($commit in @(& git -C $repo log --format=%H --all -- switchtrade/VERSION)) {
+    $candidate = (& git -C $repo show "${commit}:switchtrade/VERSION" 2>$null | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { continue }
+    $candidateMatch = [regex]::Match($candidate, '^(\d+)\.(\d+)\.(\d+)(?:-.+)?$')
+    if ($candidateMatch.Success) {
+        $candidateVersion = [version]"$($candidateMatch.Groups[1].Value).$($candidateMatch.Groups[2].Value).$($candidateMatch.Groups[3].Value)"
+        if ($candidateVersion -gt $historicalVersion) { $historicalVersion = $candidateVersion }
+    }
+}
+if ($parsedProductVersion -lt $historicalVersion) {
+    throw "switchtrade/VERSION would downgrade the installer from $historicalVersion to $ProductVersion."
+}
 if (-not $ReleaseId) { $ReleaseId = 'beta-' + ((& git -C $repo rev-parse --short=12 HEAD).Trim()) }
 if ($ReleaseId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') { throw 'Invalid release ID.' }
-if ($ProductVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'ProductVersion must be an MSI-compatible three-part version.' }
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repo "artifacts\replacement\release-$ReleaseId" }
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 $artifacts = [IO.Path]::GetFullPath((Join-Path $repo 'artifacts')).TrimEnd('\') + '\'
@@ -142,7 +164,7 @@ function Payload([string]$Root, [string]$Path) {
 $manifest = [ordered]@{
     schema = 1
     release_id = $ReleaseId
-    version = $ProductVersion
+    version = $applicationVersion
     architecture = 'x64'
     minimum_windows_build = 19045
     minimum_wsl_version = '2.4.4'
@@ -198,7 +220,9 @@ if ($CertificateThumbprint) {
 $result = [ordered]@{
     schema = 1
     release_id = $ReleaseId
-    version = $ProductVersion
+    version = $applicationVersion
+    product_version = $ProductVersion
+    release_tag = "v$applicationVersion"
     setup = $setup
     size = (Get-Item -LiteralPath $setup).Length
     sha256 = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant()

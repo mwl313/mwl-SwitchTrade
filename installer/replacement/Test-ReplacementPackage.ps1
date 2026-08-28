@@ -15,11 +15,23 @@ foreach ($path in @($resultPath, $setup, $manifestPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing package artifact: $path" }
 }
 $result = Get-Content -Raw -LiteralPath $resultPath | ConvertFrom-Json
+$applicationVersion = (Get-Content -Raw -LiteralPath (
+    Join-Path $repo 'switchtrade\VERSION')).Trim()
+$versionMatch = [regex]::Match(
+    $applicationVersion, '^(\d+)\.(\d+)\.(\d+)(?:-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)?$')
+if (-not $versionMatch.Success) { throw 'switchtrade/VERSION is invalid.' }
+$productVersion = "$($versionMatch.Groups[1].Value).$($versionMatch.Groups[2].Value).$($versionMatch.Groups[3].Value)"
 if ([long]$result.size -ne (Get-Item -LiteralPath $setup).Length -or
     [string]$result.sha256 -ne (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant()) {
     throw 'Setup EXE does not match build-result.json.'
 }
 $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+if ([string]$result.version -ne $applicationVersion -or
+    [string]$result.product_version -ne $productVersion -or
+    [string]$result.release_tag -ne "v$applicationVersion" -or
+    [string]$manifest.version -ne $applicationVersion) {
+    throw 'Release, installer, and application versions do not share switchtrade/VERSION.'
+}
 foreach ($payload in $manifest.payloads.PSObject.Properties) {
     $file = [IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $manifestPath) ([string]$payload.Value.path)))
     if (-not $file.StartsWith((Split-Path -Parent $manifestPath).TrimEnd('\') + '\',
@@ -37,6 +49,11 @@ foreach ($executable in @(
 )) {
     $process = Start-Process -FilePath $executable -ArgumentList '--self-test' -Wait -PassThru -WindowStyle Hidden
     if ($process.ExitCode -ne 0) { throw "Self-test failed: $executable" }
+}
+$desktopVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo(
+    (Join-Path $root 'publish\desktop\SwitchTrade.exe')).ProductVersion
+if ($desktopVersion -ne $applicationVersion) {
+    throw "Desktop product version does not match switchtrade/VERSION: $desktopVersion"
 }
 
 $msi = Join-Path $root 'wix\SwitchTrade.Desktop.msi'
@@ -67,8 +84,29 @@ function Get-MsiRowCount([ValidateSet('File', 'Shortcut', 'CustomAction')][strin
             'Close', [Reflection.BindingFlags]::InvokeMethod, $null, $view, $null)
     }
 }
+function Get-MsiProperty([string]$Name) {
+    $sql = "SELECT ``Value`` FROM ``Property`` WHERE ``Property``='$Name'"
+    $view = $database.GetType().InvokeMember(
+        'OpenView', [Reflection.BindingFlags]::InvokeMethod, $null, $database, [object[]]@($sql))
+    try {
+        [void]$view.GetType().InvokeMember(
+            'Execute', [Reflection.BindingFlags]::InvokeMethod, $null, $view, $null)
+        $record = $view.GetType().InvokeMember(
+            'Fetch', [Reflection.BindingFlags]::InvokeMethod, $null, $view, $null)
+        if ($null -eq $record) { return $null }
+        return $record.GetType().InvokeMember(
+            'StringData', [Reflection.BindingFlags]::GetProperty,
+            $null, $record, [object[]]@(1))
+    } finally {
+        [void]$view.GetType().InvokeMember(
+            'Close', [Reflection.BindingFlags]::InvokeMethod, $null, $view, $null)
+    }
+}
 if ((Get-MsiRowCount File) -ne 3) { throw 'Desktop MSI file table is unexpected.' }
 if ((Get-MsiRowCount Shortcut) -ne 2) { throw 'Desktop MSI shortcuts are missing.' }
+if ((Get-MsiProperty 'ProductVersion') -ne $productVersion) {
+    throw 'Desktop MSI ProductVersion does not match switchtrade/VERSION.'
+}
 try {
     if ((Get-MsiRowCount CustomAction) -ne 0) {
         throw 'Desktop MSI must not contain WSL custom actions.'
@@ -148,6 +186,11 @@ try {
     [xml]$burnManifest = Get-Content -Raw -LiteralPath (Join-Path $baRoot 'manifest.xml')
     $namespace = [Xml.XmlNamespaceManager]::new($burnManifest.NameTable)
     $namespace.AddNamespace('burn', 'http://wixtoolset.org/schemas/v4/2008/Burn')
+    $registration = $burnManifest.SelectSingleNode('//burn:Registration', $namespace)
+    if ($null -eq $registration -or
+        ([version]$registration.Version).ToString(3) -ne $productVersion) {
+        throw 'Burn bundle version does not match switchtrade/VERSION.'
+    }
     $runtimePackage = $burnManifest.SelectSingleNode(
         '//burn:ExePackage[@Id="SwitchTradeRuntime"]', $namespace)
     $expectedDetect = 'InstalledRelease = "' + [string]$manifest.release_id + '"'

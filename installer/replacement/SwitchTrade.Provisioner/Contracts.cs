@@ -69,6 +69,9 @@ internal sealed record ReleaseManifest(
         }
 
         if (value.Schema != 1 || !Contract.SafeId().IsMatch(value.ReleaseId) ||
+            !Regex.IsMatch(value.Version,
+                @"^\d+\.\d+\.\d+(?:-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)?$",
+                RegexOptions.CultureInvariant) ||
             value.Architecture != "x64" || value.MinimumWindowsBuild < 19045 ||
             !System.Version.TryParse(value.MinimumWslVersion, out _) ||
             value.ControlContract != "app-readiness.v1" ||
