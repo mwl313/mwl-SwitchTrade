@@ -63,16 +63,23 @@ future product mode.
 
 ## 5. Hardware and driver expansion
 
-1. Diagnose and fix RTL8188EU control-port association, AP+monitor concurrency, and receive-death
+1. Hide **Hardware Profiles** from the normal Settings UI. Keep the data-driven profile registry
+   internally for detection and future driver expansion, but do not expose this non-actionable list
+   to ordinary users.
+2. Add an **Adapter Test** button beside **Use selected adapter**. It must work with any detected USB
+   Wi-Fi adapter and report staged compatibility results for Windows authorization, WSL attachment,
+   driver binding, PHY/interface creation, supported radio modes, channel control, and RX health.
+   Clearly distinguish a software capability pass from physical Switch qualification.
+3. Diagnose and fix RTL8188EU control-port association, AP+monitor concurrency, and receive-death
    behavior under WSL; keep it quarantined until it passes the same gates as RTL8192EU.
-2. Physically qualify the already-profiled MT7610U, MT7612U, RT2770, RT3070, RT3572, and RTL8821CU
+4. Physically qualify the already-profiled MT7610U, MT7612U, RT2770, RT3070, RT3572, and RTL8821CU
    candidates through observe → join → host → full trade → soak.
-3. Re-evaluate AR9271 only after the known association failures have a reproducible driver-level fix.
-4. Add other upstream-supported adapters through the data-driven matrix and diagnostic promotion
+5. Re-evaluate AR9271 only after the known association failures have a reproducible driver-level fix.
+6. Add other upstream-supported adapters through the data-driven matrix and diagnostic promotion
    process.
-5. Add 5 GHz-capable hardware and validate LDN channels 36, 40, 44, and 48.
-6. Automate firmware inventory and package validation for newly supported adapters.
-7. Build a new custom kernel only when a required driver/configuration is absent; do not fork the core
+7. Add 5 GHz-capable hardware and validate LDN channels 36, 40, 44, and 48.
+8. Automate firmware inventory and package validation for newly supported adapters.
+9. Build a new custom kernel only when a required driver/configuration is absent; do not fork the core
    application for a chipset.
 
 ## 6. Party display, history, and optional statistics
