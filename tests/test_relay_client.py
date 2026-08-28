@@ -1,5 +1,7 @@
 from io import BytesIO
 import json
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -39,6 +41,23 @@ class RelayClientTests(unittest.TestCase):
             )
 
         self.assertEqual(request.call_args.args[0].get_header("User-agent"), USER_AGENT)
+
+    def test_diagnostic_upload_sends_exact_artifact_with_release_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            artifact = Path(temporary) / "diagnostic.json"
+            expected = b'{"contract_version":"hardware-diagnostic.v1"}'
+            artifact.write_bytes(expected)
+            response = BytesIO(b'{"status":"stored","upload_id":"upload-1"}')
+            with patch("switchtrade.relay_client.urlopen", return_value=response) as send:
+                result = RelayClient("https://relay.example").upload_diagnostic(
+                    "hardware-diagnostic", artifact, "client-a", "beta-test")
+        request = send.call_args.args[0]
+        self.assertEqual(result["upload_id"], "upload-1")
+        self.assertEqual(request.full_url,
+                         "https://relay.example/v1/diagnostics/hardware-diagnostic")
+        self.assertEqual(request.data, expected)
+        self.assertEqual(request.get_header("X-switchtrade-client"), "client-a")
+        self.assertEqual(request.get_header("X-switchtrade-release"), "beta-test")
 
 
 if __name__ == "__main__":

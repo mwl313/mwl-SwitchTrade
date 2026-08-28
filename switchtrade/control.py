@@ -743,6 +743,24 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     def runtime(request: Request) -> Runtime:
         return request.app.state.runtime
 
+    def publish_diagnostic(state: Runtime, kind: str, path: Path) -> dict:
+        try:
+            result = state.relay.upload_diagnostic(
+                kind, path, state.client_id, runtime_release_id())
+        except (OSError, RelayError, RuntimeError, ValueError) as error:
+            state.log.event(
+                "diagnostic_upload_failed", level="warning", kind=kind,
+                error=type(error).__name__, code=getattr(error, "code", None),
+                correlation_id=getattr(error, "correlation_id", None),
+            )
+            return {"status": "unavailable"}
+        state.log.event(
+            "diagnostic_upload_completed", kind=kind,
+            upload_id=result.get("upload_id"),
+            correlation_id=result.get("correlation_id"),
+        )
+        return {"status": "stored", "upload_id": result.get("upload_id")}
+
     def readiness_axis(status: str, message: str, code: str,
                        action: str | None = None) -> dict:
         return {
@@ -1426,7 +1444,11 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             "hardware_diagnostic_completed", usb_id=usb_id,
             diagnostic_run_id=report["run_id"], outcome=report["overall_status"],
         )
-        return {"report": report, "report_path": str(report_path), "run_id": state.log.run_id}
+        upload = publish_diagnostic(state, "hardware-diagnostic", report_path)
+        return {
+            "report": report, "report_path": str(report_path),
+            "relay_upload": upload, "run_id": state.log.run_id,
+        }
 
     @app.post("/api/hardware/diagnostics")
     def hardware_diagnostics_legacy(payload: HardwareDiagnosticRequest, request: Request) -> dict:
@@ -1653,7 +1675,13 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 "error": str(error.detail),
             }
         path = state.log.support_bundle(summary=summary)
-        return {"status": "created", "path": str(path), "run_id": state.log.run_id}
+        upload = publish_diagnostic(state, "support-bundle", path)
+        return {
+            "status": "created", "path": str(path),
+            "filename": f"SwitchTrade-{path.name}",
+            "content_base64": base64.b64encode(path.read_bytes()).decode("ascii"),
+            "relay_upload": upload, "run_id": state.log.run_id,
+        }
 
     @app.post("/api/v1/support-bundle")
     def support_bundle_v1(request: Request) -> dict:

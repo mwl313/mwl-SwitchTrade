@@ -3,12 +3,13 @@ services:
     build:
       context: ..
       dockerfile: relay/Dockerfile
-    image: switchtrade-relay:0.2.0-beta.1
+    image: switchtrade-relay:0.2.2-beta.1
     restart: unless-stopped
     init: true
     read_only: true
     environment:
       SWITCHTRADE_AUTH_DB: /var/lib/switchtrade/authority.sqlite3
+      SWITCHTRADE_DIAGNOSTICS_ROOT: /var/lib/switchtrade/diagnostics
       SWITCHTRADE_ENABLE_LEGACY_RELAY: "0"
       SWITCHTRADE_TRUSTED_PROXIES: 172.16.0.0/12
     volumes:

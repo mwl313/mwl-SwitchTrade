@@ -1,6 +1,8 @@
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import BackgroundTasks
+import hashlib
+import io
 import ipaddress
 import os
 from pathlib import Path
@@ -11,6 +13,7 @@ import string
 import threading
 import time
 import uuid
+import zipfile
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
@@ -37,7 +40,9 @@ MAX_MESSAGE_BYTES = MAX_ENVELOPE_BYTES
 SESSION_TTL = 6 * 60 * 60
 MAX_SESSIONS = 4096
 MAX_CONTROL_BODY_BYTES = 64 * 1024
+MAX_DIAGNOSTIC_UPLOAD_BYTES = 16 * 1024 * 1024
 RFU_CONTRACT = "rfu-tunnel.v1"
+DIAGNOSTIC_CONTRACT = "diagnostic-upload.v1"
 
 
 @asynccontextmanager
@@ -47,7 +52,7 @@ async def lifespan(_app: FastAPI):
     finally:
         authority.close()
 
-app = FastAPI(title="SwitchTrade Relay", version="0.2.0-beta.1", lifespan=lifespan)
+app = FastAPI(title="SwitchTrade Relay", version="0.2.2-beta.1", lifespan=lifespan)
 logger = logging.getLogger("uvicorn.error")
 
 
@@ -213,6 +218,82 @@ class RateLimiter:
 
 
 rate_limiter = RateLimiter()
+diagnostic_rate_limiter = RateLimiter(limit=12, window=60 * 60)
+
+
+def _diagnostic_root() -> Path:
+    configured = os.environ.get("SWITCHTRADE_DIAGNOSTICS_ROOT")
+    return Path(configured) if configured else Path(_authority_path()).parent / "diagnostics"
+
+
+def _validate_diagnostic(kind: str, body: bytes) -> str:
+    if kind == "hardware-diagnostic":
+        try:
+            report = json.loads(body)
+        except (UnicodeDecodeError, ValueError) as error:
+            raise HTTPException(status_code=422, detail="diagnostic payload is invalid") from error
+        if not isinstance(report, dict) or report.get("contract_version") != "hardware-diagnostic.v1":
+            raise HTTPException(status_code=422, detail="diagnostic payload is invalid")
+        return "json"
+    if kind == "support-bundle":
+        try:
+            with zipfile.ZipFile(io.BytesIO(body)) as archive:
+                entries = archive.infolist()
+                names = {entry.filename for entry in entries}
+                unsafe = any(
+                    name.startswith(("/", "\\")) or
+                    ".." in name.replace("\\", "/").split("/")
+                    for name in names
+                )
+                if (len(entries) > 512 or unsafe or "privacy-manifest.json" not in names or
+                        sum(entry.file_size for entry in entries) > 64 * 1024 * 1024):
+                    raise ValueError("unsafe support archive")
+        except (ValueError, zipfile.BadZipFile) as error:
+            raise HTTPException(status_code=422, detail="diagnostic payload is invalid") from error
+        return "zip"
+    raise HTTPException(status_code=404, detail="diagnostic kind is not supported")
+
+
+def _store_diagnostic(kind: str, body: bytes, request: Request) -> dict:
+    extension = _validate_diagnostic(kind, body)
+    root = _diagnostic_root().resolve()
+    destination = (root / kind).resolve()
+    if destination.parent != root:
+        raise HTTPException(status_code=500, detail="diagnostic storage is unavailable")
+    destination.mkdir(parents=True, exist_ok=True)
+    upload_id = str(uuid.uuid4())
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    artifact = destination / f"{stamp}-{upload_id}.{extension}"
+    temporary = destination / f".{upload_id}.tmp"
+    metadata = destination / f"{stamp}-{upload_id}.metadata.json"
+    release_id = request.headers.get("x-switchtrade-release", "unknown")[:128]
+    if not all(character.isalnum() or character in "._-" for character in release_id):
+        release_id = "invalid"
+    client_hash = hashlib.sha256(_client_id(request).encode("utf-8")).hexdigest()[:24]
+    try:
+        temporary.write_bytes(body)
+        os.replace(temporary, artifact)
+        metadata.write_text(json.dumps({
+            "schema": 1,
+            "upload_id": upload_id,
+            "kind": kind,
+            "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "release_id": release_id,
+            "client_hash": client_hash,
+            "size": len(body),
+            "sha256": hashlib.sha256(body).hexdigest(),
+            "correlation_id": getattr(request.state, "correlation_id", ""),
+        }, separators=(",", ":")) + "\n", encoding="utf-8")
+    except OSError as error:
+        temporary.unlink(missing_ok=True)
+        artifact.unlink(missing_ok=True)
+        raise HTTPException(status_code=507, detail="diagnostic storage is unavailable") from error
+    return {
+        "contract_version": DIAGNOSTIC_CONTRACT,
+        "status": "stored",
+        "upload_id": upload_id,
+        "correlation_id": getattr(request.state, "correlation_id", ""),
+    }
 
 
 def _bearer(request: Request) -> str:
@@ -298,9 +379,36 @@ async def health() -> dict:
         "service": "switchtrade-relay",
         "room_contract": "room-control.v1",
         "rfu_contract": RFU_CONTRACT,
-        "capabilities": ["manual-switch-role.v1", "public-directory.v1"],
+        "capabilities": [
+            "manual-switch-role.v1", "public-directory.v1", DIAGNOSTIC_CONTRACT,
+        ],
         "payload_mode": "opaque",
     }
+
+
+@app.post("/v1/diagnostics/{kind}")
+async def upload_diagnostic(kind: str, request: Request) -> dict:
+    diagnostic_rate_limiter.check(f"diagnostic:{_rate_identity(request)}")
+    content_length = request.headers.get("content-length", "")
+    try:
+        declared_length = int(content_length) if content_length else None
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="diagnostic content length is invalid") from error
+    if declared_length is not None and declared_length > MAX_DIAGNOSTIC_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="diagnostic upload is too large")
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > MAX_DIAGNOSTIC_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="diagnostic upload is too large")
+        body.extend(chunk)
+    if not body:
+        raise HTTPException(status_code=422, detail="diagnostic payload is invalid")
+    stored = _store_diagnostic(kind, bytes(body), request)
+    logger.info(json.dumps({
+        "event": "diagnostic_stored", "kind": kind,
+        "upload_id": stored["upload_id"], "size": len(body),
+    }, separators=(",", ":")))
+    return stored
 
 
 @app.get("/metrics")
@@ -313,7 +421,8 @@ async def metrics() -> dict:
 async def structured_request_log(request: Request, call_next):
     started = time.monotonic()
     request.state.correlation_id = request.headers.get("x-correlation-id", "").strip() or str(uuid.uuid4())
-    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+    diagnostic_upload = request.url.path.startswith("/v1/diagnostics/")
+    if request.method not in {"GET", "HEAD", "OPTIONS"} and not diagnostic_upload:
         body = bytearray()
         async for chunk in request.stream():
             if len(body) + len(chunk) > MAX_CONTROL_BODY_BYTES:

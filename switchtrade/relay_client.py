@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import secrets
 import time
 import uuid
@@ -45,12 +46,16 @@ class RelayClient:
         self.timeout = timeout
 
     def _request(self, method: str, path: str, payload: dict | None = None,
-                 headers: dict[str, str] | None = None) -> dict:
+                 headers: dict[str, str] | None = None, *, raw_body: bytes | None = None) -> dict:
         request_headers = {**(headers or {}), "User-Agent": USER_AGENT}
         data = None
+        if payload is not None and raw_body is not None:
+            raise ValueError("payload and raw_body are mutually exclusive")
         if payload is not None:
             data = json.dumps(payload).encode("utf-8")
             request_headers["Content-Type"] = "application/json"
+        elif raw_body is not None:
+            data = raw_body
         try:
             with urlopen(Request(f"{self.base_url}{path}", method=method, data=data,
                                  headers=request_headers),
@@ -85,6 +90,24 @@ class RelayClient:
 
     def health(self) -> dict:
         return self._request("GET", "/health")
+
+    def upload_diagnostic(self, kind: str, path: str | Path, client_id: str,
+                          release_id: str) -> dict:
+        content_types = {
+            "support-bundle": "application/zip",
+            "hardware-diagnostic": "application/json",
+        }
+        if kind not in content_types:
+            raise ValueError("unsupported diagnostic kind")
+        artifact = Path(path)
+        if artifact.stat().st_size > 16 * 1024 * 1024:
+            raise ValueError("diagnostic artifact exceeds 16 MiB")
+        return self._request(
+            "POST", f"/v1/diagnostics/{kind}", headers={
+                "Content-Type": content_types[kind],
+                "X-SwitchTrade-Client": client_id,
+                "X-SwitchTrade-Release": release_id,
+            }, raw_body=artifact.read_bytes())
 
     @staticmethod
     def command_id() -> str:

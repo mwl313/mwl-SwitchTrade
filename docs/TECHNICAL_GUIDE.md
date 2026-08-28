@@ -280,6 +280,12 @@ not a kernel compilation. Keep driver-specific choices in the hardware matrix an
 summary, event log, current configuration, and a privacy manifest. Redaction covers fields named like
 tokens/passwords/secrets, MAC addresses, and common inline credential forms.
 
+User-requested hardware reports and support ZIPs are exported atomically to the current Windows
+Desktop. After local creation, the control service makes a best-effort upload to the relay's
+`diagnostic-upload.v1` endpoint. The relay validates type and size, generates its own filename, stores
+the artifact outside the room database, and records only a hashed installation identifier. Relay
+unavailability never turns a successful local export into a failure.
+
 Rules for new diagnostics:
 
 - log state transitions and stable error codes, not secrets or raw bearer headers;

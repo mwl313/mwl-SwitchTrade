@@ -1,5 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
+import io
+import json
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -7,6 +9,7 @@ from threading import Event
 import time
 import unittest
 import uuid
+import zipfile
 from unittest.mock import patch
 import os
 
@@ -136,6 +139,50 @@ class AuthoritativeRoomTests(unittest.TestCase):
             headers={"Idempotency-Key": _command(), "X-SwitchTrade-Client": "public-third"},
         )
         self.assertEqual(losing_join.status_code, 409)
+
+    def test_redacted_diagnostic_uploads_are_validated_and_stored(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(
+                os.environ, {"SWITCHTRADE_DIAGNOSTICS_ROOT": temporary}):
+            report = json.dumps({
+                "contract_version": "hardware-diagnostic.v1",
+                "run_id": "20260828T000000Z-test",
+                "overall_status": "partial",
+            }).encode()
+            diagnostic = self.client.post(
+                "/v1/diagnostics/hardware-diagnostic", content=report,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-SwitchTrade-Client": "installation-a",
+                    "X-SwitchTrade-Release": "beta-test",
+                })
+            self.assertEqual(diagnostic.status_code, 200, diagnostic.text)
+            self.assertEqual(diagnostic.json()["contract_version"], "diagnostic-upload.v1")
+
+            support_bytes = io.BytesIO()
+            with zipfile.ZipFile(support_bytes, "w") as archive:
+                archive.writestr("privacy-manifest.json", "{}")
+                archive.writestr("events.jsonl", "{}\n")
+            support = self.client.post(
+                "/v1/diagnostics/support-bundle", content=support_bytes.getvalue(),
+                headers={
+                    "Content-Type": "application/zip",
+                    "X-SwitchTrade-Client": "installation-b",
+                    "X-SwitchTrade-Release": "beta-test",
+                })
+            self.assertEqual(support.status_code, 200, support.text)
+
+            root = Path(temporary)
+            self.assertEqual(len(list((root / "hardware-diagnostic").glob("*.json"))), 2)
+            self.assertEqual(len(list((root / "support-bundle").glob("*.zip"))), 1)
+            metadata = next((root / "support-bundle").glob("*.metadata.json")).read_text()
+            self.assertNotIn("installation-b", metadata)
+            self.assertIn('"release_id":"beta-test"', metadata)
+
+            invalid = self.client.post(
+                "/v1/diagnostics/hardware-diagnostic", content=b"not-json")
+            self.assertEqual(invalid.status_code, 422)
+            unknown = self.client.post("/v1/diagnostics/unknown", content=b"data")
+            self.assertEqual(unknown.status_code, 404)
 
     def test_offline_owner_room_is_hidden_and_cannot_be_joined_publicly(self):
         created = self._create_public()

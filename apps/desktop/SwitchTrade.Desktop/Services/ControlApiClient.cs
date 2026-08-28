@@ -531,7 +531,48 @@ public sealed class ControlApiClient : IControlGateway
     {
         var result = await PostAsync<SupportBundleResponse>(
             "/api/v1/support-bundle", new { }, cancellationToken);
-        return result.Path ?? "Support file created";
+        if (string.IsNullOrWhiteSpace(result.ContentBase64))
+            throw new UserFacingException(
+                "SwitchTrade received an incomplete support file.", "invalid_response");
+        byte[] content;
+        try { content = Convert.FromBase64String(result.ContentBase64); }
+        catch (FormatException)
+        {
+            throw new UserFacingException(
+                "SwitchTrade received an incomplete support file.", "invalid_response");
+        }
+        var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        if (string.IsNullOrWhiteSpace(desktop))
+            throw new UserFacingException(
+                "SwitchTrade could not find your Desktop folder.",
+                "support_export_failed", "support", true, "retry");
+        var filename = Regex.Replace(
+            Path.GetFileName(result.Filename ?? "SwitchTrade-support.zip"),
+            "[^A-Za-z0-9._-]", "_");
+        if (!filename.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+            filename += ".zip";
+        var path = Path.Combine(desktop, filename);
+        var temporaryPath = $"{path}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            Directory.CreateDirectory(desktop);
+            await File.WriteAllBytesAsync(temporaryPath, content, cancellationToken);
+            File.Move(temporaryPath, path, overwrite: true);
+            return path;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            throw new UserFacingException(
+                "SwitchTrade created the support file but could not save it to your Desktop.",
+                "support_export_failed", "support", true, "retry");
+        }
+        finally
+        {
+            try { File.Delete(temporaryPath); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
     }
 
     public async Task RepairAdapterAsync(CancellationToken cancellationToken = default) =>
@@ -928,7 +969,10 @@ public sealed class ControlApiClient : IControlGateway
         bool Shared,
         bool Attached,
         bool Selected);
-    private sealed record SupportBundleResponse(string? Path);
+    private sealed record SupportBundleResponse(
+        string? Path,
+        string? Filename,
+        [property: JsonPropertyName("content_base64")] string? ContentBase64);
     private sealed record ProblemDto(
         string? Code,
         string? Message,

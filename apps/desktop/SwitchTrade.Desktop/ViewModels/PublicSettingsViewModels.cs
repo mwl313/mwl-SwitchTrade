@@ -161,7 +161,7 @@ public sealed class SettingsScreenViewModel : ScreenViewModel
             StatusMessage = $"Checking {SelectedAdapter.FriendlyName}...";
             var result = await Shell.Gateway.RunHardwareDiagnosticsAsync(SelectedAdapter.UsbId);
             DiagnosticFilePath = result.ReportPath;
-            StatusMessage = $"Diagnostics {result.OverallStatus}: {result.Summary}";
+            StatusMessage = $"Diagnostics saved to your Desktop. {result.OverallStatus}: {result.Summary}";
             Shell.Announce(StatusMessage);
         }
         catch (UserFacingException error) { StatusMessage = error.UserMessage; }
@@ -172,7 +172,7 @@ public sealed class SettingsScreenViewModel : ScreenViewModel
         try
         {
             SupportFilePath = await Shell.Gateway.CreateSupportBundleAsync();
-            StatusMessage = "Support file created.";
+            StatusMessage = "Support file saved to your Desktop.";
             Shell.Announce(StatusMessage);
         }
         catch (UserFacingException error) { StatusMessage = error.UserMessage; }

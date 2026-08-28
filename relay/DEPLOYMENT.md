@@ -35,9 +35,11 @@ Required production controls:
 
 - mount `/var/lib/switchtrade` on an encrypted persistent volume with backups restricted to the
   relay operator;
+- retain the redacted diagnostic uploads under `/var/lib/switchtrade/diagnostics` according to the
+  operator's support policy and restrict access to support staff;
 - terminate TLS 1.2 or newer at the ingress and redirect plain HTTP before it reaches the service;
-- limit request bodies at the ingress to 64 KiB for control requests and 1,048,832 bytes for RFU
-  WebSocket messages;
+- limit request bodies at the ingress to 64 KiB for control requests, 16 MiB for
+  `/v1/diagnostics/*`, and 1,048,832 bytes for RFU WebSocket messages;
 - probe `/health`; collect `/metrics` only on the private operator network;
 - retain structured operational logs for 14 days and exclude `Authorization` and WebSocket headers;
 - alert on repeated 5xx responses, abnormal 429 rates, authority-volume exhaustion, and restart loops;
@@ -55,6 +57,8 @@ The production endpoints are:
 
 - `GET /health` — readiness and contract identity;
 - `GET /metrics` — private operational counters;
+- `POST /v1/diagnostics/support-bundle|hardware-diagnostic` — bounded, validated redacted support
+  uploads stored outside the room database;
 - `/v1/trade-rooms*` — authenticated authoritative room control;
 - `/session/{room_code}/ws?role=host|guest&protocol=rfu&attempt_id={uuid}` — credentialed,
   attempt-bound opaque RFU transport. The caller must send its member bearer token.

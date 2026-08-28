@@ -286,7 +286,7 @@ Install/Repair/Update/Rollback/Uninstall remain external gates.
 ### STB-005 — Diagnostic exports expose an internal WSL path instead of a Windows file
 
 - **Priority:** P2
-- **Status:** Partially fixed; support-file export remains open
+- **Status:** Fixed in the post-0.2.1 candidate; physical two-PC confirmation pending
 - **Scope:** Settings → Connection → Run read-only diagnostics and Settings → Support → Create
   support file.
 
@@ -294,19 +294,21 @@ The backend creates the diagnostic report and redacted support ZIP under `/root/
 inside the isolated WSL runtime. The desktop displays that Linux path directly, so a normal Windows
 user cannot browse to the generated file and may reasonably assume the export was lost.
 
-The desktop now writes the complete diagnostic JSON atomically to the current user's redirected
-Windows Desktop and displays that Windows path. This passed a live Unicode-profile check on
-2026-08-28. The redacted support ZIP still exposes its WSL path, and neither export has an **Open
-folder** action yet, so this combined issue is not closed.
+The desktop writes both the complete diagnostic JSON and redacted support ZIP atomically to the
+current user's redirected Windows Desktop and displays the Windows path. The local control service
+also attempts to upload each redacted artifact to a bounded relay ingestion endpoint. Relay failure
+does not prevent the Desktop copy from being created. An **Open folder** action remains a P2 UX
+enhancement rather than a file-availability defect.
 
-#### Required fix and acceptance
+#### Implemented acceptance
 
 - Copy each user-requested export to a documented Windows directory and return that Windows path.
-- Add an **Open folder** action; do not require PowerShell or `\\wsl.localhost` navigation.
 - Keep the internal WSL copy private and preserve the existing redaction rules.
 - Verify Unicode Windows profiles and filenames, repeated exports, missing destination directories,
   and copy failures with an actionable structured error.
 - The UI must never present `/root/...` as the only location of a user-requested export.
+
+An **Open folder** action remains a separate future convenience improvement.
 
 ## Regression rule
 

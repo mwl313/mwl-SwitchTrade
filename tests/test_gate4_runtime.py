@@ -1,5 +1,6 @@
 from pathlib import Path
 import base64
+import io
 import json
 import os
 import shutil
@@ -8,6 +9,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+import zipfile
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
@@ -281,8 +283,6 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 self.assertNotIn("CANARY_INTERNAL_DETAIL", events)
 
     def test_support_bundle_records_selected_shared_and_attached_gates(self):
-        import zipfile
-
         instance_id = r"USB\VID_0BDA&PID_818B\RADIO-A"
         usbipd_state = {"Devices": [{
             "BusId": "2-4", "ClientIPAddress": None, "PersistedGuid": None,
@@ -291,20 +291,42 @@ class Gate4RuntimeContractTests(unittest.TestCase):
         }]}
         with tempfile.TemporaryDirectory() as temporary:
             with TestClient(create_app(runs_root=temporary)) as client:
-                with patch("switchtrade.control.subprocess.run") as run:
+                with patch("switchtrade.control.subprocess.run") as run, patch.object(
+                        client.app.state.runtime.relay, "upload_diagnostic", return_value={
+                            "status": "stored", "upload_id": "support-upload",
+                            "correlation_id": "support-correlation",
+                        }) as upload:
                     run.return_value = MagicMock(
                         returncode=0, stdout=json.dumps(usbipd_state), stderr="")
                     client.post("/api/v1/hardware/selection", json={
                         "usb_id": "0bda:818b", "bus_id": "2-4",
                         "instance_id": instance_id,
                     })
-                    bundle = client.post("/api/v1/support-bundle").json()["path"]
+                    response = client.post("/api/v1/support-bundle").json()
+                    bundle = response["path"]
                 with zipfile.ZipFile(bundle) as archive:
                     summary = json.loads(archive.read("runtime-summary.json"))
+                exported = base64.b64decode(response["content_base64"])
+                with zipfile.ZipFile(io.BytesIO(exported)) as archive:
+                    self.assertIn("privacy-manifest.json", archive.namelist())
+                upload.assert_called_once()
         self.assertEqual(summary["hardware"]["selected"]["usb_id"], "0bda:818b")
         self.assertFalse(summary["hardware"]["selected"]["shared"])
         self.assertFalse(summary["hardware"]["selected"]["attached"])
         self.assertNotIn("instance_id", summary["hardware"]["selected"])
+
+    def test_support_bundle_remains_downloadable_when_relay_upload_is_offline(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with TestClient(create_app(runs_root=temporary)) as client, patch.object(
+                    client.app.state.runtime.relay, "upload_diagnostic",
+                    side_effect=RelayError("relay offline")):
+                response = client.post("/api/v1/support-bundle")
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["relay_upload"]["status"], "unavailable")
+        self.assertTrue(body["filename"].startswith("SwitchTrade-support-"))
+        with zipfile.ZipFile(io.BytesIO(base64.b64decode(body["content_base64"]))) as archive:
+            self.assertIn("privacy-manifest.json", archive.namelist())
 
     def test_party_api_fails_neutral_when_session_is_inactive(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1080,7 +1102,11 @@ class Gate4RuntimeContractTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as temporary:
             with TestClient(create_app(runs_root=temporary)) as client:
-                with patch("switchtrade.control.subprocess.run") as run:
+                with patch("switchtrade.control.subprocess.run") as run, patch.object(
+                        client.app.state.runtime.relay, "upload_diagnostic", return_value={
+                            "status": "stored", "upload_id": "diagnostic-upload",
+                            "correlation_id": "diagnostic-correlation",
+                        }) as upload:
                     run.return_value.returncode = 0
                     run.return_value.stdout = json.dumps(fake_report) + "\n"
                     run.return_value.stderr = ""
@@ -1090,7 +1116,9 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                     )
                 self.assertEqual(response.status_code, 200, response.text)
                 self.assertEqual(response.json()["report"]["overall_status"], "partial")
+                self.assertEqual(response.json()["relay_upload"]["status"], "stored")
                 self.assertIn("switchtrade.hardware_diagnostics", run.call_args.args[0])
+                upload.assert_called_once()
 
     def test_detected_experimental_adapter_can_be_selected_without_confirmation(self):
         usbipd_state = {

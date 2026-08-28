@@ -1,4 +1,4 @@
-SwitchTrade 0.2.0-beta.1 — Third-Party Notices and Source Offer
+SwitchTrade 0.2.2-beta.1 — Third-Party Notices and Source Offer
 ================================================================
 
 This file identifies third-party software distributed with or installed by SwitchTrade. It does not

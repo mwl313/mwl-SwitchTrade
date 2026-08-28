@@ -30,26 +30,7 @@
                        TextWrapping="Wrap" Margin="0,7,0,0" />
             <Button Content="Use selected adapter" Command="{Binding SelectDeviceCommand}"
                     Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" Margin="0,10,0,22" />
-            <TextBlock Text="Hardware profiles" FontWeight="SemiBold" Margin="0,0,0,10" />
-            <ItemsControl ItemsSource="{Binding Adapters}">
-              <ItemsControl.ItemTemplate>
-                <DataTemplate DataType="{x:Type model:AdapterProfileViewData}">
-                  <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,14">
-                    <StackPanel>
-                      <Grid>
-                        <TextBlock Text="{Binding FriendlyName}" FontWeight="SemiBold" FontSize="16" />
-                        <TextBlock Text="{Binding SupportLabel}" HorizontalAlignment="Right" Foreground="{DynamicResource SecondaryTextBrush}" />
-                      </Grid>
-                      <TextBlock Text="{Binding Summary}" Margin="0,5,0,0" />
-                      <Expander Header="Technical details" Margin="0,8,0,0">
-                        <TextBlock Text="{Binding TechnicalDetails}" Style="{StaticResource SecondaryText}" Margin="0,6,0,0" />
-                      </Expander>
-                    </StackPanel>
-                  </Border>
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
-            <TextBlock Text="Diagnostic profile" FontWeight="SemiBold" Margin="0,20,0,6" />
+            <TextBlock Text="Adapter diagnostics" FontWeight="SemiBold" Margin="0,0,0,6" />
             <ComboBox ItemsSource="{Binding Adapters}" SelectedItem="{Binding SelectedAdapter}"
                       DisplayMemberPath="FriendlyName" MaxWidth="420" HorizontalAlignment="Left"
                       automation:AutomationProperties.Name="Diagnostic adapter profile" />
@@ -67,7 +48,7 @@
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
           <StackPanel Margin="18,22,12,32">
             <TextBlock Text="Support" Style="{StaticResource SectionTitle}" />
-            <TextBlock Text="Create a redacted support file when a recovery step does not work." Margin="0,0,0,18" />
+            <TextBlock Text="Create a redacted support file on your Desktop. SwitchTrade also sends it to the online relay when available." Margin="0,0,0,18" TextWrapping="Wrap" />
             <Button Content="Create support file" Command="{Binding SupportCommand}" Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left" />
             <Border Style="{StaticResource SuccessNotice}" Margin="0,18,0,0"
                     Visibility="{Binding HasSupportFile, Converter={StaticResource BooleanToVisibility}}">
@@ -85,7 +66,7 @@
             </TextBlock>
             <Border Height="1" Background="{DynamicResource BorderBrush}" Margin="0,28" />
             <TextBlock Text="About SwitchTrade" Style="{StaticResource SectionTitle}" />
-            <TextBlock Text="SwitchTrade 0.2.0 beta.1" />
+            <TextBlock Text="SwitchTrade 0.2.2 beta.1" />
             <TextBlock Text="Room control v1 · Public directory v1 · Party commit v1" Style="{StaticResource SecondaryText}" Margin="0,4,0,0" />
           </StackPanel>
         </ScrollViewer>
