@@ -95,9 +95,9 @@ public partial class App : Application
                     "owner_member_id":"owner","local_member_id":"member",
                     "state":"ready_check","members":[
                     {"member_id":"owner","seat":"member_a","is_local":false,"online_state":"online",
-                    "ready_state":"not_ready","switch_room_role":null},
+                    "display_name":"Leaf","ready_state":"not_ready","switch_room_role":null},
                     {"member_id":"member","seat":"member_b","is_local":true,"online_state":"online",
-                    "ready_state":"not_ready","switch_room_role":null}],
+                    "display_name":"Red","ready_state":"not_ready","switch_room_role":null}],
                     "attempt":{"local_switch_role":null,"phase":"failed","role_locked":true,
                     "failure":{"code":"relay.restart","stage":"relay","recoverable":true,
                     "primary_action":"retry"}}}
@@ -107,6 +107,7 @@ public partial class App : Application
             {
                 FailureCode: "relay.restart", FailureStage: "relay",
                 FailureRecoverable: true, FailureAction: "retry", Room.RoomCode: "ABC123",
+                LocalTrainerDisplayName: "Red", PartnerTrainerDisplayName: "Leaf",
             };
             UserFacingException? deadlineFailure = null;
             using (var deadlineClient = new ControlApiClient(new SelfTestHttpHandler(_ =>
@@ -180,7 +181,9 @@ public partial class App : Application
                 memberCoordinator.RecoveryCode == "relay.restart" &&
                 memberCoordinator.RecoveryStage == "relay" &&
                 memberCoordinator.RecoveryRecoverable &&
-                memberCoordinator.RecoveryAction == "retry";
+                memberCoordinator.RecoveryAction == "retry" &&
+                memberCoordinator.LocalTrainerDisplayName == "Red" &&
+                memberCoordinator.PartnerTrainerDisplayName == "Leaf";
             memberCoordinator.ApplyRoom(new AuthoritativeRoomProjection(
                 5, 0, "closed", RoomMembershipRole.Member,
                 SwitchRoomRole.Unassigned, false, false, "none", false));

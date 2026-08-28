@@ -8,14 +8,14 @@
   <UserControl.Resources>
     <DataTemplate x:Key="RoomDetailsTemplate" DataType="{x:Type model:PublicRoomListing}">
       <StackPanel>
-        <Border Style="{StaticResource StatusBadge}" HorizontalAlignment="Left" Margin="0,0,0,14">
+        <Border Style="{StaticResource StatusBadge}" HorizontalAlignment="Left" Margin="0,0,0,9">
           <TextBlock Text="{Binding AvailabilityLabel}" Style="{StaticResource KickerText}" />
         </Border>
         <TextBlock Text="{Binding RoomName}" Style="{StaticResource SectionTitle}" />
         <TextBlock Text="{Binding TrainerDisplayName, StringFormat=Hosted by {0}}"
-                   Foreground="{DynamicResource SecondaryTextBrush}" Margin="0,0,0,16" />
+                   Foreground="{DynamicResource SecondaryTextBrush}" Margin="0,0,0,12" />
 
-        <Grid Margin="0,0,0,16">
+        <Grid Margin="0,0,0,12">
           <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition /></Grid.ColumnDefinitions>
           <StackPanel>
             <TextBlock Text="GAME" Style="{StaticResource KickerText}" />
@@ -28,21 +28,15 @@
         </Grid>
 
         <TextBlock Text="Offering" Style="{StaticResource FieldLabel}" />
-        <TextBlock Text="{Binding Offering}" Margin="0,0,0,12" />
+        <TextBlock Text="{Binding Offering}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                   ToolTip="{Binding Offering}" Margin="0,0,0,8" />
         <TextBlock Text="Looking for" Style="{StaticResource FieldLabel}" />
-        <TextBlock Text="{Binding Wanted}" Margin="0,0,0,12" />
-        <TextBlock Text="{Binding Note}" Foreground="{DynamicResource SecondaryTextBrush}" Margin="0,0,0,16" />
-        <TextBlock Text="{Binding Occupancy, StringFormat=Room seats: {0}}" Margin="0,0,0,18" />
-
-        <Border Height="1" Background="{DynamicResource BorderBrush}" Margin="0,0,0,18" />
-        <TextBlock Style="{StaticResource FieldLabel}">
-          <Run Text="Your trainer display name" /><Run Text=" *" Foreground="{DynamicResource DangerBrush}" />
-        </TextBlock>
-        <TextBox Text="{Binding DataContext.TrainerName, ElementName=Root, UpdateSourceTrigger=PropertyChanged}"
-                 MaxLength="20" automation:AutomationProperties.Name="Your trainer display name"
-                 automation:AutomationProperties.IsRequiredForForm="True" Margin="0,0,0,14" />
-        <Button Content="Join this room" Command="{Binding DataContext.JoinCommand, ElementName=Root}"
-                Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" MinWidth="160" />
+        <TextBlock Text="{Binding Wanted}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                   ToolTip="{Binding Wanted}" Margin="0,0,0,8" />
+        <TextBlock Text="{Binding Note}" Foreground="{DynamicResource SecondaryTextBrush}"
+                   TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" ToolTip="{Binding Note}"
+                   Margin="0,0,0,10" />
+        <TextBlock Text="{Binding Occupancy, StringFormat=Room seats: {0}}" />
       </StackPanel>
     </DataTemplate>
   </UserControl.Resources>
@@ -94,7 +88,7 @@
       </Grid>
     </StackPanel>
 
-    <Grid Grid.Row="2">
+    <Grid Grid.Row="2" Margin="0,0,0,92">
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="*" />
         <ColumnDefinition x:Name="DetailsGutter" Width="18" />
@@ -144,11 +138,9 @@
 
       <Border x:Name="WideDetails" Grid.Column="2" Style="{StaticResource SurfaceCard}">
         <Grid>
-          <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
-                        Visibility="{Binding HasSelection, Converter={StaticResource BooleanToVisibility}}">
-            <ContentControl Content="{Binding SelectedRoom}" ContentTemplate="{StaticResource RoomDetailsTemplate}"
-                            Margin="0,0,8,0" />
-          </ScrollViewer>
+          <ContentControl Content="{Binding SelectedRoom}" ContentTemplate="{StaticResource RoomDetailsTemplate}"
+                          VerticalAlignment="Top"
+                          Visibility="{Binding HasSelection, Converter={StaticResource BooleanToVisibility}}" />
           <TextBlock Text="Select a Room to See Details"
                      HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center">
             <TextBlock.Style>
@@ -166,11 +158,8 @@
       <Border x:Name="CompactDetails" Grid.ColumnSpan="3" Style="{StaticResource SurfaceCard}"
               Background="{DynamicResource SurfaceHighestBrush}" Visibility="Collapsed">
         <Grid>
-          <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
-                        Margin="0,36,0,0">
-            <ContentControl Content="{Binding SelectedRoom}" ContentTemplate="{StaticResource RoomDetailsTemplate}"
-                            Margin="0,0,8,0" />
-          </ScrollViewer>
+          <ContentControl Content="{Binding SelectedRoom}" ContentTemplate="{StaticResource RoomDetailsTemplate}"
+                          Margin="0,36,0,0" VerticalAlignment="Top" />
           <Button Content="Close details" Command="{Binding CloseDetailsCommand}" Style="{StaticResource TextButton}"
                   HorizontalAlignment="Right" VerticalAlignment="Top" />
         </Grid>
@@ -181,6 +170,27 @@
             Visibility="{Binding HasError, Converter={StaticResource BooleanToVisibility}}"
             automation:AutomationProperties.LiveSetting="Assertive">
       <TextBlock Text="{Binding ErrorMessage}" />
+    </Border>
+
+    <Border Grid.Row="2" Style="{StaticResource StickyActionBar}" VerticalAlignment="Bottom">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="18" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <StackPanel Grid.Column="0" Width="360" MaxWidth="440" HorizontalAlignment="Left">
+          <TextBlock Style="{StaticResource FieldLabel}">
+            <Run Text="Your trainer display name" /><Run Text=" *" Foreground="{DynamicResource DangerBrush}" />
+          </TextBlock>
+          <TextBox Text="{Binding TrainerName, UpdateSourceTrigger=PropertyChanged}"
+                   MaxLength="20" automation:AutomationProperties.Name="Your trainer display name"
+                   automation:AutomationProperties.IsRequiredForForm="True" />
+        </StackPanel>
+        <Button Grid.Column="2" Content="Join this room" Command="{Binding JoinCommand}"
+                Style="{StaticResource PrimaryButton}" MinWidth="170"
+                HorizontalAlignment="Right" VerticalAlignment="Bottom" />
+      </Grid>
     </Border>
   </Grid>
 </UserControl>

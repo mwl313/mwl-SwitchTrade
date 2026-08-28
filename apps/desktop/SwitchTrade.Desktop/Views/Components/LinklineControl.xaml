@@ -7,8 +7,23 @@
     <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="150" /><ColumnDefinition /></Grid.ColumnDefinitions>
     <Border Grid.Column="0" Background="{DynamicResource YouTintBrush}" CornerRadius="8" Padding="18">
       <StackPanel>
-        <TextBlock Text="You" FontWeight="SemiBold" FontSize="18" />
-        <TextBlock Text="{Binding YouSummary, ElementName=Root}" Style="{StaticResource SecondaryText}" Margin="0,5,0,0" />
+        <Grid>
+          <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+          <TextBlock Text="You" FontWeight="SemiBold" FontSize="18" />
+          <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+            <Ellipse Width="7" Height="7" Fill="{DynamicResource ActionGreenBrush}" Margin="0,0,6,0" />
+            <TextBlock Text="{Binding YouPresence, ElementName=Root}" Style="{StaticResource SecondaryText}" />
+          </StackPanel>
+        </Grid>
+        <TextBlock Text="{Binding YouSummary, ElementName=Root}" Margin="0,5,0,0">
+          <TextBlock.Style>
+            <Style TargetType="TextBlock" BasedOn="{StaticResource SecondaryText}">
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding YouSummary, ElementName=Root}" Value=""><Setter Property="Visibility" Value="Collapsed" /></DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </TextBlock.Style>
+        </TextBlock>
       </StackPanel>
     </Border>
     <Grid Grid.Column="1" VerticalAlignment="Center" Margin="16,0">
@@ -21,8 +36,34 @@
     </Grid>
     <Border Grid.Column="2" Background="{DynamicResource TealTintBrush}" CornerRadius="8" Padding="18">
       <StackPanel>
-        <TextBlock Text="Partner" FontWeight="SemiBold" FontSize="18" />
-        <TextBlock Text="{Binding PartnerSummary, ElementName=Root}" Style="{StaticResource SecondaryText}" Margin="0,5,0,0" />
+        <Grid>
+          <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+          <TextBlock Text="Partner" FontWeight="SemiBold" FontSize="18" />
+          <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+            <Ellipse Width="7" Height="7" Margin="0,0,6,0">
+              <Ellipse.Style>
+                <Style TargetType="Ellipse">
+                  <Setter Property="Fill" Value="{DynamicResource BorderStrongBrush}" />
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding PartnerIsOnline, ElementName=Root}" Value="True">
+                      <Setter Property="Fill" Value="{DynamicResource ActionGreenBrush}" />
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </Ellipse.Style>
+            </Ellipse>
+            <TextBlock Text="{Binding PartnerPresence, ElementName=Root}" Style="{StaticResource SecondaryText}" />
+          </StackPanel>
+        </Grid>
+        <TextBlock Text="{Binding PartnerSummary, ElementName=Root}" Margin="0,5,0,0">
+          <TextBlock.Style>
+            <Style TargetType="TextBlock" BasedOn="{StaticResource SecondaryText}">
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding PartnerSummary, ElementName=Root}" Value=""><Setter Property="Visibility" Value="Collapsed" /></DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </TextBlock.Style>
+        </TextBlock>
       </StackPanel>
     </Border>
   </Grid>

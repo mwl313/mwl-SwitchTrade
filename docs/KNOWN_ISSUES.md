@@ -286,13 +286,18 @@ Install/Repair/Update/Rollback/Uninstall remain external gates.
 ### STB-005 — Diagnostic exports expose an internal WSL path instead of a Windows file
 
 - **Priority:** P2
-- **Status:** Confirmed
+- **Status:** Partially fixed; support-file export remains open
 - **Scope:** Settings → Connection → Run read-only diagnostics and Settings → Support → Create
   support file.
 
 The backend creates the diagnostic report and redacted support ZIP under `/root/.local/state/...`
 inside the isolated WSL runtime. The desktop displays that Linux path directly, so a normal Windows
 user cannot browse to the generated file and may reasonably assume the export was lost.
+
+The desktop now writes the complete diagnostic JSON atomically to the current user's redirected
+Windows Desktop and displays that Windows path. This passed a live Unicode-profile check on
+2026-08-28. The redacted support ZIP still exposes its WSL path, and neither export has an **Open
+folder** action yet, so this combined issue is not closed.
 
 #### Required fix and acceptance
 

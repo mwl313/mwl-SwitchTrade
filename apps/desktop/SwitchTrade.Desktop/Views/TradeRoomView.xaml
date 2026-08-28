@@ -26,6 +26,9 @@
 
     <Border Grid.Row="1" Style="{StaticResource SurfaceCard}" Margin="0,0,0,14">
       <components:LinklineControl YouSummary="{Binding YouSummary}" PartnerSummary="{Binding PartnerSummary}"
+                                  YouPresence="{Binding YouPresenceText}"
+                                  PartnerPresence="{Binding PartnerPresenceText}"
+                                  PartnerIsOnline="{Binding PartnerOnline}"
                                   StatusText="{Binding LinklineState}" />
     </Border>
 
@@ -56,9 +59,19 @@
             <Grid.ColumnDefinitions><ColumnDefinition Width="7*" /><ColumnDefinition Width="16" /><ColumnDefinition Width="5*" /></Grid.ColumnDefinitions>
             <Border Grid.Column="0" Style="{StaticResource SurfaceCard}">
               <StackPanel>
-                <TextBlock Text="{Binding StageHeading}" Style="{StaticResource SectionTitle}" />
-                <TextBlock Text="{Binding InstructionDetails}" FontSize="15" LineHeight="23" />
-                <TextBlock Text="{Binding LimitationNotice}" Style="{StaticResource SecondaryText}" Margin="0,14,0,0" />
+                <TextBlock Text="How To Connect" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12" />
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="24" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                  <Grid.RowDefinitions><RowDefinition /><RowDefinition /><RowDefinition /></Grid.RowDefinitions>
+                  <TextBlock Text="1." FontSize="14" FontWeight="SemiBold" />
+                  <TextBlock Grid.Column="1" Text="Go to the Wireless Club Direct Corner" FontSize="14" />
+                  <TextBlock Grid.Row="1" Text="2." FontSize="14" FontWeight="SemiBold" Margin="0,8,0,0" />
+                  <TextBlock Grid.Row="1" Grid.Column="1" Text="Open Trade Center and either Join Group or Become Leader"
+                             FontSize="14" Margin="0,8,0,0" />
+                  <TextBlock Grid.Row="2" Text="3." FontSize="14" FontWeight="SemiBold" Margin="0,8,0,0" />
+                  <TextBlock Grid.Row="2" Grid.Column="1" Text="Press the respective button in the Switch Trade"
+                             FontSize="14" Margin="0,8,0,0" />
+                </Grid>
               </StackPanel>
             </Border>
 
@@ -134,11 +147,6 @@
                                   AccentBrush="{DynamicResource TealTintBrush}" />
           </Grid>
 
-          <Border Style="{StaticResource SurfaceCard}"
-                  Visibility="{Binding HasPartyData, Converter={StaticResource InverseBooleanToVisibility}}">
-            <TextBlock Text="Party details appear only after the passive decoder has a complete, checksum-valid snapshot. Trading does not depend on this display."
-                       Style="{StaticResource SecondaryText}" />
-          </Border>
         </StackPanel>
       </ScrollViewer>
 

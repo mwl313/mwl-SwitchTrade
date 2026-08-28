@@ -36,6 +36,8 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
     public string RoomState { get; private set; } = "waiting_for_partner";
     public string AttemptPhase { get; private set; } = "none";
     public bool PartnerOnline { get; private set; }
+    public string LocalTrainerDisplayName { get; private set; } = "Trainer";
+    public string PartnerTrainerDisplayName { get; private set; } = "";
     public bool BothReady { get; private set; }
     public bool RoleLocked { get; private set; }
     public bool HasRoom => Context is not null;
@@ -57,6 +59,13 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
         RoomState = room.Participants >= 2 ? "ready_check" : "waiting_for_partner";
         AttemptPhase = "none";
         PartnerOnline = room.Participants >= 2;
+        LocalTrainerDisplayName = string.IsNullOrWhiteSpace(room.LocalTrainerDisplayName)
+            ? membershipRole == RoomMembershipRole.Owner && !string.IsNullOrWhiteSpace(room.TrainerDisplayName)
+                ? room.TrainerDisplayName : "Trainer"
+            : room.LocalTrainerDisplayName;
+        PartnerTrainerDisplayName = string.IsNullOrWhiteSpace(room.PartnerTrainerDisplayName)
+            ? membershipRole == RoomMembershipRole.Member ? room.TrainerDisplayName : ""
+            : room.PartnerTrainerDisplayName;
         BothReady = false;
         RoleLocked = false;
         RaiseChanged();
@@ -222,11 +231,22 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
         {
             MembershipRole = room.MembershipRole,
             SwitchRole = room.SwitchRole,
-            Room = Context.Room with { Participants = room.Participants },
+            Room = Context.Room with
+            {
+                Participants = room.Participants,
+                LocalTrainerDisplayName = string.IsNullOrWhiteSpace(room.LocalTrainerDisplayName)
+                    ? Context.Room.LocalTrainerDisplayName : room.LocalTrainerDisplayName,
+                PartnerTrainerDisplayName = string.IsNullOrWhiteSpace(room.PartnerTrainerDisplayName)
+                    ? Context.Room.PartnerTrainerDisplayName : room.PartnerTrainerDisplayName,
+            },
         };
         RoomState = room.State;
         AttemptPhase = room.AttemptPhase;
         PartnerOnline = room.PartnerOnline;
+        if (!string.IsNullOrWhiteSpace(room.LocalTrainerDisplayName))
+            LocalTrainerDisplayName = room.LocalTrainerDisplayName;
+        if (!string.IsNullOrWhiteSpace(room.PartnerTrainerDisplayName))
+            PartnerTrainerDisplayName = room.PartnerTrainerDisplayName;
         BothReady = room.BothReady;
         RoleLocked = room.RoleLocked;
         if (room.AttemptPhase == "failed")
@@ -277,6 +297,8 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
         RoomState = "waiting_for_partner";
         AttemptPhase = "none";
         PartnerOnline = false;
+        LocalTrainerDisplayName = "Trainer";
+        PartnerTrainerDisplayName = "";
         BothReady = false;
         RoleLocked = false;
         RaiseChanged();

@@ -58,6 +58,10 @@ public sealed class ControlApiClient : IControlGateway
     {
         PropertyNameCaseInsensitive = true,
     };
+    private static readonly JsonSerializerOptions IndentedJsonOptions = new()
+    {
+        WriteIndented = true,
+    };
 
     private readonly HttpClient _http;
     private readonly string? _expectedReleaseId;
@@ -294,13 +298,17 @@ public sealed class ControlApiClient : IControlGateway
                 _ => SwitchRoomRole.Unassigned,
             };
             var active = room.Members?.Where(member => member.OnlineState != "left").ToArray() ?? [];
+            var roomInfo = ToTradeRoom(room);
             return new(room.RoomVersion, active.Length, room.State ?? "waiting_for_partner", membership,
                 switchRole, partner?.OnlineState == "online",
                 active.Length == 2 && active.All(member => member.ReadyState == "ready"),
                 room.Attempt?.Phase ?? "none", room.Attempt?.RoleLocked == true,
-                ToTradeRoom(room), room.Attempt?.Failure?.Code, room.Attempt?.Failure?.Stage,
-                room.Attempt?.Failure?.Recoverable == true,
-                room.Attempt?.Failure?.PrimaryAction);
+                Room: roomInfo, FailureCode: room.Attempt?.Failure?.Code,
+                FailureStage: room.Attempt?.Failure?.Stage,
+                FailureRecoverable: room.Attempt?.Failure?.Recoverable == true,
+                FailureAction: room.Attempt?.Failure?.PrimaryAction,
+                LocalTrainerDisplayName: roomInfo.LocalTrainerDisplayName,
+                PartnerTrainerDisplayName: roomInfo.PartnerTrainerDisplayName);
         }
         catch (HttpRequestException) { return null; }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return null; }
@@ -410,15 +418,57 @@ public sealed class ControlApiClient : IControlGateway
         var result = await PostAsync<HardwareDiagnosticResponse>(
             "/api/v1/hardware/diagnostics",
             new { usb_id = usbId, mode = "quick", role = "host" }, cancellationToken);
-        var report = result.Report ?? throw new UserFacingException(
+        if (result.Report.ValueKind != JsonValueKind.Object)
+            throw new UserFacingException(
+                "SwitchTrade received an incomplete diagnostic report.", "invalid_response");
+        var report = result.Report.Deserialize<HardwareDiagnosticReportDto>(JsonOptions) ??
+            throw new UserFacingException(
             "SwitchTrade received an incomplete diagnostic report.", "invalid_response");
         var first = report.Incompatibilities is { Count: > 0 } ? report.Incompatibilities[0] : null;
         var summary = first is null
             ? "Software checks completed. Physical Switch checks remain separate."
             : $"{first.Code}: {first.Action}";
+        var reportPath = await SaveDiagnosticReportAsync(
+            result.Report, report.RunId ?? "unknown", cancellationToken);
         return new HardwareDiagnosticViewData(
             report.RunId ?? "unknown", report.OverallStatus ?? "unknown", summary,
-            result.ReportPath ?? "Diagnostic report created");
+            reportPath);
+    }
+
+    private static async Task<string> SaveDiagnosticReportAsync(
+        JsonElement report, string runId, CancellationToken cancellationToken)
+    {
+        var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        var safeRunId = Regex.Replace(runId, "[^A-Za-z0-9._-]", "_");
+        if (string.IsNullOrWhiteSpace(desktop))
+            throw new UserFacingException(
+                "SwitchTrade could not find your Desktop folder.",
+                "diagnostic_export_failed", "diagnostics", true, "retry");
+        var path = Path.Combine(desktop, $"SwitchTrade-diagnostic-{safeRunId}.json");
+        var temporaryPath = $"{path}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            Directory.CreateDirectory(desktop);
+            await File.WriteAllTextAsync(
+                temporaryPath,
+                JsonSerializer.Serialize(report, IndentedJsonOptions),
+                cancellationToken);
+            File.Move(temporaryPath, path, overwrite: true);
+            return path;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            throw new UserFacingException(
+                "Diagnostics completed, but SwitchTrade could not save the report to your Desktop.",
+                "diagnostic_export_failed", "diagnostics", true, "retry");
+        }
+        finally
+        {
+            try { File.Delete(temporaryPath); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
     }
 
     public async Task<IReadOnlyList<HardwareDeviceViewData>> GetHardwareDevicesAsync(
@@ -716,13 +766,19 @@ public sealed class ControlApiClient : IControlGateway
         offering = string.IsNullOrWhiteSpace(offering) ? room?.Directory?.Offering ?? "" : offering;
         wanted = string.IsNullOrWhiteSpace(wanted) ? room?.Directory?.Wanted ?? "" : wanted;
         note = string.IsNullOrWhiteSpace(note) ? room?.Directory?.Note ?? "" : note;
+        var local = room?.Members?.FirstOrDefault(member => member.IsLocal);
+        var partner = room?.Members?.FirstOrDefault(member => !member.IsLocal);
+        var localName = local?.DisplayName ?? (room?.OwnerMemberId == room?.LocalMemberId
+            ? room?.Profile?.OwnerDisplayName ?? "Trainer" : "Trainer");
+        var partnerName = partner?.DisplayName ?? (room?.OwnerMemberId != room?.LocalMemberId
+            ? room?.Profile?.OwnerDisplayName ?? "" : "");
         return new(
         room?.Name ?? "Private Trade Room", room?.RoomCode ?? "",
         room?.Visibility ?? "private",
         room?.Members?.Count(member => member.OnlineState != "left") ?? 1,
         "authoritative", room?.Profile?.OwnerDisplayName ?? "",
         ParseGame(room?.Profile?.Game), ParseLanguage(room?.Profile?.Language),
-        offering, wanted, note);
+        offering, wanted, note, localName, partnerName);
     }
 
     private static PublicRoomListing ToPublicRoom(PublicRoomDto room) => new(
@@ -812,6 +868,7 @@ public sealed class ControlApiClient : IControlGateway
     private sealed record AuthorityMemberDto(
         [property: JsonPropertyName("member_id")] string? MemberId,
         string? Seat,
+        [property: JsonPropertyName("display_name")] string? DisplayName,
         [property: JsonPropertyName("is_local")] bool IsLocal,
         [property: JsonPropertyName("online_state")] string? OnlineState,
         [property: JsonPropertyName("ready_state")] string? ReadyState,
@@ -852,9 +909,7 @@ public sealed class ControlApiClient : IControlGateway
         string? Chipset,
         [property: JsonPropertyName("host_engine")] string? HostEngine,
         bool Experimental);
-    private sealed record HardwareDiagnosticResponse(
-        HardwareDiagnosticReportDto? Report,
-        [property: JsonPropertyName("report_path")] string? ReportPath);
+    private sealed record HardwareDiagnosticResponse(JsonElement Report);
     private sealed record HardwareDiagnosticReportDto(
         [property: JsonPropertyName("run_id")] string? RunId,
         [property: JsonPropertyName("overall_status")] string? OverallStatus,

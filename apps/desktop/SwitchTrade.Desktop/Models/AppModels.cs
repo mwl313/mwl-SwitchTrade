@@ -74,7 +74,9 @@ public sealed record TradeRoomInfo(
     GameLanguage Language = GameLanguage.None,
     string Offering = "",
     string Wanted = "",
-    string Note = "");
+    string Note = "",
+    string LocalTrainerDisplayName = "",
+    string PartnerTrainerDisplayName = "");
 
 public sealed record AuthoritativeRoomProjection(
     int RoomVersion,
@@ -90,7 +92,9 @@ public sealed record AuthoritativeRoomProjection(
     string? FailureCode = null,
     string? FailureStage = null,
     bool FailureRecoverable = false,
-    string? FailureAction = null);
+    string? FailureAction = null,
+    string LocalTrainerDisplayName = "",
+    string PartnerTrainerDisplayName = "");
 
 public sealed record AdapterProfileViewData(
     string UsbId,

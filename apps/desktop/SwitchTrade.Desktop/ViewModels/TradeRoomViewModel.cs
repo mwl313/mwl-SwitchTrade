@@ -38,23 +38,13 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
     public bool HasRoomCode => !string.IsNullOrWhiteSpace(RoomCode);
     public bool IsOwner => Context?.MembershipRole == RoomMembershipRole.Owner;
     public string MembershipActionText => IsOwner ? "Close Trade Room" : "Leave Trade Room";
-    public string YouSummary => YouParty is null ? "Party data unavailable" : "Checksum-verified party";
-    public string PartnerSummary => PartnerParty is null ? "Party data unavailable" : "Checksum-verified party";
-    public string MainInstruction => Context?.SwitchRole == SwitchRoomRole.Unassigned
-            ? "Choose what you are doing on your Switch"
-        : Context?.SwitchRole == SwitchRoomRole.Creator
-            ? "Keep your group open on your Switch"
-            : "Keep searching on your Switch";
-    public string InstructionDetails => Context?.SwitchRole == SwitchRoomRole.Unassigned
-            ? "Open Direct Connection in the game. Create a group or start searching, then choose the matching button below."
-        : Context?.SwitchRole == SwitchRoomRole.Creator
-            ? "SwitchTrade is looking for the group you created. Leave the group open."
-            : "SwitchTrade is preparing your partner’s group. Leave the search screen open.";
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Performance", "CA1822:Mark members as static",
-        Justification = "The notice is a bindable property of the screen projection.")]
-    public string LimitationNotice =>
-        "Use opposite choices: one trainer is Group Leader and the other is Joining.";
+    public string YouSummary => YouParty is null ? "" : "Checksum-verified party";
+    public string PartnerSummary => PartnerParty is null ? "" : "Checksum-verified party";
+    public string YouPresenceText => $"Online: {_coordinator.LocalTrainerDisplayName}";
+    public string PartnerPresenceText => _coordinator.PartnerOnline
+        ? $"Online: {(_coordinator.PartnerTrainerDisplayName.Length > 0 ? _coordinator.PartnerTrainerDisplayName : "Trainer")}"
+        : "Waiting...";
+    public bool PartnerOnline => _coordinator.PartnerOnline;
     public string ConnectionStatus => _coordinator.StatusText;
     public bool IsConnectionPending => _coordinator.IsPending;
     public bool ShowRoleChoices => _coordinator.ConnectionState == LegacyConnectionState.Idle;
@@ -70,9 +60,6 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
     public string RecoveryStage => _coordinator.RecoveryStage ?? "";
     public bool RecoveryRecoverable => _coordinator.RecoveryRecoverable;
     public string RecoveryAction => _coordinator.RecoveryAction ?? "";
-    public string StageHeading => _coordinator.ConnectionState == LegacyConnectionState.Active
-            ? "Both Switches are connected"
-            : MainInstruction;
     public string LinklineState => _coordinator.ConnectionState switch
     {
         LegacyConnectionState.Active => "Connected",
@@ -164,8 +151,9 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
         OnPropertyChanged(nameof(RoomCode));
         OnPropertyChanged(nameof(IsOwner));
         OnPropertyChanged(nameof(MembershipActionText));
-        OnPropertyChanged(nameof(MainInstruction));
-        OnPropertyChanged(nameof(InstructionDetails));
+        OnPropertyChanged(nameof(YouPresenceText));
+        OnPropertyChanged(nameof(PartnerPresenceText));
+        OnPropertyChanged(nameof(PartnerOnline));
         OnPropertyChanged(nameof(ConnectionStatus));
         OnPropertyChanged(nameof(IsConnectionPending));
         OnPropertyChanged(nameof(ShowRoleChoices));
@@ -178,7 +166,6 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
         OnPropertyChanged(nameof(RecoveryStage));
         OnPropertyChanged(nameof(RecoveryRecoverable));
         OnPropertyChanged(nameof(RecoveryAction));
-        OnPropertyChanged(nameof(StageHeading));
         OnPropertyChanged(nameof(LinklineState));
         ConnectionCommand.RaiseCanExecuteChanged();
         GroupLeaderCommand.RaiseCanExecuteChanged();
