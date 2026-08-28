@@ -263,6 +263,28 @@ rollback axis and before metadata publication; a fresh Repair converges and reve
 Temp-root Setup, kernel, and process-death simulations pass. Clean-host
 Install/Repair/Update/Rollback/Uninstall remain external gates.
 
+---
+
+### STB-005 — Diagnostic exports expose an internal WSL path instead of a Windows file
+
+- **Priority:** P2
+- **Status:** Confirmed
+- **Scope:** Settings → Connection → Run read-only diagnostics and Settings → Support → Create
+  support file.
+
+The backend creates the diagnostic report and redacted support ZIP under `/root/.local/state/...`
+inside the isolated WSL runtime. The desktop displays that Linux path directly, so a normal Windows
+user cannot browse to the generated file and may reasonably assume the export was lost.
+
+#### Required fix and acceptance
+
+- Copy each user-requested export to a documented Windows directory and return that Windows path.
+- Add an **Open folder** action; do not require PowerShell or `\\wsl.localhost` navigation.
+- Keep the internal WSL copy private and preserve the existing redaction rules.
+- Verify Unicode Windows profiles and filenames, repeated exports, missing destination directories,
+  and copy failures with an actionable structured error.
+- The UI must never present `/root/...` as the only location of a user-requested export.
+
 ## Regression rule
 
 Every P0 fix must add automated coverage for its state/error contract and must also pass the relevant
