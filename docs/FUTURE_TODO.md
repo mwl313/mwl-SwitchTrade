@@ -3,7 +3,19 @@
 This list contains work deliberately excluded from `0.2.0-beta.1`. Items are ordered within each
 section. None should be presented as a current beta capability.
 
-## 1. Post-release qualification
+## 1. Post-installer application stabilization
+
+1. Validate the replacement installer on clean Windows 10 22H2 and Windows 11 systems.
+2. Deploy and verify a relay supporting `rfu-tunnel.v1` and `manual-switch-role.v1`.
+3. Create one shared API contract source for Python and C#.
+4. Build a real WPF ↔ local control ↔ relay integration harness.
+5. Split the oversized backend orchestration module along existing responsibility boundaries.
+6. Split the oversized frontend API and state classes without changing the frozen contracts.
+7. Add WPF UI Automation for dropdowns, navigation, room state, reconnect, leave/close, and stale
+   errors.
+8. Run complete two-PC/two-Switch RTL8192EU qualification.
+
+## 2. Post-release qualification
 
 1. Run the complete production topology with two Windows PCs, two RTL8192EU adapters, two Switch
    consoles, and the hosted relay across two independent NATs.
@@ -22,7 +34,7 @@ section. None should be presented as a current beta capability.
 8. Complete physical Windows 10 22H2 qualification: clean install, reboot resume, custom-kernel boot,
    USB/IP attach, RTL8192EU health gate, full two-console trade, update, rollback, and uninstall.
 
-## 2. Reliability and product operations
+## 3. Reliability and product operations
 
 1. Add an update channel and verified in-app update flow with rollback.
 2. Add crash reporting that preserves the existing redaction and opt-in boundaries.
@@ -36,7 +48,7 @@ section. None should be presented as a current beta capability.
    localization length, and reduced motion.
 8. Continue owner-led visual polish without changing server authority or protocol contracts.
 
-## 3. Additional Switch-to-Switch features
+## 4. Additional Switch-to-Switch features
 
 1. FireRed/LeafGreen link battles.
 2. Union Room flows.
@@ -49,7 +61,7 @@ section. None should be presented as a current beta capability.
 All product features remain Switch-to-Switch. PC-to-Switch trading is a development harness, not a
 future product mode.
 
-## 4. Hardware and driver expansion
+## 5. Hardware and driver expansion
 
 1. Diagnose and fix RTL8188EU control-port association, AP+monitor concurrency, and receive-death
    behavior under WSL; keep it quarantined until it passes the same gates as RTL8192EU.
@@ -63,7 +75,7 @@ future product mode.
 7. Build a new custom kernel only when a required driver/configuration is absent; do not fork the core
    application for a chipset.
 
-## 5. Party display, history, and optional statistics
+## 6. Party display, history, and optional statistics
 
 1. Complete live two-party 2×3 presentation with validated hover/focus stat details during a native
    Switch-to-Switch session.
@@ -75,7 +87,7 @@ future product mode.
    pseudonymization. This service must remain separate from the opaque RFU relay.
 5. Never upload raw RFU frames or complete Pokémon records merely to produce statistics.
 
-## 6. Developer experience
+## 7. Developer experience
 
 1. Add deterministic protocol traces generated from synthetic/replay data so contributors do not need
    private captures.
