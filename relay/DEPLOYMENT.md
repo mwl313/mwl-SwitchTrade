@@ -79,6 +79,7 @@ hosting smoke:
 
 ```bash
 python -m relay.smoke https://relay.example.invalid
+python -m relay.smoke https://relay.example.invalid --reverse-roles
 ```
 
 The smoke verifies that `POST /session/create` returns 404, creates and joins an authoritative room,
@@ -86,6 +87,8 @@ admits two distinct matching P0 attestations, locks complementary roles and one 
 proves both v2 directions with unpredictable nonces, delivers the exact fixture advertisement by
 hash, accepts A_READY/B_READY on both seats, exchanges unpredictable byte-exact RFU in both
 directions, reaches current-generation RFU-active, and closes the room.
+Run both commands: the default delays B readiness, while `--reverse-roles` reverses the member roles
+and delays A readiness. One-sided readiness must remain inactive in both runs.
 Separately restart the container during a staged connection and confirm the attempt fails explicitly
 with no retained v2 namespace. Then provide only the public
 `https://` base URL; `installer/Build-Package.ps1 -Release` writes it into the signed configuration and

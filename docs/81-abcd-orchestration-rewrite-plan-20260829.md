@@ -51,7 +51,8 @@ Execution status:
 - Milestone 6 source checkpoint `d2130fe` added the authority-owned activation generation,
   identity-bound A_READY/B_READY barrier, bounded byte-exact RFU bridge, current-generation active
   counters, and explicit reconnect re-proof. The full fixed-runtime suite and local real-process C2
-  hosting smoke passed. Public validation-relay deployment and matrix rerun remain pending. See
+  hosting smoke passed. The redeployed relay passed repeated public happy-path, reversed-role, and
+  delayed-side C2 smoke; private zero-orphan and public negative/reconnect evidence remain pending. See
   [`89-abcd-milestone-6-c2-20260830.md`](89-abcd-milestone-6-c2-20260830.md).
 
 ## 2. Architecture and interface decisions

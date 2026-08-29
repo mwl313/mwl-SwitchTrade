@@ -2,8 +2,10 @@
 
 > Branch: `codex/abcd-orchestration-rework`
 > Source commit: `d2130fe`
-> Status: Source and local real-process exit matrix passed on 2026-08-30. Deployment of this exact
-> checkpoint to the validation relay and its public HTTPS/WSS rerun remain pending.
+> Status: Source and local real-process exit matrix passed on 2026-08-30. The validation relay was
+> redeployed and passed public HTTPS/WSS C0-C2 happy-path, repeated, reversed-role, delayed-A, and
+> delayed-B smoke. Private zero-orphan metrics and the remaining public negative/reconnect matrix are
+> pending.
 > Scope: identity-bound A_READY/B_READY activation, bounded pre-barrier RFU, byte-exact sustained
 > RFU, and reconnect re-proof. No physical A/B, distributed D, product cutover, or trade is claimed.
 
@@ -87,3 +89,17 @@ Before Milestone 6 is represented as deployed validation evidence:
 Milestone 7 is the next implementation boundary: distributed, outcome-preserving D. Normal rooms,
 production diagnostics, desktop UI, and installers remain on the old path until their later planned
 cutovers; no installer should be built from this checkpoint.
+
+## 6. Public validation evidence received
+
+After deployment, the authenticated public health request reported `ready`, `single-writer`, opaque
+payloads, writable storage, `room-control.v1`, and `rfu-tunnel.v2`. The extended C0-C2 hosting smoke
+then passed ten consecutive runs through `https://relay.pangyostonefist.org`, followed by one normal
+and one reversed-role run. Each run used distinct P0 attestations and credentials, required matching
+activation generations, held one side ready without activating, accepted the complementary side,
+and exchanged unpredictable byte-exact RFU in both directions before room deletion. Normal ordering
+proved delayed B; reversed ordering proved delayed A.
+
+This is strong deployed C2 functional evidence, but it does not yet supply the private metrics,
+running source identity, public reconnect re-proof, or deliberate early/stale/duplicate rejection
+evidence listed above. The M6 deployed gate therefore remains open until those facts are recorded.

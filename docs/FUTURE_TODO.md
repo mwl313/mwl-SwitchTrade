@@ -106,7 +106,8 @@ path. No open item may be presented as a current production capability.
 
 3. **CRITICAL — URGENT: Add the attempt-scoped A_READY/B_READY activation barrier.**
    **Status (2026-08-30): source and local real-process C2 exit matrix passed at `d2130fe`;
-   validation-relay deployment, physical two-PC proof, and M8/M9 product cutover remain open.**
+   repeated validation-relay C2 smoke passed; private zero-orphan, public negative/reconnect,
+   physical two-PC proof, and M8/M9 product cutover remain open.**
    The current `rfu-tunnel.v1` controls include `PEER_READY` and `ADVERTISEMENT`, but no physical
    side-ready message. In the normal finder path, `HostTransport.start()` returns when the AP opens,
    before `_peer` proves that the Joining Switch associated; the endpoint then constructs
