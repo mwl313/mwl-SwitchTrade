@@ -1,0 +1,24 @@
+"""Immutable, synthetic FRLG advertisement used by direct and guided B tests."""
+
+from __future__ import annotations
+
+import hashlib
+
+
+FIXTURE_ID = "frlg-search-v2"
+FIXTURE_NAME = b"DIAG"
+FIXTURE = bytes.fromhex(
+    "005c160058000000000000000000000000000000000101000000040144494147"
+    "0000000000000000000000000000000000000000000000000000000000000000"
+    "000000000000000000000000000000000000000000000000000000003e784c71"
+    "624b73563a766d6a4d5028232323232368642323232323232323"
+)
+FIXTURE_SHA256 = "c945ee4344711cc0c019356a311912437f520063ef8aa9b2f158d7a13295d863"
+
+
+def metadata() -> dict[str, str]:
+    return {"id": FIXTURE_ID, "sha256": FIXTURE_SHA256}
+
+
+assert len(FIXTURE) == 122
+assert hashlib.sha256(FIXTURE).hexdigest() == FIXTURE_SHA256

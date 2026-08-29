@@ -12,6 +12,8 @@ from switchtrade.connection.b_stage import (
     BStageError,
     DirectBStage,
     FIXTURE,
+    FIXTURE_ID,
+    FIXTURE_NAME,
     FIXTURE_SHA256,
     GATES,
     _build_beacon_head,
@@ -255,6 +257,22 @@ class DirectBContractTests(unittest.TestCase):
     def test_fixture_is_exact_validated_release_owned_input(self):
         self.assertEqual(len(FIXTURE), 122)
         self.assertEqual(hashlib.sha256(FIXTURE).hexdigest(), FIXTURE_SHA256)
+        self.assertEqual(FIXTURE_ID, "frlg-search-v2")
+        self.assertEqual(int.from_bytes(FIXTURE[23:27], "big"), len(FIXTURE_NAME))
+        self.assertEqual(FIXTURE[27], 1)
+        self.assertEqual(FIXTURE[28:28 + len(FIXTURE_NAME)], FIXTURE_NAME)
+
+        def decode_base85(value):
+            decoded = bytearray()
+            for offset in range(0, len(value), 5):
+                number = 0
+                for char in reversed(value[offset:offset + 5]):
+                    number = number * 85 + ((char - 0x23) if char < 0x5C else (char - 0x24))
+                decoded.extend((number & 0xFFFFFFFF).to_bytes(4, "little"))
+            return bytes(decoded)
+
+        rfu = decode_base85(FIXTURE[92:])
+        self.assertEqual(rfu[12:20], bytes.fromhex("0000000084150000"))
 
     def test_beacon_head_has_hidden_ssid_rates_channel_and_rsn(self):
         ssid = b"a" * 32
@@ -361,6 +379,7 @@ class DirectBContractTests(unittest.TestCase):
             self.assertEqual(param.protocol, 3)
             self.assertEqual(param.max_participants, 6)
             self.assertEqual(param.application_data, FIXTURE)
+            self.assertEqual(param.name, FIXTURE_NAME)
             stage.compatibility = {
                 "beacon_head": True, "monitor_ccmp": True, "remote_destroy": True,
             }

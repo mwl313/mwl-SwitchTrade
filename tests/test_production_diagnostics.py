@@ -108,7 +108,7 @@ class ProductionDiagnosticsTests(unittest.TestCase):
     def test_fixture_is_immutable_and_redacted_metadata_only(self):
         self.assertEqual(len(AP_FIXTURE), 122)
         metadata = fixture_metadata()
-        self.assertEqual(metadata["id"], "frlg-search-v1")
+        self.assertEqual(metadata["id"], "frlg-search-v2")
         self.assertEqual(len(metadata["sha256"]), 64)
 
     def test_diagnostic_member_pair_uses_distinct_complementary_members_for_both_roles(self):

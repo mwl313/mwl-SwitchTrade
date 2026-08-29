@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-import base64
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -20,6 +18,11 @@ import uuid
 
 from switchtrade.rfu_tunnel import Kind
 from switchtrade.tunnel_client import TunnelClient
+from switchtrade.connection.b_fixture import (
+    FIXTURE as AP_FIXTURE,
+    FIXTURE_ID as AP_FIXTURE_ID,
+    metadata as fixture_metadata,
+)
 
 
 DIAGNOSTIC_CONTRACT = "production-diagnostic.v1"
@@ -56,18 +59,6 @@ TIMEOUTS = {
     "cleanup": 30,
     "whole_run": 600,
 }
-
-# A package-owned FRLG search advertisement built with the audited beacon encoder.
-# It has no player or captured-console data and is only used to open the local AP.
-AP_FIXTURE_ID = "frlg-search-v1"
-AP_FIXTURE = base64.b64decode(
-    "AFwWAFgAAAAAAAAAAAAAAAAAAAAAAQEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA+eExxYktzVjp2bWpNUCgjIyMjIyMjIyMjIyMjIyM="
-)
-
-
-def fixture_metadata() -> dict:
-    return {"id": AP_FIXTURE_ID, "sha256": hashlib.sha256(AP_FIXTURE).hexdigest()}
-
 
 class DiagnosticFailure(RuntimeError):
     def __init__(self, code: str, message: str, *, result_level: str | None = None,

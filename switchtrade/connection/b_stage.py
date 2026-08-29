@@ -25,16 +25,9 @@ from .a_stage import (
     SCENE_ID,
     validate_advertisement,
 )
+from .b_fixture import FIXTURE, FIXTURE_ID, FIXTURE_NAME, FIXTURE_SHA256
 
 
-FIXTURE_ID = "frlg-search-v1"
-FIXTURE = bytes.fromhex(
-    "005c16005800000000000000000000000000000000010100000000000000000000"
-    "000000000000000000000000000000000000000000000000000000000000000000"
-    "00000000000000000000000000000000000000000000000000003e784c71624b73"
-    "563a766d6a4d5028232323232323232323232323232323"
-)
-FIXTURE_SHA256 = "998a8087aa9011dc7b0bc3200b99702c03eeefb3e9c3259349f3b540e6425ce2"
 PIA_PORT = 12345
 _LINUX_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,15}$")
 
@@ -345,7 +338,7 @@ class DirectBStage:
         param.accept_policy = ACCEPT_ALL
         param.password = GBA_APP_PASSPHRASE
         param.channel = self.channel
-        param.name = b"SwitchTrade"
+        param.name = FIXTURE_NAME
         param.app_version = APP_VERSION
         param.protocol = PROTOCOL
         param.phyname = self.phy
