@@ -6,7 +6,7 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import queue
 import secrets
 import signal
@@ -18,7 +18,9 @@ from typing import Callable
 from switchtrade.connection.coordinator import (
     ConnectionCoordinator, ConnectionCoordinatorError, FunctionalOutcome, Phase, RunMode,
 )
-from switchtrade.connection.p0 import P0Error, PassiveValidator, UsbAdapter, UsbLease, atomic_json
+from switchtrade.connection.p0 import (
+    P0Error, PassiveValidator, UsbAdapter, UsbLease, atomic_json, run_command,
+)
 from switchtrade.diagnostics import default_runs_root
 from switchtrade.relay_client import RelayClient
 
@@ -555,9 +557,20 @@ class P0Harness:
         return {**result, "report_path": str(final_path)}
 
 
-def _installed_release(root: Path) -> str:
+def _installed_release(root: str, distro: str, runner=run_command) -> str:
+    marker_path = PurePosixPath(root) / ".switchtrade-release.json"
     try:
-        marker = json.loads((root / ".switchtrade-release.json").read_text(encoding="utf-8"))
+        if os.name == "nt":
+            result = runner([
+                "wsl.exe", "-d", distro, "-u", "root", "--",
+                "cat", marker_path.as_posix(),
+            ], 10)
+            if result.returncode != 0:
+                raise OSError("release marker probe failed")
+            text = result.stdout
+        else:
+            text = Path(marker_path).read_text(encoding="utf-8")
+        marker = json.loads(text)
         value = marker["release_id"]
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise SystemExit("P0_RELEASE_MARKER_INVALID") from error
@@ -571,7 +584,7 @@ def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser(description="SwitchTrade cold P0 qualification harness")
     value.add_argument("--state-root", type=Path, default=default_runs_root().parent / "connection-v2")
     value.add_argument("--selection-file", type=Path, default=runtime / "hardware-selection.json")
-    value.add_argument("--runtime-root", type=Path, default=Path("/opt/switchtrade"))
+    value.add_argument("--runtime-root", default="/opt/switchtrade")
     value.add_argument("--distro", default=os.environ.get("SWITCHTRADE_WSL_DISTRO", "SwitchTrade"))
     value.add_argument("--relay-url", default=os.environ.get(
         "SWITCHTRADE_RELAY_URL", "https://relay.pangyostonefist.org"))
@@ -582,7 +595,7 @@ def parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = parser().parse_args()
-    release = _installed_release(args.runtime_root)
+    release = _installed_release(args.runtime_root, args.distro)
     relay = RelayClient(args.relay_url)
     validator = PassiveValidator(
         release=release,
@@ -590,7 +603,7 @@ def main() -> None:
         relay_health=relay.health,
         relay_websocket_health=relay.websocket_health,
         distro=args.distro,
-        runtime_root=str(args.runtime_root),
+        runtime_root=args.runtime_root,
         target_channel=args.target_channel,
         blocking_state_paths=(
             default_runs_root().parent / "runtime" / "production-diagnostic-recovery.json",
@@ -599,7 +612,7 @@ def main() -> None:
     with ConnectionCoordinator(args.state_root / "coordinator", release) as coordinator:
         harness = P0Harness(
             coordinator, validator, args.state_root / "runs",
-            distro=args.distro, runtime_root=str(args.runtime_root),
+            distro=args.distro, runtime_root=args.runtime_root,
             target_channel=args.target_channel,
         )
         current = coordinator.snapshot()

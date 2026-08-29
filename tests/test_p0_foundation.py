@@ -8,12 +8,13 @@ import tempfile
 import threading
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 from switchtrade.connection.coordinator import ConnectionCoordinator, Phase, RunMode
 from switchtrade.connection.p0 import (
     P0Error, PassiveValidator, USB_ID, UsbLease, parse_usbipd_state,
 )
-from switchtrade.connection.p0_harness import P0Harness
+from switchtrade.connection.p0_harness import P0Harness, _installed_release
 from switchtrade.connection.radio_worker import (
     REQUIRED_MODULES, RadioWorkerError, _validate_ticket, build_side_ready,
 )
@@ -115,6 +116,24 @@ class PassiveP0Tests(unittest.TestCase):
             validator.validate()
         self.assertEqual(caught.exception.code, "P0_RECOVERY_REQUIRED")
         self.assertEqual(runner.calls, [])
+
+    def test_windows_harness_reads_release_marker_inside_selected_wsl_runtime(self):
+        calls = []
+
+        def runner(command, timeout):
+            calls.append((command, timeout))
+            return completed(command, json.dumps({
+                "schema": 1, "release_id": "abcd-m2-test",
+            }))
+
+        with mock.patch("switchtrade.connection.p0_harness.os.name", "nt"):
+            release = _installed_release("/opt/switchtrade", "SwitchTrade-test", runner)
+
+        self.assertEqual(release, "abcd-m2-test")
+        self.assertEqual(calls, [([
+            "wsl.exe", "-d", "SwitchTrade-test", "-u", "root", "--",
+            "cat", "/opt/switchtrade/.switchtrade-release.json",
+        ], 10)])
 
 
 class StatefulUsbRunner:
