@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import unittest
+from unittest import mock
 
 import trio
 
@@ -20,6 +21,7 @@ from switchtrade.connection.b_stage import (
     quiesce_selected_phy,
     reset_selected_phy,
 )
+from switchtrade.connection import direct_b_endpoint
 
 
 class FakeParam:
@@ -393,9 +395,46 @@ class DirectBContractTests(unittest.TestCase):
         self.assertEqual(report["result_level"], "B_CONTROL_READY")
         self.assertEqual([item["gate"] for item in report["gates"]], list(GATES))
         self.assertEqual([item["gate"] for item in emitted], list(GATES))
+        self.assertTrue(report["cleanup"]["ldn_context_released"])
+        self.assertFalse(report["cleanup"]["radio_quiescent"])
         serialized = json.dumps(report, sort_keys=True).casefold()
         self.assertNotIn("mac_address", serialized)
         self.assertNotIn(FIXTURE.hex(), serialized)
+
+    def test_post_b10_teardown_timeout_does_not_reclassify_functional_success(self):
+        stage = make_stage(teardown_timeout=0.01)
+
+        @contextlib.asynccontextmanager
+        async def network_factory(_param):
+            stage.compatibility = {
+                "beacon_head": True, "monitor_ccmp": True, "remote_destroy": True,
+            }
+            control = trio.Event()
+            control.set()
+            try:
+                yield FakeNetwork(
+                    (stage.ap_ifname, stage.monitor_ifname, stage.tap_ifname)
+                ), control
+            finally:
+                await trio.sleep_forever()
+
+        stage.network_factory = network_factory
+        report = trio.run(stage.run)
+        self.assertEqual(report["status"], "passed")
+        self.assertEqual(report["result_level"], "B_CONTROL_READY")
+        self.assertEqual(report["last_passed_gate"], GATES[-1])
+        self.assertIsNone(report["failure"])
+        self.assertFalse(report["cleanup"]["ldn_context_released"])
+
+    def test_schema_tracks_the_release_owned_fixture(self):
+        schema = json.loads((
+            Path(__file__).resolve().parents[1] / "contracts" / "abcd" /
+            "direct-b-stage.v1.schema.json"
+        ).read_text(encoding="utf-8"))
+        fixture = schema["properties"]["fixture"]["properties"]
+        self.assertEqual(fixture["id"]["const"], FIXTURE_ID)
+        self.assertEqual(fixture["length"]["const"], len(FIXTURE))
+        self.assertEqual(fixture["sha256"]["const"], FIXTURE_SHA256)
 
     def test_no_join_times_out_at_external_advertisement_gate(self):
         stage = make_stage(association_timeout=0.01)
@@ -426,6 +465,45 @@ class DirectBContractTests(unittest.TestCase):
         self.assertFalse(schema["additionalProperties"])
         self.assertNotIn("application_data", schema["properties"])
         self.assertNotIn("mac_address", schema["properties"])
+
+    def test_endpoint_preserves_stage_context_cleanup_evidence(self):
+        report = {
+            "status": "passed",
+            "failure": None,
+            "cleanup": {"ldn_context_released": False, "radio_quiescent": False},
+        }
+
+        class FakeStage:
+            def __init__(self, **_options):
+                pass
+
+            async def run(self):
+                return report
+
+        args = SimpleNamespace(
+            process_start_ticks=11, run_id="run", release="release",
+            launch_nonce="nonce", phy="phy0", keys=Path("keys"),
+            ap_ifname="ap-b-test", monitor_ifname="mon-b-test",
+            tap_ifname="tap-b-test", channel=6, ap_timeout=1,
+            association_timeout=1, control_timeout=1, hold_seconds=1,
+            teardown_timeout=1, report=Path("report.json"),
+        )
+        written = []
+        with (
+            mock.patch.object(direct_b_endpoint, "process_start_ticks", return_value=11),
+            mock.patch.object(direct_b_endpoint, "DirectBStage", FakeStage),
+            mock.patch.object(direct_b_endpoint, "quiesce_selected_phy"),
+            mock.patch.object(
+                direct_b_endpoint, "atomic_json",
+                side_effect=lambda _path, value: written.append(dict(value["cleanup"])),
+            ),
+            mock.patch.object(direct_b_endpoint, "_emit"),
+        ):
+            self.assertEqual(direct_b_endpoint.run(args), 0)
+        self.assertEqual(written, [{
+            "ldn_context_released": False,
+            "radio_quiescent": True,
+        }])
 
 
 if __name__ == "__main__":

@@ -647,7 +647,7 @@ class FakeWorkerProcess:
                             for index, gate in enumerate(B_GATES)
                         ],
                         "fixture": {
-                            "id": "frlg-search-v1", "length": 122,
+                            "id": "frlg-search-v2", "length": 122,
                             "sha256": FIXTURE_SHA256,
                         },
                         "radio_reset": {

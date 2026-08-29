@@ -38,9 +38,9 @@
       "additionalProperties": false,
       "required": ["id", "length", "sha256"],
       "properties": {
-        "id": { "const": "frlg-search-v1" },
+        "id": { "const": "frlg-search-v2" },
         "length": { "const": 122 },
-        "sha256": { "const": "998a8087aa9011dc7b0bc3200b99702c03eeefb3e9c3259349f3b540e6425ce2" }
+        "sha256": { "const": "c945ee4344711cc0c019356a311912437f520063ef8aa9b2f158d7a13295d863" }
       }
     },
     "radio_reset": {

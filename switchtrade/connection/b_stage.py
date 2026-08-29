@@ -271,6 +271,7 @@ class DirectBStage:
         association_timeout: float = 120,
         control_timeout: float = 10,
         hold_seconds: float = 5,
+        teardown_timeout: float = 10,
         ldn_module=None,
         trio_module=None,
         radio_reset=None,
@@ -291,6 +292,7 @@ class DirectBStage:
         self.association_timeout = float(association_timeout)
         self.control_timeout = float(control_timeout)
         self.hold_seconds = float(hold_seconds)
+        self.teardown_timeout = float(teardown_timeout)
         self.ldn = ldn_module
         self.trio = trio_module
         self.radio_reset = radio_reset or (lambda: reset_selected_phy(self.phy))
@@ -300,6 +302,10 @@ class DirectBStage:
         self.started = time.monotonic()
         self.passed: list[dict] = []
         self.result_level = None
+        self.cleanup = {
+            "ldn_context_released": True,
+            "radio_quiescent": False,
+        }
         self.compatibility = {
             "beacon_head": False,
             "monitor_ccmp": False,
@@ -324,6 +330,7 @@ class DirectBStage:
             or min(
                 self.ap_timeout, self.association_timeout,
                 self.control_timeout, self.hold_seconds,
+                self.teardown_timeout,
             ) <= 0
         ):
             raise BStageError("B_POLICY_INVALID", GATES[0], "direct B policy is invalid")
@@ -433,7 +440,13 @@ class DirectBStage:
                                         continue
                                     frame = ldn.DisconnectFrame()
                                     frame.reason = ldn.DISCONNECT_NETWORK_DESTROYED
-                                    await ap.send_custom_frame(participant.mac_address, frame.encode())
+                                    # A departed Switch can stop acknowledging custom frames.
+                                    # Teardown notification is best-effort; local resource release
+                                    # must not inherit the peer's lifetime.
+                                    with self.trio.move_on_after(
+                                        min(self.teardown_timeout, 2.0), shield=True
+                                    ):
+                                        await send_custom(participant.mac_address, frame.encode())
 
                             network._destroy_network = destroy_remote_only
                             self.compatibility["remote_destroy"] = True
@@ -467,6 +480,7 @@ class DirectBStage:
             "association": None,
             "failure": {"code": error.code, "gate": error.gate, "message": error.message},
             "duration_ms": round((time.monotonic() - self.started) * 1000),
+            "cleanup": dict(self.cleanup),
         }
 
     async def run(self) -> dict:
@@ -506,49 +520,49 @@ class DirectBStage:
             self._pass(GATES[2])
 
             factory = self.network_factory or self._create_network
+            stack = contextlib.AsyncExitStack()
+            self.cleanup["ldn_context_released"] = False
             try:
-                with self.trio.fail_after(self.ap_timeout) as stage_scope:
-                    async with factory(param) as opened:
-                        network, control_done = opened
-                        names = (
-                            network._interface.name(), network._monitor.name(), network._tap.name()
-                        )
-                        if names != (self.ap_ifname, self.monitor_ifname, self.tap_ifname):
-                            raise BStageError("B_RESOURCE_IDENTITY_MISMATCH", GATES[3], "LDN resource identity changed")
-                        if not all(self.compatibility.values()):
-                            raise BStageError("B_COMPATIBILITY_MISSING", GATES[3], "required host compatibility is missing")
-                        self._pass(GATES[3])
+                with self.trio.fail_after(self.ap_timeout):
+                    network, control_done = await stack.enter_async_context(factory(param))
+                names = (
+                    network._interface.name(), network._monitor.name(), network._tap.name()
+                )
+                if names != (self.ap_ifname, self.monitor_ifname, self.tap_ifname):
+                    raise BStageError("B_RESOURCE_IDENTITY_MISMATCH", GATES[3], "LDN resource identity changed")
+                if not all(self.compatibility.values()):
+                    raise BStageError("B_COMPATIBILITY_MISSING", GATES[3], "required host compatibility is missing")
+                self._pass(GATES[3])
 
-                        with self.data_plane_factory(network) as plane:
-                            if not all(plane.get(name) is True for name in (
-                                "tap_ready", "udp_bound", "packet_socket_bound"
-                            )):
-                                raise BStageError("B_DATA_PLANE_FAILED", GATES[4], "Pia data-plane evidence is incomplete")
-                            plane_evidence = dict(plane)
-                            self._pass(GATES[4])
+                with self.data_plane_factory(network) as plane:
+                    if not all(plane.get(name) is True for name in (
+                        "tap_ready", "udp_bound", "packet_socket_bound"
+                    )):
+                        raise BStageError("B_DATA_PLANE_FAILED", GATES[4], "Pia data-plane evidence is incomplete")
+                    plane_evidence = dict(plane)
+                    self._pass(GATES[4])
 
-                            stage_scope.deadline = self.trio.current_time() + self.association_timeout
-                            join_type = getattr(self.ldn, "JoinEvent", ())
-                            while True:
-                                event = await network.next_event()
-                                if isinstance(event, join_type):
-                                    association_evidence = _validate_peer(network)
-                                    # A successful real association is stronger external evidence
-                                    # than interface-up and proves the room was observable first.
-                                    self._pass(GATES[5])
-                                    self._pass(GATES[6])
-                                    self.result_level = "B_SWITCH_ASSOCIATED"
-                                    break
+                    with self.trio.fail_after(self.association_timeout):
+                        join_type = getattr(self.ldn, "JoinEvent", ())
+                        while True:
+                            event = await network.next_event()
+                            if isinstance(event, join_type):
+                                association_evidence = _validate_peer(network)
+                                # A successful real association is stronger external evidence
+                                # than interface-up and proves the room was observable first.
+                                self._pass(GATES[5])
+                                self._pass(GATES[6])
+                                self.result_level = "B_SWITCH_ASSOCIATED"
+                                break
 
-                            stage_scope.deadline = self.trio.current_time() + self.control_timeout
-                            await control_done.wait()
-                            _validate_peer(network)
-                            self._pass(GATES[7])
-                            self.result_level = "B_CONTROL_READY"
+                    with self.trio.fail_after(self.control_timeout):
+                        await control_done.wait()
+                    _validate_peer(network)
+                    self._pass(GATES[7])
+                    self.result_level = "B_CONTROL_READY"
 
-                            stage_scope.deadline = self.trio.current_time() + self.hold_seconds + 3
-                            await self._hold(network)
-                            self._pass(GATES[8])
+                    await self._hold(network)
+                    self._pass(GATES[8])
             except self.trio.TooSlowError as error:
                 index = min(len(self.passed), len(GATES) - 1)
                 codes = {
@@ -577,6 +591,18 @@ class DirectBStage:
                     codes.get(index, "B_STAGE_INTERNAL"), GATES[index],
                     "direct B failed at its current gate",
                 ) from error
+            finally:
+                teardown_error = None
+                with self.trio.move_on_after(
+                    self.teardown_timeout, shield=True
+                ) as teardown_scope:
+                    try:
+                        await stack.aclose()
+                    except Exception as error:
+                        teardown_error = error
+                self.cleanup["ldn_context_released"] = (
+                    not teardown_scope.cancelled_caught and teardown_error is None
+                )
 
             return {
                 "contract_version": "direct-b-stage.v1",
@@ -594,6 +620,7 @@ class DirectBStage:
                 "association": association_evidence,
                 "failure": None,
                 "duration_ms": round((time.monotonic() - self.started) * 1000),
+                "cleanup": dict(self.cleanup),
             }
         except BStageError as error:
             report = self._failure(error)

@@ -56,13 +56,21 @@ def run(args: argparse.Namespace) -> int:
         association_timeout=args.association_timeout,
         control_timeout=args.control_timeout,
         hold_seconds=args.hold_seconds,
+        teardown_timeout=args.teardown_timeout,
     )
     report = trio.run(stage.run)
+    ldn_context_released = report["cleanup"]["ldn_context_released"]
     try:
         quiesce_selected_phy(args.phy, args.tap_ifname)
-        report["cleanup"] = {"ldn_context_released": True, "radio_quiescent": True}
+        report["cleanup"] = {
+            "ldn_context_released": ldn_context_released,
+            "radio_quiescent": True,
+        }
     except BStageError:
-        report["cleanup"] = {"ldn_context_released": True, "radio_quiescent": False}
+        report["cleanup"] = {
+            "ldn_context_released": ldn_context_released,
+            "radio_quiescent": False,
+        }
     atomic_json(args.report, report)
 
     if report["status"] != "passed":
@@ -97,6 +105,7 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--association-timeout", type=float, default=120)
     value.add_argument("--control-timeout", type=float, default=10)
     value.add_argument("--hold-seconds", type=float, default=5)
+    value.add_argument("--teardown-timeout", type=float, default=10)
     return value
 
 
