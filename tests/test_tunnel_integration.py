@@ -32,6 +32,7 @@ from switchtrade.rfu_tunnel_v2 import (
 from switchtrade.relay_client import RelayClient, RelayError
 from switchtrade.tunnel_client import TunnelClient
 from switchtrade.tunnel_client_v2 import TunnelClientV2
+from switchtrade.connection.c2 import C2Bridge
 from switchtrade.control import create_app, endpoint_command
 from switchtrade.production_diagnostics import SyntheticDiagnosticPeer
 from relay.authority import uuid7
@@ -540,6 +541,7 @@ class TunnelIntegrationTest(unittest.TestCase):
             "contract_version": "app-readiness.v2",
             "p0_ready_members": 1,
             "attempt_admitted": False,
+            "activation_generation": None,
         })
         self.assertIsNone(admitted.get("attempt"))
 
@@ -742,6 +744,211 @@ class TunnelIntegrationTest(unittest.TestCase):
             second_client.stop()
             self._close_authority_room(first["room"]["room_id"], first["member_token"])
 
+    def test_v2_c2_waits_for_both_sides_then_relays_byte_exact_rfu(self):
+        relay = RelayClient(self.base)
+        first = relay.create_trade_room({
+            "name": "V2 C2", "visibility": "private", "trainer_display_name": "A",
+            "game": "FireRed", "language": "English", "offering": "", "wanted": "", "note": "",
+        }, "v2-c2-a")
+        second = relay.join_trade_room(first["room"]["room_code"], "B", "v2-c2-b")
+        attempt_id = self._prepare_v2_attempt(first, second)
+        room = relay.room(first["room"]["room_id"], first["member_token"])
+        activation = room["attempt"]["activation_generation"]
+        advertisement = b"m6-byte-exact-advertisement"
+        digest = advertisement_hash(advertisement)
+        first_client = self._v2_client(first, attempt_id, "member_a").start()
+        second_client = self._v2_client(
+            second, attempt_id, "member_b", expected_advertisement_hash=digest).start()
+        try:
+            self.assertTrue(first_client.wait_data_plane(5))
+            self.assertTrue(second_client.wait_data_plane(5))
+            first_client.advertise(advertisement)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and second_client.received_advertisement_hash != digest:
+                second_client.poll()
+                time.sleep(0.02)
+            self.assertEqual(second_client.received_advertisement_hash, digest)
+
+            first_bridge = C2Bridge(
+                first["_v2_p0"]["run_id"], attempt_id, "member_a", "a_room_joiner",
+                first_client, activation_generation=activation, advertisement_sha256=digest)
+            second_bridge = C2Bridge(
+                second["_v2_p0"]["run_id"], attempt_id, "member_b", "b_ap_host",
+                second_client, activation_generation=activation, advertisement_sha256=digest)
+            first_early = b"\x57first-before-barrier"
+            second_early = b"\x57second-before-barrier"
+            first_bridge.send_rfu(first_early, flags=0x0F)
+            second_bridge.send_rfu(second_early, flags=0x07)
+            first_bridge.mark_local_ready("A_READY")
+            for _ in range(10):
+                first_bridge.pump()
+                second_bridge.pump()
+                time.sleep(0.01)
+            self.assertFalse(first_bridge.connected.is_set())
+            self.assertFalse(second_bridge.connected.is_set())
+
+            second_bridge.mark_local_ready("B_READY")
+            deadline = time.monotonic() + 5
+            while (time.monotonic() < deadline and
+                   not (first_bridge.connected.is_set() and second_bridge.connected.is_set())):
+                first_bridge.pump()
+                second_bridge.pump()
+                time.sleep(0.01)
+            self.assertTrue(first_bridge.connected.is_set())
+            self.assertTrue(second_bridge.connected.is_set())
+
+            first_received = second_received = None
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and (first_received is None or second_received is None):
+                first_received = next(iter(first_bridge.poll()), first_received)
+                second_received = next(iter(second_bridge.poll()), second_received)
+                time.sleep(0.01)
+            self.assertEqual((first_received.payload, first_received.flags), (second_early, 0x07))
+            self.assertEqual((second_received.payload, second_received.flags), (first_early, 0x0F))
+            self.assertTrue(first_bridge.rfu_active.is_set())
+            self.assertTrue(second_bridge.rfu_active.is_set())
+
+            for index in range(40):
+                to_second = b"A" + index.to_bytes(2, "big")
+                to_first = b"B" + index.to_bytes(2, "big")
+                first_bridge.send_rfu(to_second, flags=0x01)
+                second_bridge.send_rfu(to_first, flags=0x03)
+                got_first = got_second = None
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline and (got_first is None or got_second is None):
+                    got_first = next(iter(first_bridge.poll()), got_first)
+                    got_second = next(iter(second_bridge.poll()), got_second)
+                    time.sleep(0.005)
+                self.assertEqual((got_first.payload, got_first.flags), (to_first, 0x03))
+                self.assertEqual((got_second.payload, got_second.flags), (to_second, 0x01))
+        finally:
+            first_client.stop()
+            second_client.stop()
+            self._close_authority_room(first["room"]["room_id"], first["member_token"])
+
+    def test_v2_relay_rejects_rfu_before_c2_barrier(self):
+        relay = RelayClient(self.base)
+        first = relay.create_trade_room({
+            "name": "V2 early RFU", "visibility": "private", "trainer_display_name": "A",
+            "game": "FireRed", "language": "English", "offering": "", "wanted": "", "note": "",
+        }, "v2-early-rfu-a")
+        second = relay.join_trade_room(
+            first["room"]["room_code"], "B", "v2-early-rfu-b")
+        attempt_id = self._prepare_v2_attempt(first, second)
+        first_client = self._v2_client(first, attempt_id, "member_a").start()
+        second_client = self._v2_client(second, attempt_id, "member_b").start()
+        try:
+            self.assertTrue(first_client.wait_data_plane(5))
+            self.assertTrue(second_client.wait_data_plane(5))
+            first_client.advertise(b"early-rfu-advertisement")
+            time.sleep(0.1)
+            first_client.send_rfu(b"must-not-pass", flags=0x01)
+            deadline = time.monotonic() + 5
+            room = None
+            while time.monotonic() < deadline:
+                room = relay.room(first["room"]["room_id"], second["member_token"])
+                if room["attempt"]["phase"] == "failed":
+                    break
+                time.sleep(0.02)
+            self.assertEqual(room["attempt"]["recoverable_error"], "relay.c_bridge_not_ready")
+        finally:
+            first_client.stop()
+            second_client.stop()
+            self._close_authority_room(first["room"]["room_id"], first["member_token"])
+
+    def test_v2_c2_reconnect_requires_fresh_side_ready_before_rfu(self):
+        relay = RelayClient(self.base)
+        first = relay.create_trade_room({
+            "name": "V2 C2 reconnect", "visibility": "private", "trainer_display_name": "A",
+            "game": "FireRed", "language": "English", "offering": "", "wanted": "", "note": "",
+        }, "v2-c2-reconnect-a")
+        second = relay.join_trade_room(
+            first["room"]["room_code"], "B", "v2-c2-reconnect-b")
+        attempt_id = self._prepare_v2_attempt(first, second)
+        room = relay.room(first["room"]["room_id"], first["member_token"])
+        activation = room["attempt"]["activation_generation"]
+        advertisement = b"c2-reconnect-advertisement"
+        digest = advertisement_hash(advertisement)
+        first_client = self._v2_client(first, attempt_id, "member_a").start()
+        second_client = self._v2_client(
+            second, attempt_id, "member_b", expected_advertisement_hash=digest).start()
+        replacement = None
+        try:
+            self.assertTrue(first_client.wait_data_plane(5))
+            self.assertTrue(second_client.wait_data_plane(5))
+            first_client.advertise(advertisement)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and second_client.received_advertisement_hash != digest:
+                second_client.poll()
+                time.sleep(0.02)
+            first_bridge = C2Bridge(
+                first["_v2_p0"]["run_id"], attempt_id, "member_a", "a_room_joiner",
+                first_client, activation_generation=activation, advertisement_sha256=digest)
+            second_bridge = C2Bridge(
+                second["_v2_p0"]["run_id"], attempt_id, "member_b", "b_ap_host",
+                second_client, activation_generation=activation, advertisement_sha256=digest)
+            first_bridge.mark_local_ready("A_READY")
+            second_bridge.mark_local_ready("B_READY")
+            deadline = time.monotonic() + 5
+            while (time.monotonic() < deadline and
+                   not (first_bridge.connected.is_set() and second_bridge.connected.is_set())):
+                first_bridge.pump()
+                second_bridge.pump()
+                time.sleep(0.01)
+            self.assertTrue(first_bridge.connected.is_set())
+            self.assertTrue(second_bridge.connected.is_set())
+
+            first_bridge.send_rfu(b"before-reconnect-a", flags=0x01)
+            second_bridge.send_rfu(b"before-reconnect-b", flags=0x03)
+            deadline = time.monotonic() + 5
+            while (time.monotonic() < deadline and
+                   not (first_bridge.rfu_active.is_set() and
+                        second_bridge.rfu_active.is_set())):
+                first_bridge.poll()
+                second_bridge.poll()
+                time.sleep(0.01)
+            self.assertTrue(first_bridge.rfu_active.is_set())
+            self.assertTrue(second_bridge.rfu_active.is_set())
+
+            first_client.stop()
+            replacement = self._v2_client(first, attempt_id, "member_a").start()
+            self.assertTrue(replacement.wait_data_plane(8))
+            replacement_bridge = C2Bridge(
+                first["_v2_p0"]["run_id"], attempt_id, "member_a", "a_room_joiner",
+                replacement, activation_generation=activation, advertisement_sha256=digest)
+            replacement_bridge.mark_local_ready("A_READY")
+            deadline = time.monotonic() + 8
+            while (time.monotonic() < deadline and
+                   not (replacement_bridge.connected.is_set() and second_bridge.connected.is_set())):
+                replacement_bridge.pump()
+                second_bridge.pump()
+                time.sleep(0.01)
+            self.assertTrue(replacement_bridge.connected.is_set())
+            self.assertTrue(second_bridge.connected.is_set())
+            self.assertEqual(second_bridge.stats["invalidations"], 1)
+            self.assertEqual(second_bridge.stats["activation_count"], 2)
+            self.assertFalse(replacement_bridge.rfu_active.is_set())
+            self.assertFalse(second_bridge.rfu_active.is_set())
+
+            replacement_bridge.send_rfu(b"after-reconnect-a", flags=0x01)
+            second_bridge.send_rfu(b"after-reconnect-b", flags=0x03)
+            got_a = got_b = None
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and (got_a is None or got_b is None):
+                got_a = next(iter(replacement_bridge.poll()), got_a)
+                got_b = next(iter(second_bridge.poll()), got_b)
+                time.sleep(0.01)
+            self.assertEqual(got_a.payload, b"after-reconnect-b")
+            self.assertEqual(got_b.payload, b"after-reconnect-a")
+            self.assertTrue(replacement_bridge.rfu_active.is_set())
+            self.assertTrue(second_bridge.rfu_active.is_set())
+        finally:
+            first_client.stop()
+            if replacement is not None:
+                replacement.stop()
+            second_client.stop()
+            self._close_authority_room(first["room"]["room_id"], first["member_token"])
+
     def test_v2_gap_fails_attempt_factually_and_erases_retention(self):
         relay = RelayClient(self.base)
         first = relay.create_trade_room({
@@ -825,7 +1032,7 @@ class TunnelIntegrationTest(unittest.TestCase):
             self.assertTrue(second_client.wait_data_plane(8), (
                 replacement.last_error_code, replacement.last_error, replacement_log,
                 second_client.last_error_code, second_client.last_error, second_log))
-            self.assertEqual(second_client.connection_generation, 1)
+            self.assertGreaterEqual(second_client.connection_generation, 2)
             self.assertGreaterEqual(second_client.proof_generation, 2)
             replacement.advertise(payload)
             deadline = time.monotonic() + 5

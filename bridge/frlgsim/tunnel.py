@@ -43,7 +43,11 @@ class TunnelSim(Sim):
 
     def _on_reliable_app(self, flags_a, payload):
         """Forward exact application bytes; no RFU opcode or activity knowledge."""
-        self.tunnel.send(payload, kind=Kind.RFU, flags=flags_a)
+        send_rfu = getattr(self.tunnel, "send_rfu", None)
+        if callable(send_rfu):
+            send_rfu(payload, flags=flags_a)
+        else:
+            self.tunnel.send(payload, kind=Kind.RFU, flags=flags_a)
         if self.observer is not None:
             sender_role = "child" if self.parent else "parent"
             self.observer.submit(self.local_seat, sender_role, payload)
@@ -60,7 +64,7 @@ class TunnelSim(Sim):
         for envelope in self.tunnel.poll():
             if envelope.kind == Kind.PEER_CLOSE:
                 self.host_disconnected = True
-            elif envelope.kind == Kind.RFU:
+            elif getattr(envelope.kind, "name", None) == "RFU":
                 if len(envelope.payload) > MAX_PAYLOAD_BYTES:
                     raise RuntimeError("RFU payload exceeds the Pia Reliable wire limit")
                 if len(self._pending_remote) >= MAX_PENDING_REMOTE:

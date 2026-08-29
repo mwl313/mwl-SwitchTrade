@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://switchtrade.local/contracts/side-ready.v1.schema.json",
+  "title": "SwitchTrade C2 side readiness",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version", "attempt_id", "activation_generation", "source_seat",
+    "switch_role", "local_gate", "run_id", "stage_generation",
+    "launch_identity_sha256", "advertisement_sha256", "proof_generation"
+  ],
+  "properties": {
+    "contract_version": { "const": "side-ready.v1" },
+    "attempt_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "activation_generation": { "type": "integer", "minimum": 1 },
+    "source_seat": { "enum": ["member_a", "member_b"] },
+    "switch_role": { "enum": ["a_room_joiner", "b_ap_host"] },
+    "local_gate": { "enum": ["A_READY", "B_READY"] },
+    "run_id": { "type": "string", "format": "uuid" },
+    "stage_generation": { "type": "integer", "minimum": 1 },
+    "launch_identity_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "advertisement_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "proof_generation": { "type": "integer", "minimum": 1 }
+  }
+}

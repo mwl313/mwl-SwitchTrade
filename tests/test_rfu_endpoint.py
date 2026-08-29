@@ -13,6 +13,9 @@ sys.path.insert(0, str(ROOT / "bridge"))
 from frlgsim.transport import HostTransport
 from frlgsim.tunnel import MAX_PENDING_REMOTE, TunnelSim
 from switchtrade.rfu_tunnel import Direction, Envelope, Kind, MAX_PAYLOAD_BYTES
+from switchtrade.rfu_tunnel_v2 import (
+    Envelope as EnvelopeV2, Kind as KindV2, SourceSeat,
+)
 
 
 class FakeTunnel:
@@ -39,6 +42,11 @@ class FakeObserver:
         self.frames.append((seat, role, bytes(payload)))
 
 
+class FakeC2Bridge(FakeTunnel):
+    def send_rfu(self, payload, *, flags):
+        self.sent.append((bytes(payload), {"flags": flags}))
+
+
 class RfuEndpointTest(unittest.TestCase):
     def _sim(self, parent=False):
         tunnel = FakeTunnel()
@@ -53,6 +61,25 @@ class RfuEndpointTest(unittest.TestCase):
         payload = b"\x57future-feature-opcodes-are-not-decoded"
         sim._on_reliable_app(0x0F, payload)
         self.assertEqual(tunnel.sent, [(payload, {"kind": Kind.RFU, "flags": 0x0F})])
+
+    def test_tunnelsim_accepts_the_c2_feature_neutral_boundary(self):
+        tunnel = FakeC2Bridge()
+        sim = TunnelSim(
+            object(), object(), "169.254.1.2", "169.254.1.1", tunnel,
+            conn=None, our_var=0xC493,
+        )
+        batches = []
+        sim._tx_reliable_batch = lambda batch: batches.extend(batch)
+        sim._on_reliable_app(0x0F, b"local-v2")
+        tunnel.inbound.append(EnvelopeV2(
+            "attempt-v2", SourceSeat.MEMBER_B, 8, 9,
+            KindV2.RFU, b"remote-v2", 0x07,
+        ))
+        sim._drive_tunnel_reliable()
+        self.assertEqual(tunnel.sent, [(b"local-v2", {"flags": 0x0F})])
+        self.assertEqual([(flags, payload) for _seq, flags, payload in batches], [
+            (0x07, b"remote-v2"),
+        ])
 
     def test_remote_payload_is_rewrapped_with_original_flags(self):
         sim, tunnel, batches = self._sim(parent=True)

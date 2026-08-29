@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": [
     "contract_version", "attempt_id", "source_seat", "source_epoch",
-    "sequence", "kind", "payload_length"
+    "sequence", "kind", "payload_length", "reliable_flags"
   ],
   "properties": {
     "contract_version": { "const": "rfu-tunnel.v2" },
@@ -17,9 +17,10 @@
     "kind": {
       "enum": [
         "PEER_READY", "PROBE_CHALLENGE", "PROBE_RESPONSE",
-        "ADVERTISEMENT", "SIDE_READY", "PEER_CLOSE"
+        "ADVERTISEMENT", "SIDE_READY", "PEER_CLOSE", "RFU"
       ]
     },
-    "payload_length": { "type": "integer", "minimum": 0, "maximum": 65536 }
+    "payload_length": { "type": "integer", "minimum": 0, "maximum": 65536 },
+    "reliable_flags": { "type": "integer", "minimum": 0, "maximum": 255 }
   }
 }

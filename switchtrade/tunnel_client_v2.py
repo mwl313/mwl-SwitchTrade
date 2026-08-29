@@ -23,13 +23,20 @@ from switchtrade.rfu_tunnel_v2 import (
     verify_advertisement,
     verify_probe,
 )
+from switchtrade.rfu_tunnel import MAX_PAYLOAD_BYTES as MAX_RFU_PAYLOAD_BYTES
 from switchtrade.tunnel_client import permanent_connect_error
+
+
+V2_PING_INTERVAL = 1.0
+V2_PING_TIMEOUT = 2.0
+V2_CLOSE_TIMEOUT = 1.0
 
 
 @dataclass(frozen=True)
 class _Pending:
     kind: Kind
     payload: bytes
+    flags: int = 0
 
 
 def relay_websocket_url(base: str, room_code: str, attempt_id: str) -> str:
@@ -81,6 +88,7 @@ class TunnelClientV2:
         self.last_error_code = ""
         self.received_advertisement_hash: str | None = None
         self._advertisement_sent_generation = 0
+        self._side_ready_sent_generation = 0
         self.stats = {
             "sent": 0, "received": 0, "reconnects": 0, "dropped": 0,
             "advertisement_replays": 0,
@@ -127,7 +135,20 @@ class TunnelClientV2:
     def send_side_ready(self, payload: bytes, timeout: float = 1.0) -> None:
         if not self.data_plane_proven.is_set():
             raise ConnectionError("C0 data plane is not proven")
+        if self._side_ready_sent_generation == self.proof_generation:
+            raise TunnelV2Error(
+                "C_SIDE_READY_DUPLICATE", "SIDE_READY was already sent in this proof generation"
+            )
         self._put(Kind.SIDE_READY, bytes(payload), timeout)
+        self._side_ready_sent_generation = self.proof_generation
+
+    def send_rfu(self, payload: bytes, *, flags: int, timeout: float = 1.0) -> None:
+        payload = bytes(payload)
+        if not self.data_plane_proven.is_set():
+            raise ConnectionError("C0 data plane is not proven")
+        if not payload or len(payload) > MAX_RFU_PAYLOAD_BYTES or not 0 <= flags <= 0xFF:
+            raise ValueError("RFU payload or Reliable flags are invalid")
+        self._put(Kind.RFU, payload, timeout, flags=flags)
 
     def poll(self, limit: int = 32) -> list[Envelope]:
         frames = []
@@ -138,10 +159,10 @@ class TunnelClientV2:
                 break
         return frames
 
-    def _put(self, kind: Kind, payload: bytes, timeout: float) -> None:
+    def _put(self, kind: Kind, payload: bytes, timeout: float, *, flags: int = 0) -> None:
         if len(payload) > MAX_PAYLOAD_BYTES:
             raise ValueError("payload exceeds the v2 bound")
-        self._outbox.put(_Pending(kind, payload), timeout=timeout)
+        self._outbox.put(_Pending(kind, payload, flags), timeout=timeout)
 
     def _clear_readiness(self) -> None:
         self.authenticated.clear()
@@ -166,10 +187,10 @@ class TunnelClientV2:
         finally:
             self._clear_readiness()
 
-    async def _send(self, websocket, kind: Kind, payload: bytes = b"") -> None:
+    async def _send(self, websocket, kind: Kind, payload: bytes = b"", flags: int = 0) -> None:
         raw = Envelope(
             self.attempt_id, self.source_seat, self._epoch,
-            self._sequence, kind, payload,
+            self._sequence, kind, payload, flags,
         ).encode()
         self._sequence += 1
         await websocket.send(raw)
@@ -181,7 +202,12 @@ class TunnelClientV2:
         first = True
         while not self._stop.is_set():
             try:
-                options = {"max_size": MAX_ENVELOPE_BYTES}
+                options = {
+                    "max_size": MAX_ENVELOPE_BYTES,
+                    "ping_interval": V2_PING_INTERVAL,
+                    "ping_timeout": V2_PING_TIMEOUT,
+                    "close_timeout": V2_CLOSE_TIMEOUT,
+                }
                 header_name = ("additional_headers" if "additional_headers" in
                                inspect.signature(websockets.connect).parameters else "extra_headers")
                 options[header_name] = {"Authorization": f"Bearer {self.member_token}"}
@@ -216,7 +242,8 @@ class TunnelClientV2:
                 close_code = getattr(received, "code", None)
                 if close_code is None and not type(error).__name__.startswith("ConnectionClosed"):
                     close_code = getattr(error, "code", None)
-                if permanent_connect_error(error) or close_code in {4401, 4403, 4404, 4409}:
+                # 4409 is a transient seat handoff race while the relay retires the old socket.
+                if permanent_connect_error(error) or close_code in {4401, 4403, 4404}:
                     self.last_error_code = "C_AUTHENTICATION_FAILED"
                     self._stop.set()
             finally:
@@ -234,7 +261,7 @@ class TunnelClientV2:
                     pending = self._outbox.get_nowait()
                 except queue.Empty:
                     break
-                await self._send(websocket, pending.kind, pending.payload)
+                await self._send(websocket, pending.kind, pending.payload, pending.flags)
 
             try:
                 raw = await asyncio.wait_for(websocket.recv(), timeout=0.01)
@@ -282,7 +309,9 @@ class TunnelClientV2:
                     continue
                 self.received_advertisement_hash = digest
                 self._inbox.put_nowait(envelope)
-            elif envelope.kind in {Kind.SIDE_READY, Kind.PEER_CLOSE}:
+            elif envelope.kind is Kind.PEER_CLOSE:
+                raise ConnectionError("peer transport reset; proving a fresh connection")
+            elif envelope.kind in {Kind.SIDE_READY, Kind.RFU}:
                 self._inbox.put_nowait(envelope)
             if (challenge_returned and answered_peer_challenge and
                     not self.data_plane_proven.is_set()):

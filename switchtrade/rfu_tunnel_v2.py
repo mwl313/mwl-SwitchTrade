@@ -9,6 +9,8 @@ import hmac
 import secrets
 import struct
 
+from switchtrade.rfu_tunnel import MAX_PAYLOAD_BYTES as MAX_RFU_PAYLOAD_BYTES
+
 
 MAGIC = b"STR2"
 VERSION = 2
@@ -56,6 +58,7 @@ class Kind(IntEnum):
     ADVERTISEMENT = 4
     SIDE_READY = 5
     PEER_CLOSE = 6
+    RFU = 7
 
 
 def _attempt_bytes(attempt_id: str) -> bytes:
@@ -70,7 +73,11 @@ def _attempt_bytes(attempt_id: str) -> bytes:
     return encoded
 
 
-def _validate_payload(kind: Kind, payload: bytes) -> None:
+def _validate_payload(kind: Kind, payload: bytes, flags: int = 0) -> None:
+    if not 0 <= flags <= 0xFF:
+        raise TunnelV2Error("C_FLAGS_INVALID", "Reliable flags are outside uint8")
+    if kind is not Kind.RFU and flags:
+        raise TunnelV2Error("C_FLAGS_INVALID", "control frames cannot carry Reliable flags")
     if len(payload) > MAX_PAYLOAD_BYTES:
         raise TunnelV2Error("C_PAYLOAD_TOO_LARGE", "payload exceeds the v2 bound")
     if kind is Kind.PEER_READY and payload:
@@ -79,6 +86,10 @@ def _validate_payload(kind: Kind, payload: bytes) -> None:
         raise TunnelV2Error("C_PAYLOAD_INVALID", "probe payload must be 32 bytes")
     if kind in {Kind.ADVERTISEMENT, Kind.SIDE_READY} and not payload:
         raise TunnelV2Error("C_PAYLOAD_INVALID", f"{kind.name} payload must not be empty")
+    if kind is Kind.RFU and (not payload or len(payload) > MAX_RFU_PAYLOAD_BYTES):
+        raise TunnelV2Error(
+            "C_RFU_PAYLOAD_INVALID", "RFU payload is outside the Pia Reliable wire bound"
+        )
 
 
 @dataclass(frozen=True)
@@ -89,6 +100,7 @@ class Envelope:
     sequence: int
     kind: Kind
     payload: bytes = b""
+    flags: int = 0
 
     def encode(self) -> bytes:
         attempt = _attempt_bytes(self.attempt_id)
@@ -102,9 +114,9 @@ class Envelope:
         if not 0 <= self.sequence <= 0xFFFFFFFFFFFFFFFF:
             raise TunnelV2Error("C_SEQUENCE_INVALID", "sequence is outside uint64")
         payload = bytes(self.payload)
-        _validate_payload(kind, payload)
+        _validate_payload(kind, payload, self.flags)
         return HEADER.pack(
-            MAGIC, VERSION, int(kind), int(seat), 0,
+            MAGIC, VERSION, int(kind), int(seat), self.flags,
             self.source_epoch, self.sequence, len(attempt), len(payload),
         ) + attempt + payload
 
@@ -112,10 +124,10 @@ class Envelope:
     def decode(cls, raw: bytes) -> "Envelope":
         if not isinstance(raw, bytes) or len(raw) < HEADER.size:
             raise TunnelV2Error("C_ENVELOPE_INVALID", "envelope header is truncated")
-        magic, version, kind, seat, reserved, epoch, sequence, attempt_len, payload_len = (
+        magic, version, kind, seat, flags, epoch, sequence, attempt_len, payload_len = (
             HEADER.unpack_from(raw)
         )
-        if magic != MAGIC or version != VERSION or reserved != 0:
+        if magic != MAGIC or version != VERSION:
             raise TunnelV2Error("C_ENVELOPE_INVALID", "envelope header is unsupported")
         if not 1 <= attempt_len <= MAX_ATTEMPT_BYTES or payload_len > MAX_PAYLOAD_BYTES:
             raise TunnelV2Error("C_ENVELOPE_INVALID", "envelope lengths are invalid")
@@ -128,9 +140,11 @@ class Envelope:
             parsed_kind = Kind(kind)
         except (UnicodeDecodeError, ValueError) as error:
             raise TunnelV2Error("C_ENVELOPE_INVALID", "envelope field is invalid") from error
-        envelope = cls(attempt_id, source_seat, epoch, sequence, parsed_kind, raw[boundary:])
+        envelope = cls(
+            attempt_id, source_seat, epoch, sequence, parsed_kind, raw[boundary:], flags
+        )
         _attempt_bytes(envelope.attempt_id)
-        _validate_payload(envelope.kind, envelope.payload)
+        _validate_payload(envelope.kind, envelope.payload, envelope.flags)
         return envelope
 
 

@@ -28,6 +28,11 @@ class EnvelopeV2Tests(unittest.TestCase):
         for sequence, (kind, payload) in enumerate(payloads.items()):
             expected = Envelope("시도-1", SourceSeat.MEMBER_A, 7, sequence, kind, payload)
             self.assertEqual(Envelope.decode(expected.encode()), expected)
+        rfu = Envelope(
+            "시도-1", SourceSeat.MEMBER_A, 7, len(payloads), Kind.RFU,
+            b"\x57byte-exact-reliable", 0x0F,
+        )
+        self.assertEqual(Envelope.decode(rfu.encode()), rfu)
 
     def test_decode_rejects_bad_header_length_and_payload_semantics(self):
         valid = Envelope("attempt-1", SourceSeat.MEMBER_A, 1, 0, Kind.PEER_READY).encode()
@@ -40,6 +45,12 @@ class EnvelopeV2Tests(unittest.TestCase):
         with self.assertRaisesRegex(TunnelV2Error, "exceeds"):
             Envelope("attempt-1", SourceSeat.MEMBER_A, 1, 0,
                      Kind.ADVERTISEMENT, b"x" * (MAX_PAYLOAD_BYTES + 1)).encode()
+        with self.assertRaises(TunnelV2Error) as raised:
+            Envelope(
+                "attempt-1", SourceSeat.MEMBER_A, 1, 0,
+                Kind.SIDE_READY, b"ready", 0x01,
+            ).encode()
+        self.assertEqual(raised.exception.code, "C_FLAGS_INVALID")
         self.assertLess(HEADER.size, len(valid))
 
 

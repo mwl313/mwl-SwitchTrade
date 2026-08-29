@@ -635,6 +635,7 @@ class AuthorityStore:
         room["last_attempt_number"] = number
         room["attempt"] = {
             "attempt_id": uuid7(), "attempt_number": number,
+            "activation_generation": number,
             "phase": "connecting_switches", "creator_member_id": creator,
             "role_locked": True, "role_lock_version": room["room_version"] + 1,
             "started_at": _utc(), "updated_at": _utc(), "retry_count": 0,

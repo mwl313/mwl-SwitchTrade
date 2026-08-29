@@ -4,10 +4,13 @@
   "title": "SwitchTrade app-readiness.v2 projection",
   "type": "object",
   "additionalProperties": false,
-  "required": ["contract_version", "p0_ready_members", "attempt_admitted"],
+  "required": [
+    "contract_version", "p0_ready_members", "attempt_admitted", "activation_generation"
+  ],
   "properties": {
     "contract_version": { "const": "app-readiness.v2" },
     "p0_ready_members": { "type": "integer", "minimum": 0, "maximum": 2 },
-    "attempt_admitted": { "type": "boolean" }
+    "attempt_admitted": { "type": "boolean" },
+    "activation_generation": { "type": ["integer", "null"], "minimum": 1 }
   }
 }

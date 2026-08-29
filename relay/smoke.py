@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import secrets
 import time
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -12,6 +13,7 @@ from urllib.request import Request, urlopen
 from switchtrade.relay_client import RelayClient, USER_AGENT
 from relay.authority import uuid7
 from switchtrade.connection.b_fixture import FIXTURE, FIXTURE_SHA256
+from switchtrade.connection.c2 import C2Bridge
 from switchtrade.rfu_tunnel_v2 import Kind
 from switchtrade.tunnel_client_v2 import TunnelClientV2
 
@@ -78,8 +80,12 @@ def smoke(base_url: str, allow_http: bool = False) -> None:
             "ready": True, "switch_room_role": role, "p0": proof,
         }, expected_version=room["room_version"])
     attempt_id = room["attempt"]["attempt_id"]
+    activation_generation = room["attempt"].get("activation_generation")
     if (not room["attempt"]["role_locked"] or
-            not room["v2_admission"]["attempt_admitted"]):
+            not room["v2_admission"]["attempt_admitted"] or
+            isinstance(activation_generation, bool) or
+            not isinstance(activation_generation, int) or activation_generation < 1 or
+            activation_generation != room["v2_admission"].get("activation_generation")):
         raise RuntimeError("v2 P0 admission and roles were not locked atomically")
 
     def client(credential: dict, seat: str, pid: int, expected_hash=None) -> TunnelClientV2:
@@ -99,6 +105,45 @@ def smoke(base_url: str, allow_http: bool = False) -> None:
         if first_client.advertise(FIXTURE) != FIXTURE_SHA256:
             raise RuntimeError("A advertisement hash changed before relay delivery")
         _wait_advertisement(second_client)
+
+        first_bridge = C2Bridge(
+            attestations[first["member_token"]]["run_id"], attempt_id,
+            "member_a", "a_room_joiner", first_client,
+            activation_generation=activation_generation,
+            advertisement_sha256=FIXTURE_SHA256,
+        )
+        second_bridge = C2Bridge(
+            attestations[second["member_token"]]["run_id"], attempt_id,
+            "member_b", "b_ap_host", second_client,
+            activation_generation=activation_generation,
+            advertisement_sha256=FIXTURE_SHA256,
+        )
+        first_bridge.mark_local_ready("A_READY")
+        second_bridge.mark_local_ready("B_READY")
+        deadline = time.monotonic() + 10
+        while (time.monotonic() < deadline and
+               not (first_bridge.connected.is_set() and second_bridge.connected.is_set())):
+            first_bridge.pump()
+            second_bridge.pump()
+            time.sleep(0.02)
+        if not first_bridge.connected.is_set() or not second_bridge.connected.is_set():
+            raise RuntimeError("C2 side-ready barrier did not activate both seats")
+
+        to_first, to_second = secrets.token_bytes(32), secrets.token_bytes(32)
+        first_bridge.send_rfu(to_second, flags=0x01)
+        second_bridge.send_rfu(to_first, flags=0x03)
+        received_first = received_second = None
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and (
+                received_first is None or received_second is None):
+            received_first = next(iter(first_bridge.poll()), received_first)
+            received_second = next(iter(second_bridge.poll()), received_second)
+            time.sleep(0.02)
+        if (received_first is None or received_second is None or
+                (received_first.payload, received_first.flags) != (to_first, 0x03) or
+                (received_second.payload, received_second.flags) != (to_second, 0x01) or
+                not first_bridge.rfu_active.is_set() or not second_bridge.rfu_active.is_set()):
+            raise RuntimeError("C2 byte-exact bidirectional RFU proof failed")
     finally:
         first_client.stop()
         second_client.stop()

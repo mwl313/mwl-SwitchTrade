@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from fastapi import BackgroundTasks
 import hashlib
@@ -28,10 +29,12 @@ from switchtrade.rfu_tunnel import (
 from switchtrade.rfu_tunnel_v2 import (
     MAX_ENVELOPE_BYTES as MAX_V2_ENVELOPE_BYTES,
     Envelope as EnvelopeV2,
+    Kind as KindV2,
     SequenceGate as SequenceGateV2,
     SourceSeat,
     TunnelV2Error,
 )
+from switchtrade.c2_protocol import SideReady, launch_identity_hash
 from relay.authority import AuthorityError, AuthorityStore
 
 HEARTBEAT_TIMEOUT = 30.0
@@ -620,8 +623,10 @@ async def ready_trade_room_v2(room_id: str, payload: V2ReadyPayload,
         admission.last_activity = time.monotonic()
         if payload.ready:
             admission.proofs[member_id] = proof
+            admission.roles[member_id] = str(payload.switch_room_role)
         else:
             admission.proofs.clear()
+            admission.roles.clear()
             admission.launches.clear()
             _retire_v2_admission(room_code)
 
@@ -638,12 +643,14 @@ async def ready_trade_room_v2(room_id: str, payload: V2ReadyPayload,
                 raise HTTPException(status_code=409, detail="both v2 P0 proofs are required")
             admission.attempt_id = attempt_id
             admission.role_lock_version = attempt.get("role_lock_version")
+            admission.activation_generation = attempt.get("activation_generation")
             v2_attempt_admissions[(room_code, attempt_id)] = admission
 
         room["v2_admission"] = {
             "contract_version": "app-readiness.v2",
             "p0_ready_members": len(admission.proofs),
             "attempt_admitted": bool(active),
+            "activation_generation": admission.activation_generation if active else None,
         }
         return room
 
@@ -739,6 +746,12 @@ class Session:
 sessions: dict[str, Session] = {}
 
 
+@dataclass(frozen=True)
+class V2Peer:
+    websocket: WebSocket
+    reset_event: asyncio.Event
+
+
 class V2Session:
     """One process-local, attempt-scoped v2 transport namespace."""
 
@@ -746,7 +759,7 @@ class V2Session:
         self.room_code = room_code
         self.room_id = room_id
         self.attempt_id = attempt_id
-        self.peers: dict[SourceSeat, WebSocket | None] = {
+        self.peers: dict[SourceSeat, V2Peer | None] = {
             SourceSeat.MEMBER_A: None, SourceSeat.MEMBER_B: None,
         }
         self.generations = {SourceSeat.MEMBER_A: 0, SourceSeat.MEMBER_B: 0}
@@ -758,6 +771,10 @@ class V2Session:
             SourceSeat.MEMBER_A: [], SourceSeat.MEMBER_B: [],
         }
         self.retained_bytes = {SourceSeat.MEMBER_A: 0, SourceSeat.MEMBER_B: 0}
+        self.side_ready_epochs: dict[SourceSeat, int | None] = {
+            SourceSeat.MEMBER_A: None, SourceSeat.MEMBER_B: None,
+        }
+        self.advertisement_hash: str | None = None
         self.lock = asyncio.Lock()
         self.created = self.last_activity = time.monotonic()
 
@@ -769,9 +786,11 @@ class V2Admission:
         self.room_code = room_code
         self.room_id = room_id
         self.proofs: dict[str, dict] = {}
+        self.roles: dict[str, str] = {}
         self.launches: dict[str, dict] = {}
         self.attempt_id: str | None = None
         self.role_lock_version: int | None = None
+        self.activation_generation: int | None = None
         self.last_activity = time.monotonic()
 
 
@@ -796,8 +815,10 @@ def _retire_v2_admission(room_code: str, attempt_id: str | None = None) -> None:
 async def _disconnect_v2_session(session: V2Session, reason: str) -> None:
     v2_sessions.pop((session.room_code, session.attempt_id), None)
     async with session.lock:
-        peers = [peer for peer in session.peers.values() if peer is not None]
+        peers = [peer.websocket for peer in session.peers.values() if peer is not None]
         for seat in session.peers:
+            if session.peers[seat] is not None:
+                session.peers[seat].reset_event.set()
             session.peers[seat] = None
             session.retained[seat].clear()
             session.retained_bytes[seat] = 0
@@ -806,6 +827,24 @@ async def _disconnect_v2_session(session: V2Session, reason: str) -> None:
             await peer.close(code=CLOSE_PEER_OFFLINE, reason=reason)
         except RuntimeError:
             pass
+
+
+async def _receive_v2_or_reset(websocket: WebSocket,
+                               reset_event: asyncio.Event) -> bytes | None:
+    """Receive until the socket closes or its run-scoped session ownership is revoked."""
+    receive_task = asyncio.create_task(websocket.receive_bytes())
+    reset_task = asyncio.create_task(reset_event.wait())
+    tasks = {receive_task, reset_task}
+    try:
+        done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        if reset_task in done:
+            return None
+        return receive_task.result()
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def _disconnect_v2_room(room_code: str, reason: str,
@@ -1102,20 +1141,22 @@ async def ws_attempt_v2(websocket: WebSocket, room_code: str, attempt_id: str) -
         return
 
     peer_seat = seat.peer
+    reset_event = asyncio.Event()
     try:
         async with session.lock:
             if session.peers[seat] is not None:
                 await websocket.close(code=CLOSE_SLOT_TAKEN, reason="seat already connected")
                 return
             session.generations[seat] += 1
-            session.peers[seat] = websocket
+            session.peers[seat] = V2Peer(websocket, reset_event)
             session.last_activity = time.monotonic()
             await websocket.accept()
             for retained in session.retained[peer_seat]:
                 await asyncio.wait_for(websocket.send_bytes(retained), timeout=PEER_SEND_TIMEOUT)
     except (asyncio.TimeoutError, RuntimeError):
         async with session.lock:
-            if session.peers[seat] is websocket:
+            if (session.peers[seat] is not None and
+                    session.peers[seat].websocket is websocket):
                 session.peers[seat] = None
         await websocket.close(code=CLOSE_PEER_OFFLINE, reason="retained replay timed out")
         return
@@ -1129,14 +1170,23 @@ async def ws_attempt_v2(websocket: WebSocket, room_code: str, attempt_id: str) -
     }, separators=(",", ":")))
     try:
         while True:
-            raw = await websocket.receive_bytes()
+            raw = await _receive_v2_or_reset(websocket, reset_event)
+            if raw is None:
+                disconnect_reason = "peer_reset"
+                try:
+                    await websocket.close(
+                        code=CLOSE_PEER_OFFLINE, reason="peer transport is reconnecting"
+                    )
+                except RuntimeError:
+                    pass
+                break
             if not isinstance(raw, bytes) or len(raw) > MAX_V2_ENVELOPE_BYTES:
                 raise TunnelV2Error("C_ENVELOPE_INVALID", "v2 frame size is invalid")
             envelope = EnvelopeV2.decode(raw)
             if envelope.attempt_id != attempt_id or envelope.source_seat is not seat:
                 raise TunnelV2Error("C_IDENTITY_MISMATCH", "v2 frame identity is invalid")
 
-            schedule_peer_expiry = None
+            peer_send_failed = False
             async with session.lock:
                 gate = session.gates[seat]
                 prior_epoch = gate.epoch
@@ -1144,23 +1194,79 @@ async def ws_attempt_v2(websocket: WebSocket, room_code: str, attempt_id: str) -
                 if prior_epoch != gate.epoch:
                     session.retained[seat].clear()
                     session.retained_bytes[seat] = 0
-                if (len(session.retained[seat]) >= V2_RETAINED_FRAMES or
-                        session.retained_bytes[seat] + len(raw) > V2_RETAINED_BYTES):
-                    raise TunnelV2Error("C_RETENTION_OVERFLOW", "v2 retained frame bound exceeded")
-                session.retained[seat].append(raw)
-                session.retained_bytes[seat] += len(raw)
+                    session.side_ready_epochs[seat] = None
+
+                if envelope.kind is KindV2.ADVERTISEMENT:
+                    digest = hashlib.sha256(envelope.payload).hexdigest()
+                    if session.advertisement_hash not in {None, digest}:
+                        raise TunnelV2Error(
+                            "C_ADVERTISEMENT_CHANGED", "advertisement changed inside one attempt"
+                        )
+                    session.advertisement_hash = digest
+                elif envelope.kind is KindV2.SIDE_READY:
+                    ready = SideReady.decode(envelope.payload)
+                    expected_role = {
+                        "creator": "a_room_joiner", "finder": "b_ap_host",
+                    }.get(admission.roles.get(identity["member_id"]))
+                    expected_launch_hash = launch_identity_hash(
+                        launch["run_id"], launch["stage_generation"],
+                        launch["launch_nonce"], launch["endpoint_pid"],
+                    )
+                    if (ready.attempt_id != attempt_id or ready.source_seat != seat.label or
+                            ready.switch_role != expected_role or ready.run_id != launch["run_id"] or
+                            ready.stage_generation != launch["stage_generation"] or
+                            ready.launch_identity_sha256 != expected_launch_hash or
+                            ready.activation_generation != admission.activation_generation):
+                        raise TunnelV2Error(
+                            "C_SIDE_READY_IDENTITY", "SIDE_READY does not match its admitted launch"
+                        )
+                    if (session.advertisement_hash is None or
+                            ready.advertisement_sha256 != session.advertisement_hash):
+                        raise TunnelV2Error(
+                            "C_SIDE_READY_ADVERTISEMENT",
+                            "SIDE_READY does not match the admitted advertisement",
+                        )
+                    if session.side_ready_epochs[seat] == envelope.source_epoch:
+                        raise TunnelV2Error(
+                            "C_SIDE_READY_DUPLICATE", "SIDE_READY is duplicate in this source epoch"
+                        )
+                    session.side_ready_epochs[seat] = envelope.source_epoch
+                elif envelope.kind is KindV2.RFU:
+                    if any(
+                            session.side_ready_epochs[source] != session.gates[source].epoch
+                            for source in (SourceSeat.MEMBER_A, SourceSeat.MEMBER_B)):
+                        raise TunnelV2Error(
+                            "C_BRIDGE_NOT_READY", "RFU arrived before both current SIDE_READY frames"
+                        )
+
+                if envelope.kind in {KindV2.PEER_READY, KindV2.ADVERTISEMENT}:
+                    if (len(session.retained[seat]) >= V2_RETAINED_FRAMES or
+                            session.retained_bytes[seat] + len(raw) > V2_RETAINED_BYTES):
+                        raise TunnelV2Error(
+                            "C_RETENTION_OVERFLOW", "v2 retained frame bound exceeded"
+                        )
+                    session.retained[seat].append(raw)
+                    session.retained_bytes[seat] += len(raw)
                 peer = session.peers[peer_seat]
                 if peer is not None:
                     try:
-                        await asyncio.wait_for(peer.send_bytes(raw), timeout=PEER_SEND_TIMEOUT)
+                        await asyncio.wait_for(
+                            peer.websocket.send_bytes(raw), timeout=PEER_SEND_TIMEOUT
+                        )
                     except (asyncio.TimeoutError, RuntimeError):
-                        session.peers[peer_seat] = None
-                        schedule_peer_expiry = session.generations[peer_seat]
+                        peer_send_failed = True
                 session.last_activity = time.monotonic()
-            if schedule_peer_expiry is not None:
-                asyncio.create_task(_expire_v2_peer(session, peer_seat, schedule_peer_expiry))
             frames += 1
             bytes_forwarded += len(raw)
+            if peer_send_failed:
+                disconnect_reason = "peer_send_failed"
+                try:
+                    await websocket.close(
+                        code=CLOSE_PEER_OFFLINE, reason="peer send failed; reprove both sides"
+                    )
+                except RuntimeError:
+                    pass
+                break
     except TunnelV2Error as error:
         fatal_code = error.code
         disconnect_reason = error.code.lower()
@@ -1173,15 +1279,36 @@ async def ws_attempt_v2(websocket: WebSocket, room_code: str, attempt_id: str) -
     except RuntimeError:
         disconnect_reason = "websocket_runtime_error"
     finally:
-        expire_generation = None
+        expire_targets: list[tuple[SourceSeat, int]] = []
         async with session.lock:
-            if session.peers[seat] is websocket:
+            if (session.peers[seat] is not None and
+                    session.peers[seat].websocket is websocket):
                 session.peers[seat] = None
                 if not fatal_code and v2_sessions.get(key) is session:
                     for retained_seat in session.retained:
                         session.retained[retained_seat].clear()
                         session.retained_bytes[retained_seat] = 0
-                    expire_generation = session.generations[seat]
+                        session.side_ready_epochs[retained_seat] = None
+                    expire_targets.append((seat, session.generations[seat]))
+                    peer = session.peers[peer_seat]
+                    if peer is not None:
+                        gate = session.gates[seat]
+                        if gate.epoch is not None:
+                            close_envelope = EnvelopeV2(
+                                attempt_id, seat, gate.epoch, gate.next_sequence,
+                                KindV2.PEER_CLOSE, b"peer transport reset",
+                            )
+                            gate.accept(close_envelope)
+                            try:
+                                await asyncio.wait_for(
+                                    peer.websocket.send_bytes(close_envelope.encode()),
+                                    timeout=PEER_SEND_TIMEOUT,
+                                )
+                            except (asyncio.TimeoutError, RuntimeError):
+                                pass
+                        peer.reset_event.set()
+                        session.peers[peer_seat] = None
+                        expire_targets.append((peer_seat, session.generations[peer_seat]))
             session.last_activity = time.monotonic()
         if fatal_code:
             authority.fail_transport_attempt(
@@ -1189,8 +1316,9 @@ async def ws_attempt_v2(websocket: WebSocket, room_code: str, attempt_id: str) -
             )
             _retire_v2_admission(room_code, attempt_id)
             await _disconnect_v2_session(session, fatal_code)
-        elif v2_sessions.get(key) is session and expire_generation is not None:
-            asyncio.create_task(_expire_v2_peer(session, seat, expire_generation))
+        elif v2_sessions.get(key) is session:
+            for target_seat, generation in expire_targets:
+                asyncio.create_task(_expire_v2_peer(session, target_seat, generation))
         logger.info(json.dumps({
             "event": "rfu_v2_peer_disconnected", "room_id": identity["room_id"],
             "attempt_id": attempt_id, "source_seat": seat.label,
