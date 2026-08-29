@@ -34,9 +34,10 @@ Execution status:
 - Milestone 3 passed A0-A9 on PC A in immutable runtime `abcd-m3-80c4e13`; PC B remains the formal
   exit-gate debt. The owner directed the project to proceed to Milestone 4 without representing that
   debt as closed.
-- Milestone 4 is source-complete at `a96f53f`. Immutable PC A runtime `abcd-m4-a96f53f` passed
-  installation, integrity, dependency, kernel, contract, CLI, residue, and detached-USB smoke. The
-  one-Switch B2-B10 physical run is pending.
+- Milestone 4 is source-complete at `99e21fe`. Immutable PC A runtime `abcd-m4-99e21fe` passed
+  installation, integrity, dependency, kernel, contract, CLI, residue, and detached-USB smoke. A
+  prior v2-fixture run proved physical B2-B10 but exposed teardown misclassification; the corrected
+  candidate's final real one-Switch confirmation run is pending.
 
 ## 2. Architecture and interface decisions
 

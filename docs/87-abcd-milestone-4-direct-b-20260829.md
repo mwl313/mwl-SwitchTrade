@@ -1,8 +1,8 @@
 # ABC+D Milestone 4 direct B qualification evidence
 
 > Branch: `codex/abcd-orchestration-rework`
-> Source commit: `a96f53f`
-> Status: source complete; PC A immutable runtime installed and smoke-tested; physical B2-B10 pending.
+> Source commit: `99e21fe`
+> Status: source complete; final PC A immutable runtime installed and smoke-tested; final physical rerun pending.
 > Scope: local app-hosted room advertisement, one real searching Switch, control port, and bounded hold.
 
 ## 1. Entry decision and boundary
@@ -34,8 +34,8 @@ contact a relay, or retry implicitly.
 
 One CLI action acquires exactly one adapter lease and one long-lived worker. The endpoint then:
 
-1. B2 validates the 122-byte `frlg-search-v1` fixture and SHA-256
-   `998a8087aa9011dc7b0bc3200b99702c03eeefb3e9c3259349f3b540e6425ce2` before touching the radio.
+1. B2 validates the 122-byte `frlg-search-v2` fixture and SHA-256
+   `c945ee4344711cc0c019356a311912437f520063ef8aa9b2f158d7a13295d863` before touching the radio.
 2. B3 inventories the selected PHY and removes only its stale virtual interfaces and the exact
    run-reserved TAP.
 3. B4 loads production keys and constructs protocol 3, scene 22287, communication ID
@@ -60,11 +60,14 @@ packet capture, trainer data, or Pokémon data.
 
 ## 4. Automated evidence
 
-The final source regression passed 251 tests with one intentional skip. The focused P0/A/B matrix
-passed 42 tests. Direct B coverage includes fixture immutability, B2-B10 order, parameter identity,
+The final source regression passed 413 tests with three intentional skips. The focused Direct B/P0
+matrix passed 38 tests. Direct B coverage includes fixture immutability, B2-B10 order, parameter identity,
 run-owned compatibility behavior without class mutation, real-peer event requirements, control-port
 failure, association/hold timeout, participant loss, one launch, strict endpoint identity, one
-attach/conditional detach, cleanup failure precedence, redaction, and no relay dependency.
+attach/conditional detach, cleanup failure precedence, redaction, and no relay dependency. It also
+opens a Trio nursery across the fake LDN context yield, proving that the stage preserves the real
+library's cancel-scope nesting, and proves that a post-B10 teardown timeout cannot rewrite functional
+success while still leaving cleanup unverified.
 
 The legacy Linux-only bridge test module cannot import Windows `fcntl` and was not counted as a
 Windows pass. The admitted compatibility behavior is instead covered through the new run-local Direct
@@ -72,19 +75,20 @@ B tests and remains subject to the physical installed-runtime gate.
 
 ## 5. Immutable PC A candidate
 
-- release: `abcd-m4-a96f53f`;
+- release: `abcd-m4-99e21fe`;
 - application version carried by the qualification package: `0.2.6-beta.2`;
-- runtime content ID: `5696cbc80cdf45cbc8933cafe761fff06ffb348b907d58ef7cde129769a35197`;
-- WSL archive SHA-256: `6f8e614ed4d110ccae5d98df37c3db3db68abffced5ed36f125b742395b86877`;
-- WSL archive size: `110364608` bytes;
+- runtime content ID: `ed5863a011f268bbb29de6262153123ce6daf870f81468ab0f1eaeb7ce2516d4`;
+- WSL archive SHA-256: `8d8a5222e72edaba49311b635b11f622af1c453c8f8f47a5e875c9197f5082f5`;
+- WSL archive size: `110364652` bytes;
 - custom kernel: `6.18.35.2-microsoft-standard-WSL2+`;
-- active runtime: `SwitchTrade-beta-abcd-m4-a96f5-329e3033102d4eeaa2aac60336c59c15`;
-- package directory: `artifacts\qualification\m4-a96f53f\package`.
+- active runtime: `SwitchTrade-beta-abcd-m4-99e21-666a4479c5764366a7433fd77b0d6d20`;
+- package directory: `artifacts\qualification\m4-99e21fe\package`.
 
 The replacement provisioner installed the candidate side by side, verified it, atomically selected
 it, and retired the superseded M3 runtime. Installed smoke verified the release and payload integrity,
 pinned `ldn==0.0.17`, all B2-B10 gate names, fixture hash, Direct B endpoint import, custom kernel,
-zero active endpoints, no Direct B AP/monitor/TAP residue, no relay CLI option, and USB bus `4-18`
+zero active endpoints, no Direct B AP/monitor/TAP residue, no relay CLI option, truthful context-release
+tracking, and USB bus `4-18`
 detached from WSL. The checks ran from the non-ASCII Windows profile path. This proves package/runtime
 readiness only and did not attach the adapter or claim physical B.
 
@@ -95,7 +99,7 @@ live evidence reaches B5/B6 and the app-hosted room is advertising, open FireRed
 Club Direct Corner, enter the Trade Center, choose **Join Group**, and select the advertised room.
 
 ```powershell
-$candidate = (Resolve-Path 'artifacts\qualification\m4-a96f53f').Path
+$candidate = (Resolve-Path 'artifacts\qualification\m4-99e21fe').Path
 $active = Get-Content -Raw (Join-Path $env:LOCALAPPDATA `
   'SwitchTrade\state\active-runtime.json') | ConvertFrom-Json
 wsl.exe --shutdown
@@ -111,3 +115,31 @@ Accept PC A Direct B only when the command exits 0 with `functional_status=passe
 show normal endpoint exit, no recovery record, the run-acquired adapter returned to Windows, and no
 Linux USB/interface/PHY/process residue. This is local B evidence only; it cannot claim B1,
 `B_READY`, C, relay transport, RFU, a trade, or formal Milestone 4 completion while PC B remains open.
+
+## 7. Physical findings and historical correlation
+
+The first PC A candidate, `abcd-m4-a96f53f`, transmitted Nintendo vendor advertisements but the real
+Switch did not list a room. Comparison with prior physically successful PC-host captures proved that
+the synthetic fixture had inconsistent empty Pia/RFU participant identity fields. The package-owned
+`frlg-search-v2` fixture now uses one consistent synthetic `DIAG` identity and a nonzero RFU partner
+word; it contains no captured trainer or Pokémon data.
+
+Runtime `abcd-m4-d41a284` then made the room visible. Run
+`fd133053-5108-499c-9ccc-0214a261a2e9` recorded a real participant transition to 2/6 and passed every
+gate B2-B10, including Nintendo control activity and the bounded hold. The Switch displayed “The other
+trainer appears unavailable.” Historical VM/WSL evidence in documents 26, 31, 33, and 34 records the
+same UI after progressively successful LDN, Pia Session, and RFU NI stages. The message therefore does
+not negate B; it marks an unimplemented higher Pia/RFU boundary that belongs after local B admission.
+
+That run was nevertheless reported as `B_HOLD_TIMEOUT` because the single functional deadline remained
+armed while `network.start()` sent its destroy notification. The notification stalled after B10 and
+rewrote completed functional evidence. Commit `2154533` separated functional and cleanup outcomes, but
+its first AsyncExitStack implementation closed an outer Trio timeout while LDN's nursery cancel scope
+was still active. Installed run `2e0625ec-9946-435b-89e6-26b7577072e6` caught this source regression at
+B5 and verified full cleanup without requiring Switch input.
+
+Commit `99e21fe` keeps one timeout scope outside the complete native LDN context lifetime, bounds the
+peer destroy notification, and records context release only after the context actually exits. It is
+installed and in a clean pre-test state. A final one-Switch run must still exit 0 with both functional
+and cleanup success before PC A Direct B is formally accepted; PC B remains separate qualification
+debt.

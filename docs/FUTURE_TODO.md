@@ -11,9 +11,9 @@ path. No open item may be presented as a current production capability.
    **Status (2026-08-29): PC A passed the immutable installed cold P0 and verified cleanup. The owner
    accepted that result as sufficient to begin Milestone 3. The direct A0-A9 endpoint/harness is
    complete and PC A passed its one-Switch installed-runtime qualification with verified cleanup.
-   Direct B2-B10 is source-complete and its immutable PC A runtime passed installed no-hardware
-   smoke. PC B P0, PC B direct A, physical direct B on both PCs, and production-path cutover remain
-   open.**
+   Direct B2-B10 is source-complete and its final immutable PC A runtime passed installed no-hardware
+   smoke. A prior PC A run physically passed B2-B10 but exposed post-B10 teardown misclassification;
+   final PC A confirmation, PC B P0/direct A/direct B, and production-path cutover remain open.**
    The installed `0.2.6-beta.2` runtime contains the correct kernel and the `ccm`, `cmac`, and `tun`
    modules, but the production wrapper does not load them and does not verify `/dev/net/tun` before
    entering the LDN path. A real Switch-hosted room was observed and decoded three times, then every
@@ -53,9 +53,13 @@ path. No open item may be presented as a current production capability.
    engines. It validates one immutable package-owned fixture, resets only the selected PHY, constructs
    the exact FRLG network, applies compatibility behavior to run-owned instances, and requires
    AP/monitor/TAP, data-plane, real Switch association, control-port, and hold evidence in B2-B10
-   order. Source commit `a96f53f` passed 251 tests with one intentional skip. Immutable runtime
-   `abcd-m4-a96f53f` passed package and installed-runtime smoke on PC A; physical B2-B10 remains open
-   and no B1, `B_READY`, relay delivery, or trade is claimed.
+   order. Source commit `99e21fe` passed 413 tests with three intentional skips. Runtime
+   `abcd-m4-d41a284` made the room visible and physically recorded B2-B10, but a peer destroy stall
+   after B10 falsely rewrote the report as `B_HOLD_TIMEOUT`. The corrected lifecycle keeps the Trio
+   timeout outside the complete LDN context lifetime, bounds the destroy notification, and separates
+   functional success from factual context cleanup. Immutable runtime `abcd-m4-99e21fe` passed package
+   and installed-runtime smoke on PC A and is waiting for final physical confirmation; no B1,
+   `B_READY`, relay delivery, or trade is claimed.
 
 2. **CRITICAL — URGENT: Preserve relay frame order and truthful P0/A/B/C/D diagnostic stages.**
    **Status (2026-08-29): confirmed regression; not fixed.**

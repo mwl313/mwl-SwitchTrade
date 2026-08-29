@@ -117,12 +117,14 @@ or a completed trade. PC A run `88f8e357-2e8c-4981-ad87-4cfaa1f93c31` passed A0-
 cleanup; PC B direct A remains the formal Milestone 3 exit debt.
 
 Milestone 4 now has a source-complete Direct B2-B10 harness and an installed immutable PC A
-qualification runtime, `abcd-m4-a96f53f`. It owns one selected PHY, creates the AP/monitor/TAP
+qualification runtime, `abcd-m4-99e21fe`. It owns one selected PHY, creates the AP/monitor/TAP
 resources through run-local canonical `ldn.create_network()` mechanics, requires a real Switch
 association and Nintendo control-port activity, and keeps functional and cleanup results separate.
-Source regression passed 251 tests with one intentional skip; installed integrity and no-hardware
-smoke passed. The one-Switch physical B2-B10 run is still pending, so this does not yet claim a
-Direct B pass, B1, `B_READY`, relay delivery, or a trade.
+Source regression passed 413 tests with three intentional skips; installed integrity and no-hardware
+smoke passed. A prior v2-fixture run made the room visible and recorded B2-B10 against a real Switch,
+but also exposed a post-B10 teardown/result-classification defect. The final lifecycle fix is installed
+and awaiting one confirmation run, so this does not yet claim formal Direct B acceptance, B1,
+`B_READY`, relay delivery, or a trade.
 
 The [definitive TODO](docs/FUTURE_TODO.md) records implementation and qualification status. A passing
 test for the previous behavior does not close an ABC+D gate unless it proves the gate's current
