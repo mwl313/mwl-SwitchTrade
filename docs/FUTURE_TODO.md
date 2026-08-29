@@ -8,8 +8,10 @@ path. No open item may be presented as a current production capability.
 ## Critical and urgent blockers
 
 1. **CRITICAL — URGENT: Restore the complete WSL LDN prerequisite gate.**
-   **Status (2026-08-29): isolated Milestone 2 source replacement implemented; the installed app is
-   not cut over and cold physical qualification is pending, so this blocker remains open.**
+   **Status (2026-08-29): PC A passed the immutable installed cold P0 and verified cleanup. The owner
+   accepted that result as sufficient to begin Milestone 3. The direct A0-A9 endpoint/harness is now
+   complete in source and awaiting its one-Switch installed-runtime qualification. PC B P0, direct
+   A/B physical qualification, and production-path cutover remain open.**
    The installed `0.2.6-beta.2` runtime contains the correct kernel and the `ccm`, `cmac`, and `tun`
    modules, but the production wrapper does not load them and does not verify `/dev/net/tun` before
    entering the LDN path. A real Switch-hosted room was observed and decoded three times, then every
@@ -35,6 +37,12 @@ path. No open item may be presented as a current production capability.
    qualification must run from a non-ASCII Windows profile and prove locale-independent UTF-8/
    UTF-16LE process output, JSON, log, and Windows/WSL path handling; encoding failures retain their
    own factual gate instead of being mislabeled as radio or relay failures.
+
+   The new direct A path does not import the rejected `LiveTransport` lifecycle. It admits only one
+   exact FRLG advertisement, performs no fallback or orchestration retry, exposes ordered A0-A9
+   checkpoints around the run-local station/CCMP/control-port objects, opens the Pia UDP/raw sockets,
+   completes a bounded local hold, and persists only the advertisement length/hash. It must still
+   pass against one real Switch in the immutable Milestone 3 runtime before this is physical evidence.
 
 2. **CRITICAL — URGENT: Preserve relay frame order and truthful P0/A/B/C/D diagnostic stages.**
    **Status (2026-08-29): confirmed regression; not fixed.**

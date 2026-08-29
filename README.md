@@ -105,8 +105,15 @@ implementation: strict passive runtime/relay validation, exact Windows USB lease
 ordered Linux module/TUN/RX gate, a long-lived WSL radio worker, identity-bound single launch, and
 restart-safe cleanup. It is intentionally not connected to the legacy normal-room, diagnostics, or
 desktop paths. PC A passed the installed cold P0 and verified cleanup using immutable qualification
-runtime `abcd-m2-975e68b`; PC B and the remaining physical fault matrix are still required before
-Milestone 2 can close. No physical A, B, C, or trade capability is claimed by this foundation.
+runtime `abcd-m2-975e68b`. By explicit project decision, that PC A result is sufficient to begin
+Milestone 3; it does not claim a PC B P0 pass or close the remaining cross-PC qualification debt.
+
+Milestone 3 now has a source-complete direct A harness. It runs the exact A0-A9 station sequence
+through one PID-preserving installed-runtime endpoint, selects only one exact FRLG room, records
+association/CCMP/control-port/participant/data-plane checkpoints, holds locally for a bounded period,
+and hands the validated advertisement to the harness in memory while persisting only its hash. It
+does not reuse `LiveTransport` lifecycle orchestration and does not claim A10, C1, `A_READY`, B, C,
+or a completed trade. Installed-runtime physical A qualification is the next gate.
 
 The [definitive TODO](docs/FUTURE_TODO.md) records implementation and qualification status. A passing
 test for the previous behavior does not close an ABC+D gate unless it proves the gate's current
@@ -121,6 +128,7 @@ contract.
 - [ABC+D Orchestration Rewrite Plan](docs/81-abcd-orchestration-rewrite-plan-20260829.md)
 - [ABC+D Milestone 2 P0 Source Evidence](docs/84-abcd-milestone-2-p0-source-20260829.md)
 - [ABC+D Milestone 2 Qualification Guide](docs/85-abcd-milestone-2-qualification-guide-20260829.md)
+- [ABC+D Milestone 3 Direct A Source Evidence](docs/86-abcd-milestone-3-direct-a-20260829.md)
 - [Definitive TODO](docs/FUTURE_TODO.md)
 - [Known Issues](docs/KNOWN_ISSUES.md)
 - [Relay deployment](relay/DEPLOYMENT.md)

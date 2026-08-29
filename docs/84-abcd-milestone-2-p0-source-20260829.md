@@ -111,9 +111,11 @@ The installed exercise also exposed and fixed four boundary defects rather than 
 - post-detach Windows USB re-enumeration was misclassified immediately as an identity change;
 - restart recovery inspected Windows PID/netdev/USB state instead of the selected WSL distribution.
 
-## 6. Remaining Milestone 2 exit gate
+## 6. Project entry decision and remaining Milestone 2 qualification
 
-Before Milestone 3 may begin:
+On 2026-08-29 the owner explicitly accepted the verified PC A cold P0 as sufficient to begin direct
+A work. This is a milestone-entry decision, not evidence that PC B passed and not closure of the
+cross-PC P0 qualification gate. Milestone 3 may proceed while the following debt remains:
 
 1. Copy the exact `abcd-m2-975e68b` qualification package to PC B without rebuilding it there.
 2. On PC B, cold boot with the relevant modules initially unloaded and run the P0 harness.
