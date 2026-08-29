@@ -1,11 +1,13 @@
-# ABC+D Milestone 7 authority D checkpoint
+# ABC+D Milestone 7 distributed D checkpoint
 
 > Branch: `codex/abcd-orchestration-rework`
 > Source commit: `d815562`
+> Endpoint D2-D4 commit: `fdbdd12`
 > Validation-smoke commit: `40fecf3`
-> Status: M7 authority slice complete; Milestone 7 remains open.
-> Scope: D1 closing intent, D5 authority acknowledgement, D6 two-side/forced barrier, and relay
-> transport retirement. This checkpoint does not implement or claim local D2-D4 or D7-D11.
+> Status: M7 authority and endpoint D2-D4 slices complete; Milestone 7 remains open.
+> Scope: D1 closing intent, endpoint D2-D4, D5 authority acknowledgement, D6 two-side/forced
+> barrier, and relay transport retirement. This checkpoint does not implement or claim D7-D11 or
+> production control wiring for measured D5 evidence.
 
 ## 1. Boundary
 
@@ -13,9 +15,10 @@ This checkpoint introduces one authority-owned distributed-D path on top of the 
 It does not reuse the legacy room terminalization path and it is not advertised as a completed relay
 capability. Only a P0-admitted v2 attempt may enter it.
 
-The relay owns the shared outcome and barrier. Each PC will remain responsible for its own endpoint,
-LDN, interfaces, radio, USB lease, and recovery evidence in the next M7 slices. A local acknowledgement
-proves only the credential-derived seat that submitted it.
+The relay owns the shared outcome and barrier. The new endpoint stage owns only its local D2-D4
+resources. Local control still must prove endpoint exit, interfaces, radio, USB lease, and recovery
+state in later M7 slices. A local acknowledgement proves only the credential-derived seat that
+submitted it.
 
 ## 2. Implemented ordering and invariants
 
@@ -47,6 +50,8 @@ proves only the credential-derived seat that submitted it.
 - `d-side-quiescent.v1`: one launch-bound seat acknowledgement with Boolean-only resource evidence.
 - `distributed-d.v1`: persisted authority projection, including deadline, both side records, barrier
   state, cleanup result, secondary cleanup code, and terminal timestamp.
+- `d-endpoint-stage.v1`: launch-bound D2-D4 result with Boolean resource evidence, bounded queue
+  counts, stable cleanup failures, and no payload data.
 
 The contracts contain no bearer credentials, reconnect tokens, launch nonce, raw RFU frames, MAC
 addresses, packet captures, or game/trainer data. The launch nonce and PID are represented only by the
@@ -66,10 +71,16 @@ existing SHA-256 launch identity.
 ## 5. Evidence
 
 - Focused authority and real-process tunnel matrix: `62 passed`.
-- Full audit runtime: `450 passed, 3 skipped`.
+- Full audit runtime after the endpoint slice: `455 passed, 3 skipped`.
 - Source-identical local uvicorn smoke passed both normal and reversed role assignments through C0-C2,
   D1, one-sided D5 non-terminal behavior, two-sided D6, post-terminal retry, and room close. Final
   metrics were zero for active credentials, v1/v2 sessions, and v2 admissions.
+- The source-identical public relay deployment passed normal and reversed-role HTTPS/WSS smoke
+  through C0-C2 and D1/D5/D6. Private metrics are access-controlled and still require the operator's
+  zero-orphan confirmation for this deployed checkpoint.
+- Endpoint tests prove exact D2 -> D3 -> D4 call order, native close-tail success and timeout,
+  continued cleanup after faults, immutable run/attempt/seat/activation/launch binding, queue
+  accounting, admission sealing, transport/thread/LDN evidence, and idempotent replay.
 - Tests cover two-sided cancellation, failed outcomes, false completion rejection, stale launch
   identity, legacy-path rejection, primary/secondary error separation, forced-side evidence, barrier
   timeout, relay restart, exact post-terminal HTTP retry, and transport retirement.
@@ -80,15 +91,13 @@ existing SHA-256 launch identity.
 
 This checkpoint is not the M7 exit gate. The following must be implemented and verified in order:
 
-1. D2 bounded native Switch close-link tail in the endpoint.
-2. D3 bridge admission stop and deterministic drain/final observer evidence.
-3. D4 LDN/socket/thread/vif teardown by the endpoint that owns them.
-4. Production control wiring that constructs D5 from measured local state, not caller claims.
-5. D7 diagnostic-only peer/room/token cleanup.
-6. D8 exact endpoint/child/launch verification, D9 stable Linux radio quiescence, D10 conditional
+1. Production control wiring that invokes D2-D4 only after authoritative D1 and constructs D5 from
+   the persisted endpoint report plus measured process/radio state, not caller claims.
+2. D7 diagnostic-only peer/room/token cleanup.
+3. D8 exact endpoint/child/launch verification, D9 stable Linux radio quiescence, D10 conditional
    return of only the run-owned USB adapter, and D11 recovery-state/lock release.
-7. Stop, Leave, Close, app/control/PC restart, endpoint hang, and fault injection at every gate.
-8. Source-identical deployed relay validation and the complete C0-C2 plus distributed-D harness.
+4. Stop, Leave, Close, app/control/PC restart, endpoint hang, and fault injection at every gate.
+5. Private zero-orphan deployed relay confirmation and the complete C0-C2 plus distributed-D harness.
 
 Until those checks pass, normal rooms, production diagnostics, desktop UI, and installers remain on
 their existing paths and no installer should be built from this checkpoint.

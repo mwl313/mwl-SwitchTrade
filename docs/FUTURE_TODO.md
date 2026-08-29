@@ -138,8 +138,9 @@ path. No open item may be presented as a current production capability.
    proves simultaneous physical A_READY/B_READY through the production coordinator.
 
 4. **CRITICAL — URGENT: Make D cleanup two-sided, attempt-scoped, and outcome-preserving.**
-   **Status (2026-08-30): authority D1/D5/D6 implemented at `d815562`; endpoint D2-D4 and local
-   control D7-D11 remain open, so the product blocker is not closed.**
+   **Status (2026-08-30): authority D1/D5/D6 implemented at `d815562` and ordered endpoint D2-D4 at
+   `fdbdd12`; measured D5 control wiring and local D7-D11 remain open, so the product blocker is not
+   closed.**
    Local session Stop currently stops the endpoint and releases hardware before it publishes the
    authoritative cancellation. A WebSocket disconnect while the authority is still in any
    non-terminal phase—including `closing`—is converted by the relay into `relay.peer_lost`. The relay
