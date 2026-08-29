@@ -704,9 +704,10 @@ class FakeWorkerProcess:
 
 
 class FakeLease:
-    def __init__(self, adapter, recovery):
+    def __init__(self, adapter, recovery, events=None):
         self.adapter = adapter
         self.recovery = recovery
+        self.events = events
         self.acquires = 0
         self.releases = 0
 
@@ -715,8 +716,29 @@ class FakeLease:
         return {"active": True, "acquired_by_run": True}
 
     def release(self):
+        if self.events is not None:
+            self.events.append("D10")
         self.releases += 1
         return {"prior_state_restored": True, "detached_by_run": True}
+
+
+class FakeReleaseProbes:
+    def __init__(self, events):
+        self.events = events
+
+    def launch(self, _identity):
+        self.events.append("D8")
+        return {
+            "status": "absent", "endpoint_exited": True, "wrapper_exited": True,
+            "children_absent": True, "token_absent": True, "session_absent": True,
+        }
+
+    def radio(self, _identity):
+        self.events.append("D9")
+        return {
+            "status": "quiescent", "owned_interfaces": 0,
+            "driver_threads": 0, "phy_active": False,
+        }
 
 
 class P0HarnessTests(unittest.TestCase):
@@ -774,8 +796,9 @@ class P0HarnessTests(unittest.TestCase):
                 }),
             )
             leases = []
+            release_events = []
             def lease_factory(selected, recovery):
-                lease = FakeLease(selected, recovery)
+                lease = FakeLease(selected, recovery, release_events)
                 leases.append(lease)
                 return lease
             processes = []
@@ -811,6 +834,7 @@ class P0HarnessTests(unittest.TestCase):
                 result = P0Harness(
                     coordinator, validator, root / "runs",
                     worker_factory=worker_factory, lease_factory=lease_factory,
+                    release_probes=FakeReleaseProbes(release_events),
                 ).run()
                 snapshot = coordinator.snapshot(result["run_id"])
             self.assertEqual(result["functional_status"], "passed")
@@ -820,6 +844,9 @@ class P0HarnessTests(unittest.TestCase):
             self.assertEqual(snapshot["ownership"]["launch_count"], 1)
             self.assertEqual(leases[0].acquires, 1)
             self.assertEqual(leases[0].releases, 1)
+            self.assertEqual(release_events, ["D8", "D9", "D9", "D9", "D10"])
+            self.assertTrue(result["cleanup"]["d_release"]["endpoint_identity_absent"])
+            self.assertTrue(result["cleanup"]["d_release"]["radio_stably_quiescent"])
             self.assertEqual(processes[0].returncode, 0)
             self.assertTrue(Path(result["report_path"]).is_file())
 

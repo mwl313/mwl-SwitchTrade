@@ -22,6 +22,11 @@ from switchtrade.connection.b_stage import GATES as B_GATES
 from switchtrade.connection.coordinator import (
     ConnectionCoordinator, ConnectionCoordinatorError, FunctionalOutcome, Phase, RunMode,
 )
+from switchtrade.connection.d_probes import (
+    WslDProbes,
+    verify_launch_absence,
+    verify_stable_radio_quiescence,
+)
 from switchtrade.connection.p0 import (
     P0Error, PassiveValidator, UsbAdapter, UsbLease, atomic_json, linux_usb_probe, run_command,
 )
@@ -312,6 +317,7 @@ class P0Harness:
         runtime_root: str = "/opt/switchtrade",
         packaged_python: str = "/opt/switchtrade/bridge/.venv/bin/python",
         target_channel: int = 6,
+        release_probes: WslDProbes | None = None,
     ):
         self.coordinator = coordinator
         self.validator = validator
@@ -333,6 +339,7 @@ class P0Harness:
         self.runtime_root = runtime_root
         self.packaged_python = packaged_python
         self.target_channel = target_channel
+        self.release_probes = release_probes
 
     @staticmethod
     def _validate_ready(report: object, run: dict, adapter: UsbAdapter, report_path: Path) -> dict:
@@ -511,6 +518,20 @@ class P0Harness:
             and cleanup.get("radio_quiescent") is True
         )
 
+    def _verify_d8_d9(self, identity: dict) -> tuple[dict | None, bool]:
+        if self.release_probes is None:
+            return None, True
+        launch, endpoint_absent = verify_launch_absence(
+            self.release_probes.launch, identity)
+        radio, radio_quiescent = verify_stable_radio_quiescence(
+            self.release_probes.radio, identity)
+        return {
+            "launch": launch,
+            "radio": radio,
+            "endpoint_identity_absent": endpoint_absent,
+            "radio_stably_quiescent": radio_quiescent,
+        }, endpoint_absent and radio_quiescent
+
     def _process_start_ticks(self, pid: int) -> int | None:
         if os.name == "nt":
             return _wsl_process_start_ticks(
@@ -584,6 +605,8 @@ class P0Harness:
             "worker_exited": wrapper_pid is None,
             "radio_quiescent": wrapper_pid is None,
             "prior_usb_state_restored": False,
+            "endpoint_identity_absent": None,
+            "radio_stably_quiescent": None,
         }
         try:
             if wrapper_pid is not None:
@@ -648,6 +671,34 @@ class P0Harness:
                             "recovery could not quiesce the selected netdev",
                         )
             evidence["radio_quiescent"] = True
+            if self.release_probes is not None and run["ownership"]["wrapper_acquired"]:
+                probe_identity = {
+                    **identity,
+                    "run_id": run_id,
+                    "wrapper_pid": wrapper_pid,
+                    "process_start_ticks": start_ticks,
+                    "endpoint_pid": identity.get("endpoint_pid") or wrapper_pid,
+                    "endpoint_start_ticks": identity.get("endpoint_start_ticks") or start_ticks,
+                    "netdev": netdev,
+                    "phy": identity.get("phy"),
+                }
+                if side_report_path.exists() and not probe_identity["phy"]:
+                    probe_identity["phy"] = side["radio"].get("phy")
+                release_evidence, release_verified = self._verify_d8_d9(probe_identity)
+                evidence["endpoint_identity_absent"] = release_evidence[
+                    "endpoint_identity_absent"]
+                evidence["radio_stably_quiescent"] = release_evidence[
+                    "radio_stably_quiescent"]
+                if not release_verified:
+                    gate = (
+                        "D8_endpoint_verification"
+                        if not evidence["endpoint_identity_absent"]
+                        else "D9_radio_quiescence"
+                    )
+                    raise P0Error(
+                        "P0_RELEASE_STATE_UNVERIFIED", gate,
+                        "the exact endpoint or radio release state is active or unknown",
+                    )
             recovery_file = self.root / run_id / "p0-usb-recovery.json"
             if recovery_file.exists():
                 lease = UsbLease.from_recovery(
@@ -712,6 +763,8 @@ class P0Harness:
         b_stage = None
         primary = None
         cleanup = {}
+        release_verified = True
+        release_evidence = None
         try:
             self.coordinator.transition(run_id, Phase.PREFLIGHT, "P0a_release")
             adapter, p0a = self.validator.validate()
@@ -854,7 +907,16 @@ class P0Harness:
             elif process is not None and process.poll() is None:
                 process.terminate()
                 process.wait(timeout=3)
-            if lease is not None:
+            snapshot = self.coordinator.snapshot(run_id)
+            if (
+                self.release_probes is not None and
+                snapshot["ownership"]["wrapper_acquired"]
+            ):
+                release_evidence, release_verified = self._verify_d8_d9({
+                    **snapshot["identity"], "run_id": run_id,
+                })
+                cleanup["d_release"] = release_evidence
+            if lease is not None and release_verified:
                 cleanup["usb"] = lease.release()
             worker_verified = (
                 events is None or (
@@ -863,14 +925,17 @@ class P0Harness:
                 )
             )
             usb_verified = (
-                lease is None or cleanup.get("usb", {}).get("prior_state_restored") is True
+                lease is None or (
+                    release_verified and
+                    cleanup.get("usb", {}).get("prior_state_restored") is True
+                )
             )
             stage_cleanup_verified = self._stage_cleanup_verified(
                 mode, endpoint_started=endpoint_started,
                 a_stage=a_stage, b_stage=b_stage,
             )
             cleanup_verified = (
-                worker_verified and usb_verified and stage_cleanup_verified
+                worker_verified and release_verified and usb_verified and stage_cleanup_verified
             )
             self.coordinator.complete_cleanup(
                 run_id, verified=cleanup_verified,
@@ -881,6 +946,14 @@ class P0Harness:
                     "stage_resources_released": (
                         None if mode not in {RunMode.DIRECT_A, RunMode.DIRECT_B}
                         else stage_cleanup_verified
+                    ),
+                    "endpoint_identity_absent": (
+                        None if release_evidence is None
+                        else release_evidence["endpoint_identity_absent"]
+                    ),
+                    "radio_stably_quiescent": (
+                        None if release_evidence is None
+                        else release_evidence["radio_stably_quiescent"]
                     ),
                 },
                 code=None if cleanup_verified else "P0_CLEANUP_FAILED",
@@ -980,6 +1053,10 @@ def main() -> None:
             coordinator, validator, args.state_root / "runs",
             distro=args.distro, runtime_root=args.runtime_root,
             target_channel=args.target_channel,
+            release_probes=WslDProbes(
+                distro=args.distro,
+                packaged_python="/opt/switchtrade/bridge/.venv/bin/python",
+            ),
         )
         current = coordinator.snapshot()
         if current is not None and not current["cleanup"]["verified"]:

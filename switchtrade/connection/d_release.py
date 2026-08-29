@@ -15,6 +15,10 @@ from switchtrade.connection.coordinator import (
     RunMode,
 )
 from switchtrade.connection.d_control import DControlError, load_d5_state
+from switchtrade.connection.d_probes import (
+    verify_launch_absence,
+    verify_stable_radio_quiescence,
+)
 from switchtrade.connection.p0 import atomic_json
 from switchtrade.c2_protocol import launch_identity_hash
 
@@ -149,25 +153,6 @@ class LocalDRelease:
             )
         return state
 
-    @staticmethod
-    def _launch_evidence(value: object) -> tuple[dict, bool]:
-        fields = {
-            "status", "endpoint_exited", "wrapper_exited", "children_absent",
-            "token_absent", "session_absent",
-        }
-        valid = (
-            isinstance(value, dict) and set(value) == fields and
-            value.get("status") in {"absent", "present", "unknown"} and
-            all(isinstance(value.get(key), bool) for key in fields - {"status"})
-        )
-        if not valid:
-            value = {
-                "status": "unknown", "endpoint_exited": False, "wrapper_exited": False,
-                "children_absent": False, "token_absent": False, "session_absent": False,
-            }
-        return value, value["status"] == "absent" and all(
-            value[key] for key in fields - {"status"})
-
     def _radio_evidence(self, identity: dict) -> tuple[dict, bool]:
         if identity["mode"] in _SOFTWARE_ONLY_MODES:
             return {
@@ -179,46 +164,14 @@ class LocalDRelease:
                 "status": "unknown", "owned_interfaces": None,
                 "driver_threads": None, "phy_active": None,
             }, False
-        deadline = self.monotonic() + self.radio_timeout
-        stable = 0
-        last = None
-        probe_identity = {**identity, "run_id": self.run_id}
-        while True:
-            try:
-                value = self.radio_probe(deepcopy(probe_identity))
-            except Exception:
-                value = None
-            valid = (
-                isinstance(value, dict) and set(value) == {
-                    "status", "owned_interfaces", "driver_threads", "phy_active"} and
-                value.get("status") in {"quiescent", "active", "unknown"} and
-                (value.get("owned_interfaces") is None or
-                 isinstance(value.get("owned_interfaces"), int) and
-                 not isinstance(value.get("owned_interfaces"), bool) and
-                 value["owned_interfaces"] >= 0) and
-                (value.get("driver_threads") is None or
-                 isinstance(value.get("driver_threads"), int) and
-                 not isinstance(value.get("driver_threads"), bool) and
-                 value["driver_threads"] >= 0) and
-                (value.get("phy_active") is None or isinstance(value.get("phy_active"), bool))
-            )
-            if not valid:
-                value = {
-                    "status": "unknown", "owned_interfaces": None,
-                    "driver_threads": None, "phy_active": None,
-                }
-            last = value
-            clean = (
-                value["status"] == "quiescent" and value["owned_interfaces"] == 0 and
-                value["driver_threads"] == 0 and value["phy_active"] is False
-            )
-            stable = stable + 1 if clean else 0
-            if stable >= self.stable_samples:
-                return last, True
-            remaining = deadline - self.monotonic()
-            if remaining <= 0:
-                return last, False
-            self.sleep(min(self.sample_interval, remaining))
+        return verify_stable_radio_quiescence(
+            self.radio_probe, {**identity, "run_id": self.run_id},
+            stable_samples=self.stable_samples,
+            sample_interval=self.sample_interval,
+            timeout=self.radio_timeout,
+            monotonic=self.monotonic,
+            sleep=self.sleep,
+        )
 
     @staticmethod
     def _diagnostic_evidence(callback, required: bool) -> tuple[dict, bool]:
@@ -296,11 +249,8 @@ class LocalDRelease:
             })
         self._persist(report)
 
-        try:
-            launch_value = self.launch_probe({**deepcopy(run["identity"]), "run_id": self.run_id})
-        except Exception:
-            launch_value = None
-        launch, d8_ok = self._launch_evidence(launch_value)
+        launch, d8_ok = verify_launch_absence(
+            self.launch_probe, {**deepcopy(run["identity"]), "run_id": self.run_id})
         report["evidence"]["launch"] = launch
         if d8_ok:
             report["last_passed_gate"] = GATES[2]

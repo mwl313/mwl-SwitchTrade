@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 from pathlib import Path
 import re
 import subprocess
+import time
 from typing import Callable, Iterable
 import uuid
 
@@ -14,6 +16,87 @@ from switchtrade.connection.p0 import run_command
 
 class DProbeError(RuntimeError):
     pass
+
+
+_LAUNCH_FIELDS = {
+    "status", "endpoint_exited", "wrapper_exited", "children_absent",
+    "token_absent", "session_absent",
+}
+_RADIO_FIELDS = {"status", "owned_interfaces", "driver_threads", "phy_active"}
+
+
+def verify_launch_absence(probe: Callable[[dict], dict], identity: dict) -> tuple[dict, bool]:
+    """Return bounded D8 evidence; errors and malformed values fail closed."""
+    try:
+        value = probe(deepcopy(identity))
+    except Exception:
+        value = None
+    valid = (
+        isinstance(value, dict) and set(value) == _LAUNCH_FIELDS and
+        value.get("status") in {"absent", "present", "unknown"} and
+        all(isinstance(value.get(key), bool) for key in _LAUNCH_FIELDS - {"status"})
+    )
+    if not valid:
+        value = {
+            "status": "unknown", "endpoint_exited": False, "wrapper_exited": False,
+            "children_absent": False, "token_absent": False, "session_absent": False,
+        }
+    verified = value["status"] == "absent" and all(
+        value[key] for key in _LAUNCH_FIELDS - {"status"})
+    return value, verified
+
+
+def verify_stable_radio_quiescence(
+    probe: Callable[[dict], dict],
+    identity: dict,
+    *,
+    stable_samples: int = 3,
+    sample_interval: float = 0.1,
+    timeout: float = 5.0,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> tuple[dict, bool]:
+    """Require repeated valid D9 observations within one bounded deadline."""
+    if stable_samples < 2 or sample_interval <= 0 or timeout <= 0:
+        raise ValueError("D radio verification policy is invalid")
+    deadline = monotonic() + timeout
+    stable = 0
+    last = None
+    while True:
+        try:
+            value = probe(deepcopy(identity))
+        except Exception:
+            value = None
+        valid = (
+            isinstance(value, dict) and set(value) == _RADIO_FIELDS and
+            value.get("status") in {"quiescent", "active", "unknown"} and
+            (value.get("owned_interfaces") is None or
+             isinstance(value.get("owned_interfaces"), int) and
+             not isinstance(value.get("owned_interfaces"), bool) and
+             value["owned_interfaces"] >= 0) and
+            (value.get("driver_threads") is None or
+             isinstance(value.get("driver_threads"), int) and
+             not isinstance(value.get("driver_threads"), bool) and
+             value["driver_threads"] >= 0) and
+            (value.get("phy_active") is None or isinstance(value.get("phy_active"), bool))
+        )
+        if not valid:
+            value = {
+                "status": "unknown", "owned_interfaces": None,
+                "driver_threads": None, "phy_active": None,
+            }
+        last = value
+        clean = (
+            value["status"] == "quiescent" and value["owned_interfaces"] == 0 and
+            value["driver_threads"] == 0 and value["phy_active"] is False
+        )
+        stable = stable + 1 if clean else 0
+        if stable >= stable_samples:
+            return last, True
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            return last, False
+        sleep(min(sample_interval, remaining))
 
 
 _PROCESS_PROGRAM = r"""
@@ -194,4 +277,7 @@ class WslDProbes:
         }
 
 
-__all__ = ["DProbeError", "WslDProbes"]
+__all__ = [
+    "DProbeError", "WslDProbes", "verify_launch_absence",
+    "verify_stable_radio_quiescence",
+]
