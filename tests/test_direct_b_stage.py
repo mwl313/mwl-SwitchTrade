@@ -382,12 +382,15 @@ class DirectBContractTests(unittest.TestCase):
             self.assertEqual(param.max_participants, 6)
             self.assertEqual(param.application_data, FIXTURE)
             self.assertEqual(param.name, FIXTURE_NAME)
-            stage.compatibility = {
-                "beacon_head": True, "monitor_ccmp": True, "remote_destroy": True,
-            }
-            control = trio.Event()
-            control.set()
-            yield FakeNetwork((stage.ap_ifname, stage.monitor_ifname, stage.tap_ifname)), control
+            async with trio.open_nursery():
+                stage.compatibility = {
+                    "beacon_head": True, "monitor_ccmp": True, "remote_destroy": True,
+                }
+                control = trio.Event()
+                control.set()
+                yield FakeNetwork(
+                    (stage.ap_ifname, stage.monitor_ifname, stage.tap_ifname)
+                ), control
 
         stage.network_factory = network_factory
         report = trio.run(stage.run)
@@ -456,6 +459,7 @@ class DirectBContractTests(unittest.TestCase):
         self.assertEqual(report["failure"]["code"], "B_SWITCH_ASSOCIATION_TIMEOUT")
         self.assertEqual(report["failure"]["gate"], GATES[5])
         self.assertEqual(report["last_passed_gate"], GATES[4])
+        self.assertTrue(report["cleanup"]["ldn_context_released"])
 
     def test_schema_forbids_raw_fixture_and_identity_fields(self):
         schema = json.loads((

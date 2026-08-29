@@ -463,6 +463,23 @@ class DirectBStage:
                     raise BStageError("B_LOCAL_HOLD_LOST", GATES[8], "joining Switch left during local hold")
         _validate_peer(network)
 
+    @contextlib.asynccontextmanager
+    async def _tracked_network_context(self, manager):
+        """Record release only when the run-owned LDN context actually exits."""
+        body_error = None
+        try:
+            async with manager as opened:
+                try:
+                    yield opened
+                except BaseException as error:
+                    body_error = error
+                    raise
+        except BaseException as error:
+            self.cleanup["ldn_context_released"] = error is body_error
+            raise
+        else:
+            self.cleanup["ldn_context_released"] = True
+
     def _failure(self, error: BStageError) -> dict:
         return {
             "contract_version": "direct-b-stage.v1",
@@ -520,90 +537,90 @@ class DirectBStage:
             self._pass(GATES[2])
 
             factory = self.network_factory or self._create_network
-            stack = contextlib.AsyncExitStack()
+            functional_complete = False
             self.cleanup["ldn_context_released"] = False
             try:
-                with self.trio.fail_after(self.ap_timeout):
-                    network, control_done = await stack.enter_async_context(factory(param))
-                names = (
-                    network._interface.name(), network._monitor.name(), network._tap.name()
-                )
-                if names != (self.ap_ifname, self.monitor_ifname, self.tap_ifname):
-                    raise BStageError("B_RESOURCE_IDENTITY_MISMATCH", GATES[3], "LDN resource identity changed")
-                if not all(self.compatibility.values()):
-                    raise BStageError("B_COMPATIBILITY_MISSING", GATES[3], "required host compatibility is missing")
-                self._pass(GATES[3])
+                with self.trio.move_on_after(self.ap_timeout) as stage_scope:
+                    async with self._tracked_network_context(factory(param)) as opened:
+                        network, control_done = opened
+                        names = (
+                            network._interface.name(), network._monitor.name(), network._tap.name()
+                        )
+                        if names != (self.ap_ifname, self.monitor_ifname, self.tap_ifname):
+                            raise BStageError("B_RESOURCE_IDENTITY_MISMATCH", GATES[3], "LDN resource identity changed")
+                        if not all(self.compatibility.values()):
+                            raise BStageError("B_COMPATIBILITY_MISSING", GATES[3], "required host compatibility is missing")
+                        self._pass(GATES[3])
 
-                with self.data_plane_factory(network) as plane:
-                    if not all(plane.get(name) is True for name in (
-                        "tap_ready", "udp_bound", "packet_socket_bound"
-                    )):
-                        raise BStageError("B_DATA_PLANE_FAILED", GATES[4], "Pia data-plane evidence is incomplete")
-                    plane_evidence = dict(plane)
-                    self._pass(GATES[4])
+                        with self.data_plane_factory(network) as plane:
+                            if not all(plane.get(name) is True for name in (
+                                "tap_ready", "udp_bound", "packet_socket_bound"
+                            )):
+                                raise BStageError("B_DATA_PLANE_FAILED", GATES[4], "Pia data-plane evidence is incomplete")
+                            plane_evidence = dict(plane)
+                            self._pass(GATES[4])
 
-                    with self.trio.fail_after(self.association_timeout):
-                        join_type = getattr(self.ldn, "JoinEvent", ())
-                        while True:
-                            event = await network.next_event()
-                            if isinstance(event, join_type):
-                                association_evidence = _validate_peer(network)
-                                # A successful real association is stronger external evidence
-                                # than interface-up and proves the room was observable first.
-                                self._pass(GATES[5])
-                                self._pass(GATES[6])
-                                self.result_level = "B_SWITCH_ASSOCIATED"
-                                break
+                            stage_scope.deadline = self.trio.current_time() + self.association_timeout
+                            join_type = getattr(self.ldn, "JoinEvent", ())
+                            while True:
+                                event = await network.next_event()
+                                if isinstance(event, join_type):
+                                    association_evidence = _validate_peer(network)
+                                    # A successful real association is stronger external evidence
+                                    # than interface-up and proves the room was observable first.
+                                    self._pass(GATES[5])
+                                    self._pass(GATES[6])
+                                    self.result_level = "B_SWITCH_ASSOCIATED"
+                                    break
 
-                    with self.trio.fail_after(self.control_timeout):
-                        await control_done.wait()
-                    _validate_peer(network)
-                    self._pass(GATES[7])
-                    self.result_level = "B_CONTROL_READY"
+                            stage_scope.deadline = self.trio.current_time() + self.control_timeout
+                            await control_done.wait()
+                            _validate_peer(network)
+                            self._pass(GATES[7])
+                            self.result_level = "B_CONTROL_READY"
 
-                    await self._hold(network)
-                    self._pass(GATES[8])
-            except self.trio.TooSlowError as error:
-                index = min(len(self.passed), len(GATES) - 1)
-                codes = {
-                    3: "B_AP_CREATION_TIMEOUT",
-                    5: "B_SWITCH_ASSOCIATION_TIMEOUT",
-                    7: "B_CONTROL_PORT_TIMEOUT",
-                    8: "B_HOLD_TIMEOUT",
-                }
-                raise BStageError(
-                    codes.get(index, "B_STAGE_TIMEOUT"), GATES[index],
-                    "direct B stage deadline expired",
-                ) from error
+                            stage_scope.deadline = self.trio.current_time() + self.hold_seconds + 3
+                            await self._hold(network)
+                            self._pass(GATES[8])
+                            functional_complete = True
+                            stage_scope.deadline = (
+                                self.trio.current_time() + self.teardown_timeout
+                            )
+                    stage_scope.deadline = float("inf")
+                if stage_scope.cancelled_caught:
+                    if functional_complete:
+                        self.cleanup["ldn_context_released"] = False
+                    else:
+                        index = min(len(self.passed), len(GATES) - 1)
+                        codes = {
+                            3: "B_AP_CREATION_TIMEOUT",
+                            5: "B_SWITCH_ASSOCIATION_TIMEOUT",
+                            7: "B_CONTROL_PORT_TIMEOUT",
+                            8: "B_HOLD_TIMEOUT",
+                        }
+                        raise BStageError(
+                            codes.get(index, "B_STAGE_TIMEOUT"), GATES[index],
+                            "direct B stage deadline expired",
+                        )
             except BStageError:
                 raise
-            except BaseException as error:
-                index = min(len(self.passed), len(GATES) - 1)
-                codes = {
-                    3: "B_AP_CREATION_FAILED",
-                    4: "B_DATA_PLANE_FAILED",
-                    5: "B_ROOM_ADVERTISEMENT_FAILED",
-                    6: "B_SWITCH_ASSOCIATION_FAILED",
-                    7: "B_CONTROL_PORT_FAILED",
-                    8: "B_LOCAL_HOLD_LOST",
-                }
-                raise BStageError(
-                    codes.get(index, "B_STAGE_INTERNAL"), GATES[index],
-                    "direct B failed at its current gate",
-                ) from error
-            finally:
-                teardown_error = None
-                with self.trio.move_on_after(
-                    self.teardown_timeout, shield=True
-                ) as teardown_scope:
-                    try:
-                        await stack.aclose()
-                    except Exception as error:
-                        teardown_error = error
-                self.cleanup["ldn_context_released"] = (
-                    not teardown_scope.cancelled_caught and teardown_error is None
-                )
-
+            except Exception as error:
+                if functional_complete:
+                    self.cleanup["ldn_context_released"] = False
+                else:
+                    index = min(len(self.passed), len(GATES) - 1)
+                    codes = {
+                        3: "B_AP_CREATION_FAILED",
+                        4: "B_DATA_PLANE_FAILED",
+                        5: "B_ROOM_ADVERTISEMENT_FAILED",
+                        6: "B_SWITCH_ASSOCIATION_FAILED",
+                        7: "B_CONTROL_PORT_FAILED",
+                        8: "B_LOCAL_HOLD_LOST",
+                    }
+                    raise BStageError(
+                        codes.get(index, "B_STAGE_INTERNAL"), GATES[index],
+                        "direct B failed at its current gate",
+                    ) from error
             return {
                 "contract_version": "direct-b-stage.v1",
                 "schema": 1,
