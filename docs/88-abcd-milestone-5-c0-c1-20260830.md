@@ -2,8 +2,10 @@
 
 > Branch: `codex/abcd-orchestration-rework`
 > Source commit: `162f779`
-> Status: local source and deployed validation-relay data-path checks passed; operator restart and
-> immutable-deployment evidence remain pending.
+> Status: Milestone 5 functional exit gate accepted on 2026-08-30. The deployed validation relay
+> passed the full C0/C1 matrix and restart/no-orphan checks. Production deployment reproducibility
+> remains an explicit Milestone 9 gate because this host uses native launchd rather than the reference
+> container artifact.
 > Scope: P0-bound authority admission, endpoint identity, ordered `rfu-tunnel.v2`, bidirectional
 > nonce proof, and exact A-to-B advertisement delivery.
 
@@ -66,10 +68,11 @@ The Windows default Python lacks `trio` and therefore cannot load the Direct A/B
 not the qualification interpreter; `.audit-venv\Scripts\python.exe` contains the pinned `trio 0.33.0`
 runtime and produced the complete result above.
 
-## 4. Open gate
+## 4. Deployment gate and recorded deviation
 
-This checkpoint is not formal Milestone 5 acceptance. Docker is not installed on this PC, so the
-exact `switchtrade-relay:0.3.0-validation.1` container could not be built here. The relay operator must:
+Docker is not installed on the development PC, so the exact
+`switchtrade-relay:0.3.0-validation.1` container could not be built locally. The original handoff
+required the relay operator to:
 
 1. build the committed Compose/Dockerfile artifact from `162f779` or a documentation-only descendant;
 2. record the immutable image digest and single-worker configuration;
@@ -77,6 +80,15 @@ exact `switchtrade-relay:0.3.0-validation.1` container could not be built here. 
 4. run `python -m relay.smoke https://<validation-relay>`;
 5. repeat restart, late-peer, both-role, stale/gap/wrong-attempt, and no-orphan checks against that
    deployed artifact.
+
+The validation host is actually supervised by launchd and runs one native uvicorn worker. It has no
+Docker image. The M5 behavioral matrix was therefore executed against that real native deployment,
+not against the reference container. This is accepted for the M5 C0/C1 functional exit because the
+running critical source files match the committed checkpoint and every M5 exit behavior passed.
+It is not accepted as proof of a reproducible production artifact. Before Milestone 9 cutover, the
+operator must either deploy the reference container or provide a committed native release manifest
+covering the clean Git tree, complete relay source tree, pinned dependency set, Python runtime,
+launchd unit/configuration, environment contract, and rollback artifact with full hashes.
 
 No `SIDE_READY`, `C_BRIDGE_READY`, RFU data plane, physical A/B integration, distributed D, normal
 application cutover, diagnostic migration, production deployment, or trade is claimed here.
@@ -99,8 +111,26 @@ The operator deployed documentation checkpoint `bbc549f` (source checkpoint `162
 - factual attempt failure for sequence gap, duplicate sequence, stale epoch, and wrong attempt;
 - successful idempotent room deletion after every completed or deliberately failed case.
 
-The ingress intentionally returns HTTP 403 for `/metrics`, so an external client cannot assert the
-internal live/admitted v2 counters. Formal Milestone 5 acceptance therefore still requires operator
-evidence for the immutable image digest and worker count, plus one controlled restart while a v2
-attempt is active. After restart, the operator must confirm the attempt reports `relay.restart` and
-both internal v2 namespace counters are zero. These remaining checks do not require a Switch.
+The ingress intentionally returns HTTP 403 for `/metrics`, so the operator read the private endpoint.
+During a controlled restart with a nonce-proven active v2 attempt, the public client observed the
+attempt fail factually as `relay.restart`, cleaned the room, and passed a fresh post-restart v2 smoke.
+The private metrics then reported:
+
+- `live_rfu_sessions=0`;
+- `live_rfu_v2_attempts=0`;
+- `admitted_rfu_v2_attempts=0`;
+- `active_member_credentials=0`.
+
+The operator also reported exactly one `uvicorn relay.server:app` process under launchd. The running
+checkout was identified as `bbc549f`; the supplied hash prefixes were independently matched to the
+complete Git-object hashes:
+
+- `relay/server.py`:
+  `615e83e0e12fdb62c3d8a98bbf4efcedab13c368b82049e3636fa61ed914b511`;
+- `relay/authority.py`:
+  `d0b628cf4d1665e08eb6e874453fdf422b4dea7e40e39442a63f20fb25a0a24f`.
+
+This closes the Milestone 5 exit gate: both role assignments, unpredictable probes, late-peer,
+reconnect, restart, stale/gap/wrong-attempt behavior, factual C0/C1 errors, and zero orphan authority
+state passed through the validation relay. It does not claim `SIDE_READY`, C2, physical A/B
+integration, distributed D, diagnostic/application migration, production cutover, or a trade.

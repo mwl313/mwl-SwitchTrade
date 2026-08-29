@@ -71,8 +71,8 @@ path. No open item may be presented as a current production capability.
    remains open and Milestone 4 must not be represented as formally accepted until that run passes.
 
 2. **CRITICAL — URGENT: Preserve relay frame order and truthful P0/A/B/C/D diagnostic stages.**
-   **Status (2026-08-30): core M5 v2 source and local relay validation implemented; external
-   validation deployment plus M8/M9 diagnostic/application migration remain open.**
+   **Status (2026-08-30): the M5 v2 source and deployed validation-relay functional exit gate passed;
+   M8/M9 diagnostic/application migration and reproducible production deployment remain open.**
    In the guided AP diagnostic, the synthetic host sends `PEER_READY` at sequence 0 and the retained
    advertisement at sequence 1. When the endpoint connects later, the relay replays the advertisement
    before the ready frame. `SequenceGate` accepts sequence 1 and rejects sequence 0 as stale, leaving a
@@ -95,9 +95,14 @@ path. No open item may be presented as a current production capability.
    distinct matching P0 attestations and bound launch identities, replays retained frames in strict
    source order, rejects gaps/duplicates/stale epochs/wrong attempts, repeats unpredictable nonce
    proof after reconnect, verifies the advertisement hash, and erases admission/retention at attempt
-   retirement. Local uvicorn and hosting smoke passed. This does not close the item until the exact
-   immutable relay artifact passes the same matrix through validation HTTPS and the production
-   diagnostic/UI projections migrate to the factual v2 C gates.
+   retirement. Local uvicorn and hosting smoke passed. The deployed validation relay then passed both
+   roles, late-peer, reconnect, active-attempt restart, stale/gap/wrong-attempt rejection, and private
+   zero-orphan metrics. The host is a single launchd-supervised native uvicorn process whose critical
+   source hashes match `bbc549f`, not the reference Docker image. Before M9 production cutover, either
+   deploy that reference image or commit and verify a complete native release manifest including the
+   clean source tree, dependencies, Python runtime, launchd configuration, environment, and rollback
+   hashes. Keep this critical item open until M8/M9 migrate the production diagnostic/UI projections
+   and normal application to the factual v2 C gates.
 
 3. **CRITICAL — URGENT: Add the attempt-scoped A_READY/B_READY activation barrier.**
    **Status (2026-08-29): confirmed architecture gap; not implemented.**

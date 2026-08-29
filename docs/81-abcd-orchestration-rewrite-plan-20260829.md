@@ -42,8 +42,11 @@ Execution status:
   authorized Milestone 5 to begin without treating Milestone 4 as accepted.
 - Milestone 5 source checkpoint `162f779` added P0/launch-bound `rfu-tunnel.v2`, strict contiguous
   ordering, reconnect nonce re-proof, exact advertisement-hash delivery, and factual C0/C1 stages.
-  Local real-process validation passed; the immutable external validation-relay image build, deploy,
-  HTTPS smoke, and deployed failure matrix remain open, so Milestone 5 is not yet accepted. See
+  Local validation and the deployed HTTPS/WSS role, ordering, reconnect, restart, failure, and
+  zero-orphan matrix passed, so the M5 functional exit gate was accepted on 2026-08-30. The validation
+  host uses one launchd-supervised native uvicorn worker rather than the reference container; a fully
+  reproducible native manifest or reference image remains mandatory before Milestone 9 production
+  cutover. See
   [`88-abcd-milestone-5-c0-c1-20260830.md`](88-abcd-milestone-5-c0-c1-20260830.md).
 
 ## 2. Architecture and interface decisions

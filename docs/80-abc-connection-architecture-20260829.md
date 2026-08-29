@@ -470,19 +470,21 @@ Do not rebuild another installer until the source and installed runtime pass in 
    cancellation, restart, and cleanup cases. Zero duplicate launches, stale interfaces, orphan rooms,
    or unresolved ownership is permitted.
 
-Current evidence does not change this order. Source commit `a96f53f` implements the isolated Direct
-B2-B10 harness, and immutable PC A runtime `abcd-m4-a96f53f` passed installed no-hardware smoke. A
-real searching Switch has not yet passed B8-B10 on that runtime, so Milestone 4 and B readiness remain
-open.
+Current evidence does not change this order. Direct B remains explicit owner-deferred physical
+qualification debt. Milestone 5 source checkpoint `162f779` and its deployed validation-relay matrix
+passed C0/C1 ordering, identity, nonce, advertisement, reconnect, restart, and zero-orphan gates, so
+those components are admitted for C2 work. This does not claim A_READY/B_READY, RFU activation,
+distributed D, diagnostic/application migration, production cutover, or a trade.
 
 ## 11. Confirmed critical blockers
 
 1. **Missing WSL LDN prerequisite load:** the production wrapper does not load `ccm`, `cmac`, or
    `tun`, and does not verify `/dev/net/tun`, although the proven standalone WSL path did. This causes
    A6 `NL80211_CMD_NEW_KEY` `ENOENT` and would block the later TAP boundary.
-2. **Out-of-order retained relay frames:** the AP diagnostic synthetic peer creates readiness
-   sequence 0 and advertisement sequence 1, while the relay replays advertisement before readiness.
-   `SequenceGate` accepts 1 and rejects 0, so C0 fails before B begins.
+2. **Out-of-order retained relay frames:** fixed and admitted in the isolated `rfu-tunnel.v2` C0/C1
+   path after deployed late-peer, reconnect, restart, and failure-matrix validation. The legacy normal
+   application and production diagnostics still use rejected orchestration until M8/M9 migration, so
+   this blocker remains open at the product level and no v1 fallback may enter the new path.
 3. **Missing A_READY/B_READY barrier:** the current RFU envelope has peer-ready and advertisement
    controls but no attempt-scoped physical side-ready control. The normal B endpoint starts
    `TunnelSim` as soon as the AP opens, before `_peer` proves the Joining Switch associated; neither

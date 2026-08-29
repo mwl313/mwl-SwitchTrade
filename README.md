@@ -127,11 +127,14 @@ cleanup. The bounded run-local cleanup fix is installed and awaiting one confirm
 not yet claim formal Direct B acceptance, B1,
 `B_READY`, relay delivery, or a trade.
 
-Milestone 5 is in progress at source checkpoint `162f779`. A separate P0- and launch-bound
-`rfu-tunnel.v2` path now passes local real-process tests for strict late-peer ordering, both role
-assignments, unpredictable bidirectional probes, reconnect re-proof, exact advertisement-hash
-delivery, stale/gap/wrong-attempt rejection, and restart cleanup. The external immutable validation
-relay has not been built or deployed yet, so C0/C1 are not accepted production capabilities.
+Milestone 5's functional exit gate is accepted at source checkpoint `162f779`. The separate P0- and
+launch-bound `rfu-tunnel.v2` path passed local real-process tests and the deployed validation-relay
+matrix for strict late-peer ordering, both role assignments, unpredictable bidirectional probes,
+reconnect re-proof, exact advertisement-hash delivery, stale/gap/wrong-attempt rejection, active
+attempt restart, and zero orphan authority state. This admits the C0/C1 components for Milestone 6;
+it does not expose them through the normal app or diagnostics yet. The validation host runs one
+launchd-supervised native uvicorn worker, so a complete reproducible native manifest or the reference
+container remains a mandatory Milestone 9 production-cutover gate.
 
 The [definitive TODO](docs/FUTURE_TODO.md) records implementation and qualification status. A passing
 test for the previous behavior does not close an ABC+D gate unless it proves the gate's current

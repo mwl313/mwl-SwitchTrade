@@ -20,6 +20,14 @@ container/worker for this beta: authoritative room state is persisted in SQLite,
 WebSocket peers are deliberately process-local. Horizontal replicas require a later shared live-peer
 router and are not safe merely by mounting the same database.
 
+The reference and production-target deployment is the pinned container above. The current validation
+host is a documented exception: it runs one launchd-supervised native uvicorn process. Native
+validation may provide behavioral milestone evidence only when its committed source hashes, pinned
+Python/dependency set, supervisor configuration, environment, persistent storage, and rollback
+artifact are recorded. Two source-file hashes alone are not a reproducible production artifact.
+Before production cutover, either deploy the reference container or commit and verify the complete
+native release manifest; do not describe a native process as having passed a Docker image check.
+
 Production mode sets `SWITCHTRADE_ENABLE_LEGACY_RELAY=0`. This is security-critical: the old
 unauthenticated `/session/create` development API then returns 404, while the authenticated
 `/v1/trade-rooms*` authority and credentialed RFU WebSockets remain enabled. Do not override it on a
