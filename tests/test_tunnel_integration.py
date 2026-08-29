@@ -32,7 +32,19 @@ from switchtrade.rfu_tunnel_v2 import (
 from switchtrade.relay_client import RelayClient, RelayError
 from switchtrade.tunnel_client import TunnelClient
 from switchtrade.tunnel_client_v2 import TunnelClientV2
+from switchtrade.connection import (
+    AuthoritySeat,
+    ConnectionCoordinator,
+    EndpointDStage,
+    FunctionalOutcome,
+    LocalDRelease,
+    MeasuredD5Control,
+    Phase,
+    RunMode,
+    SwitchRole,
+)
 from switchtrade.connection.c2 import C2Bridge
+from switchtrade.connection.p0 import atomic_json
 from switchtrade.c2_protocol import launch_identity_hash
 from switchtrade.control import create_app, endpoint_command
 from switchtrade.production_diagnostics import SyntheticDiagnosticPeer
@@ -1035,6 +1047,151 @@ class TunnelIntegrationTest(unittest.TestCase):
         finally:
             first_client.stop()
             second_client.stop()
+            self._close_authority_room(first["room"]["room_id"], first["member_token"])
+
+    def test_v2_distributed_d_uses_endpoint_reports_measured_control_and_local_release(self):
+        relay = RelayClient(self.base)
+        first = relay.create_trade_room({
+            "name": "Measured distributed D", "visibility": "private",
+            "trainer_display_name": "A", "game": "FireRed", "language": "English",
+            "offering": "", "wanted": "", "note": "",
+        }, "measured-d-a")
+        second = relay.join_trade_room(first["room"]["room_code"], "B", "measured-d-b")
+        attempt_id = self._prepare_v2_attempt(first, second)
+        first_client = self._v2_client(first, attempt_id, "member_a").start()
+        second_client = self._v2_client(second, attempt_id, "member_b").start()
+        roots = tempfile.TemporaryDirectory()
+        coordinators = []
+        try:
+            self.assertTrue(first_client.wait_data_plane(5))
+            self.assertTrue(second_client.wait_data_plane(5))
+            room = relay.room(first["room"]["room_id"], first["member_token"])
+            activation = room["attempt"]["activation_generation"]
+            role_lock = room["attempt"]["role_lock_version"]
+            advertisement_bytes = b"measured-d-advertisement"
+            advertisement = advertisement_hash(advertisement_bytes)
+            first_client.advertise(advertisement_bytes)
+            deadline = time.monotonic() + 5
+            while (time.monotonic() < deadline and
+                   second_client.received_advertisement_hash != advertisement):
+                second_client.poll()
+                time.sleep(0.01)
+            self.assertEqual(second_client.received_advertisement_hash, advertisement)
+            first_bridge = C2Bridge(
+                first_client.run_id, attempt_id, "member_a", "a_room_joiner", first_client,
+                activation_generation=activation, advertisement_sha256=advertisement,
+            )
+            second_bridge = C2Bridge(
+                second_client.run_id, attempt_id, "member_b", "b_ap_host", second_client,
+                activation_generation=activation, advertisement_sha256=advertisement,
+            )
+            first_bridge.mark_local_ready("A_READY")
+            second_bridge.mark_local_ready("B_READY")
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and not (
+                    first_bridge.connected.is_set() and second_bridge.connected.is_set()):
+                first_bridge.pump()
+                second_bridge.pump()
+                time.sleep(0.01)
+            self.assertTrue(first_bridge.connected.is_set())
+            self.assertTrue(second_bridge.connected.is_set())
+
+            closing = {
+                "contract_version": "d-closing-intent.v1",
+                "attempt_id": attempt_id,
+                "activation_generation": activation,
+                "outcome": "canceled",
+                "primary_failure_code": None,
+                "last_passed_gate": "C_BRIDGE_READY",
+            }
+            room = relay.begin_distributed_d(
+                room["room_id"], attempt_id, first["member_token"], closing,
+                expected_version=room["room_version"],
+            )
+
+            def local(credential, client, bridge, seat, switch_role, index):
+                root = Path(roots.name) / seat
+                coordinator = ConnectionCoordinator(root / "coordinator", "0.3.0-validation")
+                coordinators.append(coordinator)
+                run = coordinator.start(
+                    RunMode.C_HARNESS, run_id=client.run_id,
+                    adapter_instance_id="software", usb_id="software",
+                )
+                coordinator.transition(run["run_id"], Phase.PREFLIGHT, "P0a_release")
+                coordinator.transition(run["run_id"], Phase.RUNNING, "C0.1_authority")
+                coordinator.bind_authority(
+                    run["run_id"], room_id=room["room_id"], room_version=1,
+                    seat=AuthoritySeat(seat), switch_role=SwitchRole(switch_role),
+                )
+                ticks = 1000 + index
+                coordinator.acquire_wrapper(
+                    run["run_id"], wrapper_pid=client.endpoint_pid,
+                    process_start_ticks=ticks, adapter_instance_id="software",
+                    usb_id="software", bus_id="software",
+                )
+                coordinator.mark_p0_ready(
+                    run["run_id"], wrapper_pid=client.endpoint_pid,
+                    process_start_ticks=ticks, phy="software", netdev="software",
+                )
+                coordinator.lock_attempt(
+                    run["run_id"], attempt_id=attempt_id, role_lock_version=role_lock)
+                coordinator.reserve_endpoint_launch(
+                    run["run_id"], launch_nonce=client.launch_nonce)
+                coordinator.acknowledge_endpoint(
+                    run["run_id"], launch_nonce=client.launch_nonce,
+                    endpoint_pid=client.endpoint_pid, process_start_ticks=ticks,
+                )
+                coordinator.close_run(run["run_id"], FunctionalOutcome.CANCELED)
+                report = EndpointDStage(
+                    run_id=run["run_id"], source_seat=seat, stage_generation=1,
+                    launch_identity_sha256=launch_identity_hash(
+                        client.run_id, client.stage_generation,
+                        client.launch_nonce, client.endpoint_pid),
+                    closing_intent=closing, bridge=bridge,
+                ).run()
+                report_path = root / "d-endpoint-stage.json"
+                atomic_json(report_path, report, private=True)
+                control = MeasuredD5Control(
+                    coordinator=coordinator, relay=relay, run_id=run["run_id"],
+                    member_token=credential["member_token"],
+                    endpoint_report_path=report_path,
+                    state_path=root / "d5-control-state.json",
+                    process_probe=lambda _pid: None,
+                )
+                return coordinator, control, root
+
+            first_local = local(
+                first, first_client, first_bridge, "member_a", "a_room_joiner", 1)
+            second_local = local(
+                second, second_client, second_bridge, "member_b", "b_ap_host", 2)
+            first_ack = first_local[1].acknowledge(room)["room"]
+            self.assertEqual(first_ack["attempt"]["phase"], "closing")
+            terminal = second_local[1].acknowledge(first_ack)["room"]
+            self.assertEqual(terminal["attempt"]["phase"], "canceled")
+            self.assertEqual(terminal["attempt"]["d"]["cleanup_status"], "verified")
+
+            def absent(_identity):
+                return {
+                    "status": "absent", "endpoint_exited": True, "wrapper_exited": True,
+                    "children_absent": True, "token_absent": True, "session_absent": True,
+                }
+
+            for coordinator, _control, root in (first_local, second_local):
+                released = LocalDRelease(
+                    coordinator=coordinator,
+                    run_id=coordinator.snapshot()["run_id"],
+                    d5_state_path=root / "d5-control-state.json",
+                    release_state_path=root / "d-local-release.json",
+                    launch_probe=absent,
+                ).release(terminal)
+                self.assertEqual(released["status"], "passed")
+                self.assertTrue(released["run"]["cleanup"]["verified"])
+        finally:
+            first_client.stop()
+            second_client.stop()
+            for coordinator in coordinators:
+                coordinator.close()
+            roots.cleanup()
             self._close_authority_room(first["room"]["room_id"], first["member_token"])
 
     def test_v2_gap_fails_attempt_factually_and_erases_retention(self):

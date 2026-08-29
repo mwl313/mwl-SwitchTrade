@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://switchtrade.local/contracts/d-local-release.v1.schema.json",
+  "title": "SwitchTrade redacted D6-D11 local release report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version", "schema", "run_id", "attempt_id", "status", "last_passed_gate",
+    "shared_barrier_status", "shared_cleanup_verified", "evidence", "failures"
+  ],
+  "properties": {
+    "contract_version": { "const": "d-local-release.v1" },
+    "schema": { "const": 1 },
+    "run_id": { "type": "string", "format": "uuid" },
+    "attempt_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "status": { "enum": ["running", "passed", "failed"] },
+    "last_passed_gate": {
+      "enum": [
+        "D6_TWO_SIDE_BARRIER", "D7_DIAGNOSTIC_RESOURCES", "D8_ENDPOINT_VERIFICATION",
+        "D9_RADIO_QUIESCENCE", "D10_USB_RETURN", "D11_RELEASE"
+      ]
+    },
+    "shared_barrier_status": {
+      "enum": ["two_side_terminal", "forced_timeout", "forced_failure"]
+    },
+    "shared_cleanup_verified": { "type": "boolean" },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "diagnostic": { "$ref": "#/$defs/diagnostic" },
+        "launch": { "$ref": "#/$defs/launch" },
+        "radio": { "$ref": "#/$defs/radio" },
+        "usb": { "$ref": "#/$defs/usb" }
+      }
+    },
+    "failures": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "gate", "message"],
+        "properties": {
+          "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_.-]{0,95}$" },
+          "gate": {
+            "enum": [
+              "D7_DIAGNOSTIC_RESOURCES", "D8_ENDPOINT_VERIFICATION",
+              "D9_RADIO_QUIESCENCE", "D10_USB_RETURN"
+            ]
+          },
+          "message": { "type": "string", "maxLength": 500 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["synthetic_peer_stopped", "temporary_room_closed", "credential_file_absent"],
+      "properties": {
+        "synthetic_peer_stopped": { "type": "boolean" },
+        "temporary_room_closed": { "type": "boolean" },
+        "credential_file_absent": { "type": "boolean" }
+      }
+    },
+    "launch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status", "endpoint_exited", "wrapper_exited", "children_absent", "token_absent",
+        "session_absent"
+      ],
+      "properties": {
+        "status": { "enum": ["absent", "present", "unknown"] },
+        "endpoint_exited": { "type": "boolean" },
+        "wrapper_exited": { "type": "boolean" },
+        "children_absent": { "type": "boolean" },
+        "token_absent": { "type": "boolean" },
+        "session_absent": { "type": "boolean" }
+      }
+    },
+    "radio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "owned_interfaces", "driver_threads", "phy_active"],
+      "properties": {
+        "status": { "enum": ["quiescent", "active", "unknown"] },
+        "owned_interfaces": { "type": ["integer", "null"], "minimum": 0 },
+        "driver_threads": { "type": ["integer", "null"], "minimum": 0 },
+        "phy_active": { "type": ["boolean", "null"] }
+      }
+    },
+    "usb": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "prior_state_restored", "windows_state_verified", "linux_state_verified",
+        "detached_by_run"
+      ],
+      "properties": {
+        "prior_state_restored": { "type": "boolean" },
+        "windows_state_verified": { "type": "boolean" },
+        "linux_state_verified": { "type": "boolean" },
+        "detached_by_run": { "type": "boolean" }
+      }
+    }
+  }
+}

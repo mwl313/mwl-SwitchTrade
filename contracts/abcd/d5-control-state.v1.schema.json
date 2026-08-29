@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://switchtrade.local/contracts/d5-control-state.v1.schema.json",
+  "title": "SwitchTrade private measured D5 control state",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version", "schema", "run_id", "room_id", "attempt_id",
+    "expected_room_version", "command_id", "endpoint_report_sha256", "measurement", "payload"
+  ],
+  "properties": {
+    "contract_version": { "const": "d5-control-state.v1" },
+    "schema": { "const": 1 },
+    "run_id": { "type": "string", "format": "uuid" },
+    "room_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "attempt_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "expected_room_version": { "type": "integer", "minimum": 1 },
+    "command_id": { "type": "string", "format": "uuid" },
+    "endpoint_report_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["process_state_known", "temporary_interface_state_known"],
+      "properties": {
+        "process_state_known": { "type": "boolean" },
+        "temporary_interface_state_known": { "type": "boolean" }
+      }
+    },
+    "payload": { "$ref": "d-side-quiescent.v1.schema.json" }
+  }
+}
