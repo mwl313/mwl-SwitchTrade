@@ -14,6 +14,7 @@ from switchtrade.relay_client import RelayClient, USER_AGENT
 from relay.authority import uuid7
 from switchtrade.connection.b_fixture import FIXTURE, FIXTURE_SHA256
 from switchtrade.connection.c2 import C2Bridge
+from switchtrade.c2_protocol import launch_identity_hash
 from switchtrade.rfu_tunnel_v2 import Kind
 from switchtrade.tunnel_client_v2 import TunnelClientV2
 
@@ -39,6 +40,30 @@ def _p0_attestation(label: str) -> dict:
             f"hosting-smoke-adapter-{label}".encode()).hexdigest(),
         "report_sha256": hashlib.sha256(
             f"hosting-smoke-report-{label}".encode()).hexdigest(),
+    }
+
+
+def _d_quiescent(client: TunnelClientV2, seat: str,
+                 activation_generation: int) -> dict:
+    return {
+        "contract_version": "d-side-quiescent.v1",
+        "attempt_id": client.attempt_id,
+        "activation_generation": activation_generation,
+        "source_seat": seat,
+        "run_id": client.run_id,
+        "stage_generation": client.stage_generation,
+        "launch_identity_sha256": launch_identity_hash(
+            client.run_id, client.stage_generation,
+            client.launch_nonce, client.endpoint_pid,
+        ),
+        "evidence": {
+            "endpoint_exited": True,
+            "transport_exited": True,
+            "threads_exited": True,
+            "ldn_released": True,
+            "interfaces_absent": True,
+            "forced": False,
+        },
     }
 
 
@@ -159,6 +184,47 @@ def smoke(base_url: str, allow_http: bool = False, reverse_roles: bool = False) 
                 (received_second.payload, received_second.flags) != (to_second, 0x01) or
                 not first_bridge.rfu_active.is_set() or not second_bridge.rfu_active.is_set()):
             raise RuntimeError("C2 byte-exact bidirectional RFU proof failed")
+
+        room = relay.room(room_id, first["member_token"])
+        closing_payload = {
+            "contract_version": "d-closing-intent.v1",
+            "attempt_id": attempt_id,
+            "activation_generation": activation_generation,
+            "outcome": "canceled",
+            "primary_failure_code": None,
+            "last_passed_gate": "C_RFU_ACTIVE",
+        }
+        room = relay.begin_distributed_d(
+            room_id, attempt_id, first["member_token"], closing_payload,
+            expected_version=room["room_version"],
+        )
+        if room["attempt"]["phase"] != "closing":
+            raise RuntimeError("D1 did not preserve the closing intent")
+
+        first_client.stop()
+        first_quiescent = _d_quiescent(first_client, "member_a", activation_generation)
+        first_ack = relay.acknowledge_distributed_d(
+            room_id, attempt_id, first["member_token"], first_quiescent,
+            expected_version=room["room_version"],
+        )
+        if first_ack["attempt"]["phase"] != "closing":
+            raise RuntimeError("D6 terminalized before both sides were quiescent")
+
+        second_client.stop()
+        second_quiescent = _d_quiescent(second_client, "member_b", activation_generation)
+        terminal = relay.acknowledge_distributed_d(
+            room_id, attempt_id, second["member_token"], second_quiescent,
+            expected_version=first_ack["room_version"],
+        )
+        if (terminal["attempt"]["phase"] != "canceled" or
+                terminal["attempt"]["d"]["cleanup_status"] != "verified"):
+            raise RuntimeError("D6 did not preserve the canceled two-side outcome")
+        replay = relay.acknowledge_distributed_d(
+            room_id, attempt_id, second["member_token"], second_quiescent,
+            expected_version=first_ack["room_version"],
+        )
+        if replay["room_version"] != terminal["room_version"]:
+            raise RuntimeError("D5 response-loss retry mutated the terminal room")
     finally:
         first_client.stop()
         second_client.stop()
