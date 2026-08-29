@@ -91,6 +91,24 @@ class RelayClient:
     def health(self) -> dict:
         return self._request("GET", "/health")
 
+    def websocket_health(self) -> bool:
+        """Check WebSocket egress without creating relay state."""
+        from websockets.exceptions import WebSocketException
+        from websockets.sync.client import connect
+
+        parts = urlsplit(self.base_url)
+        scheme = "wss" if parts.scheme == "https" else "ws"
+        url = urlunsplit((scheme, parts.netloc, f"{parts.path}/health/ws", "", ""))
+        try:
+            with connect(url, open_timeout=self.timeout, close_timeout=self.timeout) as socket:
+                message = json.loads(socket.recv(timeout=self.timeout))
+        except (OSError, TimeoutError, ValueError, WebSocketException) as error:
+            raise RelayError(f"relay WebSocket health unavailable: {error}") from error
+        return (
+            isinstance(message, dict) and message.get("status") == "ready" and
+            message.get("contract_version") == "passive-websocket-health.v1"
+        )
+
     def upload_diagnostic(self, kind: str, path: str | Path, client_id: str,
                           release_id: str) -> dict:
         content_types = {

@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://switchtrade.local/contracts/p0-side-ready.v1.schema.json",
+  "title": "SwitchTrade P0 side readiness",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version", "schema", "run_id", "release", "mode", "run_generation",
+    "stage_generation", "wrapper_pid", "process_start_ticks", "monotonic_ns", "adapter",
+    "radio", "runtime", "outcome"
+  ],
+  "properties": {
+    "contract_version": { "const": "p0-side-ready.v1" },
+    "schema": { "const": 1 },
+    "run_id": { "type": "string", "format": "uuid" },
+    "release": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "mode": {
+      "enum": [
+        "normal", "p0_harness", "direct_a", "direct_b", "diagnostic_automated",
+        "diagnostic_a", "diagnostic_b", "diagnostic_suite"
+      ]
+    },
+    "run_generation": { "type": "integer", "minimum": 1 },
+    "stage_generation": { "type": "integer", "minimum": 1 },
+    "wrapper_pid": { "type": "integer", "minimum": 1 },
+    "process_start_ticks": { "type": "integer", "minimum": 1 },
+    "monotonic_ns": { "type": "integer", "minimum": 1 },
+    "adapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instance_sha256", "usb_id", "bus_id"],
+      "properties": {
+        "instance_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "usb_id": { "const": "0bda:818b" },
+        "bus_id": { "type": "string", "pattern": "^[0-9]+-[0-9]+(?:\\.[0-9]+)*$" }
+      }
+    },
+    "radio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phy", "netdev", "driver", "rx_passed", "rx_channel", "target_channel"],
+      "properties": {
+        "phy": { "type": "string", "pattern": "^phy[0-9]+$" },
+        "netdev": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$" },
+        "driver": { "const": "rtl8xxxu" },
+        "rx_passed": { "const": true },
+        "rx_channel": { "type": "integer", "minimum": 1, "maximum": 196 },
+        "target_channel": { "type": "integer", "minimum": 1, "maximum": 196 }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kernel_release", "integrity_manifest_sha256", "modules", "firmware_sha256", "tun_device"],
+      "properties": {
+        "kernel_release": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "integrity_manifest_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "modules": {
+          "type": "array",
+          "minItems": 10,
+          "maxItems": 10,
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "firmware_sha256": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["regulatory.db", "regulatory.db.p7s", "rtlwifi/rtl8192eu_nic.bin"],
+          "properties": {
+            "regulatory.db": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "regulatory.db.p7s": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "rtlwifi/rtl8192eu_nic.bin": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        },
+        "tun_device": { "const": true }
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "gate", "code"],
+      "properties": {
+        "status": { "const": "passed" },
+        "gate": { "const": "P0_SIDE_READY" },
+        "code": { "const": null }
+      }
+    }
+  }
+}

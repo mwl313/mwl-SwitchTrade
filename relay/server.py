@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from fastapi import BackgroundTasks
 import hashlib
 import io
@@ -380,11 +381,24 @@ async def health() -> dict:
         "service": "switchtrade-relay",
         "room_contract": "room-control.v1",
         "rfu_contract": RFU_CONTRACT,
+        "server_time_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "capabilities": [
             "manual-switch-role.v1", "public-directory.v1", DIAGNOSTIC_CONTRACT,
+            "passive-websocket-health.v1",
         ],
         "payload_mode": "opaque",
     }
+
+
+@app.websocket("/health/ws")
+async def websocket_health(websocket: WebSocket) -> None:
+    """Prove the passive WebSocket path without creating a room or retaining state."""
+    await websocket.accept()
+    await websocket.send_json({
+        "contract_version": "passive-websocket-health.v1",
+        "status": "ready",
+    })
+    await websocket.close(code=1000)
 
 
 @app.post("/v1/diagnostics/{kind}")

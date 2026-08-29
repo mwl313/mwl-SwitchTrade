@@ -13,7 +13,8 @@ new_case() {
     local case_root="$TEST_ROOT/$1" fake
     mkdir -p "$case_root/sys/bus/usb/devices/1-1/1-1:1.0" \
         "$case_root/sys/class/net" "$case_root/sys/class/ieee80211" \
-        "$case_root/sys/drivers/rtl8xxxu" "$case_root/bin" "$case_root/locks"
+        "$case_root/sys/drivers/rtl8xxxu" "$case_root/sys/module" \
+        "$case_root/dev/net" "$case_root/bin" "$case_root/locks"
     printf '0bda\n' > "$case_root/sys/bus/usb/devices/1-1/idVendor"
     printf '818b\n' > "$case_root/sys/bus/usb/devices/1-1/idProduct"
     printf '00\n' > "$case_root/sys/bus/usb/devices/1-1/bDeviceClass"
@@ -28,8 +29,10 @@ new_case() {
     cat > "$fake" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-[[ $1 == rtl8xxxu ]]
 sys=$SWITCHTRADE_SYSFS_ROOT
+name=${1//-/_}
+mkdir -p "$sys/module/$name"
+[[ $1 == rtl8xxxu ]] || exit 0
 dev="$sys/bus/usb/devices/1-1"
 mkdir -p "$sys/class/net/wlan7" "$sys/class/ieee80211/phy7"
 ln -sfn "$dev/1-1:1.0" "$sys/class/net/wlan7/device"
@@ -41,6 +44,22 @@ touch "$SWITCHTRADE_TEST_STATE/module-loaded"
 if [[ ${MODPROBE_WARNING:-0} == 1 ]]; then
   printf 'rtl8xxxu 1-1:1.0: Firmware failed to start\n' >> "$SWITCHTRADE_TEST_STATE/dmesg.log"
 fi
+EOF
+    fake="$case_root/bin/modinfo"
+    cat > "$fake" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case ${1:-} in
+  -n) printf '/lib/modules/%s/kernel/%s.ko\n' "$(uname -r)" "${2//-/_}" ;;
+  -F)
+    case ${2:-} in
+      vermagic) printf '%s SMP\n' "$(uname -r)" ;;
+      name) printf '%s\n' "${3//-/_}" ;;
+      srcversion) printf 'TESTSRC\n' ;;
+      *) exit 2 ;;
+    esac ;;
+  *) exit 2 ;;
+esac
 EOF
     fake="$case_root/bin/lsmod"
     cat > "$fake" <<'EOF'
@@ -85,6 +104,7 @@ touch "$SWITCHTRADE_TEST_STATE/usbreset-called"
 exit 0
 EOF
     chmod +x "$case_root/bin"/*
+    : > "$case_root/dev/net/tun"
     printf '%s\n' "$case_root"
 }
 
@@ -92,6 +112,7 @@ run_prepare() {
     local case_root=$1; shift
     env PATH="$case_root/bin:$PATH" \
         SWITCHTRADE_SYSFS_ROOT="$case_root/sys" \
+        SWITCHTRADE_DEV_ROOT="$case_root/dev" \
         SWITCHTRADE_LOCK_ROOT="$case_root/locks" \
         SWITCHTRADE_TEST_STATE="$case_root" \
         SWITCHTRADE_RADIO_PROFILES="$REPO/config/wsl-radio-hardware.tsv" \

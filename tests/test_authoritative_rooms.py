@@ -99,6 +99,12 @@ class AuthoritativeRoomTests(unittest.TestCase):
         self.assertIn("public-directory.v1", health.json()["capabilities"])
         self.assertEqual(health.json()["room_contract"], "room-control.v1")
         self.assertEqual(health.json()["rfu_contract"], "rfu-tunnel.v1")
+        self.assertIn("passive-websocket-health.v1", health.json()["capabilities"])
+        self.assertTrue(health.json()["server_time_utc"].endswith("Z"))
+
+        with self.client.websocket_connect("/health/ws") as websocket:
+            self.assertEqual(websocket.receive_json(), {
+                "contract_version": "passive-websocket-health.v1", "status": "ready"})
 
         listed = self.client.get(
             "/v1/public-trade-rooms?query=vulpix&game=LeafGreen&language=English")

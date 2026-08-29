@@ -12,8 +12,10 @@ IFACE=""
 EXPECTED_USB_ID=""
 DRY_RUN=0
 RESET_ON_RX_FAILURE=0
+RX_OBSERVED_CHANNEL=""
+LOG_FD="${SWITCHTRADE_LOG_FD:-1}"
 
-msg() { printf '%s\n' "$*"; }
+msg() { printf '%s\n' "$*" >&"$LOG_FD"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 usage() {
@@ -126,6 +128,7 @@ has_rx() {
         iw dev "$IFACE" set channel "$channel"
         if timeout -s INT "$RX_TIMEOUT" tcpdump -q -i "$IFACE" -n -s 96 -c 1 \
                 -w /dev/null >/dev/null 2>&1; then
+            RX_OBSERVED_CHANNEL="$channel"
             msg "[health] RX alive on channel $channel"
             return 0
         fi
@@ -209,4 +212,7 @@ PHY="$(basename "$(readlink -f "$SYSFS_ROOT/class/net/$IFACE/phy80211" 2>/dev/nu
 export SWITCHTRADE_IFACE="$IFACE"
 export SWITCHTRADE_USB_ID="$CARD_ID"
 export SWITCHTRADE_PHY="$PHY"
+export SWITCHTRADE_P0_RX_PASSED=1
+export SWITCHTRADE_P0_RX_CHANNEL="$RX_OBSERVED_CHANNEL"
+export SWITCHTRADE_P0_TARGET_CHANNEL="$TARGET_CHANNEL"
 (( $# == 0 )) || exec "$@"

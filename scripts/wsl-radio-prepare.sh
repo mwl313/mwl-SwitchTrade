@@ -5,6 +5,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SYSFS_ROOT="${SWITCHTRADE_SYSFS_ROOT:-/sys}"
+DEV_ROOT="${SWITCHTRADE_DEV_ROOT:-/dev}"
+LOG_FD="${SWITCHTRADE_LOG_FD:-1}"
 LOCK_ROOT="${SWITCHTRADE_LOCK_ROOT:-/run/lock}"
 PROFILE_FILE="${SWITCHTRADE_RADIO_PROFILES:-$SCRIPT_DIR/../config/wsl-radio-hardware.tsv}"
 HEALTH_GATE="$SCRIPT_DIR/radio-health-gate.sh"
@@ -18,7 +20,7 @@ REQUIRED_ROLE="${RADIO_ROLE:-}"
 RESET_ON_RX_FAILURE=0
 MODE=ensure
 
-msg() { printf '%s\n' "$*"; }
+msg() { printf '%s\n' "$*" >&"$LOG_FD"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 usage() {
@@ -238,6 +240,26 @@ verify_loaded_module() {
         die "loaded $driver is not the profiled module artifact (srcversion mismatch)"
 }
 
+loaded_module_name() {
+    # modprobe accepts dashes while sysfs/lsmod normally expose underscores.
+    printf '%s\n' "${1//-/_}"
+}
+
+load_prerequisite_module() {
+    local requested=$1 loaded module_path vermagic
+    loaded="$(loaded_module_name "$requested")"
+    msg "[prerequisite] loading $requested"
+    modprobe "$requested" || die "MODULE_LOAD_FAILED: could not load $requested"
+    [[ -d $SYSFS_ROOT/module/$loaded ]] || \
+        die "MODULE_NOT_LOADED: $requested has no loaded sysfs module"
+    module_path="$(modinfo -n "$requested" 2>/dev/null || true)"
+    if [[ -n $module_path && $module_path != '(builtin)' ]]; then
+        vermagic="$(modinfo -F vermagic "$requested" 2>/dev/null | awk '{print $1}')"
+        [[ $vermagic == "$(uname -r)" ]] || \
+            die "MODULE_VERMAGIC_MISMATCH: $requested $vermagic != $(uname -r)"
+    fi
+}
+
 select_device() {
     local id dev profile auto_select candidates=()
     while IFS=$'\t' read -r id dev; do
@@ -322,6 +344,16 @@ if [[ -n $REQUIRED_ROLE ]]; then
     case $REQUIRED_ROLE in host|guest|relay) ;; *) die "invalid role: $REQUIRED_ROLE" ;; esac
     role_allowed "$REQUIRED_ROLE" "$roles" || die "$USB_ID does not support role $REQUIRED_ROLE (roles=$roles)"
 fi
+
+# P0b has a single, explicit dependency order. Do not rely on call-site autoloading:
+# the packaged WSL kernel has previously exposed missing crypto/TUN modules only after
+# ldn.connect() or ldn.create_network() had already started.
+load_prerequisite_module usbip-core
+load_prerequisite_module vhci-hcd
+load_prerequisite_module cfg80211
+load_prerequisite_module libarc4
+load_prerequisite_module mac80211
+load_prerequisite_module led-class
 iface="$(preferred_iface_for_device "$DEVICE" 2>/dev/null || true)"
 driver="$(driver_for_device "$DEVICE" 2>/dev/null || true)"
 
@@ -390,6 +422,16 @@ if [[ $module_file != - ]]; then
     fi
 fi
 msg "[driver] PASS usb=$USB_ID strategy=$strategy driver=$driver iface=$iface roles=$roles status=$status auto_select=$auto_select engine=$host_engine${REQUIRED_ROLE:+ required_role=$REQUIRED_ROLE}"
+
+load_prerequisite_module ccm
+load_prerequisite_module cmac
+load_prerequisite_module tun
+if [[ $SYSFS_ROOT == /sys ]]; then
+    [[ -c $DEV_ROOT/net/tun ]] || die "TUN_DEVICE_MISSING: $DEV_ROOT/net/tun is not a character device"
+else
+    [[ -e $DEV_ROOT/net/tun ]] || die "TUN_DEVICE_MISSING: $DEV_ROOT/net/tun is missing"
+fi
+msg "[prerequisite] PASS crypto=ccm,cmac tun=$DEV_ROOT/net/tun"
 
 [[ $MODE != driver ]] || exit 0
 

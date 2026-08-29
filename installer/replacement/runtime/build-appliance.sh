@@ -94,6 +94,7 @@ kernel_release=$(tar -tzf "$modules" | awk -F/ 'NF >= 2 && $2 != "" {print $2; e
 chroot "$stage" /usr/sbin/depmod "$kernel_release"
 
 cp -a "$firmware_directory/." "$stage/usr/lib/firmware/"
+cp -a "$firmware_manifest" "$stage/etc/switchtrade/firmware-manifest.sha256"
 
 while read -r expected relative; do
   [[ -n ${expected:-} && -n ${relative:-} ]] || continue
@@ -136,6 +137,7 @@ chroot "$stage" dpkg-query -W -f='${Package}=${Version}\n' | LC_ALL=C sort \
   >"$stage/etc/switchtrade/package-lock.txt"
 chmod 0644 "$stage/etc/wsl.conf" "$stage/etc/wsl-distribution.conf" \
   "$stage/etc/switchtrade-distro.json" "$stage/opt/switchtrade/.switchtrade-release.json"
+chmod 0600 "$stage/opt/switchtrade/config/prod.keys"
 
 chroot "$stage" /usr/bin/python3 - <<'PY'
 import hashlib, json, pathlib
