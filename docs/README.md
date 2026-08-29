@@ -11,7 +11,16 @@ part of the public repository or release package.
 - [FireRed/LeafGreen Communication Protocol](FRLG_PROTOCOL.md) — the detailed, evidence-labelled
   protocol specification recovered by the project.
 - [Development History](DEVELOPMENT_HISTORY.md) — milestones, corrections, and engineering lessons.
-- [Future TODO](FUTURE_TODO.md) — work deliberately excluded from the current beta.
+- [A/B/C Connection Architecture](80-abc-connection-architecture-20260829.md) — ordered readiness
+  gates and the normative source of truth for the Switch-room side, mirrored-AP side, relay bridge,
+  and verified cleanup.
+- [ABC+D Orchestration Rewrite Plan](81-abcd-orchestration-rewrite-plan-20260829.md) — phased,
+  exit-gated implementation plan for replacing orchestration while admitting only proven low-level
+  components.
+- [ABC+D Milestone 0 Baseline](82-abcd-milestone-0-baseline-20260829.md) — reproducible baseline,
+  reuse-admission ledger, explicit replacement boundary, and known retained failures.
+- [Future TODO](FUTURE_TODO.md) — definitive implementation and qualification ledger for that
+  architecture.
 - [Known Issues](KNOWN_ISSUES.md) — authoritative beta defect register, evidence, workarounds, and
   acceptance checks.
 
@@ -22,7 +31,9 @@ read [relay/DEPLOYMENT.md](../relay/DEPLOYMENT.md), and distribution engineers s
 ## Documentation rules
 
 1. Update these documents in the same commit as a behavior, contract, or packaging change.
-2. Treat source code and tests as authoritative when a document and implementation disagree.
+2. For the production connection rework, the A/B/C+D architecture and definitive TODO are
+   normative. Source code and tests show current implementation status; a disagreement is an open
+   implementation gap, not permission to weaken a required gate.
 3. Label protocol claims as observed, source-confirmed, implemented, or inferred.
 4. Never commit credentials, tokens, private keys, raw support bundles, packet captures, or player
    data.

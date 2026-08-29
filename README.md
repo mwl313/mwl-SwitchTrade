@@ -74,12 +74,44 @@ advertises or joins the FireRed/LeafGreen wireless room and translates its LDN, 
 The server authoritatively manages two-member rooms and forwards attempt-bound RFU envelopes between
 the endpoints without decoding the game payload.
 
+### ABC+D connection rework decision
+
+The production connection path is being rebuilt around the normative
+[ABC+D architecture](docs/80-abc-connection-architecture-20260829.md). The project will not perform a
+clean-room rewrite and will not keep extending the existing orchestration with isolated patches.
+Instead, it will build a new ABC+D coordinator while reusing a current component only when focused
+tests and physical evidence prove that the component has one clear responsibility and a reliable,
+idempotent lifecycle.
+
+The current `LiveTransport` Switch-room join path, canonical `HostTransport + ldn.create_network()`
+AP path, authority primitives, RFU envelope/transport, and feature-neutral `TunnelSim` are reuse
+candidates. Connection/session orchestration, physical A/B readiness coordination, and distributed D
+cleanup are replacement boundaries. Legacy APIs, role compatibility paths, and prototype AP engines
+must not enter the new production path.
+
+Implementation proceeds in this order:
+
+1. Freeze the current behavior as characterization evidence; do not treat it as the new architecture.
+2. Implement the shared P0 prerequisite and attempt-scoped radio-ownership gate.
+3. Admit A and B components independently only after their direct harnesses pass their defined gates.
+4. Implement C authority ordering, advertisement delivery, and the A_READY/B_READY activation barrier.
+5. Implement two-sided, outcome-preserving D cleanup and recovery.
+6. Route normal rooms and production diagnostics through the same coordinator, then remove the old
+   orchestration and other unreachable legacy paths.
+7. Qualify source and installed runtime in P0 → A → B → C → D order before packaging another release.
+
+The [definitive TODO](docs/FUTURE_TODO.md) records implementation and qualification status. A passing
+test for the previous behavior does not close an ABC+D gate unless it proves the gate's current
+contract.
+
 ## Documentation
 
 - [Technical Guide](docs/TECHNICAL_GUIDE.md)
 - [FireRed/LeafGreen Communication Protocol](docs/FRLG_PROTOCOL.md)
 - [Development History](docs/DEVELOPMENT_HISTORY.md)
-- [Future TODO](docs/FUTURE_TODO.md)
+- [ABC+D Connection Architecture](docs/80-abc-connection-architecture-20260829.md)
+- [ABC+D Orchestration Rewrite Plan](docs/81-abcd-orchestration-rewrite-plan-20260829.md)
+- [Definitive TODO](docs/FUTURE_TODO.md)
 - [Known Issues](docs/KNOWN_ISSUES.md)
 - [Relay deployment](relay/DEPLOYMENT.md)
 - [Installer and package engineering](installer/README.md)

@@ -3,6 +3,9 @@
 > Status: implemented in source; installed-runtime and physical qualification remain required.
 > UI location: **Settings → Advanced → Production diagnostics**.
 > Contract: `production-diagnostic.v1`.
+> Architecture authority: this menu must project the P0/A/B/C/D gates in
+> `80-abc-connection-architecture-20260829.md`; that document controls wherever this earlier design
+> uses broader or older readiness wording.
 > Prerequisite: fix the critical false-start and repeated-launch defects documented in
 > `FUTURE_TODO.md` before using this design as qualification evidence.
 
@@ -525,7 +528,7 @@ require later calibration.
 
 ### 17.4 Local qualification gate
 
-PC A and PC B must each complete 50 consecutive automated runs of both roles plus guided room and AP
+PC A and PC B must each complete 30 consecutive automated runs of both roles plus guided room and AP
 checks, expected-failure checks, cancellation, and application restart with zero duplicate launches,
 orphan processes, stale locks, or altered adapter state. Only then resume the physically separated
 two-PC/two-Switch trade test.

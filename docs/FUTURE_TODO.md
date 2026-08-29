@@ -1,11 +1,91 @@
 # SwitchTrade Future TODO
 
-This list contains work deliberately excluded from `0.2.0-beta.1`. Items are ordered within each
-section. None should be presented as a current beta capability.
+This is the definitive implementation and qualification ledger. Together with
+`80-abc-connection-architecture-20260829.md`, it supersedes older connection plans. Items are ordered
+within each section; historical beta notes remain as evidence, not as authority for the new ABC+D
+path. No open item may be presented as a current production capability.
 
 ## Critical and urgent blockers
 
-1. **CRITICAL — URGENT: Stop false-positive endpoint startup and unbounded relaunch storms.**
+1. **CRITICAL — URGENT: Restore the complete WSL LDN prerequisite gate.**
+   **Status (2026-08-29): confirmed regression; not fixed.**
+   The installed `0.2.6-beta.2` runtime contains the correct kernel and the `ccm`, `cmac`, and `tun`
+   modules, but the production wrapper does not load them and does not verify `/dev/net/tun` before
+   entering the LDN path. A real Switch-hosted room was observed and decoded three times, then every
+   join failed at ABC+D gate A6, `NL80211_CMD_NEW_KEY`, with `ENOENT`. This is the same WSL failure
+   previously fixed in the standalone `run_trade.sh` path by explicitly loading `ccm`, `cmac`, and
+   `tun`; that block was lost when the product moved to `run-beta-endpoint.sh`.
+
+   Put the complete ordered prerequisite check in the one shared production radio gate: exact WSL
+   runtime and module-tree match; `usbip-core`/`vhci-hcd`; exact USB enumeration;
+   `cfg80211`/`libarc4`/`mac80211`/`led-class`/profile driver and firmware; explicit `ccm`, `cmac`,
+   and `tun`; `/dev/net/tun`; driver/PHY/netdev; stale-vif cleanup; and actual RX. Normal rooms and
+   diagnostics must call this same gate. Cold-boot acceptance requires
+   all modules initially unloaded, one successful A-side Switch room join, one successful B-side AP
+   association, and verified cleanup without manual `modprobe` or a warm-runtime dependency.
+
+2. **CRITICAL — URGENT: Preserve relay frame order and truthful P0/A/B/C/D diagnostic stages.**
+   **Status (2026-08-29): confirmed regression; not fixed.**
+   In the guided AP diagnostic, the synthetic host sends `PEER_READY` at sequence 0 and the retained
+   advertisement at sequence 1. When the endpoint connects later, the relay replays the advertisement
+   before the ready frame. `SequenceGate` accepts sequence 1 and rejects sequence 0 as stale, leaving a
+   relay-connected endpoint waiting for a peer that is already online. The AP path never starts, yet
+   the report incorrectly emits `DIAG_RELAY_UNREACHABLE`. The same bundle reports a detected and parsed
+   Switch room's A6 CCMP-key join failure as generic `DIAG_RADIO_GATE_FAILED`.
+
+   Retained frames from one source epoch must reach a late peer in source sequence order. Readiness
+   must precede advertisement delivery, stale advertisements must not cross attempts/epochs, and the
+   endpoint must distinguish connected from authenticated, peer-ready, and data-plane-proven.
+   Diagnostics must report the last completed gate defined in
+   `80-abc-connection-architecture-20260829.md`: P0 passive/attached/enumerated/driver/LDN/RX; A
+   observed/parsed/associated/control/ready; B AP-created/advertised/associated/control/ready; C
+   authenticated/peer-ready/data-plane-proven/advertisement-delivered/bridge-ready/RFU-active; and D
+   closing/local-quiescent/two-side-terminal/USB-returned. Acceptance requires a real-relay late-peer test
+   that reproduces the previous ordering, proves no stale-frame drop, reaches B AP startup, and maps
+   failures to their factual A/B/C gate.
+
+3. **CRITICAL — URGENT: Add the attempt-scoped A_READY/B_READY activation barrier.**
+   **Status (2026-08-29): confirmed architecture gap; not implemented.**
+   The current `rfu-tunnel.v1` controls include `PEER_READY` and `ADVERTISEMENT`, but no physical
+   side-ready message. In the normal finder path, `HostTransport.start()` returns when the AP opens,
+   before `_peer` proves that the Joining Switch associated; the endpoint then constructs
+   `TunnelSim` and reports `session_ready`. The room-side endpoint likewise has no authoritative
+   evidence that B reached association/control/TAP readiness. Relay authentication is therefore able
+   to masquerade as a physically complete two-sided bridge.
+
+   Implement the C2 barrier in `80-abc-connection-architecture-20260829.md`: arm each local
+   Pia/Reliable bridge with a bounded pre-barrier queue so early Switch frames are not lost; publish
+   exactly one identity-bound `A_READY` or `B_READY` after that side's complete hold gate; accept only
+   the remote message for the same attempt/seat/role/launch generation/advertisement hash; and expose
+   `C_BRIDGE_READY` only after both endpoints hold both signals. Reconnect must create a new epoch and
+   re-prove the barrier without admitting stale side readiness.
+
+   Acceptance requires delayed-B, delayed-A, stale-attempt, reconnect, duplicate-message, queue-limit,
+   endpoint-loss, and cancellation tests. A real two-PC test must prove that an AP merely opening does
+   not advance C, that early local RFU is bounded and preserved, and that both sides agree on the same
+   activation generation before real RFU counters are called active.
+
+4. **CRITICAL — URGENT: Make D cleanup two-sided, attempt-scoped, and outcome-preserving.**
+   **Status (2026-08-29): confirmed architecture gap; not implemented.**
+   Local session Stop currently stops the endpoint and releases hardware before it publishes the
+   authoritative cancellation. A WebSocket disconnect while the authority is still in any
+   non-terminal phase—including `closing`—is converted by the relay into `relay.peer_lost`. The relay
+   has no `D_SIDE_QUIESCENT` barrier and one local control cannot prove the remote PC's endpoint,
+   interfaces, or USB ownership were cleaned. This conflicts with distributed D and can overwrite a
+   normal/canceled outcome or claim terminal cleanup without both sides.
+
+   Implement D1–D11 from the ABC+D source of truth. Record an idempotent closing intent and original
+   outcome first; allow a bounded native Switch close-link tail; have each endpoint/control prove its
+   own transport/thread/PID/interface state; terminalize and disconnect the relay only after both
+   side-quiescent acknowledgements or an explicit forced-failure deadline; then verify local Linux
+   quiescence and return only the exact run-owned USB device to Windows. Expected closing disconnects
+   must not become `relay.peer_lost`, and cleanup errors remain secondary to the first A/B/C failure.
+
+   Acceptance covers successful trade, Stop, room close, peer loss, endpoint hang, app close, relay
+   restart, and PC restart at every D gate. No new attempt is enabled until both shared authority and
+   the local resource owner have a terminal verified record; repeated cleanup commands are idempotent.
+
+5. **CRITICAL — URGENT: Stop false-positive endpoint startup and unbounded relaunch storms.**
    **Status (2026-08-28): implemented in source; the current-PC single-launch and close/reopen smoke
    cases passed, while packaged fault injection, PC B, and physical qualification remain.**
    The PC B support bundle `20260828T075317Z-8036dd6a` recorded 128 `session_started` events in seven
@@ -64,7 +144,7 @@ section. None should be presented as a current beta capability.
    exposed the separate diagnostic and state-projection bugs tracked below; they block treating the whole
    workflow as qualified even though the one-click launch-storm regression passed.
 
-2. **CRITICAL — URGENT: Gate hot-attached radios on completed Linux driver probe.**
+6. **CRITICAL — URGENT: Gate hot-attached radios on completed Linux driver probe.**
    **Status (2026-08-28): fixed and qualified on the current PC in the installed
    `beta-2088aaaa25da-probe30-20260828` candidate; PC B and physical two-machine qualification remain.**
    The installed `beta-2088aaaa25da-statefix-20260828` candidate reproduced a deterministic readiness
@@ -90,7 +170,7 @@ section. None should be presented as a current beta capability.
    the expected stable `radio.switch_room_not_found` result after three scans, and released the exact
    adapter. Retain PC B and repeated physical qualification before closing the wider release gate.
 
-3. **URGENT: Add a production-path, single-machine diagnostic before resuming separated testing.**
+7. **URGENT: Add a production-path, single-machine diagnostic before resuming separated testing.**
    **Status (2026-08-28): the existing adapter-check workflow is fixed in source and now uses the
    production attach, Linux-enumeration, radio-preparation, driver, RX, and exact-device cleanup gates.
    The `production-diagnostic.v1` debug menu, synthetic peer, and guided checks are implemented in source.
@@ -110,7 +190,7 @@ section. None should be presented as a current beta capability.
    Start, Continue, Retry, Cancel, and Finish actions with no polling-triggered launches, show each stage
    and stable failure code, and save a redacted diagnostic report in the normal support bundle. Result
    levels must distinguish automated wrapper/relay/adapter pass, physical room detected, physical AP
-   association, and the final two-PC/two-Switch end-to-end pass. Fifty consecutive runs of both roles on
+   association, and the final two-PC/two-Switch end-to-end pass. Thirty consecutive runs of both roles on
    each PC, including cancellation and expected failure cases, must produce no duplicate launch, orphan
    process, stale lock, or altered adapter state.
 
