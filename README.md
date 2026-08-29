@@ -154,10 +154,13 @@ endpoint now performs ordered native close tail, C2 drain/admission seal, observ
 tunnel stop, and run-owned LDN/socket/thread teardown. Local control now builds D5 only from the
 persisted launch-bound endpoint report plus independent PID-generation and temporary-interface
 measurements, verifies exact D6 evidence, then orders D7-D11 with stable WSL radio probes and the
-existing run-owned USB lease. The complete software C2-to-D11 integration path passes. M7 remains
-open for restart/hang/fault injection, installed-WSL qualification, diagnostic-resource wiring, and
-Stop/Leave/Close action semantics; the post-review audit is `480 passed, 3 skipped`. This partial path
-is not advertised as a production capability.
+existing run-owned USB lease. Commit `0d7549d` also puts the real cold-P0 cleanup behind the same
+D8/D9 evidence before D10; PC A passed that installed-runtime path under a Korean profile with no
+USB, interface, PHY, process, or recovery residue. The exact `ed382db` relay artifact passed renewed
+two-role public smoke and operator-confirmed zero-orphan metrics. The complete software C2-to-D11
+integration path passes. M7 remains open for PC B, restart/hang/fault injection,
+diagnostic-resource wiring, and Stop/Leave/Close action semantics; the post-review audit is
+`480 passed, 3 skipped`. This partial path is not advertised as a production capability.
 
 The [definitive TODO](docs/FUTURE_TODO.md) records implementation and qualification status. A passing
 test for the previous behavior does not close an ABC+D gate unless it proves the gate's current

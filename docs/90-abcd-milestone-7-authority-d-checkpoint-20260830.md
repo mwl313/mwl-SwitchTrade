@@ -6,8 +6,11 @@
 > Measured local-control commit: `f52fe93`
 > Local recovery/probe hardening commit: `62f93fa`
 > Validation-smoke commit: `40fecf3`
+> Installed D8-D10 qualification commit: `0d7549d`
+> Deployed relay artifact checkpoint: `ed382db`
 > Status: M7 authority, endpoint D2-D4, and measured local D5/D7-D11 happy-path slices complete;
-> Milestone 7 remains open for fault/restart and installed-runtime qualification.
+> the installed PC A D8-D10 path is qualified. Milestone 7 remains open for PC B, fault/restart,
+> diagnostic-resource, and product-action qualification.
 > Scope: D1 closing intent, endpoint D2-D4, D5 authority acknowledgement, D6 two-side/forced
 > barrier, relay transport retirement, measured local D5 evidence, and ordered local release.
 
@@ -84,8 +87,16 @@ existing SHA-256 launch identity.
   D1, one-sided D5 non-terminal behavior, two-sided D6, post-terminal retry, and room close. Final
   metrics were zero for active credentials, v1/v2 sessions, and v2 admissions.
 - The source-identical public relay deployment passed normal and reversed-role HTTPS/WSS smoke
-  through C0-C2 and D1/D5/D6. Private metrics are access-controlled and still require the operator's
-  zero-orphan confirmation for this deployed checkpoint.
+  through C0-C2 and D1/D5/D6. The exact-artifact and private-metric confirmation is recorded below.
+- The operator redeployed the exact `ed382db` artifact and verified the deployed relay/import files
+  have zero diff from that checkpoint. One launchd-managed uvicorn worker was running; legacy
+  `/session/create` remained 404; health was ready with writable storage; and relay smoke passed.
+  Private metrics were all zero for live v2 attempts, admitted v2 attempts, and active member
+  credentials. The deployment backup is `/tmp/relay-backup-ed382db-080150/`. The server checkout's
+  local HEAD pointer remained at another commit, so artifact file identity—not that pointer—is the
+  deployment authority.
+- After that redeployment, public HTTPS/WSS smoke passed again in both normal and reversed role
+  assignments.
 - Endpoint tests prove exact D2 -> D3 -> D4 call order, native close-tail success and timeout,
   continued cleanup after faults, immutable run/attempt/seat/activation/launch binding, queue
   accounting, admission sealing, transport/thread/LDN evidence, and idempotent replay.
@@ -106,6 +117,17 @@ existing SHA-256 launch identity.
   coordinator recovery, and that forced D6 timeout can still drive conservative D8-D11 recovery when
   no local D5 acknowledgement reached the authority. The WSL `/proc` inventory excludes its own
   probe process so a clean run cannot falsely look active forever.
+- Commit `0d7549d` makes the cold P0 qualification path use the same fail-closed D8 launch and stable
+  D9 radio evidence policy as `LocalDRelease`; `UsbLease.release()` is reached only after both pass.
+  The policy is shared rather than copied, and restart recovery uses the same exact PID, interface,
+  and PHY evidence before a recovered lease can be returned.
+- PC A passed a real cold run against installed runtime `abcd-m4-9635a1f` and public relay through a
+  Korean Windows profile path. Run `a21db4a1-a217-4985-8dce-b7984fcde9b9` proved D8 endpoint,
+  wrapper, child, session, and token absence; D9 observed zero owned interfaces, zero matching driver
+  processes, and an inactive selected PHY for three consecutive samples; only then did D10 prove
+  Windows detach and matching Linux USB absence. The run ended terminal with verified cleanup, no
+  recovery file, and no Linux USB, interface, or PHY residue.
+- The post-change full audit remains `480 passed, 3 skipped`.
 
 ## 6. Remaining Milestone 7 work
 
@@ -113,13 +135,13 @@ This checkpoint is not the M7 exit gate. The following must be implemented and v
 
 1. Wire the D7 diagnostic callback to the production diagnostic peer/temporary-room/credential owner;
    its strict gate exists but product diagnostics are intentionally not migrated before M8.
-2. Qualify the real WSL PID/interface/PHY probes and conditional `UsbLease` return on both installed
-   PCs, including non-ASCII profile paths.
+2. Repeat the now-qualified real WSL PID/interface/PHY and conditional `UsbLease` path on PC B. PC A
+   and its non-ASCII profile boundary are complete.
 3. Complete app/control/PC restart recovery and endpoint-hang/fault injection at every D gate.
 4. Prove Stop, End, Leave, and Close room-action semantics without bypassing D; product routing remains
    a Milestone 9 migration boundary.
-5. Confirm private zero-orphan metrics for the deployed checkpoint and rerun the complete C0-C2 plus
-   measured distributed-D harness in both role assignments.
+5. Extend the deployed check from the completed public two-role smoke and zero-orphan authority
+   metrics to the complete measured distributed-D harness when a second installed PC is available.
 
 Until those checks pass, normal rooms, production diagnostics, desktop UI, and installers remain on
 their existing paths and no installer should be built from this checkpoint.

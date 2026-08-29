@@ -140,8 +140,11 @@ path. No open item may be presented as a current production capability.
 4. **CRITICAL — URGENT: Make D cleanup two-sided, attempt-scoped, and outcome-preserving.**
    **Status (2026-08-30): authority D1/D5/D6 is implemented at `d815562`, ordered endpoint D2-D4 at
    `fdbdd12`, and measured local D5 plus the D7-D11 release state machine at `f52fe93`, hardened for
-   restart recovery and WSL probe self-exclusion at `62f93fa`. The software happy path is complete,
-   but endpoint-hang/fault injection, installed-WSL qualification,
+   restart recovery and WSL probe self-exclusion at `62f93fa`. Commit `0d7549d` shares the D8/D9
+   fail-closed policy with cold P0 and PC A passed the installed-runtime D8-D10 sequence under a
+   non-ASCII profile with verified USB return and no residue. The exact `ed382db` deployed artifact
+   also passed renewed two-role smoke and zero-orphan metrics. The software happy path is complete,
+   but PC B, endpoint-hang/fault injection,
    diagnostic-resource wiring, and product action migration remain open, so this blocker is not
    closed.**
    Local session Stop currently stops the endpoint and releases hardware before it publishes the
