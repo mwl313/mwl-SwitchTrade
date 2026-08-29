@@ -238,8 +238,8 @@ class PassiveValidator:
         *,
         release: str,
         selection_file: Path,
-        relay_health: Callable[[], dict],
-        relay_websocket_health: Callable[[], bool],
+        relay_health: Callable[[], dict] | None = None,
+        relay_websocket_health: Callable[[], bool] | None = None,
         runner: Runner = run_command,
         distro: str = "SwitchTrade",
         runtime_root: str = "/opt/switchtrade",
@@ -249,6 +249,7 @@ class PassiveValidator:
         required_rfu_contract: str = "rfu-tunnel.v1",
         required_capabilities: frozenset[str] = frozenset({"passive-websocket-health.v1"}),
         blocking_state_paths: tuple[Path, ...] = (),
+        require_relay: bool = True,
     ):
         self.release = release
         self.selection_file = Path(selection_file)
@@ -263,6 +264,7 @@ class PassiveValidator:
         self.required_rfu_contract = required_rfu_contract
         self.required_capabilities = required_capabilities
         self.blocking_state_paths = tuple(Path(item) for item in blocking_state_paths)
+        self.require_relay = require_relay
 
     def requested_identity(self) -> tuple[str, str]:
         """Read only the requested identity so a failed P0a still receives a run record."""
@@ -349,28 +351,46 @@ class PassiveValidator:
             )
         if not adapter.attached and matches not in {0, None}:
             raise P0Error("P0_ADAPTER_STATE_CONFLICT", "P0a_usbipd", "Windows and Linux USB state disagree")
-        try:
-            health = self.relay_health()
-        except Exception as error:
-            raise P0Error("P0_RELAY_UNAVAILABLE", "P0a_relay", "relay health is unavailable") from error
-        capabilities = set(health.get("capabilities", [])) if isinstance(health, dict) else set()
-        if (not isinstance(health, dict) or health.get("status") != "ready" or
-                health.get("room_contract") != self.required_room_contract or
-                health.get("rfu_contract") != self.required_rfu_contract or
-                not self.required_capabilities.issubset(capabilities)):
-            raise P0Error("P0_RELAY_CONTRACT_MISMATCH", "P0a_relay", "relay contracts are incompatible")
-        try:
-            server_time = datetime.fromisoformat(str(health["server_time_utc"]).replace("Z", "+00:00"))
-        except (KeyError, TypeError, ValueError) as error:
-            raise P0Error("P0_RELAY_TIME_UNAVAILABLE", "P0a_relay", "relay time evidence is unavailable") from error
-        if abs((datetime.now(timezone.utc) - server_time).total_seconds()) > 300:
-            raise P0Error("P0_SYSTEM_TIME_SKEW", "P0a_relay", "system clock differs from the relay")
-        try:
-            websocket_ok = self.relay_websocket_health()
-        except Exception as error:
-            raise P0Error("P0_RELAY_WEBSOCKET_UNAVAILABLE", "P0a_relay", "relay WebSocket path is unavailable") from error
-        if websocket_ok is not True:
-            raise P0Error("P0_RELAY_WEBSOCKET_UNAVAILABLE", "P0a_relay", "relay WebSocket path is unavailable")
+        if self.require_relay:
+            if self.relay_health is None or self.relay_websocket_health is None:
+                raise P0Error(
+                    "P0_RELAY_CONFIGURATION_INVALID", "P0a_relay",
+                    "relay validation is not configured",
+                )
+            try:
+                health = self.relay_health()
+            except Exception as error:
+                raise P0Error("P0_RELAY_UNAVAILABLE", "P0a_relay", "relay health is unavailable") from error
+            capabilities = set(health.get("capabilities", [])) if isinstance(health, dict) else set()
+            if (not isinstance(health, dict) or health.get("status") != "ready" or
+                    health.get("room_contract") != self.required_room_contract or
+                    health.get("rfu_contract") != self.required_rfu_contract or
+                    not self.required_capabilities.issubset(capabilities)):
+                raise P0Error("P0_RELAY_CONTRACT_MISMATCH", "P0a_relay", "relay contracts are incompatible")
+            try:
+                server_time = datetime.fromisoformat(str(health["server_time_utc"]).replace("Z", "+00:00"))
+            except (KeyError, TypeError, ValueError) as error:
+                raise P0Error("P0_RELAY_TIME_UNAVAILABLE", "P0a_relay", "relay time evidence is unavailable") from error
+            if abs((datetime.now(timezone.utc) - server_time).total_seconds()) > 300:
+                raise P0Error("P0_SYSTEM_TIME_SKEW", "P0a_relay", "system clock differs from the relay")
+            try:
+                websocket_ok = self.relay_websocket_health()
+            except Exception as error:
+                raise P0Error("P0_RELAY_WEBSOCKET_UNAVAILABLE", "P0a_relay", "relay WebSocket path is unavailable") from error
+            if websocket_ok is not True:
+                raise P0Error("P0_RELAY_WEBSOCKET_UNAVAILABLE", "P0a_relay", "relay WebSocket path is unavailable")
+            relay = {
+                "room_contract": self.required_room_contract,
+                "rfu_contract": self.required_rfu_contract,
+                "capabilities": sorted(self.required_capabilities),
+                "https": True,
+                "websocket": True,
+                "clock_within_300_seconds": True,
+            }
+            relay_path = True
+        else:
+            relay = {"status": "not_required"}
+            relay_path = None
         report = {
             "contract_version": PASSIVE_CONTRACT,
             "schema": 1,
@@ -378,20 +398,13 @@ class PassiveValidator:
             "status": "passed",
             "adapter": adapter.public(),
             "runtime": runtime,
-            "relay": {
-                "room_contract": self.required_room_contract,
-                "rfu_contract": self.required_rfu_contract,
-                "capabilities": sorted(self.required_capabilities),
-                "https": True,
-                "websocket": True,
-                "clock_within_300_seconds": True,
-            },
+            "relay": relay,
             "checks": {
                 "topology": True,
                 "release_contracts": True,
                 "runtime": True,
                 "tools_privilege": True,
-                "relay_path": True,
+                "relay_path": relay_path,
                 "exclusive": True,
                 "adapter_identity": True,
                 "usbipd": True,

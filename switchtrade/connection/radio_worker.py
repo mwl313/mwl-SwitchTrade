@@ -221,7 +221,12 @@ def _validate_ticket(ticket: object, report: dict) -> dict:
         raise RadioWorkerError("P0_LAUNCH_TICKET_INVALID", "launch ticket contract is invalid")
     if ticket.get("action") == "stop":
         return {"action": "stop"}
-    if ticket.get("action") != "launch" or ticket.get("endpoint") != "probe":
+    endpoint = ticket.get("endpoint")
+    expected_endpoint = {
+        "p0_harness": "probe",
+        "direct_a": "direct_a",
+    }.get(report["mode"])
+    if ticket.get("action") != "launch" or endpoint != expected_endpoint:
         raise RadioWorkerError("P0_LAUNCH_TICKET_INVALID", "launch ticket action is invalid")
     expected = {
         "run_id": report["run_id"],
@@ -244,7 +249,10 @@ def _validate_ticket(ticket: object, report: dict) -> dict:
         _bounded(attempt_id, "attempt_id", 128)
     elif attempt_id is not None:
         _bounded(attempt_id, "attempt_id", 128)
-    return {"action": "launch", "launch_nonce": nonce, "attempt_id": attempt_id}
+    return {
+        "action": "launch", "endpoint": endpoint,
+        "launch_nonce": nonce, "attempt_id": attempt_id,
+    }
 
 
 def serve(args: argparse.Namespace) -> int:
@@ -269,13 +277,26 @@ def serve(args: argparse.Namespace) -> int:
             return 0
         _emit(
             "endpoint_exec", run_id=report["run_id"], launch_nonce=ticket["launch_nonce"],
-            wrapper_pid=report["wrapper_pid"], process_start_ticks=report["process_start_ticks"],
+            endpoint=ticket["endpoint"], wrapper_pid=report["wrapper_pid"],
+            process_start_ticks=report["process_start_ticks"],
         )
+        if ticket["endpoint"] == "direct_a":
+            endpoint_module = "switchtrade.connection.direct_a_endpoint"
+            endpoint_args = [
+                "--phy", report["radio"]["phy"],
+                "--ifname", f"sta-a-{report['run_id'].replace('-', '')[:8]}",
+                "--keys", str(args.runtime_root / "config" / "prod.keys"),
+                "--report", str(args.report.with_name("direct-a-stage-report.json")),
+            ]
+        else:
+            endpoint_module = "switchtrade.connection.worker_probe"
+            endpoint_args = []
         argv = [
-            sys.executable, "-m", "switchtrade.connection.worker_probe",
+            sys.executable, "-m", endpoint_module,
             "--run-id", report["run_id"], "--release", report["release"],
             "--launch-nonce", ticket["launch_nonce"],
             "--process-start-ticks", str(report["process_start_ticks"]),
+            *endpoint_args,
         ]
         os.execv(sys.executable, argv)
     except RadioWorkerError as error:

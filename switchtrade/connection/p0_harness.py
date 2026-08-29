@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
 import json
 import os
@@ -15,6 +17,7 @@ import threading
 import time
 from typing import Callable
 
+from switchtrade.connection.a_stage import GATES as A_GATES
 from switchtrade.connection.coordinator import (
     ConnectionCoordinator, ConnectionCoordinatorError, FunctionalOutcome, Phase, RunMode,
 )
@@ -154,9 +157,10 @@ def _worker_command(
         "--report", _wsl_path(report_path) if os.name == "nt" else str(report_path),
         "--runtime-root", runtime_root,
     ]
+    required_role = "guest" if run["identity"]["mode"] == RunMode.DIRECT_A.value else "relay"
     radio = [
         "./scripts/wsl-radio-prepare.sh", "--usb-id", adapter.usb_id,
-        "--role", "relay", "--target-channel", str(target_channel), "--", *worker,
+        "--role", required_role, "--target-channel", str(target_channel), "--", *worker,
     ]
     if os.name == "nt":
         return [
@@ -200,9 +204,6 @@ class WorkerEvents:
         log = getattr(self.process, "_switchtrade_stdout_log", None)
         try:
             for line in stream:
-                if log is not None:
-                    log.write(line[:16_384])
-                    log.flush()
                 if len(line) > 16_384:
                     raise P0Error("P0_WORKER_PROTOCOL_INVALID", "P0b_worker", "worker event exceeds its bound")
                 try:
@@ -211,6 +212,13 @@ class WorkerEvents:
                     raise P0Error("P0_WORKER_PROTOCOL_INVALID", "P0b_worker", "worker emitted non-JSON output") from error
                 if not isinstance(value, dict) or not isinstance(value.get("event"), str):
                     raise P0Error("P0_WORKER_PROTOCOL_INVALID", "P0b_worker", "worker event is invalid")
+                if log is not None:
+                    public = dict(value)
+                    advertisement = public.pop("advertisement_b64", None)
+                    if advertisement is not None:
+                        public["advertisement_redacted"] = True
+                    log.write(json.dumps(public, sort_keys=True, separators=(",", ":"))[:16_384] + "\n")
+                    log.flush()
                 self.events.put(value)
         except BaseException as error:
             self.events.put(error)
@@ -371,6 +379,73 @@ class P0Harness:
                 "P0_EVIDENCE_MISMATCH", "P0b_worker",
                 "runtime, module, or firmware evidence changed between P0a and P0b",
             )
+
+    @staticmethod
+    def _validate_a_stage(
+        event: dict, *, run_id: str, release: str, nonce: str, report_path: Path,
+    ) -> tuple[dict, bytes | None]:
+        if event.get("run_id") != run_id or event.get("launch_nonce") != nonce:
+            raise P0Error(
+                "A_ENDPOINT_IDENTITY_MISMATCH", "A0_SCAN_PREPARATION",
+                "direct A checkpoint changed launch identity",
+            )
+        report = event.get("report")
+        if not isinstance(report, dict):
+            raise P0Error("A_REPORT_INVALID", "A0_SCAN_PREPARATION", "direct A report is invalid")
+        if (
+            report.get("contract_version") != "direct-a-stage.v1"
+            or report.get("schema") != 1
+            or report.get("run_id") != run_id
+            or report.get("release") != release
+            or report.get("status") not in {"passed", "failed"}
+            or not isinstance(report.get("gates"), list)
+        ):
+            raise P0Error("A_REPORT_INVALID", "A0_SCAN_PREPARATION", "direct A report is invalid")
+        gate_names = [item.get("gate") for item in report["gates"] if isinstance(item, dict)]
+        if (
+            len(gate_names) != len(report["gates"])
+            or tuple(gate_names) != A_GATES[:len(gate_names)]
+            or (report["status"] == "passed" and tuple(gate_names) != A_GATES)
+        ):
+            raise P0Error("A_REPORT_INVALID", "A0_SCAN_PREPARATION", "direct A gates are invalid")
+        serialized_report = json.dumps(report, sort_keys=True).casefold()
+        if any(name in serialized_report for name in (
+            "advertisement_b64", "application_data", "bssid", "mac_address", "password", "credential"
+        )):
+            raise P0Error("A_REPORT_REDACTION_FAILED", "A3_ADVERTISEMENT_PARSING", "A report is not redacted")
+        try:
+            persisted = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise P0Error(
+                "A_REPORT_MISSING", "A0_SCAN_PREPARATION", "atomic direct A report is unavailable"
+            ) from error
+        if persisted != report:
+            raise P0Error(
+                "A_REPORT_MISMATCH", "A0_SCAN_PREPARATION", "direct A event and report differ"
+            )
+        encoded = event.get("advertisement_b64")
+        if report["status"] == "failed":
+            if encoded is not None or not isinstance(report.get("failure"), dict):
+                raise P0Error("A_REPORT_INVALID", "A0_SCAN_PREPARATION", "failed A report is invalid")
+            return report, None
+        try:
+            advertisement = base64.b64decode(encoded, validate=True)
+        except (TypeError, ValueError, binascii.Error) as error:
+            raise P0Error(
+                "A_ADVERTISEMENT_HANDOFF_INVALID", "A3_ADVERTISEMENT_PARSING",
+                "validated advertisement handoff is invalid",
+            ) from error
+        evidence = report.get("advertisement")
+        if (
+            not isinstance(evidence, dict)
+            or evidence.get("length") != len(advertisement)
+            or evidence.get("sha256") != hashlib.sha256(advertisement).hexdigest()
+        ):
+            raise P0Error(
+                "A_ADVERTISEMENT_HANDOFF_INVALID", "A3_ADVERTISEMENT_PARSING",
+                "validated advertisement handoff does not match its report",
+            )
+        return report, advertisement
 
     def _process_start_ticks(self, pid: int) -> int | None:
         if os.name == "nt":
@@ -537,20 +612,33 @@ class P0Harness:
             }
 
     def run(self, *, launch_probe: bool = True) -> dict:
+        return self._run(
+            mode=RunMode.P0_HARNESS, endpoint="probe", launch_endpoint=launch_probe,
+        )
+
+    def run_direct_a(self) -> dict:
+        return self._run(mode=RunMode.DIRECT_A, endpoint="direct_a", launch_endpoint=True)
+
+    def _run(self, *, mode: RunMode, endpoint: str, launch_endpoint: bool) -> dict:
         requested_instance, requested_usb = self.validator.requested_identity()
         run = self.coordinator.start(
-            RunMode.P0_HARNESS, adapter_instance_id=requested_instance, usb_id=requested_usb)
+            mode, adapter_instance_id=requested_instance, usb_id=requested_usb)
         run_id = run["run_id"]
         run_root = self.root / run_id
         run_root.mkdir(parents=True, exist_ok=True)
         report_path = run_root / "p0-side-ready.json"
-        final_path = run_root / "p0-harness-report.json"
+        a_report_path = run_root / "direct-a-stage-report.json"
+        final_path = run_root / (
+            "direct-a-harness-report.json" if mode == RunMode.DIRECT_A else "p0-harness-report.json"
+        )
         lease = None
         events = None
         process = None
         endpoint_started = False
+        next_a_gate = 0
         p0a = None
         p0b = None
+        a_stage = None
         primary = None
         cleanup = {}
         try:
@@ -581,13 +669,13 @@ class P0Harness:
                 run_id, wrapper_pid=p0b["wrapper_pid"],
                 process_start_ticks=p0b["process_start_ticks"],
                 phy=p0b["radio"]["phy"], netdev=p0b["radio"]["netdev"])
-            if launch_probe:
+            if launch_endpoint:
                 nonce = secrets.token_hex(32)
                 self.coordinator.reserve_endpoint_launch(run_id, launch_nonce=nonce)
                 events.send({
                     "contract_version": "p0-launch-ticket.v1",
                     "action": "launch",
-                    "endpoint": "probe",
+                    "endpoint": endpoint,
                     "run_id": run_id,
                     "release": run["identity"]["release"],
                     "run_generation": run["identity"]["run_generation"],
@@ -601,18 +689,50 @@ class P0Harness:
                     "attempt_id": None,
                 })
                 events.wait_for({"endpoint_exec"}, 5)
-                endpoint = events.wait_for({"endpoint_started"}, 5)
-                if (endpoint.get("run_id") != run_id or endpoint.get("launch_nonce") != nonce or
-                        endpoint.get("endpoint_pid") != p0b["wrapper_pid"] or
-                        endpoint.get("process_start_ticks") != p0b["process_start_ticks"]):
+                endpoint_event = events.wait_for({"endpoint_started"}, 5)
+                if (endpoint_event.get("run_id") != run_id or endpoint_event.get("launch_nonce") != nonce or
+                        endpoint_event.get("endpoint_pid") != p0b["wrapper_pid"] or
+                        endpoint_event.get("process_start_ticks") != p0b["process_start_ticks"] or
+                        endpoint_event.get("endpoint") != (
+                            "direct_a" if mode == RunMode.DIRECT_A else "probe")):
                     raise P0Error(
                         "P0_ENDPOINT_IDENTITY_MISMATCH", "P0b_launch",
                         "PID-preserving endpoint acknowledgement changed identity",
                     )
                 self.coordinator.acknowledge_endpoint(
-                    run_id, launch_nonce=nonce, endpoint_pid=endpoint["endpoint_pid"],
-                    process_start_ticks=endpoint["process_start_ticks"])
+                    run_id, launch_nonce=nonce, endpoint_pid=endpoint_event["endpoint_pid"],
+                    process_start_ticks=endpoint_event["process_start_ticks"])
                 endpoint_started = True
+                if mode == RunMode.DIRECT_A:
+                    while True:
+                        checkpoint = events.wait_for(
+                            {"a_gate_passed", "a_stage_ready", "a_stage_failed"}, 45)
+                        if (
+                            checkpoint.get("run_id") != run_id
+                            or checkpoint.get("launch_nonce") != nonce
+                        ):
+                            raise P0Error(
+                                "A_ENDPOINT_IDENTITY_MISMATCH", "A0_SCAN_PREPARATION",
+                                "direct A checkpoint changed launch identity",
+                            )
+                        if checkpoint["event"] == "a_gate_passed":
+                            gate = checkpoint.get("gate")
+                            if next_a_gate >= len(A_GATES) or gate != A_GATES[next_a_gate]:
+                                raise P0Error(
+                                    "A_GATE_ORDER_INVALID", str(gate or "A0_SCAN_PREPARATION"),
+                                    "direct A checkpoint order is invalid",
+                                )
+                            self.coordinator.pass_gate(run_id, gate)
+                            next_a_gate += 1
+                            continue
+                        a_stage, _advertisement = self._validate_a_stage(
+                            checkpoint, run_id=run_id, release=run["identity"]["release"],
+                            nonce=nonce, report_path=a_report_path,
+                        )
+                        if checkpoint["event"] == "a_stage_failed":
+                            failure = a_stage["failure"]
+                            raise P0Error(failure["code"], failure["gate"], failure["message"])
+                        break
             self.coordinator.close_run(run_id, FunctionalOutcome.PASSED)
             cleanup["lease"] = lease_evidence
         except (P0Error, ConnectionCoordinatorError, OSError, subprocess.SubprocessError) as error:
@@ -673,12 +793,16 @@ class P0Harness:
                 pass
         snapshot = self.coordinator.snapshot(run_id)
         result = {
-            "contract_version": "p0-harness-report.v1",
+            "contract_version": (
+                "direct-a-harness-report.v1" if mode == RunMode.DIRECT_A
+                else "p0-harness-report.v1"
+            ),
             "schema": 1,
             "run_id": run_id,
             "release": run["identity"]["release"],
             "p0a": p0a,
             "p0b": p0b,
+            "a_stage": a_stage,
             "primary_failure": primary,
             "cleanup": cleanup,
             "functional_status": snapshot["functional"]["status"],

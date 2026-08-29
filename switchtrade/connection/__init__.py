@@ -1,5 +1,6 @@
 """Public ABC+D connection coordination contract."""
 
+from .a_stage import AStageError, DirectAStage
 from .coordinator import (
     AuthoritySeat,
     CleanupOutcome,
@@ -17,8 +18,8 @@ from .coordinator import (
 from .p0 import P0Error, PassiveValidator, UsbAdapter, UsbLease
 
 __all__ = [
-    "AuthoritySeat", "CleanupOutcome", "ConnectionCoordinator",
+    "AStageError", "AuthoritySeat", "CleanupOutcome", "ConnectionCoordinator",
     "ConnectionCoordinatorError", "CONTRACT_VERSION", "FunctionalOutcome", "LdnRole", "Phase",
     "RfuRole", "RunMode", "SwitchRole", "TunnelDirection",
-    "P0Error", "PassiveValidator", "UsbAdapter", "UsbLease",
+    "DirectAStage", "P0Error", "PassiveValidator", "UsbAdapter", "UsbLease",
 ]

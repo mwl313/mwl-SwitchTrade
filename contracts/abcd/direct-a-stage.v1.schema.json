@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://switchtrade.local/contracts/abcd/direct-a-stage.v1.schema.json",
+  "title": "SwitchTrade direct A stage report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version", "schema", "run_id", "release", "status", "result_level",
+    "last_passed_gate", "gates", "advertisement", "data_plane", "failure", "duration_ms",
+    "cleanup"
+  ],
+  "properties": {
+    "contract_version": { "const": "direct-a-stage.v1" },
+    "schema": { "const": 1 },
+    "run_id": { "type": "string", "format": "uuid" },
+    "release": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "status": { "enum": ["passed", "failed"] },
+    "result_level": { "type": ["string", "null"], "enum": [null, "A_CONTROL_READY"] },
+    "last_passed_gate": { "type": ["string", "null"], "maxLength": 96 },
+    "gates": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["gate", "elapsed_ms"],
+        "properties": {
+          "gate": { "type": "string", "maxLength": 96 },
+          "elapsed_ms": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "advertisement": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["length", "sha256"],
+          "properties": {
+            "length": { "const": 122 },
+            "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        }
+      ]
+    },
+    "data_plane": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["netdev_resolved", "udp_bound", "packet_socket_bound", "local_hold_completed"],
+          "properties": {
+            "netdev_resolved": { "type": "boolean" },
+            "udp_bound": { "type": "boolean" },
+            "packet_socket_bound": { "type": "boolean" },
+            "local_hold_completed": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "failure": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "gate", "message"],
+          "properties": {
+            "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_.-]{0,95}$" },
+            "gate": { "type": "string", "maxLength": 96 },
+            "message": { "type": "string", "maxLength": 500 }
+          }
+        }
+      ]
+    },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "cleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ldn_context_released", "radio_quiescent"],
+      "properties": {
+        "ldn_context_released": { "type": "boolean" },
+        "radio_quiescent": { "type": "boolean" }
+      }
+    }
+  }
+}
