@@ -2,7 +2,8 @@
 
 > Branch: `codex/abcd-orchestration-rework`
 > Source commit: `162f779`
-> Status: local source and real-process validation passed; external validation-relay deployment pending.
+> Status: local source and deployed validation-relay data-path checks passed; operator restart and
+> immutable-deployment evidence remain pending.
 > Scope: P0-bound authority admission, endpoint identity, ordered `rfu-tunnel.v2`, bidirectional
 > nonce proof, and exact A-to-B advertisement delivery.
 
@@ -79,3 +80,27 @@ exact `switchtrade-relay:0.3.0-validation.1` container could not be built here. 
 
 No `SIDE_READY`, `C_BRIDGE_READY`, RFU data plane, physical A/B integration, distributed D, normal
 application cutover, diagnostic migration, production deployment, or trade is claimed here.
+
+## 5. Deployed validation relay evidence
+
+The operator deployed documentation checkpoint `bbc549f` (source checkpoint `162f779`) to
+`https://relay.pangyostonefist.org`. On 2026-08-30, the external health contract reported `ready`,
+`single-writer`, opaque payloads, `room-control.v1`, and both `rfu-tunnel.v1` and
+`rfu-tunnel.v2`. The following checks then passed through the public HTTPS/WSS ingress:
+
+- the production hosting smoke once, followed by 10 consecutive reruns;
+- creator/finder with both seat assignments, including member B as creator;
+- exact fixture advertisement delivery in both directions;
+- two-way unpredictable nonce proof and reconnect re-proof with fresh epochs;
+- late-peer replay ordered as `PEER_READY` sequence 0 then `ADVERTISEMENT` sequence 1, exactly once;
+- suppression of an identical advertisement after reconnect;
+- rejection of mismatched releases and duplicate P0 run identities;
+- rejection of a changed launch nonce for an already admitted seat;
+- factual attempt failure for sequence gap, duplicate sequence, stale epoch, and wrong attempt;
+- successful idempotent room deletion after every completed or deliberately failed case.
+
+The ingress intentionally returns HTTP 403 for `/metrics`, so an external client cannot assert the
+internal live/admitted v2 counters. Formal Milestone 5 acceptance therefore still requires operator
+evidence for the immutable image digest and worker count, plus one controlled restart while a v2
+attempt is active. After restart, the operator must confirm the attempt reports `relay.restart` and
+both internal v2 namespace counters are zero. These remaining checks do not require a Switch.
