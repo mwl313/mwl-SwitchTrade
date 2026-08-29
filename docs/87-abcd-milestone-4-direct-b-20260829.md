@@ -1,7 +1,7 @@
 # ABC+D Milestone 4 direct B qualification evidence
 
 > Branch: `codex/abcd-orchestration-rework`
-> Source commit: `99e21fe`
+> Source commit: `9635a1f`
 > Status: source complete; final PC A immutable runtime installed and smoke-tested; final physical rerun pending.
 > Scope: local app-hosted room advertisement, one real searching Switch, control port, and bounded hold.
 
@@ -60,8 +60,8 @@ packet capture, trainer data, or Pokémon data.
 
 ## 4. Automated evidence
 
-The final source regression passed 413 tests with three intentional skips. The focused Direct B/P0
-matrix passed 38 tests. Direct B coverage includes fixture immutability, B2-B10 order, parameter identity,
+The final source regression passed 414 tests with three intentional skips. The focused Direct B/P0
+matrix passed 39 tests. Direct B coverage includes fixture immutability, B2-B10 order, parameter identity,
 run-owned compatibility behavior without class mutation, real-peer event requirements, control-port
 failure, association/hold timeout, participant loss, one launch, strict endpoint identity, one
 attach/conditional detach, cleanup failure precedence, redaction, and no relay dependency. It also
@@ -75,14 +75,14 @@ B tests and remains subject to the physical installed-runtime gate.
 
 ## 5. Immutable PC A candidate
 
-- release: `abcd-m4-99e21fe`;
+- release: `abcd-m4-9635a1f`;
 - application version carried by the qualification package: `0.2.6-beta.2`;
-- runtime content ID: `ed5863a011f268bbb29de6262153123ce6daf870f81468ab0f1eaeb7ce2516d4`;
-- WSL archive SHA-256: `8d8a5222e72edaba49311b635b11f622af1c453c8f8f47a5e875c9197f5082f5`;
-- WSL archive size: `110364652` bytes;
+- runtime content ID: `6e6cc8374d146faace24db0ce0d91f1b66bf17863c9694634426cc26279bebe5`;
+- WSL archive SHA-256: `7c6a580311f04df057952c1d3ac8d7286343e63c77416f450e6371e9ffa053af`;
+- WSL archive size: `110383498` bytes;
 - custom kernel: `6.18.35.2-microsoft-standard-WSL2+`;
-- active runtime: `SwitchTrade-beta-abcd-m4-99e21-666a4479c5764366a7433fd77b0d6d20`;
-- package directory: `artifacts\qualification\m4-99e21fe\package`.
+- active runtime: `SwitchTrade-beta-abcd-m4-9635a-e10b0acb45ae4b8aaa41208d9024f742`;
+- package directory: `artifacts\qualification\m4-9635a1f\package`.
 
 The replacement provisioner installed the candidate side by side, verified it, atomically selected
 it, and retired the superseded M3 runtime. Installed smoke verified the release and payload integrity,
@@ -99,7 +99,7 @@ live evidence reaches B5/B6 and the app-hosted room is advertising, open FireRed
 Club Direct Corner, enter the Trade Center, choose **Join Group**, and select the advertised room.
 
 ```powershell
-$candidate = (Resolve-Path 'artifacts\qualification\m4-99e21fe').Path
+$candidate = (Resolve-Path 'artifacts\qualification\m4-9635a1f').Path
 $active = Get-Content -Raw (Join-Path $env:LOCALAPPDATA `
   'SwitchTrade\state\active-runtime.json') | ConvertFrom-Json
 wsl.exe --shutdown
@@ -138,8 +138,16 @@ its first AsyncExitStack implementation closed an outer Trio timeout while LDN's
 was still active. Installed run `2e0625ec-9946-435b-89e6-26b7577072e6` caught this source regression at
 B5 and verified full cleanup without requiring Switch input.
 
-Commit `99e21fe` keeps one timeout scope outside the complete native LDN context lifetime, bounds the
-peer destroy notification, and records context release only after the context actually exits. It is
-installed and in a clean pre-test state. A final one-Switch run must still exit 0 with both functional
-and cleanup success before PC A Direct B is formally accepted; PC B remains separate qualification
-debt.
+Commit `99e21fe` kept one timeout scope outside the complete native LDN context lifetime, bounded the
+peer destroy notification, and preserved functional success. Physical run
+`d5366c2e-3e82-4592-b523-9e38bc83cc18` then passed B2-B10 and returned `B_CONTROL_READY`; the worker
+exited normally and Windows/Linux USB restoration passed. The report correctly retained that functional
+success but failed cleanup because the LDN context still did not exit within ten seconds.
+
+The ldn 0.0.17 source waits without a deadline for `NL80211_CMD_STOP_AP` before its enclosing AP-interface
+context performs the authoritative interface deletion. This matches the joined-session AP-context hang
+recorded in documents 32 and 33. Commit `9635a1f` applies a two-second bound only to that run-owned
+STOP_AP request, then continues through the ordinary interface deletion. It also records each network,
+TAP, monitor, AP, interface, and factory exit checkpoint. A simulation where STOP_AP never responds
+reaches `factory_released`, and the full suite passes. Immutable runtime `abcd-m4-9635a1f` is installed,
+hash-verified, smoke-tested, detached, and waiting for one final real-Switch cleanup confirmation.

@@ -53,12 +53,15 @@ path. No open item may be presented as a current production capability.
    engines. It validates one immutable package-owned fixture, resets only the selected PHY, constructs
    the exact FRLG network, applies compatibility behavior to run-owned instances, and requires
    AP/monitor/TAP, data-plane, real Switch association, control-port, and hold evidence in B2-B10
-   order. Source commit `99e21fe` passed 413 tests with three intentional skips. Runtime
+   order. Source commit `9635a1f` passed 414 tests with three intentional skips. Runtime
    `abcd-m4-d41a284` made the room visible and physically recorded B2-B10, but a peer destroy stall
    after B10 falsely rewrote the report as `B_HOLD_TIMEOUT`. The corrected lifecycle keeps the Trio
    timeout outside the complete LDN context lifetime, bounds the destroy notification, and separates
-   functional success from factual context cleanup. Immutable runtime `abcd-m4-99e21fe` passed package
-   and installed-runtime smoke on PC A and is waiting for final physical confirmation; no B1,
+   functional success from factual context cleanup. A subsequent physical run passed B2-B10 and all
+   worker/USB cleanup but confirmed that the joined LDN AP context still exceeded its ten-second exit
+   deadline. The ldn 0.0.17 STOP_AP wait is now bounded before authoritative interface deletion, with
+   ordered teardown checkpoints retained in the report. Immutable runtime `abcd-m4-9635a1f` passed
+   package and installed-runtime smoke on PC A and is waiting for final physical confirmation; no B1,
    `B_READY`, relay delivery, or trade is claimed.
 
 2. **CRITICAL — URGENT: Preserve relay frame order and truthful P0/A/B/C/D diagnostic stages.**
