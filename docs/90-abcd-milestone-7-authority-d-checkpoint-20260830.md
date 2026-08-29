@@ -3,11 +3,13 @@
 > Branch: `codex/abcd-orchestration-rework`
 > Source commit: `d815562`
 > Endpoint D2-D4 commit: `fdbdd12`
+> Measured local-control commit: `f52fe93`
+> Local recovery/probe hardening commit: `62f93fa`
 > Validation-smoke commit: `40fecf3`
-> Status: M7 authority and endpoint D2-D4 slices complete; Milestone 7 remains open.
+> Status: M7 authority, endpoint D2-D4, and measured local D5/D7-D11 happy-path slices complete;
+> Milestone 7 remains open for fault/restart and installed-runtime qualification.
 > Scope: D1 closing intent, endpoint D2-D4, D5 authority acknowledgement, D6 two-side/forced
-> barrier, and relay transport retirement. This checkpoint does not implement or claim D7-D11 or
-> production control wiring for measured D5 evidence.
+> barrier, relay transport retirement, measured local D5 evidence, and ordered local release.
 
 ## 1. Boundary
 
@@ -15,10 +17,10 @@ This checkpoint introduces one authority-owned distributed-D path on top of the 
 It does not reuse the legacy room terminalization path and it is not advertised as a completed relay
 capability. Only a P0-admitted v2 attempt may enter it.
 
-The relay owns the shared outcome and barrier. The new endpoint stage owns only its local D2-D4
-resources. Local control still must prove endpoint exit, interfaces, radio, USB lease, and recovery
-state in later M7 slices. A local acknowledgement proves only the credential-derived seat that
-submitted it.
+The relay owns the shared outcome and barrier. The endpoint stage owns only its local D2-D4
+resources. Local control measures its own launch and radio evidence, verifies that exact evidence at
+D6, and releases only its own diagnostic, endpoint, radio, USB, and lock resources. It never claims
+the remote PC's local release.
 
 ## 2. Implemented ordering and invariants
 
@@ -52,6 +54,10 @@ submitted it.
   state, cleanup result, secondary cleanup code, and terminal timestamp.
 - `d-endpoint-stage.v1`: launch-bound D2-D4 result with Boolean resource evidence, bounded queue
   counts, stable cleanup failures, and no payload data.
+- `d5-control-state.v1`: private response-loss retry state containing the endpoint-report hash,
+  UUIDv7 command ID, Boolean measurement-known flags, and exact redacted D5 payload.
+- `d-local-release.v1`: redacted D6-D11 report containing bounded launch/radio/USB evidence and
+  stable secondary cleanup failures.
 
 The contracts contain no bearer credentials, reconnect tokens, launch nonce, raw RFU frames, MAC
 addresses, packet captures, or game/trainer data. The launch nonce and PID are represented only by the
@@ -72,6 +78,8 @@ existing SHA-256 launch identity.
 
 - Focused authority and real-process tunnel matrix: `62 passed`.
 - Full audit runtime after the endpoint slice: `455 passed, 3 skipped`.
+- Full audit runtime after measured local control, WSL self-exclusion review, and restart recovery:
+  `480 passed, 3 skipped`.
 - Source-identical local uvicorn smoke passed both normal and reversed role assignments through C0-C2,
   D1, one-sided D5 non-terminal behavior, two-sided D6, post-terminal retry, and room close. Final
   metrics were zero for active credentials, v1/v2 sessions, and v2 admissions.
@@ -86,18 +94,32 @@ existing SHA-256 launch identity.
   timeout, relay restart, exact post-terminal HTTP retry, and transport retirement.
 - JSON contracts were parsed independently and the persisted authority projection was checked against
   the strict required field set.
+- Measured-control tests prove report immutability, exact run/attempt/seat/activation/launch binding,
+  stable temporary-interface measurement, response-loss replay, no credential persistence, and
+  forced false evidence for live or unknown state.
+- Local-release tests prove D7 -> D8 -> D9 -> D10 -> D11 order, exact D6 evidence comparison,
+  endpoint-active and unknown-radio detach prevention, diagnostic cleanup failure, software-only
+  ownership, failed-cleanup guard retention, and verified retry.
+- A real local HTTP/WSS relay process passes C2 activation, authoritative D1, endpoint D2-D4,
+  measured D5 on each coordinator, two-seat D6, and independent D7-D11 local release.
+- Restart tests prove that a persisted UUIDv7 D5 request can be replayed without remeasurement after
+  coordinator recovery, and that forced D6 timeout can still drive conservative D8-D11 recovery when
+  no local D5 acknowledgement reached the authority. The WSL `/proc` inventory excludes its own
+  probe process so a clean run cannot falsely look active forever.
 
 ## 6. Remaining Milestone 7 work
 
 This checkpoint is not the M7 exit gate. The following must be implemented and verified in order:
 
-1. Production control wiring that invokes D2-D4 only after authoritative D1 and constructs D5 from
-   the persisted endpoint report plus measured process/radio state, not caller claims.
-2. D7 diagnostic-only peer/room/token cleanup.
-3. D8 exact endpoint/child/launch verification, D9 stable Linux radio quiescence, D10 conditional
-   return of only the run-owned USB adapter, and D11 recovery-state/lock release.
-4. Stop, Leave, Close, app/control/PC restart, endpoint hang, and fault injection at every gate.
-5. Private zero-orphan deployed relay confirmation and the complete C0-C2 plus distributed-D harness.
+1. Wire the D7 diagnostic callback to the production diagnostic peer/temporary-room/credential owner;
+   its strict gate exists but product diagnostics are intentionally not migrated before M8.
+2. Qualify the real WSL PID/interface/PHY probes and conditional `UsbLease` return on both installed
+   PCs, including non-ASCII profile paths.
+3. Complete app/control/PC restart recovery and endpoint-hang/fault injection at every D gate.
+4. Prove Stop, End, Leave, and Close room-action semantics without bypassing D; product routing remains
+   a Milestone 9 migration boundary.
+5. Confirm private zero-orphan metrics for the deployed checkpoint and rerun the complete C0-C2 plus
+   measured distributed-D harness in both role assignments.
 
 Until those checks pass, normal rooms, production diagnostics, desktop UI, and installers remain on
 their existing paths and no installer should be built from this checkpoint.

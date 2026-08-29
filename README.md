@@ -146,14 +146,18 @@ normal/reversed roles, delayed A/B, single-worker identity, and private zero-orp
 software/deployed exit gate is accepted. This does not claim physical A/B, distributed D,
 diagnostic/application cutover, or a trade.
 
-Milestone 7 has authority checkpoint `d815562` and endpoint D2-D4 checkpoint `fdbdd12`. The v2-only
-D1/D5/D6 path freezes
+Milestone 7 has authority checkpoint `d815562`, endpoint D2-D4 checkpoint `fdbdd12`, and measured
+local-control checkpoint `f52fe93` hardened at `62f93fa`. The v2-only D1/D5/D6 path freezes
 the functional outcome before teardown, authenticates each side's launch-bound quiescence evidence,
 waits for both seats, and preserves primary A/B/C failure across timeout or relay restart. The
 endpoint now performs ordered native close tail, C2 drain/admission seal, observer/capture finalization,
-tunnel stop, and run-owned LDN/socket/thread teardown. The full audit runtime passed `455 passed,
-3 skipped`. M7 remains open until measured D5 control wiring and D7-D11 are implemented and
-fault-qualified; the partial path is not advertised as a production capability.
+tunnel stop, and run-owned LDN/socket/thread teardown. Local control now builds D5 only from the
+persisted launch-bound endpoint report plus independent PID-generation and temporary-interface
+measurements, verifies exact D6 evidence, then orders D7-D11 with stable WSL radio probes and the
+existing run-owned USB lease. The complete software C2-to-D11 integration path passes. M7 remains
+open for restart/hang/fault injection, installed-WSL qualification, diagnostic-resource wiring, and
+Stop/Leave/Close action semantics; the post-review audit is `480 passed, 3 skipped`. This partial path
+is not advertised as a production capability.
 
 The [definitive TODO](docs/FUTURE_TODO.md) records implementation and qualification status. A passing
 test for the previous behavior does not close an ABC+D gate unless it proves the gate's current

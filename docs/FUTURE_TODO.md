@@ -138,8 +138,11 @@ path. No open item may be presented as a current production capability.
    proves simultaneous physical A_READY/B_READY through the production coordinator.
 
 4. **CRITICAL — URGENT: Make D cleanup two-sided, attempt-scoped, and outcome-preserving.**
-   **Status (2026-08-30): authority D1/D5/D6 implemented at `d815562` and ordered endpoint D2-D4 at
-   `fdbdd12`; measured D5 control wiring and local D7-D11 remain open, so the product blocker is not
+   **Status (2026-08-30): authority D1/D5/D6 is implemented at `d815562`, ordered endpoint D2-D4 at
+   `fdbdd12`, and measured local D5 plus the D7-D11 release state machine at `f52fe93`, hardened for
+   restart recovery and WSL probe self-exclusion at `62f93fa`. The software happy path is complete,
+   but endpoint-hang/fault injection, installed-WSL qualification,
+   diagnostic-resource wiring, and product action migration remain open, so this blocker is not
    closed.**
    Local session Stop currently stops the endpoint and releases hardware before it publishes the
    authoritative cancellation. A WebSocket disconnect while the authority is still in any
@@ -155,11 +158,15 @@ path. No open item may be presented as a current production capability.
    quiescence and return only the exact run-owned USB device to Windows. Expected closing disconnects
    must not become `relay.peer_lost`, and cleanup errors remain secondary to the first A/B/C failure.
 
-   The authority checkpoint now enforces a v2-only immutable closing intent, exact launch-bound side
+   The authority checkpoint enforces a v2-only immutable closing intent, exact launch-bound side
    acknowledgements, a two-seat terminal barrier, post-response-loss idempotency, and bounded
-   timeout/restart terminalization without replacing the first functional cause. Do not wire callers
-   directly to Boolean cleanup claims: the remaining endpoint/control work must measure D2-D4 and
-   D8-D10, persist recovery identity, and release the local lock only at D11.
+   timeout/restart terminalization without replacing the first functional cause. The local checkpoint
+   rejects caller-supplied D5 success: it hashes and validates the persisted D2-D4 report, independently
+   measures the exact PID generation and run-owned temporary interfaces, reuses one persisted UUIDv7
+   command after response loss, and accepts D6 only when the authority contains that exact evidence.
+   It then orders diagnostic cleanup, endpoint/child/token proof, a bounded stable WSL radio probe,
+   conditional release through the existing `UsbLease`, and lock release at D11. Unknown remains
+   failure and USB return is skipped while endpoint or radio state is unproven.
 
    Acceptance covers successful trade, Stop, room close, peer loss, endpoint hang, app close, relay
    restart, and PC restart at every D gate. No new attempt is enabled until both shared authority and
