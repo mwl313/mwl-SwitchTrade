@@ -13,6 +13,7 @@ from unittest import mock
 
 from switchtrade.connection.coordinator import ConnectionCoordinator, Phase, RunMode
 from switchtrade.connection.a_stage import GATES as A_GATES
+from switchtrade.connection.b_stage import FIXTURE_SHA256, GATES as B_GATES
 from switchtrade.connection.p0 import (
     P0Error, PassiveValidator, USB_ID, UsbLease, _decode_native_output, parse_usbipd_state,
 )
@@ -516,6 +517,31 @@ class RadioWorkerTests(unittest.TestCase):
             _validate_ticket(ticket, report)
         self.assertEqual(caught.exception.code, "P0_LAUNCH_TICKET_INVALID")
 
+    def test_direct_b_mode_accepts_only_the_direct_b_endpoint(self):
+        args = self.args()
+        args.mode = "direct_b"
+        report = build_side_ready(args, {
+            "SWITCHTRADE_IFACE": "wlan7",
+            "SWITCHTRADE_PHY": "phy7",
+            "SWITCHTRADE_USB_ID": USB_ID,
+            "SWITCHTRADE_P0_RX_PASSED": "1",
+            "SWITCHTRADE_P0_RX_CHANNEL": "6",
+            "SWITCHTRADE_P0_TARGET_CHANNEL": "6",
+        })
+        ticket = {
+            "contract_version": "p0-launch-ticket.v1", "action": "launch",
+            "endpoint": "direct_b", "run_id": report["run_id"], "release": report["release"],
+            "run_generation": 1, "stage_generation": 1,
+            "adapter_instance_sha256": "a" * 64, "usb_id": USB_ID, "bus_id": "4-18",
+            "wrapper_pid": report["wrapper_pid"], "process_start_ticks": 12345,
+            "launch_nonce": "n" * 32, "attempt_id": None,
+        }
+        self.assertEqual(_validate_ticket(ticket, report)["endpoint"], "direct_b")
+        ticket["endpoint"] = "direct_a"
+        with self.assertRaises(RadioWorkerError) as caught:
+            _validate_ticket(ticket, report)
+        self.assertEqual(caught.exception.code, "P0_LAUNCH_TICKET_INVALID")
+
 
 class QueueOutput:
     def __init__(self):
@@ -541,9 +567,10 @@ class QueueOutput:
 
 
 class FakeWorkerProcess:
-    def __init__(self, report, a_report_path=None):
+    def __init__(self, report, a_report_path=None, b_report_path=None):
         self.report = report
         self.a_report_path = a_report_path
+        self.b_report_path = b_report_path
         self.stdout = QueueOutput()
         self.returncode = None
         self.exited = threading.Event()
@@ -603,6 +630,48 @@ class FakeWorkerProcess:
                         "advertisement_b64": base64.b64encode(advertisement).decode("ascii"),
                     })
                     self.owner._exit(0)
+                elif value["endpoint"] == "direct_b":
+                    for index, gate in enumerate(B_GATES):
+                        self.owner.stdout.feed({
+                            "event": "b_gate_passed", "run_id": value["run_id"],
+                            "launch_nonce": value["launch_nonce"], "gate": gate,
+                            "elapsed_ms": index + 1,
+                        })
+                    stage = {
+                        "contract_version": "direct-b-stage.v1", "schema": 1,
+                        "run_id": value["run_id"], "release": value["release"],
+                        "status": "passed", "result_level": "B_CONTROL_READY",
+                        "last_passed_gate": B_GATES[-1],
+                        "gates": [
+                            {"gate": gate, "elapsed_ms": index + 1}
+                            for index, gate in enumerate(B_GATES)
+                        ],
+                        "fixture": {
+                            "id": "frlg-search-v1", "length": 122,
+                            "sha256": FIXTURE_SHA256,
+                        },
+                        "radio_reset": {
+                            "selected_phy_only": True, "interfaces_removed": 1,
+                            "tap_removed": False,
+                        },
+                        "compatibility": {
+                            "beacon_head": True, "monitor_ccmp": True,
+                            "remote_destroy": True,
+                        },
+                        "data_plane": {
+                            "tap_ready": True, "udp_bound": True,
+                            "packet_socket_bound": True, "local_hold_completed": True,
+                        },
+                        "association": {"participant_count": 2, "peer_recorded": True},
+                        "failure": None, "duration_ms": 20,
+                        "cleanup": {"ldn_context_released": True, "radio_quiescent": True},
+                    }
+                    self.owner.b_report_path.write_text(json.dumps(stage), encoding="utf-8")
+                    self.owner.stdout.feed({
+                        "event": "b_stage_ready", "run_id": value["run_id"],
+                        "launch_nonce": value["launch_nonce"], "report": stage,
+                    })
+                    self.owner._exit(0)
             elif value.get("action") == "stop":
                 self.owner._exit(0)
             return len(text)
@@ -651,6 +720,16 @@ class FakeLease:
 
 
 class P0HarnessTests(unittest.TestCase):
+    def test_direct_stage_cleanup_is_separate_and_fails_closed(self):
+        passed = {"cleanup": {"ldn_context_released": True, "radio_quiescent": True}}
+        uncertain = {"cleanup": {"ldn_context_released": True, "radio_quiescent": False}}
+        self.assertTrue(P0Harness._stage_cleanup_verified(
+            RunMode.DIRECT_B, endpoint_started=True, a_stage=None, b_stage=passed))
+        self.assertFalse(P0Harness._stage_cleanup_verified(
+            RunMode.DIRECT_B, endpoint_started=True, a_stage=None, b_stage=uncertain))
+        self.assertTrue(P0Harness._stage_cleanup_verified(
+            RunMode.DIRECT_B, endpoint_started=False, a_stage=None, b_stage=None))
+
     def test_cross_stage_hash_change_is_rejected(self):
         passive = {"runtime": {
             "kernel_release": "kernel-a", "integrity_manifest_sha256": "a" * 64,
@@ -831,6 +910,93 @@ class P0HarnessTests(unittest.TestCase):
             log_text = event_log.read_text(encoding="utf-8")
             self.assertIn('"advertisement_redacted":true', log_text)
             self.assertNotIn("IyMjIyMj", log_text)
+
+    def test_direct_b_harness_runs_one_host_endpoint_and_cleans_once(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            adapter = parse_usbipd_state(usb_state())[0]
+            firmware = {
+                "regulatory.db": "1" * 64,
+                "regulatory.db.p7s": "2" * 64,
+                "rtlwifi/rtl8192eu_nic.bin": "3" * 64,
+            }
+            integrity = "4" * 64
+            validator = SimpleNamespace(
+                requested_identity=lambda: (INSTANCE, USB_ID),
+                validate=lambda: (adapter, {
+                    "contract_version": "p0-passive.v1", "status": "passed",
+                    "runtime": {
+                        "kernel_release": "test-kernel",
+                        "integrity_manifest_sha256": integrity,
+                        "firmware_sha256": firmware,
+                        "module_vermagic": {
+                            name.replace("_", "-"): "test-kernel" for name in REQUIRED_MODULES
+                        },
+                    },
+                }),
+            )
+            leases = []
+
+            def lease_factory(selected, recovery):
+                lease = FakeLease(selected, recovery)
+                leases.append(lease)
+                return lease
+
+            commands = []
+
+            def worker_factory(command, stdout_path, _stderr_path):
+                commands.append(command)
+
+                def argument(name):
+                    return command[command.index(name) + 1]
+
+                report = {
+                    "contract_version": "p0-side-ready.v1", "schema": 1,
+                    "run_id": argument("--run-id"), "release": argument("--release"),
+                    "mode": argument("--mode"),
+                    "run_generation": int(argument("--run-generation")),
+                    "stage_generation": int(argument("--stage-generation")),
+                    "wrapper_pid": 4300, "process_start_ticks": 65432,
+                    "adapter": {
+                        "instance_sha256": adapter.instance_sha256,
+                        "usb_id": USB_ID, "bus_id": "4-18",
+                    },
+                    "radio": {"phy": "phy0", "netdev": "wlan0", "rx_passed": True},
+                    "runtime": {
+                        "kernel_release": "test-kernel",
+                        "integrity_manifest_sha256": integrity,
+                        "firmware_sha256": firmware,
+                        "modules": list(REQUIRED_MODULES),
+                    },
+                }
+                (stdout_path.parent / "p0-side-ready.json").write_text(
+                    json.dumps(report), encoding="utf-8")
+                process = FakeWorkerProcess(
+                    report, b_report_path=stdout_path.parent / "direct-b-stage-report.json")
+                process._switchtrade_stdout_log = stdout_path.open(
+                    "w", encoding="utf-8", newline="\n")
+                return process
+
+            with ConnectionCoordinator(root / "coordinator", "release-a") as coordinator:
+                result = P0Harness(
+                    coordinator, validator, root / "runs",
+                    worker_factory=worker_factory, lease_factory=lease_factory,
+                ).run_direct_b()
+                snapshot = coordinator.snapshot(result["run_id"])
+
+            self.assertEqual(result["contract_version"], "direct-b-harness-report.v1")
+            self.assertEqual(result["functional_status"], "passed")
+            self.assertEqual(result["cleanup_status"], "verified")
+            self.assertEqual(result["b_stage"]["last_passed_gate"], B_GATES[-1])
+            self.assertEqual(snapshot["identity"]["mode"], "direct_b")
+            self.assertEqual(snapshot["ownership"]["launch_count"], 1)
+            self.assertEqual(leases[0].acquires, 1)
+            self.assertEqual(leases[0].releases, 1)
+            self.assertEqual(commands[0][commands[0].index("--role") + 1], "host")
+            event_log = Path(result["report_path"]).parent / "worker-events.ndjson"
+            log_text = event_log.read_text(encoding="utf-8").casefold()
+            self.assertNotIn("application_data", log_text)
+            self.assertNotIn("mac_address", log_text)
 
     def test_restart_recovery_clears_preflight_guard_without_hardware_actions(self):
         with tempfile.TemporaryDirectory() as temporary:

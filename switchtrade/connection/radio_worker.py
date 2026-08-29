@@ -225,6 +225,7 @@ def _validate_ticket(ticket: object, report: dict) -> dict:
     expected_endpoint = {
         "p0_harness": "probe",
         "direct_a": "direct_a",
+        "direct_b": "direct_b",
     }.get(report["mode"])
     if ticket.get("action") != "launch" or endpoint != expected_endpoint:
         raise RadioWorkerError("P0_LAUNCH_TICKET_INVALID", "launch ticket action is invalid")
@@ -287,6 +288,17 @@ def serve(args: argparse.Namespace) -> int:
                 "--ifname", f"sta-a-{report['run_id'].replace('-', '')[:8]}",
                 "--keys", str(args.runtime_root / "config" / "prod.keys"),
                 "--report", str(args.report.with_name("direct-a-stage-report.json")),
+            ]
+        elif ticket["endpoint"] == "direct_b":
+            suffix = report["run_id"].replace("-", "")[:8]
+            endpoint_module = "switchtrade.connection.direct_b_endpoint"
+            endpoint_args = [
+                "--phy", report["radio"]["phy"],
+                "--ap-ifname", f"ap-b-{suffix}",
+                "--monitor-ifname", f"mon-b-{suffix}",
+                "--tap-ifname", f"tap-b-{suffix}",
+                "--keys", str(args.runtime_root / "config" / "prod.keys"),
+                "--report", str(args.report.with_name("direct-b-stage-report.json")),
             ]
         else:
             endpoint_module = "switchtrade.connection.worker_probe"

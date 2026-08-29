@@ -18,6 +18,7 @@ import time
 from typing import Callable
 
 from switchtrade.connection.a_stage import GATES as A_GATES
+from switchtrade.connection.b_stage import GATES as B_GATES
 from switchtrade.connection.coordinator import (
     ConnectionCoordinator, ConnectionCoordinatorError, FunctionalOutcome, Phase, RunMode,
 )
@@ -157,7 +158,10 @@ def _worker_command(
         "--report", _wsl_path(report_path) if os.name == "nt" else str(report_path),
         "--runtime-root", runtime_root,
     ]
-    required_role = "guest" if run["identity"]["mode"] == RunMode.DIRECT_A.value else "relay"
+    required_role = {
+        RunMode.DIRECT_A.value: "guest",
+        RunMode.DIRECT_B.value: "host",
+    }.get(run["identity"]["mode"], "relay")
     radio = [
         "./scripts/wsl-radio-prepare.sh", "--usb-id", adapter.usb_id,
         "--role", required_role, "--target-channel", str(target_channel), "--", *worker,
@@ -399,6 +403,7 @@ class P0Harness:
             or report.get("release") != release
             or report.get("status") not in {"passed", "failed"}
             or not isinstance(report.get("gates"), list)
+            or not isinstance(report.get("cleanup"), dict)
         ):
             raise P0Error("A_REPORT_INVALID", "A0_SCAN_PREPARATION", "direct A report is invalid")
         gate_names = [item.get("gate") for item in report["gates"] if isinstance(item, dict)]
@@ -446,6 +451,65 @@ class P0Harness:
                 "validated advertisement handoff does not match its report",
             )
         return report, advertisement
+
+    @staticmethod
+    def _validate_b_stage(
+        event: dict, *, run_id: str, release: str, nonce: str, report_path: Path,
+    ) -> dict:
+        if event.get("run_id") != run_id or event.get("launch_nonce") != nonce:
+            raise P0Error(
+                "B_ENDPOINT_IDENTITY_MISMATCH", "B2_ADVERTISEMENT_VALIDATION",
+                "direct B checkpoint changed launch identity",
+            )
+        report = event.get("report")
+        if not isinstance(report, dict):
+            raise P0Error("B_REPORT_INVALID", B_GATES[0], "direct B report is invalid")
+        if (
+            report.get("contract_version") != "direct-b-stage.v1"
+            or report.get("schema") != 1
+            or report.get("run_id") != run_id
+            or report.get("release") != release
+            or report.get("status") not in {"passed", "failed"}
+            or not isinstance(report.get("gates"), list)
+            or not isinstance(report.get("cleanup"), dict)
+        ):
+            raise P0Error("B_REPORT_INVALID", B_GATES[0], "direct B report is invalid")
+        gate_names = [item.get("gate") for item in report["gates"] if isinstance(item, dict)]
+        if (
+            len(gate_names) != len(report["gates"])
+            or tuple(gate_names) != B_GATES[:len(gate_names)]
+            or (report["status"] == "passed" and tuple(gate_names) != B_GATES)
+        ):
+            raise P0Error("B_REPORT_INVALID", B_GATES[0], "direct B gates are invalid")
+        serialized_report = json.dumps(report, sort_keys=True).casefold()
+        if any(name in serialized_report for name in (
+            "fixture_b64", "application_data", "bssid", "mac_address", "password", "credential"
+        )):
+            raise P0Error("B_REPORT_REDACTION_FAILED", B_GATES[0], "B report is not redacted")
+        try:
+            persisted = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise P0Error("B_REPORT_MISSING", B_GATES[0], "atomic direct B report is unavailable") from error
+        if persisted != report:
+            raise P0Error("B_REPORT_MISMATCH", B_GATES[0], "direct B event and report differ")
+        if report["status"] == "failed" and not isinstance(report.get("failure"), dict):
+            raise P0Error("B_REPORT_INVALID", B_GATES[0], "failed B report is invalid")
+        return report
+
+    @staticmethod
+    def _stage_cleanup_verified(
+        mode: RunMode, *, endpoint_started: bool,
+        a_stage: dict | None, b_stage: dict | None,
+    ) -> bool:
+        if not endpoint_started or mode not in {RunMode.DIRECT_A, RunMode.DIRECT_B}:
+            return True
+        stage = a_stage if mode == RunMode.DIRECT_A else b_stage
+        cleanup = stage.get("cleanup") if isinstance(stage, dict) else None
+        return (
+            isinstance(cleanup, dict)
+            and cleanup.get("ldn_context_released") is True
+            and cleanup.get("radio_quiescent") is True
+        )
 
     def _process_start_ticks(self, pid: int) -> int | None:
         if os.name == "nt":
@@ -619,6 +683,9 @@ class P0Harness:
     def run_direct_a(self) -> dict:
         return self._run(mode=RunMode.DIRECT_A, endpoint="direct_a", launch_endpoint=True)
 
+    def run_direct_b(self) -> dict:
+        return self._run(mode=RunMode.DIRECT_B, endpoint="direct_b", launch_endpoint=True)
+
     def _run(self, *, mode: RunMode, endpoint: str, launch_endpoint: bool) -> dict:
         requested_instance, requested_usb = self.validator.requested_identity()
         run = self.coordinator.start(
@@ -628,17 +695,21 @@ class P0Harness:
         run_root.mkdir(parents=True, exist_ok=True)
         report_path = run_root / "p0-side-ready.json"
         a_report_path = run_root / "direct-a-stage-report.json"
-        final_path = run_root / (
-            "direct-a-harness-report.json" if mode == RunMode.DIRECT_A else "p0-harness-report.json"
-        )
+        b_report_path = run_root / "direct-b-stage-report.json"
+        final_path = run_root / {
+            RunMode.DIRECT_A: "direct-a-harness-report.json",
+            RunMode.DIRECT_B: "direct-b-harness-report.json",
+        }.get(mode, "p0-harness-report.json")
         lease = None
         events = None
         process = None
         endpoint_started = False
         next_a_gate = 0
+        next_b_gate = 0
         p0a = None
         p0b = None
         a_stage = None
+        b_stage = None
         primary = None
         cleanup = {}
         try:
@@ -693,8 +764,7 @@ class P0Harness:
                 if (endpoint_event.get("run_id") != run_id or endpoint_event.get("launch_nonce") != nonce or
                         endpoint_event.get("endpoint_pid") != p0b["wrapper_pid"] or
                         endpoint_event.get("process_start_ticks") != p0b["process_start_ticks"] or
-                        endpoint_event.get("endpoint") != (
-                            "direct_a" if mode == RunMode.DIRECT_A else "probe")):
+                        endpoint_event.get("endpoint") != endpoint):
                     raise P0Error(
                         "P0_ENDPOINT_IDENTITY_MISMATCH", "P0b_launch",
                         "PID-preserving endpoint acknowledgement changed identity",
@@ -733,6 +803,36 @@ class P0Harness:
                             failure = a_stage["failure"]
                             raise P0Error(failure["code"], failure["gate"], failure["message"])
                         break
+                elif mode == RunMode.DIRECT_B:
+                    while True:
+                        checkpoint = events.wait_for(
+                            {"b_gate_passed", "b_stage_ready", "b_stage_failed"}, 180)
+                        if (
+                            checkpoint.get("run_id") != run_id
+                            or checkpoint.get("launch_nonce") != nonce
+                        ):
+                            raise P0Error(
+                                "B_ENDPOINT_IDENTITY_MISMATCH", B_GATES[0],
+                                "direct B checkpoint changed launch identity",
+                            )
+                        if checkpoint["event"] == "b_gate_passed":
+                            gate = checkpoint.get("gate")
+                            if next_b_gate >= len(B_GATES) or gate != B_GATES[next_b_gate]:
+                                raise P0Error(
+                                    "B_GATE_ORDER_INVALID", str(gate or B_GATES[0]),
+                                    "direct B checkpoint order is invalid",
+                                )
+                            self.coordinator.pass_gate(run_id, gate)
+                            next_b_gate += 1
+                            continue
+                        b_stage = self._validate_b_stage(
+                            checkpoint, run_id=run_id, release=run["identity"]["release"],
+                            nonce=nonce, report_path=b_report_path,
+                        )
+                        if checkpoint["event"] == "b_stage_failed":
+                            failure = b_stage["failure"]
+                            raise P0Error(failure["code"], failure["gate"], failure["message"])
+                        break
             self.coordinator.close_run(run_id, FunctionalOutcome.PASSED)
             cleanup["lease"] = lease_evidence
         except (P0Error, ConnectionCoordinatorError, OSError, subprocess.SubprocessError) as error:
@@ -765,8 +865,12 @@ class P0Harness:
             usb_verified = (
                 lease is None or cleanup.get("usb", {}).get("prior_state_restored") is True
             )
+            stage_cleanup_verified = self._stage_cleanup_verified(
+                mode, endpoint_started=endpoint_started,
+                a_stage=a_stage, b_stage=b_stage,
+            )
             cleanup_verified = (
-                worker_verified and usb_verified
+                worker_verified and usb_verified and stage_cleanup_verified
             )
             self.coordinator.complete_cleanup(
                 run_id, verified=cleanup_verified,
@@ -774,6 +878,10 @@ class P0Harness:
                     "worker_exited": None if events is None else worker_verified,
                     "prior_usb_state_restored": None if lease is None else usb_verified,
                     "endpoint_exited": None if not endpoint_started else worker_verified,
+                    "stage_resources_released": (
+                        None if mode not in {RunMode.DIRECT_A, RunMode.DIRECT_B}
+                        else stage_cleanup_verified
+                    ),
                 },
                 code=None if cleanup_verified else "P0_CLEANUP_FAILED",
                 message=None if cleanup_verified else "P0 cleanup could not be verified",
@@ -795,6 +903,7 @@ class P0Harness:
         result = {
             "contract_version": (
                 "direct-a-harness-report.v1" if mode == RunMode.DIRECT_A
+                else "direct-b-harness-report.v1" if mode == RunMode.DIRECT_B
                 else "p0-harness-report.v1"
             ),
             "schema": 1,
@@ -803,6 +912,7 @@ class P0Harness:
             "p0a": p0a,
             "p0b": p0b,
             "a_stage": a_stage,
+            "b_stage": b_stage,
             "primary_failure": primary,
             "cleanup": cleanup,
             "functional_status": snapshot["functional"]["status"],

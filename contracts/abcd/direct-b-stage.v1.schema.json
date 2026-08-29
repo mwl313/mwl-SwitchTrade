@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://switchtrade.local/contracts/abcd/direct-b-stage.v1.schema.json",
+  "title": "SwitchTrade direct B stage report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version", "schema", "run_id", "release", "status", "result_level",
+    "last_passed_gate", "gates", "fixture", "radio_reset", "compatibility", "data_plane",
+    "association", "failure", "duration_ms", "cleanup"
+  ],
+  "properties": {
+    "contract_version": { "const": "direct-b-stage.v1" },
+    "schema": { "const": 1 },
+    "run_id": { "type": "string", "format": "uuid" },
+    "release": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "status": { "enum": ["passed", "failed"] },
+    "result_level": {
+      "type": ["string", "null"],
+      "enum": [null, "B_SWITCH_ASSOCIATED", "B_CONTROL_READY"]
+    },
+    "last_passed_gate": { "type": ["string", "null"], "maxLength": 96 },
+    "gates": {
+      "type": "array",
+      "maxItems": 9,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["gate", "elapsed_ms"],
+        "properties": {
+          "gate": { "type": "string", "maxLength": 96 },
+          "elapsed_ms": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "length", "sha256"],
+      "properties": {
+        "id": { "const": "frlg-search-v1" },
+        "length": { "const": 122 },
+        "sha256": { "const": "998a8087aa9011dc7b0bc3200b99702c03eeefb3e9c3259349f3b540e6425ce2" }
+      }
+    },
+    "radio_reset": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["selected_phy_only", "interfaces_removed", "tap_removed"],
+          "properties": {
+            "selected_phy_only": { "type": "boolean" },
+            "interfaces_removed": { "type": "integer", "minimum": 0 },
+            "tap_removed": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["beacon_head", "monitor_ccmp", "remote_destroy"],
+      "properties": {
+        "beacon_head": { "type": "boolean" },
+        "monitor_ccmp": { "type": "boolean" },
+        "remote_destroy": { "type": "boolean" }
+      }
+    },
+    "data_plane": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tap_ready", "udp_bound", "packet_socket_bound", "local_hold_completed"],
+          "properties": {
+            "tap_ready": { "type": "boolean" },
+            "udp_bound": { "type": "boolean" },
+            "packet_socket_bound": { "type": "boolean" },
+            "local_hold_completed": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "association": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["participant_count", "peer_recorded"],
+          "properties": {
+            "participant_count": { "const": 2 },
+            "peer_recorded": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "failure": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "gate", "message"],
+          "properties": {
+            "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_.-]{0,95}$" },
+            "gate": { "type": "string", "maxLength": 96 },
+            "message": { "type": "string", "maxLength": 500 }
+          }
+        }
+      ]
+    },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "cleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ldn_context_released", "radio_quiescent"],
+      "properties": {
+        "ldn_context_released": { "type": "boolean" },
+        "radio_quiescent": { "type": "boolean" }
+      }
+    }
+  }
+}
