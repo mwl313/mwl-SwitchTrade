@@ -36,6 +36,7 @@ from switchtrade.relay_client import RelayClient
 
 WorkerFactory = Callable[[list[str], Path, Path], subprocess.Popen]
 LeaseFactory = Callable[[UsbAdapter, Path], UsbLease]
+EndpointCheckpoint = Callable[[dict], None]
 
 
 def _unknown_linux_usb() -> dict:
@@ -318,6 +319,7 @@ class P0Harness:
         packaged_python: str = "/opt/switchtrade/bridge/.venv/bin/python",
         target_channel: int = 6,
         release_probes: WslDProbes | None = None,
+        after_endpoint_started: EndpointCheckpoint | None = None,
     ):
         self.coordinator = coordinator
         self.validator = validator
@@ -340,6 +342,7 @@ class P0Harness:
         self.packaged_python = packaged_python
         self.target_channel = target_channel
         self.release_probes = release_probes
+        self.after_endpoint_started = after_endpoint_started
 
     @staticmethod
     def _validate_ready(report: object, run: dict, adapter: UsbAdapter, report_path: Path) -> dict:
@@ -705,6 +708,8 @@ class P0Harness:
                     recovery_file, distro=self.distro, probe=self.linux_probe)
                 usb = lease.release()
                 evidence["prior_usb_state_restored"] = usb["prior_state_restored"]
+            elif run["cleanup"]["evidence"].get("prior_usb_state_restored") is True:
+                evidence["prior_usb_state_restored"] = True
             elif run["ownership"]["wrapper_acquired"]:
                 raise P0Error(
                     "P0_RECOVERY_STATE_MISSING", "D10_usb_return",
@@ -826,6 +831,8 @@ class P0Harness:
                     run_id, launch_nonce=nonce, endpoint_pid=endpoint_event["endpoint_pid"],
                     process_start_ticks=endpoint_event["process_start_ticks"])
                 endpoint_started = True
+                if self.after_endpoint_started is not None:
+                    self.after_endpoint_started(self.coordinator.snapshot(run_id))
                 if mode == RunMode.DIRECT_A:
                     while True:
                         checkpoint = events.wait_for(

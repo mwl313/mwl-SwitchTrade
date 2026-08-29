@@ -11,7 +11,9 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-from switchtrade.connection.coordinator import ConnectionCoordinator, Phase, RunMode
+from switchtrade.connection.coordinator import (
+    ConnectionCoordinator, FunctionalOutcome, Phase, RunMode,
+)
 from switchtrade.connection.a_stage import GATES as A_GATES
 from switchtrade.connection.b_stage import FIXTURE_SHA256, GATES as B_GATES
 from switchtrade.connection.p0 import (
@@ -797,6 +799,7 @@ class P0HarnessTests(unittest.TestCase):
             )
             leases = []
             release_events = []
+            endpoint_checkpoints = []
             def lease_factory(selected, recovery):
                 lease = FakeLease(selected, recovery, release_events)
                 leases.append(lease)
@@ -835,6 +838,7 @@ class P0HarnessTests(unittest.TestCase):
                     coordinator, validator, root / "runs",
                     worker_factory=worker_factory, lease_factory=lease_factory,
                     release_probes=FakeReleaseProbes(release_events),
+                    after_endpoint_started=lambda run: endpoint_checkpoints.append(run),
                 ).run()
                 snapshot = coordinator.snapshot(result["run_id"])
             self.assertEqual(result["functional_status"], "passed")
@@ -844,6 +848,8 @@ class P0HarnessTests(unittest.TestCase):
             self.assertEqual(snapshot["ownership"]["launch_count"], 1)
             self.assertEqual(leases[0].acquires, 1)
             self.assertEqual(leases[0].releases, 1)
+            self.assertEqual(len(endpoint_checkpoints), 1)
+            self.assertEqual(endpoint_checkpoints[0]["identity"]["endpoint_pid"], 4100)
             self.assertEqual(release_events, ["D8", "D9", "D9", "D9", "D10"])
             self.assertTrue(result["cleanup"]["d_release"]["endpoint_identity_absent"])
             self.assertTrue(result["cleanup"]["d_release"]["radio_stably_quiescent"])
@@ -1043,6 +1049,41 @@ class P0HarnessTests(unittest.TestCase):
                 next_run = second.start(
                     RunMode.P0_HARNESS, adapter_instance_id=INSTANCE, usb_id=USB_ID)
                 self.assertNotEqual(next_run["run_id"], run["run_id"])
+
+    def test_restart_accepts_already_verified_usb_return_without_recovery_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with ConnectionCoordinator(root / "coordinator", "release-a") as coordinator:
+                run = coordinator.start(
+                    RunMode.P0_HARNESS, adapter_instance_id=INSTANCE, usb_id=USB_ID)
+                coordinator.transition(run["run_id"], Phase.PREFLIGHT, "P0a_release")
+                coordinator.transition(run["run_id"], Phase.RUNNING, "P0b_lease")
+                coordinator.acquire_wrapper(
+                    run["run_id"], wrapper_pid=4100, process_start_ticks=12345,
+                    adapter_instance_id=INSTANCE, usb_id=USB_ID, bus_id="4-18")
+                coordinator.mark_p0_ready(
+                    run["run_id"], wrapper_pid=4100, process_start_ticks=12345,
+                    phy="phy0", netdev="wlan0")
+                coordinator.reserve_endpoint_launch(run["run_id"], launch_nonce="n" * 64)
+                coordinator.acknowledge_endpoint(
+                    run["run_id"], launch_nonce="n" * 64,
+                    endpoint_pid=4100, process_start_ticks=12345)
+                coordinator.close_run(run["run_id"], FunctionalOutcome.PASSED)
+                coordinator.begin_cleanup(run["run_id"])
+                failed = coordinator.complete_cleanup(
+                    run["run_id"], verified=False,
+                    evidence={"worker_exited": True, "prior_usb_state_restored": True},
+                    code="P0_CLEANUP_FAILED", message="forced endpoint exit")
+                harness = P0Harness(
+                    coordinator, SimpleNamespace(requested_identity=lambda: (INSTANCE, USB_ID)),
+                    root / "runs")
+                harness._process_start_ticks = lambda _pid: None
+                with mock.patch(
+                        "switchtrade.connection.p0_harness._wsl_netdev_exists",
+                        return_value=False):
+                    recovered = harness.recover(failed)
+                self.assertEqual(recovered["status"], "recovered")
+                self.assertTrue(coordinator.snapshot(run["run_id"])["cleanup"]["verified"])
 
 
 if __name__ == "__main__":
