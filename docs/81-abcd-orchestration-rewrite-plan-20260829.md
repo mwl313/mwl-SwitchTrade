@@ -48,6 +48,11 @@ Execution status:
   reproducible native manifest or reference image remains mandatory before Milestone 9 production
   cutover. See
   [`88-abcd-milestone-5-c0-c1-20260830.md`](88-abcd-milestone-5-c0-c1-20260830.md).
+- Milestone 6 source checkpoint `d2130fe` added the authority-owned activation generation,
+  identity-bound A_READY/B_READY barrier, bounded byte-exact RFU bridge, current-generation active
+  counters, and explicit reconnect re-proof. The full fixed-runtime suite and local real-process C2
+  hosting smoke passed. Public validation-relay deployment and matrix rerun remain pending. See
+  [`89-abcd-milestone-6-c2-20260830.md`](89-abcd-milestone-6-c2-20260830.md).
 
 ## 2. Architecture and interface decisions
 

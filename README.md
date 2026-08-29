@@ -136,6 +136,14 @@ it does not expose them through the normal app or diagnostics yet. The validatio
 launchd-supervised native uvicorn worker, so a complete reproducible native manifest or the reference
 container remains a mandatory Milestone 9 production-cutover gate.
 
+Milestone 6 is source-complete at `d2130fe`. The new C2 bridge binds one `A_READY` and `B_READY` per
+current proof generation to the attempt, credential-derived seat, complementary role, launch
+identity, advertisement hash, and relay-owned activation generation. It preserves byte-exact Pia
+Reliable payloads behind a bounded 256-frame pre-barrier queue and requires current-generation
+bidirectional RFU before `C_RFU_ACTIVE`. Local real-process smoke and the full `443 passed, 3 skipped`
+audit suite passed. The exact checkpoint still needs deployment and public-ingress validation, and it
+does not claim physical A/B, distributed D, diagnostic/application cutover, or a trade.
+
 The [definitive TODO](docs/FUTURE_TODO.md) records implementation and qualification status. A passing
 test for the previous behavior does not close an ABC+D gate unless it proves the gate's current
 contract.
@@ -152,6 +160,7 @@ contract.
 - [ABC+D Milestone 3 Direct A Qualification Evidence](docs/86-abcd-milestone-3-direct-a-20260829.md)
 - [ABC+D Milestone 4 Direct B Qualification Evidence](docs/87-abcd-milestone-4-direct-b-20260829.md)
 - [ABC+D Milestone 5 C0/C1 Source Checkpoint](docs/88-abcd-milestone-5-c0-c1-20260830.md)
+- [ABC+D Milestone 6 C2 Source Checkpoint](docs/89-abcd-milestone-6-c2-20260830.md)
 - [Definitive TODO](docs/FUTURE_TODO.md)
 - [Known Issues](docs/KNOWN_ISSUES.md)
 - [Relay deployment](relay/DEPLOYMENT.md)

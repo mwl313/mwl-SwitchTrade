@@ -105,7 +105,8 @@ path. No open item may be presented as a current production capability.
    and normal application to the factual v2 C gates.
 
 3. **CRITICAL — URGENT: Add the attempt-scoped A_READY/B_READY activation barrier.**
-   **Status (2026-08-29): confirmed architecture gap; not implemented.**
+   **Status (2026-08-30): source and local real-process C2 exit matrix passed at `d2130fe`;
+   validation-relay deployment, physical two-PC proof, and M8/M9 product cutover remain open.**
    The current `rfu-tunnel.v1` controls include `PEER_READY` and `ADVERTISEMENT`, but no physical
    side-ready message. In the normal finder path, `HostTransport.start()` returns when the AP opens,
    before `_peer` proves that the Joining Switch associated; the endpoint then constructs
@@ -124,6 +125,15 @@ path. No open item may be presented as a current production capability.
    endpoint-loss, and cancellation tests. A real two-PC test must prove that an AP merely opening does
    not advance C, that early local RFU is bounded and preserved, and that both sides agree on the same
    activation generation before real RFU counters are called active.
+
+   Source checkpoint `d2130fe` implements canonical `side-ready.v1`, relay-bound activation
+   generation, one current readiness per source epoch, the 256-frame pre-barrier queue, exact Pia
+   Reliable byte/flag transport, and current-generation bidirectional RFU activation. Disconnect and
+   peer-send loss revoke both owned transport slots and require fresh nonce and side-ready proof.
+   Focused tests passed 49 cases; the full fixed audit runtime passed 443 tests with three intentional
+   skips; and the extended local hosting smoke passed C0-C2. Keep this item open until that exact code
+   passes the public validation-relay matrix and a later two-PC/two-Switch run proves simultaneous
+   physical A_READY/B_READY through the product coordinator.
 
 4. **CRITICAL — URGENT: Make D cleanup two-sided, attempt-scoped, and outcome-preserving.**
    **Status (2026-08-29): confirmed architecture gap; not implemented.**

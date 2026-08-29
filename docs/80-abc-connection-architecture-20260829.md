@@ -485,10 +485,12 @@ distributed D, diagnostic/application migration, production cutover, or a trade.
    path after deployed late-peer, reconnect, restart, and failure-matrix validation. The legacy normal
    application and production diagnostics still use rejected orchestration until M8/M9 migration, so
    this blocker remains open at the product level and no v1 fallback may enter the new path.
-3. **Missing A_READY/B_READY barrier:** the current RFU envelope has peer-ready and advertisement
-   controls but no attempt-scoped physical side-ready control. The normal B endpoint starts
-   `TunnelSim` as soon as the AP opens, before `_peer` proves the Joining Switch associated; neither
-   endpoint can prove that both physical legs are ready for the same attempt.
+3. **A_READY/B_READY barrier not yet cut into the product:** source checkpoint `d2130fe` implements
+   the isolated C2 authority, current-epoch side-ready controls, bounded pre-barrier bridge, exact RFU,
+   loss invalidation, and reconnect re-proof. Its local real-process matrix passed. The legacy normal
+   application and production diagnostics still do not use it, and public-relay plus physical
+   two-PC/two-Switch validation remain open; AP-open therefore still must not be presented as product
+   `B_READY` or a completed bridge.
 4. **Missing distributed D barrier:** a local Stop terminates its endpoint/radio before publishing
    authority cancellation, and the relay treats a WebSocket loss during non-terminal `closing` as
    `relay.peer_lost`. There are no two-side `D_SIDE_QUIESCENT` acknowledgements, so shared terminal
