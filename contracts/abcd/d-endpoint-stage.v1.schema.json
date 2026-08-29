@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://switchtrade.local/contracts/d-endpoint-stage.v1.schema.json",
+  "title": "SwitchTrade endpoint D2-D4 report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version", "run_id", "attempt_id", "activation_generation", "source_seat",
+    "stage_generation", "launch_identity_sha256", "outcome", "primary_failure_code",
+    "last_passed_gate", "status", "forced", "evidence", "drain", "failures", "elapsed_ms"
+  ],
+  "properties": {
+    "contract_version": { "const": "d-endpoint-stage.v1" },
+    "run_id": { "type": "string", "format": "uuid" },
+    "attempt_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "activation_generation": { "type": "integer", "minimum": 1 },
+    "source_seat": { "enum": ["member_a", "member_b"] },
+    "stage_generation": { "type": "integer", "minimum": 1 },
+    "launch_identity_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "outcome": { "enum": ["completed", "canceled", "failed"] },
+    "primary_failure_code": { "type": ["string", "null"], "maxLength": 96 },
+    "last_passed_gate": {
+      "type": ["string", "null"],
+      "enum": ["D2_GAME_CLOSE_TAIL", "D3_BRIDGE_DRAIN", "D4_LDN_TEARDOWN", null]
+    },
+    "status": { "enum": ["passed", "failed"] },
+    "forced": { "type": "boolean" },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "close_tail_required", "close_tail_observed", "bridge_admission_stopped",
+        "bridge_transport_exited", "observer_stopped", "simulation_closed",
+        "ldn_released", "radio_thread_exited"
+      ],
+      "properties": {
+        "close_tail_required": { "type": "boolean" },
+        "close_tail_observed": { "type": "boolean" },
+        "bridge_admission_stopped": { "type": "boolean" },
+        "bridge_transport_exited": { "type": "boolean" },
+        "observer_stopped": { "type": "boolean" },
+        "simulation_closed": { "type": "boolean" },
+        "ldn_released": { "type": "boolean" },
+        "radio_thread_exited": { "type": "boolean" }
+      }
+    },
+    "drain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pending_local_frames", "flushed_local_frames", "discarded_local_frames",
+        "discarded_remote_frames"
+      ],
+      "properties": {
+        "pending_local_frames": { "type": "integer", "minimum": 0, "maximum": 256 },
+        "flushed_local_frames": { "type": "integer", "minimum": 0, "maximum": 256 },
+        "discarded_local_frames": { "type": "integer", "minimum": 0, "maximum": 256 },
+        "discarded_remote_frames": { "type": "integer", "minimum": 0, "maximum": 256 }
+      }
+    },
+    "failures": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "gate", "message"],
+        "properties": {
+          "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_.-]{0,95}$" },
+          "gate": { "enum": ["D2_GAME_CLOSE_TAIL", "D3_BRIDGE_DRAIN", "D4_LDN_TEARDOWN"] },
+          "message": { "type": "string", "maxLength": 500 }
+        }
+      }
+    },
+    "elapsed_ms": { "type": "integer", "minimum": 0 }
+  }
+}

@@ -63,6 +63,10 @@ class C2Bridge:
         self._pending_local: deque[tuple[bytes, int]] = deque()
         self._pending_remote: deque[Envelope] = deque()
         self._canceled = False
+        self._sealed = False
+        self._drain_result: dict | None = None
+        self._drain_outcome: str | None = None
+        self._transport_stopped = False
         self._generation_tx = 0
         self._generation_rx = 0
         self.stats = {
@@ -187,6 +191,8 @@ class C2Bridge:
             self._pass(GATES[2])
 
     def pump(self) -> None:
+        if self._sealed:
+            return
         if self.failure is not None:
             raise C2StageError(**self.failure)
         if self._canceled:
@@ -211,6 +217,11 @@ class C2Bridge:
         self._maybe_activate()
 
     def send_rfu(self, payload: bytes, *, flags: int) -> None:
+        if self._sealed:
+            raise C2StageError(
+                "D_BRIDGE_SEALED", "D3_BRIDGE_DRAIN",
+                "bridge no longer accepts RFU after D3",
+            )
         payload = bytes(payload)
         if not payload or len(payload) > MAX_RFU_PAYLOAD_BYTES or not 0 <= flags <= 0xFF:
             self._fail("C_RFU_INVALID", GATES[2], "RFU payload or Reliable flags are invalid")
@@ -232,6 +243,8 @@ class C2Bridge:
         )
 
     def poll(self, limit: int = 32) -> list[Envelope]:
+        if self._sealed:
+            return []
         self.pump()
         frames = []
         for _ in range(min(limit, len(self._pending_remote))):
@@ -253,7 +266,7 @@ class C2Bridge:
         return self.rfu_active.is_set()
 
     def cancel(self) -> None:
-        if self._canceled:
+        if self._canceled or self._sealed:
             return
         self._canceled = True
         self._pending_local.clear()
@@ -264,6 +277,57 @@ class C2Bridge:
             self.failure = {
                 "code": "C_CANCELED", "gate": GATES[1], "message": "C2 activation was canceled",
             }
+
+    def finish_drain(self, outcome: str) -> dict:
+        """Seal RFU admission and deterministically account for every bounded queue entry."""
+        if outcome not in {"completed", "canceled", "failed"}:
+            raise ValueError("D outcome is invalid")
+        if self._drain_result is not None:
+            if self._drain_outcome != outcome:
+                raise ValueError("D outcome conflicts with the completed bridge drain")
+            return dict(self._drain_result)
+
+        pending_local = len(self._pending_local)
+        pending_remote = len(self._pending_remote)
+        flushed = 0
+        unsent_popped = 0
+        error_code = None
+        if outcome == "completed" and self.connected.is_set():
+            while self._pending_local:
+                payload, flags = self._pending_local.popleft()
+                try:
+                    self.client.send_rfu(payload, flags=flags)
+                except Exception:
+                    error_code = "D_BRIDGE_FLUSH_FAILED"
+                    unsent_popped = 1
+                    break
+                self.stats["tx_rfu_frames"] += 1
+                flushed += 1
+        elif outcome == "completed" and pending_local:
+            error_code = "D_BRIDGE_UNFLUSHED"
+
+        discarded_local = len(self._pending_local) + unsent_popped
+        self._pending_local.clear()
+        self._pending_remote.clear()
+        self.connected.clear()
+        self.rfu_active.clear()
+        self._sealed = True
+        self._drain_outcome = outcome
+        self._drain_result = {
+            "admission_stopped": True,
+            "pending_local_frames": pending_local,
+            "flushed_local_frames": flushed,
+            "discarded_local_frames": discarded_local,
+            "discarded_remote_frames": pending_remote,
+            "error_code": error_code,
+        }
+        return dict(self._drain_result)
+
+    def stop_transport(self) -> None:
+        if self._transport_stopped:
+            return
+        self.client.stop()
+        self._transport_stopped = True
 
     def report(self) -> dict:
         return {

@@ -32,6 +32,7 @@ class FakeClient:
         self.frames = []
         self.side_ready = []
         self.rfu = []
+        self.stop_count = 0
 
     def send_side_ready(self, payload):
         self.side_ready.append(bytes(payload))
@@ -42,6 +43,9 @@ class FakeClient:
     def poll(self):
         frames, self.frames = self.frames, []
         return frames
+
+    def stop(self):
+        self.stop_count += 1
 
 
 def peer_ready(epoch=11, proof=1, *, advertisement=ADVERTISEMENT_HASH,
@@ -142,6 +146,32 @@ class C2BridgeTests(unittest.TestCase):
             canceled.send_rfu(b"must-not-queue", flags=0x01)
         self.assertEqual(raised.exception.code, "C_CANCELED")
         self.assertEqual(canceled.report()["queued_local_frames"], 0)
+
+    def test_drain_seals_admission_accounts_queues_and_stops_transport_once(self):
+        bridge, client = self.activate()
+        client.frames.append(Envelope(
+            ATTEMPT, SourceSeat.MEMBER_B, 11, 7, Kind.RFU, b"remote-tail", 0x01,
+        ))
+        bridge.pump()
+        result = bridge.finish_drain("canceled")
+        self.assertEqual(result["discarded_remote_frames"], 1)
+        self.assertTrue(result["admission_stopped"])
+        self.assertEqual(bridge.finish_drain("canceled"), result)
+        with self.assertRaisesRegex(ValueError, "conflicts"):
+            bridge.finish_drain("completed")
+        self.assertEqual(bridge.poll(), [])
+        with self.assertRaises(C2StageError) as raised:
+            bridge.send_rfu(b"late", flags=0x01)
+        self.assertEqual(raised.exception.code, "D_BRIDGE_SEALED")
+        bridge.stop_transport()
+        bridge.stop_transport()
+        self.assertEqual(client.stop_count, 1)
+
+        pending, _client = self.bridge()
+        pending.send_rfu(b"unactivated", flags=0x01)
+        unflushed = pending.finish_drain("completed")
+        self.assertEqual(unflushed["error_code"], "D_BRIDGE_UNFLUSHED")
+        self.assertEqual(unflushed["discarded_local_frames"], 1)
 
     def test_reconnect_invalidates_once_and_reproves_side_ready(self):
         bridge, client = self.activate()
