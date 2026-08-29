@@ -160,7 +160,9 @@ USB, interface, PHY, process, or recovery residue. The exact `ed382db` relay art
 two-role public smoke and operator-confirmed zero-orphan metrics. The complete software C2-to-D11
 integration path passes. M7 remains open for PC B, restart/hang/fault injection,
 diagnostic-resource wiring, and Stop/Leave/Close action semantics; the post-review audit is
-`480 passed, 3 skipped`. This partial path is not advertised as a production capability.
+`484 passed, 3 skipped`. Commit `9e1621d` additionally recovers a lost D11 response without
+repeating teardown and bounds injected D2/D3/D10 failures. This partial path is not advertised as a
+production capability.
 
 The [definitive TODO](docs/FUTURE_TODO.md) records implementation and qualification status. A passing
 test for the previous behavior does not close an ABC+D gate unless it proves the gate's current

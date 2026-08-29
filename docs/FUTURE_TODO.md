@@ -144,7 +144,8 @@ path. No open item may be presented as a current production capability.
    fail-closed policy with cold P0 and PC A passed the installed-runtime D8-D10 sequence under a
    non-ASCII profile with verified USB return and no residue. The exact `ed382db` deployed artifact
    also passed renewed two-role smoke and zero-orphan metrics. The software happy path is complete,
-   but PC B, endpoint-hang/fault injection,
+   and `9e1621d` adds bounded D2/D3/D10 failure injection plus restart-safe D11 response-loss report
+   finalization without repeating teardown. PC B, packaged endpoint-hang/machine-restart injection,
    diagnostic-resource wiring, and product action migration remain open, so this blocker is not
    closed.**
    Local session Stop currently stops the endpoint and releases hardware before it publishes the

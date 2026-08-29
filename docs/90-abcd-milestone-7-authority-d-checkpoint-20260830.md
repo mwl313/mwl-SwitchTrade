@@ -7,6 +7,7 @@
 > Local recovery/probe hardening commit: `62f93fa`
 > Validation-smoke commit: `40fecf3`
 > Installed D8-D10 qualification commit: `0d7549d`
+> D11 response-loss recovery commit: `9e1621d`
 > Deployed relay artifact checkpoint: `ed382db`
 > Status: M7 authority, endpoint D2-D4, and measured local D5/D7-D11 happy-path slices complete;
 > the installed PC A D8-D10 path is qualified. Milestone 7 remains open for PC B, fault/restart,
@@ -127,7 +128,12 @@ existing SHA-256 launch identity.
   processes, and an inactive selected PHY for three consecutive samples; only then did D10 prove
   Windows detach and matching Linux USB absence. The run ended terminal with verified cleanup, no
   recovery file, and no Linux USB, interface, or PHY residue.
-- The post-change full audit remains `480 passed, 3 skipped`.
+- Commit `9e1621d` closes the D11 response-loss window: if the coordinator durably reaches verified
+  terminal state but the control loses that response, retry validates and finalizes the existing
+  redacted local report, removes the private D5 state, and does not repeat endpoint, radio, or USB
+  teardown. Deterministic injection also proves D2 exceptions and every D3 cleanup sub-operation
+  remain bounded and continue into D4, while D10 failure remains secondary and keeps the cleanup
+  guard. The post-change full audit is `484 passed, 3 skipped`.
 
 ## 6. Remaining Milestone 7 work
 
@@ -137,7 +143,9 @@ This checkpoint is not the M7 exit gate. The following must be implemented and v
    its strict gate exists but product diagnostics are intentionally not migrated before M8.
 2. Repeat the now-qualified real WSL PID/interface/PHY and conditional `UsbLease` path on PC B. PC A
    and its non-ASCII profile boundary are complete.
-3. Complete app/control/PC restart recovery and endpoint-hang/fault injection at every D gate.
+3. Complete app/control/PC restart recovery and endpoint-hang/fault injection at every D gate. The
+   software D2/D3/D10 fault cases and D11 lost-response recovery now pass; packaged process-hang and
+   machine-restart qualification remain.
 4. Prove Stop, End, Leave, and Close room-action semantics without bypassing D; product routing remains
    a Milestone 9 migration boundary.
 5. Extend the deployed check from the completed public two-role smoke and zero-orphan authority
