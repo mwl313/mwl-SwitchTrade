@@ -529,6 +529,9 @@ class RfuTunnelTests(unittest.TestCase):
         rejected = type("InvalidStatus", (Exception,), {})("unauthorized")
         rejected.response = response
         self.assertTrue(permanent_connect_error(rejected))
+        direct_status = type("InvalidStatusCode", (Exception,), {})("unauthorized")
+        direct_status.status_code = 403
+        self.assertTrue(permanent_connect_error(direct_status))
         transient = type("InvalidStatus", (Exception,), {})("server error")
         transient.response = SimpleNamespace(status_code=503)
         self.assertFalse(permanent_connect_error(transient))

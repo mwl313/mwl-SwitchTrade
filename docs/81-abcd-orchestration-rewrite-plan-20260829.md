@@ -38,6 +38,8 @@ Execution status:
   installation, integrity, dependency, kernel, contract, CLI, residue, and detached-USB smoke. A
   latest physical run proved B2-B10 and preserved functional success but exposed the joined AP-stop
   cleanup hang; the bounded, checkpointed candidate's final real one-Switch confirmation is pending.
+  On 2026-08-30 the owner directed that confirmation to remain explicit qualification debt and
+  authorized Milestone 5 to begin without treating Milestone 4 as accepted.
 
 ## 2. Architecture and interface decisions
 

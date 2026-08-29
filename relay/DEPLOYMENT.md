@@ -60,8 +60,11 @@ The production endpoints are:
 - `POST /v1/diagnostics/support-bundle|hardware-diagnostic` — bounded, validated redacted support
   uploads stored outside the room database;
 - `/v1/trade-rooms*` — authenticated authoritative room control;
-- `/session/{room_code}/ws?role=host|guest&protocol=rfu&attempt_id={uuid}` — credentialed,
-  attempt-bound opaque RFU transport. The caller must send its member bearer token.
+- `POST /v2/trade-rooms/{room_id}/ready` — binds one redacted `p0-attestation.v2` and explicit
+  Switch role to the member before the relay can admit a v2 attempt;
+- `/v2/trade-rooms/{room_code}/attempts/{attempt_id}/ws` — credentialed, P0/attempt/launch-bound
+  `rfu-tunnel.v2` transport. The caller sends its member bearer token plus run, stage generation,
+  launch nonce, and endpoint PID headers. Seat comes only from the credential.
 
 Before handing the URL to the packaging agent, run the repository test suite and the credentialed
 hosting smoke:
@@ -71,8 +74,10 @@ python -m relay.smoke https://relay.example.invalid
 ```
 
 The smoke verifies that `POST /session/create` returns 404, creates and joins an authoritative room,
-locks a connection attempt, relays opaque bytes in both directions, and closes the room. Separately
-restart the container during a staged connection and confirm both clients reconnect. Then provide only the public
+admits two distinct matching P0 attestations, locks complementary roles, proves both v2 directions
+with unpredictable nonces, delivers the exact fixture advertisement by hash, and closes the room.
+Separately restart the container during a staged connection and confirm the attempt fails explicitly
+with no retained v2 namespace. Then provide only the public
 `https://` base URL; `installer/Build-Package.ps1 -Release` writes it into the signed configuration and
 rejects HTTP or loopback release URLs.
 

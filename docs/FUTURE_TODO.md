@@ -64,6 +64,12 @@ path. No open item may be presented as a current production capability.
    package and installed-runtime smoke on PC A and is waiting for final physical confirmation; no B1,
    `B_READY`, relay delivery, or trade is claimed.
 
+   **Deferred qualification debt (owner-directed, 2026-08-30):** retain one PC A run with a real
+   searching Switch against runtime `abcd-m4-9635a1f`. It must pass B2-B10, exit through
+   `factory_released`, report `ldn_context_released=true`, verify radio/USB cleanup, and leave no
+   endpoint, interface, PHY, lock, or recovery residue. Work may proceed to Milestone 5, but this item
+   remains open and Milestone 4 must not be represented as formally accepted until that run passes.
+
 2. **CRITICAL — URGENT: Preserve relay frame order and truthful P0/A/B/C/D diagnostic stages.**
    **Status (2026-08-29): confirmed regression; not fixed.**
    In the guided AP diagnostic, the synthetic host sends `PEER_READY` at sequence 0 and the retained

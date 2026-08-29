@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://switchtrade.local/contracts/rfu-tunnel.v2.schema.json",
+  "title": "SwitchTrade rfu-tunnel.v2 decoded envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version", "attempt_id", "source_seat", "source_epoch",
+    "sequence", "kind", "payload_length"
+  ],
+  "properties": {
+    "contract_version": { "const": "rfu-tunnel.v2" },
+    "attempt_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "source_seat": { "enum": ["member_a", "member_b"] },
+    "source_epoch": { "type": "integer", "minimum": 0 },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "kind": {
+      "enum": [
+        "PEER_READY", "PROBE_CHALLENGE", "PROBE_RESPONSE",
+        "ADVERTISEMENT", "SIDE_READY", "PEER_CLOSE"
+      ]
+    },
+    "payload_length": { "type": "integer", "minimum": 0, "maximum": 65536 }
+  }
+}

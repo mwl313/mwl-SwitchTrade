@@ -3,23 +3,41 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import time
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from switchtrade.relay_client import RelayClient, USER_AGENT
-from switchtrade.rfu_tunnel import Kind
-from switchtrade.tunnel_client import TunnelClient
+from relay.authority import uuid7
+from switchtrade.connection.b_fixture import FIXTURE, FIXTURE_SHA256
+from switchtrade.rfu_tunnel_v2 import Kind
+from switchtrade.tunnel_client_v2 import TunnelClientV2
 
 
-def _wait(client: TunnelClient, payload: bytes, timeout: float = 10.0) -> None:
+def _wait_advertisement(client: TunnelClientV2, timeout: float = 10.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if any(frame.kind == Kind.RFU and frame.payload == payload for frame in client.poll()):
+        if any(frame.kind == Kind.ADVERTISEMENT and frame.payload == FIXTURE
+               for frame in client.poll()):
             return
         time.sleep(0.02)
-    raise RuntimeError("timed out waiting for relayed RFU payload")
+    raise RuntimeError("timed out waiting for the verified v2 advertisement")
+
+
+def _p0_attestation(label: str) -> dict:
+    return {
+        "contract_version": "p0-attestation.v2",
+        "run_id": uuid7(),
+        "release": "0.3.0-validation.1",
+        "run_generation": 1,
+        "stage_generation": 1,
+        "adapter_instance_sha256": hashlib.sha256(
+            f"hosting-smoke-adapter-{label}".encode()).hexdigest(),
+        "report_sha256": hashlib.sha256(
+            f"hosting-smoke-report-{label}".encode()).hexdigest(),
+    }
 
 
 def smoke(base_url: str, allow_http: bool = False) -> None:
@@ -31,7 +49,7 @@ def smoke(base_url: str, allow_http: bool = False) -> None:
         health = json.load(response)
     if (health.get("status") != "ready" or health.get("payload_mode") != "opaque" or
             health.get("room_contract") != "room-control.v1" or
-            health.get("rfu_contract") != "rfu-tunnel.v1"):
+            "rfu-tunnel.v2" not in health.get("rfu_contracts", [])):
         raise RuntimeError("relay health contract is not ready")
     try:
         urlopen(Request(f"{base_url}/session/create", method="POST", headers=headers), timeout=5)
@@ -50,35 +68,40 @@ def smoke(base_url: str, allow_http: bool = False) -> None:
         first["room"]["room_code"], "Smoke B", "hosting-smoke-b")
     room_id = first["room"]["room_id"]
     code = first["room"]["room_code"]
-    for credential, role in ((first, "creator"), (second, "finder")):
+    attestations = {}
+    for label, credential, role in (
+            ("a", first, "creator"), ("b", second, "finder")):
+        proof = _p0_attestation(label)
+        attestations[credential["member_token"]] = proof
         room = relay.room(room_id, credential["member_token"])
-        relay.room_command(
-            room_id, credential["member_token"], "/ready",
-            {"ready": True, "switch_room_role": role},
-            expected_version=room["room_version"],
-        )
-    room = relay.room(room_id, first["member_token"])
-    room = relay.room_command(
-        room_id, first["member_token"], "/attempts",
-        expected_version=room["room_version"],
-    )
+        room = relay.v2_ready(room_id, credential["member_token"], {
+            "ready": True, "switch_room_role": role, "p0": proof,
+        }, expected_version=room["room_version"])
     attempt_id = room["attempt"]["attempt_id"]
-    if not room["attempt"]["role_locked"]:
-        raise RuntimeError("manual Switch roles were not locked atomically")
-    host = TunnelClient(base_url, code, "host", heartbeat_interval=1,
-                        member_token=first["member_token"], attempt_id=attempt_id).start()
-    guest = TunnelClient(base_url, code, "guest", heartbeat_interval=1,
-                         member_token=second["member_token"], attempt_id=attempt_id).start()
+    if (not room["attempt"]["role_locked"] or
+            not room["v2_admission"]["attempt_admitted"]):
+        raise RuntimeError("v2 P0 admission and roles were not locked atomically")
+
+    def client(credential: dict, seat: str, pid: int, expected_hash=None) -> TunnelClientV2:
+        proof = attestations[credential["member_token"]]
+        return TunnelClientV2(
+            base_url, code, attempt_id, seat, credential["member_token"],
+            run_id=proof["run_id"], stage_generation=proof["stage_generation"],
+            launch_nonce=hashlib.sha256(f"launch-{seat}-{attempt_id}".encode()).hexdigest(),
+            endpoint_pid=pid, expected_advertisement_hash=expected_hash,
+        )
+
+    first_client = client(first, "member_a", 4101).start()
+    second_client = client(second, "member_b", 4102, FIXTURE_SHA256).start()
     try:
-        if not host.wait_connected(10) or not guest.wait_connected(10):
-            raise RuntimeError("both credentialed RFU seats did not connect")
-        host.send(b"switchtrade-hosting-smoke-a")
-        _wait(guest, b"switchtrade-hosting-smoke-a")
-        guest.send(b"switchtrade-hosting-smoke-b")
-        _wait(host, b"switchtrade-hosting-smoke-b")
+        if not first_client.wait_data_plane(10) or not second_client.wait_data_plane(10):
+            raise RuntimeError("both v2 seats did not prove the bidirectional nonce path")
+        if first_client.advertise(FIXTURE) != FIXTURE_SHA256:
+            raise RuntimeError("A advertisement hash changed before relay delivery")
+        _wait_advertisement(second_client)
     finally:
-        host.stop()
-        guest.stop()
+        first_client.stop()
+        second_client.stop()
         room = relay.room(room_id, first["member_token"])
         relay.room_command(room_id, first["member_token"], "", method="DELETE",
                            expected_version=room["room_version"])

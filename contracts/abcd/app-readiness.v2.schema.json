@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://switchtrade.local/contracts/app-readiness.v2.schema.json",
+  "title": "SwitchTrade app-readiness.v2 projection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "p0_ready_members", "attempt_admitted"],
+  "properties": {
+    "contract_version": { "const": "app-readiness.v2" },
+    "p0_ready_members": { "type": "integer", "minimum": 0, "maximum": 2 },
+    "attempt_admitted": { "type": "boolean" }
+  }
+}

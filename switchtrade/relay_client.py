@@ -200,3 +200,10 @@ class RelayClient:
             headers["If-Match"] = str(expected_version)
         return self._request(method, f"/v1/trade-rooms/{room_id}{path}", payload,
                              headers)
+
+    def v2_ready(self, room_id: str, token: str, payload: dict, *,
+                 expected_version: int, command_id: str | None = None) -> dict:
+        headers = self._auth(token, command_id or self.command_id())
+        headers["If-Match"] = str(expected_version)
+        return self._request(
+            "POST", f"/v2/trade-rooms/{room_id}/ready", payload, headers)

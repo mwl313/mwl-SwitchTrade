@@ -33,7 +33,7 @@ PERMANENT_HTTP_STATUSES = {400, 401, 403, 404, 409, 426}
 def permanent_connect_error(error: Exception) -> bool:
     """Classify handshake failures that retries cannot repair without new state."""
     response = getattr(error, "response", None)
-    status = getattr(response, "status_code", None)
+    status = getattr(response, "status_code", None) or getattr(error, "status_code", None)
     return status in PERMANENT_HTTP_STATUSES or type(error).__name__ == "InvalidURI"
 
 

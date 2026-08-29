@@ -3,7 +3,7 @@ services:
     build:
       context: ..
       dockerfile: relay/Dockerfile
-    image: switchtrade-relay:0.2.2-beta.1
+    image: switchtrade-relay:0.3.0-validation.1
     restart: unless-stopped
     init: true
     read_only: true
