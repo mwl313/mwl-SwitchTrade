@@ -1,7 +1,7 @@
 # ABC+D Milestone 2 P0 source evidence
 
 > Branch: `codex/abcd-orchestration-rework`
-> Status: source implementation complete; installed and physical exit gate pending.
+> Status: source implementation complete; PC A installed cold P0 passed; PC B and fault matrix pending.
 > Scope: P0a, P0b, continuous local radio ownership, one launch canary, and local recovery only.
 
 ## 1. Implemented boundary
@@ -58,8 +58,8 @@ Focused fault tests cover:
 
 The final source checks on 2026-08-29 produced:
 
-- 223 Python control/relay/endpoint/diagnostic/installer tests passed, with one intentional skip;
-- 14 focused P0/coordinator fault and lifecycle tests passed;
+- 230 Python control/relay/endpoint/diagnostic/installer tests passed, with one intentional skip;
+- 21 focused P0/coordinator fault and lifecycle tests passed;
 - the Linux radio workflow simulation passed, including cold load, delayed probe, stuck probe,
   RX failure, explicit recovery, module warning, and competing lock cases;
 - replacement provisioner contract tests passed;
@@ -81,26 +81,49 @@ This milestone does not:
 - route the legacy room or diagnostics API through the new coordinator;
 - start `LiveTransport`, `HostTransport`, or an RFU tunnel;
 - implement C0.1/C0.2 relay authority, direct A, direct B, C, or distributed D;
-- deploy the new passive WebSocket relay capability;
-- update the current installed WSL runtime or build an installer;
+- build or install a public release installer;
 - close the Critical missing-prerequisite TODO.
 
 The executable source harness is `python -m switchtrade.connection.p0_harness`. It must only be run
-from a qualification runtime containing the same source and immutable integrity manifest. Running it
-inside the current `0.2.6-beta.2` installation would correctly fail release/integrity validation.
+from a qualification runtime containing the same source and immutable integrity manifest. A legacy
+`0.2.6-beta.2` release runtime correctly fails release/integrity validation; the isolated
+`abcd-m2-975e68b` qualification runtime is the admitted P0 candidate.
 
-## 5. Remaining Milestone 2 exit gate
+## 5. Installed PC A evidence
+
+PC A was qualified from the non-ASCII profile `C:\Users\임민우` on 2026-08-29 using:
+
+- source commit `975e68b` and immutable runtime `abcd-m2-975e68b`;
+- runtime content ID `369f7774aad3e7a8aa6e15b6dcaf8eae512685e7d693463c0e10fe41064c6358`;
+- runtime archive SHA-256 `b0116b52876bed5ef97c74d0e717961d184e90f746d3fce7f344cf419833e96e`;
+- custom kernel `6.18.35.2-microsoft-standard-WSL2+` and RTL8192EU at Windows bus `4-18`;
+- real relay HTTPS/WebSocket health and the packaged module, firmware, dependency, and payload gates.
+
+The final cold run `f0a999b3-cfc7-4eda-bcfd-d18df266d72a` reached `P0_SIDE_READY`, proved actual RX,
+exited its worker normally, detached exactly the adapter attached by the run, and finished with
+`functional_status=passed` and `cleanup_status=verified`. Post-run inspection found the Windows device
+detached, Linux USB absent, no interface or PHY, no recovery file, and a verified terminal record.
+
+The installed exercise also exposed and fixed four boundary defects rather than bypassing them:
+
+- redirected Windows-native UTF-16LE output was decoded as UTF-8;
+- passive P0 incorrectly required live `cfg80211` regulatory state before P0b loaded the radio stack;
+- post-detach Windows USB re-enumeration was misclassified immediately as an identity change;
+- restart recovery inspected Windows PID/netdev/USB state instead of the selected WSL distribution.
+
+## 6. Remaining Milestone 2 exit gate
 
 Before Milestone 3 may begin:
 
-1. Deploy the stateless relay health capability from this source.
-2. Build or stage an immutable qualification WSL runtime without producing the release installer.
-3. On PC A and PC B, cold boot with the relevant modules initially unloaded and run the P0 harness.
-4. Exercise detached, pre-attached, cancellation, app/control interruption, delayed enumeration,
+1. Copy the exact `abcd-m2-975e68b` qualification package to PC B without rebuilding it there.
+2. On PC B, cold boot with the relevant modules initially unloaded and run the P0 harness.
+3. Exercise pre-attached, cancellation, app/control interruption, delayed enumeration,
    inactive-port, adapter-change, and recovery cases.
-5. Confirm zero orphan worker/endpoint PIDs, active interfaces, stale locks, unintended detach, or
-   unresolved recovery records.
-6. Repeat the boundary checks from a non-ASCII Windows profile with UTF-8 Linux output, redirected
-   UTF-16LE Windows output, spaces/non-ASCII paths, and malformed-output fail-closed cases.
+4. Confirm on both PCs that there are zero orphan worker/endpoint PIDs, active interfaces, stale
+   locks, unintended detach, or unresolved recovery records.
+5. Repeat the installed boundary checks under the supported English Windows locale. PC A already
+   proves the non-ASCII Korean-profile path, mixed UTF-8/UTF-16LE output, and malformed-output tests.
+6. After one accepted run on each PC and the fault cases, execute the agreed 30-run qualification;
+   do not use the obsolete 50-run count.
 
 Only that installed evidence can change this document to “Milestone 2 exit gate passed.”
