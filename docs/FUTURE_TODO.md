@@ -145,9 +145,12 @@ path. No open item may be presented as a current production capability.
    non-ASCII profile with verified USB return and no residue. The exact `ed382db` deployed artifact
    also passed renewed two-role smoke and zero-orphan metrics. The software happy path is complete,
    and `9e1621d` adds bounded D2/D3/D10 failure injection plus restart-safe D11 response-loss report
-   finalization without repeating teardown. PC B, packaged endpoint-hang/machine-restart injection,
-   diagnostic-resource wiring, and product action migration remain open, so this blocker is not
-   closed.**
+   finalization without repeating teardown. PC B matching qualification, real PC A machine-restart
+   recovery, diagnostic-resource wiring, and product action migration remain open, so this blocker is
+   not closed. Commit `153365c` and installed PC A runs now prove that run-owned endpoint residue blocks
+   USB return, exact PID/start-tick termination permits verified recovery, and an interrupted local
+   control process can resume the same durable run through D8-D11. A real Windows-reboot recovery is
+   staged separately and remains unaccepted until its post-boot cleanup is measured.**
    Local session Stop currently stops the endpoint and releases hardware before it publishes the
    authoritative cancellation. A WebSocket disconnect while the authority is still in any
    non-terminal phase—including `closing`—is converted by the relay into `relay.peer_lost`. The relay

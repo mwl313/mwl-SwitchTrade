@@ -8,9 +8,11 @@
 > Validation-smoke commit: `40fecf3`
 > Installed D8-D10 qualification commit: `0d7549d`
 > D11 response-loss recovery commit: `9e1621d`
+> P0 endpoint-hang/control-restart qualification commit: `153365c`
 > Deployed relay artifact checkpoint: `ed382db`
 > Status: M7 authority, endpoint D2-D4, and measured local D5/D7-D11 happy-path slices complete;
-> the installed PC A D8-D10 path is qualified. Milestone 7 remains open for PC B, fault/restart,
+> the installed PC A D8-D10 and endpoint/control-interruption paths are qualified. Milestone 7
+> remains open for PC B, machine-restart,
 > diagnostic-resource, and product-action qualification.
 > Scope: D1 closing intent, endpoint D2-D4, D5 authority acknowledgement, D6 two-side/forced
 > barrier, relay transport retirement, measured local D5 evidence, and ordered local release.
@@ -134,6 +136,20 @@ existing SHA-256 launch identity.
   teardown. Deterministic injection also proves D2 exceptions and every D3 cleanup sub-operation
   remain bounded and continue into D4, while D10 failure remains secondary and keeps the cleanup
   guard. The post-change full audit is `484 passed, 3 skipped`.
+- Commit `153365c` adds an installed-runtime qualification harness without adding a second runtime or
+  cleanup implementation. It injects only at the exact post-acknowledgement checkpoint, while the
+  production `P0Harness`, coordinator, D8/D9 probes, and `UsbLease` remain authoritative.
+- PC A run `8ee2560c-8c32-4bf2-9cb7-8156d9c0baf1` held a run-identified installed-WSL child that
+  ignored normal termination. D8 detected the residue, cleanup did not reach USB return, and no false
+  success was recorded. After exact PID/start-tick termination, the same run recovered through D8,
+  stable D9, D10, and verified D11 with no Linux USB/interface/PHY residue.
+- PC A run `41566d77-4982-4f59-94b9-f59b07e6d5e4` was interrupted by terminating the exact local
+  control process while its installed endpoint and USB lease were active. The durable coordinator and
+  private recovery evidence survived; a fresh control process classified the functional result as
+  `CONNECTION_RUN_INTERRUPTED`, completed conservative D8-D10 release, and reached verified D11 with
+  the adapter detached. This proves app/control-process restart recovery, not a Windows reboot.
+- The post-qualification full audit is `485 passed, 3 skipped`. A distinct real Windows-reboot run is
+  intentionally staged and must be recovered after boot before the machine-restart gate can close.
 
 ## 6. Remaining Milestone 7 work
 
@@ -143,9 +159,9 @@ This checkpoint is not the M7 exit gate. The following must be implemented and v
    its strict gate exists but product diagnostics are intentionally not migrated before M8.
 2. Repeat the now-qualified real WSL PID/interface/PHY and conditional `UsbLease` path on PC B. PC A
    and its non-ASCII profile boundary are complete.
-3. Complete app/control/PC restart recovery and endpoint-hang/fault injection at every D gate. The
-   software D2/D3/D10 fault cases and D11 lost-response recovery now pass; packaged process-hang and
-   machine-restart qualification remain.
+3. Complete PC restart recovery and the remaining fault injection at every D gate. The software
+   D2/D3/D10 fault cases, D11 lost-response recovery, installed endpoint-hang cleanup guard, and exact
+   control-process interruption recovery now pass on PC A. A real machine-restart qualification remains.
 4. Prove Stop, End, Leave, and Close room-action semantics without bypassing D; product routing remains
    a Milestone 9 migration boundary.
 5. Extend the deployed check from the completed public two-role smoke and zero-orphan authority
