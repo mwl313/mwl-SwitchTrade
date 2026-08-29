@@ -21,6 +21,9 @@ part of the public repository or release package.
   reuse-admission ledger, explicit replacement boundary, and known retained failures.
 - [ABC+D Milestone 1 Coordinator](83-abcd-milestone-1-coordinator-20260829.md) — serialized run state,
   identity-bound launch ownership, restart recovery, cleanup guard, tests, and deliberate limits.
+- [ABC+D Milestone 7 Authority D Checkpoint](90-abcd-milestone-7-authority-d-checkpoint-20260830.md)
+  — v2-only D1/D5/D6 outcome preservation, launch-bound two-side barrier, forced-failure policy, and
+  the explicit remaining local cleanup boundary.
 - [Future TODO](FUTURE_TODO.md) — definitive implementation and qualification ledger for that
   architecture.
 - [Known Issues](KNOWN_ISSUES.md) — authoritative beta defect register, evidence, workarounds, and

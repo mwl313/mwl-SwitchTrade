@@ -138,7 +138,8 @@ path. No open item may be presented as a current production capability.
    proves simultaneous physical A_READY/B_READY through the production coordinator.
 
 4. **CRITICAL — URGENT: Make D cleanup two-sided, attempt-scoped, and outcome-preserving.**
-   **Status (2026-08-29): confirmed architecture gap; not implemented.**
+   **Status (2026-08-30): authority D1/D5/D6 implemented at `d815562`; endpoint D2-D4 and local
+   control D7-D11 remain open, so the product blocker is not closed.**
    Local session Stop currently stops the endpoint and releases hardware before it publishes the
    authoritative cancellation. A WebSocket disconnect while the authority is still in any
    non-terminal phase—including `closing`—is converted by the relay into `relay.peer_lost`. The relay
@@ -152,6 +153,12 @@ path. No open item may be presented as a current production capability.
    side-quiescent acknowledgements or an explicit forced-failure deadline; then verify local Linux
    quiescence and return only the exact run-owned USB device to Windows. Expected closing disconnects
    must not become `relay.peer_lost`, and cleanup errors remain secondary to the first A/B/C failure.
+
+   The authority checkpoint now enforces a v2-only immutable closing intent, exact launch-bound side
+   acknowledgements, a two-seat terminal barrier, post-response-loss idempotency, and bounded
+   timeout/restart terminalization without replacing the first functional cause. Do not wire callers
+   directly to Boolean cleanup claims: the remaining endpoint/control work must measure D2-D4 and
+   D8-D10, persist recovery identity, and release the local lock only at D11.
 
    Acceptance covers successful trade, Stop, room close, peer loss, endpoint hang, app close, relay
    restart, and PC restart at every D gate. No new attempt is enabled until both shared authority and
