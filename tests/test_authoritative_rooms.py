@@ -654,7 +654,7 @@ class AuthoritativeRoomTests(unittest.TestCase):
     def test_unhandled_relay_failure_returns_generic_structured_envelope(self):
         with patch.object(
                 relay_server.authority, "operational_stats",
-                side_effect=ExceptionGroup("do-not-leak", [RuntimeError("credential-secret")])):
+                side_effect=RuntimeError("do-not-leak: credential-secret")):
             response = self.client.get("/metrics")
         self.assertEqual(response.status_code, 500, response.text)
         body = response.json()

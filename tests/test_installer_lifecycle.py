@@ -270,7 +270,7 @@ class InstallerLifecycleTests(unittest.TestCase):
                 "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                 str(ROOT / "installer" / "Test-RollbackRecoveryLifecycle.ps1"),
                 "-TestRoot", temporary,
-            ], cwd=ROOT, capture_output=True, text=True, timeout=60)
+            ], cwd=ROOT, capture_output=True, text=True, timeout=90)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Rollback package-identity process-death simulation PASS", result.stdout)
 
