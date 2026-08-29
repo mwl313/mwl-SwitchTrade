@@ -9,9 +9,9 @@ path. No open item may be presented as a current production capability.
 
 1. **CRITICAL — URGENT: Restore the complete WSL LDN prerequisite gate.**
    **Status (2026-08-29): PC A passed the immutable installed cold P0 and verified cleanup. The owner
-   accepted that result as sufficient to begin Milestone 3. The direct A0-A9 endpoint/harness is now
-   complete in source and awaiting its one-Switch installed-runtime qualification. PC B P0, direct
-   A/B physical qualification, and production-path cutover remain open.**
+   accepted that result as sufficient to begin Milestone 3. The direct A0-A9 endpoint/harness is
+   complete and PC A passed its one-Switch installed-runtime qualification with verified cleanup.
+   PC B P0, PC B direct A, direct B, and production-path cutover remain open.**
    The installed `0.2.6-beta.2` runtime contains the correct kernel and the `ccm`, `cmac`, and `tun`
    modules, but the production wrapper does not load them and does not verify `/dev/net/tun` before
    entering the LDN path. A real Switch-hosted room was observed and decoded three times, then every
@@ -41,8 +41,11 @@ path. No open item may be presented as a current production capability.
    The new direct A path does not import the rejected `LiveTransport` lifecycle. It admits only one
    exact FRLG advertisement, performs no fallback or orchestration retry, exposes ordered A0-A9
    checkpoints around the run-local station/CCMP/control-port objects, opens the Pia UDP/raw sockets,
-   completes a bounded local hold, and persists only the advertisement length/hash. It must still
-   pass against one real Switch in the immutable Milestone 3 runtime before this is physical evidence.
+   completes a bounded local hold, and persists only the advertisement length/hash. PC A physical run
+   `88f8e357-2e8c-4981-ad87-4cfaa1f93c31` passed every A0-A9 gate in immutable runtime
+   `abcd-m3-80c4e13`, returned `A_CONTROL_READY`, and verified normal endpoint exit, radio quiescence,
+   Windows/Linux USB restoration, and absence of Linux interface/PHY/process residue. This is direct A
+   evidence only and does not claim A10, C1, `A_READY`, B, C, D, or a trade.
 
 2. **CRITICAL — URGENT: Preserve relay frame order and truthful P0/A/B/C/D diagnostic stages.**
    **Status (2026-08-29): confirmed regression; not fixed.**

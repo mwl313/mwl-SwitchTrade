@@ -1,8 +1,8 @@
-# ABC+D Milestone 3 direct A source evidence
+# ABC+D Milestone 3 direct A qualification evidence
 
 > Branch: `codex/abcd-orchestration-rework`
 > Source commit: `80c4e13`
-> Status: source and immutable-runtime smoke complete; one-Switch physical A0-A9 qualification pending.
+> Status: source complete; PC A immutable-runtime one-Switch A0-A9 qualification passed; PC B pending.
 > Scope: local Switch-hosted room observation, exact admission, station join, and bounded hold only.
 
 ## 1. Project entry decision
@@ -124,3 +124,23 @@ in order. Post-run evidence must show the run-acquired adapter detached, Linux U
 absent, no worker process, no recovery record, and no raw advertisement or MAC identity in the saved
 files. Any functional or cleanup failure remains evidence to diagnose; it must not be retried until
 cleanup is verified.
+
+## 8. PC A physical result
+
+PC A run `88f8e357-2e8c-4981-ad87-4cfaa1f93c31` completed on release `abcd-m3-80c4e13` with exit
+code 0. One real Switch hosted a FireRed/LeafGreen Trade Center room. The run produced:
+
+- `functional_status=passed` and `cleanup_status=verified`;
+- `result_level=A_CONTROL_READY` and ordered A0-A9 completion;
+- exact room detection and a 122-byte validated advertisement, persisted only as SHA-256
+  `a2afffc55c865334ff0415f240a46e6e8ae3c918cecdf50b4c7ba657fc85f1fd`;
+- successful station association, both CCMP operations, Nintendo control-port authentication,
+  stable participant state, UDP port 12345, AF_PACKET binding, and bounded local hold;
+- normal worker exit code 0 with no forced termination;
+- verified LDN context release, radio quiescence, Windows detach, Linux disappearance, and prior USB
+  ownership restoration.
+
+Post-run inspection found no target USB, interface, PHY, endpoint, or worker in WSL. Windows showed
+USB bus `4-18` detached from WSL. The saved run files contained no raw advertisement, MAC-address,
+room-passcode, or trainer-data pattern. This passes PC A direct A only; the formal Milestone 3 exit
+gate still requires the same result on PC B.

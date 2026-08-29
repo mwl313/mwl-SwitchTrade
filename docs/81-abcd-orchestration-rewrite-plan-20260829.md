@@ -113,9 +113,10 @@ restores prior ownership.
 
 ### Milestone 3 — Direct A admission
 
-> Source status (2026-08-29): implemented and regression-tested; immutable installed-runtime physical
-> A qualification remains. The owner explicitly accepted PC A's verified cold P0 as sufficient to
-> begin this milestone. PC B P0 remains qualification debt and is not represented as passed.
+> Status (2026-08-29): implemented and regression-tested. PC A immutable installed-runtime run
+> `88f8e357-2e8c-4981-ad87-4cfaa1f93c31` passed A0-A9 with verified cleanup. The owner explicitly
+> accepted PC A's verified cold P0 as sufficient to begin this milestone. PC B P0 and direct A remain
+> qualification debt and are not represented as passed.
 
 - Build a new A stage owner around admitted LDN station mechanics rather than reusing the current
   `LiveTransport` lifecycle wholesale.
