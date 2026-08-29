@@ -298,6 +298,33 @@ class MeasuredD5ControlTests(unittest.TestCase):
             schema["properties"]["contract_version"]["const"],
         )
 
+    def test_response_loss_retry_survives_coordinator_restart_without_remeasurement(self):
+        run = self.prepare_run()
+        report_path = self.write_endpoint_report(run)
+        first_relay = FakeRelay()
+        process_calls = []
+        control = self.control(
+            run, first_relay, report_path,
+            process_probe=lambda pid: process_calls.append(pid),
+            radio_probe=lambda _identity: {"status": "quiescent", "owned_interfaces": 0},
+        )
+        first = control.acknowledge(self.authority_room(run))["control"]
+        self.coordinator.close()
+        self.coordinator = ConnectionCoordinator(
+            self.root / "coordinator", "0.3.0-dev")
+        self.assertEqual(self.coordinator.snapshot(run["run_id"])["phase"], "cleaning")
+
+        retry_relay = FakeRelay()
+        retry = self.control(
+            run, retry_relay, report_path,
+            process_probe=lambda _pid: self.fail("persisted D5 must not be remeasured"),
+            radio_probe=lambda _identity: self.fail("persisted D5 must not be remeasured"),
+        )
+        replay = retry.acknowledge(self.authority_room(run))["control"]
+        self.assertEqual(replay, first)
+        self.assertEqual(len(retry_relay.calls), 1)
+        self.assertEqual(retry_relay.calls[0][4]["command_id"], first["command_id"])
+
 
 if __name__ == "__main__":
     unittest.main()

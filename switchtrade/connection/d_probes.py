@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 import subprocess
 from typing import Callable, Iterable
+import uuid
 
 from switchtrade.connection.p0 import run_command
 
@@ -15,7 +17,7 @@ class DProbeError(RuntimeError):
 
 
 _PROCESS_PROGRAM = r"""
-import json,sys
+import json,os,sys
 from pathlib import Path
 def ticks(pid):
     path=Path('/proc')/str(pid)/'stat'
@@ -26,6 +28,7 @@ endpoint=int(sys.argv[2]); wrapper=int(sys.argv[3])
 matching=0
 for item in Path('/proc').iterdir():
     if not item.name.isdigit(): continue
+    if item.name==str(os.getpid()): continue
     try:
         command=(item/'cmdline').read_bytes().replace(b'\0',b' ').decode('utf-8','replace')
     except OSError:
@@ -37,11 +40,20 @@ print(json.dumps({'endpoint_actual':ticks(endpoint),'wrapper_actual':ticks(wrapp
 
 
 _RADIO_PROGRAM = r"""
-import json,sys
+import json,os,sys
 from pathlib import Path
 run_id,phy,base=sys.argv[1:4]
 suffix=run_id.replace('-','')[:8]
 owned={f'sta-a-{suffix}',f'ap-b-{suffix}',f'mon-b-{suffix}',f'tap-b-{suffix}'}
+base_path=Path('/sys/class/net')/base
+try:
+    base_valid=base_path.exists() and (base_path/'phy80211').resolve(strict=True).name==phy
+except OSError:
+    base_valid=False
+if not base_valid:
+    print(json.dumps({'status':'unknown','owned_interfaces':None,
+                      'driver_threads':None,'phy_active':None},separators=(',',':')))
+    raise SystemExit(0)
 present=sum((Path('/sys/class/net')/name).exists() for name in owned)
 active=False
 for item in Path('/sys/class/net').iterdir():
@@ -59,6 +71,7 @@ for item in Path('/sys/class/net').iterdir():
 threads=0
 for item in Path('/proc').iterdir():
     if not item.name.isdigit(): continue
+    if item.name==str(os.getpid()): continue
     try:
         command=(item/'cmdline').read_bytes().replace(b'\0',b' ').decode('utf-8','replace')
     except OSError:
@@ -88,7 +101,10 @@ class WslDProbes:
             raise ValueError("D WSL probe timeout is invalid")
         self.distro = distro
         self.packaged_python = packaged_python
-        self.private_paths = tuple(Path(item) for item in private_paths)
+        paths = tuple(Path(item).resolve(strict=False) for item in private_paths)
+        if len(paths) > 16:
+            raise ValueError("D private path inventory exceeds its bound")
+        self.private_paths = paths
         self.runner = runner
         self.timeout = timeout
 
@@ -120,20 +136,22 @@ class WslDProbes:
             endpoint_ticks = identity["endpoint_start_ticks"]
             wrapper_pid = identity["wrapper_pid"]
             wrapper_ticks = identity["process_start_ticks"]
-            run_id = identity["run_id"] if "run_id" in identity else None
+            run_id = identity["run_id"]
         except (KeyError, TypeError) as error:
             raise DProbeError("endpoint launch identity is incomplete") from error
-        # Coordinator identity intentionally excludes run_id; callers pass its immutable projection
-        # with run_id added by `for_run` below.
-        if not isinstance(run_id, str) or not run_id:
-            raise DProbeError("endpoint run identity is unavailable")
+        try:
+            run_id = str(uuid.UUID(str(run_id)))
+        except (TypeError, ValueError, AttributeError) as error:
+            raise DProbeError("endpoint run identity is unavailable") from error
         value = self._json(_PROCESS_PROGRAM, run_id, endpoint_pid, wrapper_pid)
         actual_endpoint = value.get("endpoint_actual")
         actual_wrapper = value.get("wrapper_actual")
         matching = value.get("matching_processes")
         if (
-            (actual_endpoint is not None and not isinstance(actual_endpoint, int)) or
-            (actual_wrapper is not None and not isinstance(actual_wrapper, int)) or
+            (actual_endpoint is not None and
+             (not isinstance(actual_endpoint, int) or isinstance(actual_endpoint, bool))) or
+            (actual_wrapper is not None and
+             (not isinstance(actual_wrapper, int) or isinstance(actual_wrapper, bool))) or
             not isinstance(matching, int) or isinstance(matching, bool) or matching < 0
         ):
             raise DProbeError("endpoint launch evidence is invalid")
@@ -152,25 +170,19 @@ class WslDProbes:
 
     def radio(self, identity: dict) -> dict:
         try:
-            run_id = identity["run_id"]
+            run_id = str(uuid.UUID(str(identity["run_id"])))
             phy = identity["phy"]
             base = identity["netdev"]
-        except (KeyError, TypeError) as error:
+        except (KeyError, TypeError, ValueError, AttributeError) as error:
             raise DProbeError("radio identity is incomplete") from error
+        if (not isinstance(phy, str) or re.fullmatch(r"phy[0-9]+", phy) is None or
+                not isinstance(base, str) or re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", base) is None):
+            raise DProbeError("radio identity is invalid")
         value = self._json(_RADIO_PROGRAM, run_id, phy, base)
         fields = {"status", "owned_interfaces", "driver_threads", "phy_active"}
         if set(value) != fields:
             raise DProbeError("radio cleanup evidence is invalid")
         return value
-
-    @staticmethod
-    def for_run(probe: Callable[[dict], dict], run_id: str) -> Callable[[dict], dict]:
-        """Bind coordinator's top-level run ID without mutating its identity projection."""
-        def bound(identity: dict) -> dict:
-            value = dict(identity)
-            value["run_id"] = run_id
-            return probe(value)
-        return bound
 
     def temporary_interfaces(self, identity: dict) -> dict:
         value = self.radio(identity)

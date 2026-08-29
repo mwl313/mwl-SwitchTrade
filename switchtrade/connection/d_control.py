@@ -179,7 +179,8 @@ def load_d5_state(path: str | Path) -> dict:
     )
     try:
         uuid.UUID(str(state.get("run_id")))
-        uuid.UUID(str(state.get("command_id")))
+        if uuid.UUID(str(state.get("command_id"))).version != 7:
+            valid = False
     except (TypeError, ValueError, AttributeError):
         valid = False
     if not valid:
@@ -260,7 +261,7 @@ class MeasuredD5Control:
         identity = run.get("identity") if isinstance(run, dict) else None
         if (
             not isinstance(run, dict) or not isinstance(identity, dict) or
-            run.get("phase") != Phase.CLOSING.value or
+            run.get("phase") not in {Phase.CLOSING.value, Phase.CLEANING.value} or
             run.get("functional", {}).get("status") == "pending" or
             not run.get("ownership", {}).get("endpoint_started") or
             not all(identity.get(key) is not None for key in (
@@ -321,9 +322,10 @@ class MeasuredD5Control:
         deadline = self.monotonic() + self.exit_timeout
         stable = 0
         unknown = False
+        probe_identity = {**identity, "run_id": self.run_id}
         while True:
             try:
-                result = self.radio_probe(deepcopy(identity))
+                result = self.radio_probe(deepcopy(probe_identity))
             except Exception:
                 result = {"status": "unknown", "owned_interfaces": None}
             if not isinstance(result, dict) or result.get("status") not in {

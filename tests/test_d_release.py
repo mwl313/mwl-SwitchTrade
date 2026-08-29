@@ -15,6 +15,7 @@ from switchtrade.connection import (
     SwitchRole,
 )
 from switchtrade.connection.p0 import atomic_json
+from switchtrade.relay_client import RelayClient
 
 
 ADAPTER = r"USB\VID_0BDA&PID_818B\RADIO-A"
@@ -104,7 +105,7 @@ class LocalDReleaseTests(unittest.TestCase):
             "contract_version": "d5-control-state.v1", "schema": 1,
             "run_id": run_id, "room_id": "room-1", "attempt_id": "attempt-1",
             "expected_room_version": 12,
-            "command_id": "00000000-0000-0000-0000-000000000005",
+            "command_id": RelayClient.command_id(),
             "endpoint_report_sha256": "a" * 64,
             "measurement": {
                 "process_state_known": True, "temporary_interface_state_known": True},
@@ -271,6 +272,43 @@ class LocalDReleaseTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "D_BARRIER_UNVERIFIED")
         self.assertEqual(events, [])
         self.assertEqual(self.coordinator.snapshot(run["run_id"])["phase"], "closing")
+
+    def test_missing_d5_state_is_rejected_during_an_ordinary_live_run(self):
+        run, room, d5_path = self.prepare()
+        d5_path.unlink()
+        worker = LocalDRelease(
+            coordinator=self.coordinator, run_id=run["run_id"], d5_state_path=d5_path,
+            release_state_path=self.root / "release.json",
+            launch_probe=self.launch_absent([]), radio_probe=self.radio_quiescent([]),
+            usb_lease=FakeLease([]),
+        )
+        with self.assertRaises(DControlError) as caught:
+            worker.release(room)
+        self.assertEqual(caught.exception.code, "D_CONTROL_STATE_INVALID")
+
+    def test_startup_recovery_can_release_after_forced_d6_without_a_local_d5_record(self):
+        run, room, d5_path = self.prepare(RunMode.C_HARNESS)
+        d5_path.unlink()
+        room["attempt"]["d"].update(
+            barrier_status="forced_timeout", cleanup_status="failed",
+            secondary_failure_code="D_BARRIER_TIMEOUT")
+        room["attempt"]["d"]["sides"]["member_a"] = None
+        self.coordinator.close()
+        self.coordinator = ConnectionCoordinator(
+            self.root / "coordinator", "0.3.0-dev")
+        recovered = self.coordinator.snapshot(run["run_id"])
+        self.assertEqual(recovered["phase"], "cleaning")
+        self.assertTrue(recovered["recovery_required"])
+        events = []
+        worker = LocalDRelease(
+            coordinator=self.coordinator, run_id=run["run_id"], d5_state_path=d5_path,
+            release_state_path=self.root / "recovered-release.json",
+            launch_probe=self.launch_absent(events),
+        )
+        result = worker.release(room)
+        self.assertEqual(result["status"], "passed")
+        self.assertTrue(result["run"]["cleanup"]["verified"])
+        self.assertFalse(result["report"]["shared_cleanup_verified"])
 
     def test_failed_local_cleanup_can_be_retried_to_verified_release(self):
         run, room, d5_path = self.prepare()

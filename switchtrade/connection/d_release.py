@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
+import re
 import time
 from typing import Callable
 
@@ -15,6 +16,7 @@ from switchtrade.connection.coordinator import (
 )
 from switchtrade.connection.d_control import DControlError, load_d5_state
 from switchtrade.connection.p0 import atomic_json
+from switchtrade.c2_protocol import launch_identity_hash
 
 
 CONTRACT_VERSION = "d-local-release.v1"
@@ -28,6 +30,7 @@ _DIAGNOSTIC_MODES = {
     RunMode.DIAGNOSTIC_AUTOMATED.value, RunMode.DIAGNOSTIC_A.value,
     RunMode.DIAGNOSTIC_B.value, RunMode.DIAGNOSTIC_SUITE.value,
 }
+_CODE = re.compile(r"[A-Z][A-Z0-9_.-]{0,95}")
 
 
 class LocalDRelease:
@@ -71,21 +74,20 @@ class LocalDRelease:
         self.sleep = sleep
 
     @staticmethod
-    def _d6(room: dict, run: dict, d5: dict) -> dict:
+    def _d6(room: dict, run: dict, d5: dict | None) -> dict:
         identity = run["identity"]
         attempt = room.get("attempt") if isinstance(room, dict) else None
         state = attempt.get("d") if isinstance(attempt, dict) else None
         side = state.get("sides", {}).get(identity.get("authority_seat")) if isinstance(state, dict) else None
-        payload = d5["payload"]
-        comparable = {
-            "run_id": payload["run_id"],
-            "stage_generation": payload["stage_generation"],
+        payload = d5["payload"] if d5 is not None else None
+        comparable = None if payload is None else {
+            "run_id": payload["run_id"], "stage_generation": payload["stage_generation"],
             "launch_identity_sha256": payload["launch_identity_sha256"],
             "evidence": payload["evidence"],
         }
         side_fields = {
             "run_id", "stage_generation", "launch_identity_sha256", "evidence", "acknowledged_at"}
-        if (
+        invalid = (
             not isinstance(attempt, dict) or not isinstance(state, dict) or
             room.get("room_id") != identity.get("room_id") or
             attempt.get("attempt_id") != identity.get("attempt_id") or
@@ -93,13 +95,37 @@ class LocalDRelease:
             state.get("barrier_status") not in {
                 "two_side_terminal", "forced_timeout", "forced_failure"} or
             state.get("cleanup_status") not in {"verified", "failed"} or
-            state.get("terminalized_at") is None or not isinstance(side, dict) or
-            set(side) != side_fields or
-            state.get("activation_generation") != payload["activation_generation"] or
+            state.get("terminalized_at") is None or
+            not isinstance(state.get("activation_generation"), int) or
+            isinstance(state.get("activation_generation"), bool) or
+            state.get("activation_generation") < 1 or
             (state.get("barrier_status") in {"forced_timeout", "forced_failure"} and
-             state.get("cleanup_status") != "failed") or
-            any(side.get(key) != value for key, value in comparable.items())
-        ):
+             state.get("cleanup_status") != "failed")
+        )
+        side_valid = (
+            isinstance(side, dict) and set(side) == side_fields and
+            (comparable is None or all(side.get(key) == value for key, value in comparable.items()))
+        )
+        if comparable is None and side_valid:
+            expected_hash = launch_identity_hash(
+                run["run_id"], identity["stage_generation"],
+                identity["launch_nonce"], identity["endpoint_pid"],
+            )
+            side_valid = all((
+                side["run_id"] == run["run_id"],
+                side["stage_generation"] == identity["stage_generation"],
+                side["launch_identity_sha256"] == expected_hash,
+            ))
+        recovery_without_side = (
+            comparable is None and run.get("recovery_required") is True and side is None and
+            isinstance(state, dict) and state.get("barrier_status") in {
+                "forced_timeout", "forced_failure"}
+        )
+        activation_valid = (
+            isinstance(state, dict) and
+            (payload is None or state.get("activation_generation") == payload["activation_generation"])
+        )
+        if invalid or not activation_valid or not (side_valid or recovery_without_side):
             raise DControlError(
                 "D_BARRIER_UNVERIFIED", GATES[0],
                 "the relay D6 terminal barrier does not contain this run's measured D5 evidence",
@@ -156,9 +182,10 @@ class LocalDRelease:
         deadline = self.monotonic() + self.radio_timeout
         stable = 0
         last = None
+        probe_identity = {**identity, "run_id": self.run_id}
         while True:
             try:
-                value = self.radio_probe(deepcopy(identity))
+                value = self.radio_probe(deepcopy(probe_identity))
             except Exception:
                 value = None
             valid = (
@@ -226,13 +253,19 @@ class LocalDRelease:
         if not isinstance(run, dict):
             raise DControlError("D_RUN_STATE_INVALID", GATES[0], "the coordinator run is unavailable")
         if run["phase"] == Phase.TERMINAL.value and run["cleanup"]["verified"]:
+            self.d5_state_path.unlink(missing_ok=True)
             return {"status": "passed", "run": run, "report": None}
         if run["phase"] == Phase.TERMINAL.value:
             run = self.coordinator.retry_cleanup(self.run_id)
         elif run["phase"] not in {Phase.CLOSING.value, Phase.CLEANING.value}:
             raise DControlError(
                 "D_RUN_STATE_INVALID", GATES[0], "the coordinator run is not in D cleanup")
-        d5 = load_d5_state(self.d5_state_path)
+        d5 = load_d5_state(self.d5_state_path) if self.d5_state_path.exists() else None
+        if d5 is None and not run.get("recovery_required"):
+            raise DControlError(
+                "D_CONTROL_STATE_INVALID", GATES[0],
+                "the measured D5 state is missing outside startup recovery",
+            )
         d6 = self._d6(room, run, d5)
         if run["phase"] == Phase.CLOSING.value:
             run = self.coordinator.begin_cleanup(self.run_id)
@@ -264,7 +297,7 @@ class LocalDRelease:
         self._persist(report)
 
         try:
-            launch_value = self.launch_probe(deepcopy(run["identity"]))
+            launch_value = self.launch_probe({**deepcopy(run["identity"]), "run_id": self.run_id})
         except Exception:
             launch_value = None
         launch, d8_ok = self._launch_evidence(launch_value)
@@ -317,9 +350,12 @@ class LocalDRelease:
                         isinstance(usb["detached_by_run"], bool)
                     )
                 except Exception as error:
+                    code = getattr(error, "code", "D_USB_RETURN_FAILED")
+                    if not isinstance(code, str) or _CODE.fullmatch(code) is None:
+                        code = "D_USB_RETURN_FAILED"
+                    message = str(error)[:500] or type(error).__name__
                     report["failures"].append({
-                        "code": getattr(error, "code", "D_USB_RETURN_FAILED"),
-                        "gate": GATES[4], "message": str(error)[:500],
+                        "code": code, "gate": GATES[4], "message": message,
                     })
             if not d10_ok and not any(item["gate"] == GATES[4] for item in report["failures"]):
                 report["failures"].append({
@@ -331,9 +367,7 @@ class LocalDRelease:
             report["last_passed_gate"] = GATES[4]
 
         verified = d7_ok and d8_ok and d9_ok and d10_ok
-        report["status"] = "passed" if verified else "failed"
-        if verified:
-            report["last_passed_gate"] = GATES[5]
+        report["status"] = "running" if verified else "failed"
         report["failures"] = report["failures"][:16]
         self._persist(report)
 
@@ -349,6 +383,9 @@ class LocalDRelease:
             terminal = self.coordinator.complete_cleanup(
                 self.run_id, verified=True, evidence=cleanup_evidence)
             self.d5_state_path.unlink(missing_ok=True)
+            report["status"] = "passed"
+            report["last_passed_gate"] = GATES[5]
+            self._persist(report)
         else:
             first = report["failures"][0]
             terminal = self.coordinator.complete_cleanup(

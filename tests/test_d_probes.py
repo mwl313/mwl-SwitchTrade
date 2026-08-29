@@ -90,19 +90,12 @@ class WslDProbesTests(unittest.TestCase):
         self.assertEqual(stable["status"], "quiescent")
         self.assertFalse(stable["phy_active"])
 
-    def test_run_binding_does_not_mutate_coordinator_identity(self):
-        seen = []
-        identity = {"phy": "phy0"}
-
-        def probe(value):
-            seen.append(value)
-            return {"ok": True}
-
-        bound = WslDProbes.for_run(
-            probe, "00000000-0000-0000-0000-000000000123")
-        self.assertEqual(bound(identity), {"ok": True})
-        self.assertNotIn("run_id", identity)
-        self.assertEqual(seen[0]["run_id"], "00000000-0000-0000-0000-000000000123")
+    def test_wsl_inventory_excludes_the_probe_process_from_run_residue(self):
+        # The run ID is an argv item of the probe itself; failing to exclude self makes every clean
+        # launch/radio observation look active forever in the installed WSL runtime.
+        import switchtrade.connection.d_probes as module
+        self.assertEqual(module._PROCESS_PROGRAM.count("item.name==str(os.getpid())"), 1)
+        self.assertEqual(module._RADIO_PROGRAM.count("item.name==str(os.getpid())"), 1)
 
     def test_timeout_and_malformed_output_are_unknown_not_success(self):
         runner = FakeRunner([subprocess.TimeoutExpired("wsl.exe", 5)])
@@ -116,6 +109,23 @@ class WslDProbesTests(unittest.TestCase):
             distro="SwitchTrade", packaged_python="python3", runner=malformed)
         with self.assertRaises(DProbeError):
             probes.process_start_ticks(5001)
+
+    def test_probe_identity_and_private_path_inventory_are_bounded(self):
+        with self.assertRaises(ValueError):
+            WslDProbes(
+                distro="SwitchTrade", packaged_python="python3",
+                private_paths=[Path(f"token-{index}") for index in range(17)],
+            )
+        probes = WslDProbes(
+            distro="SwitchTrade", packaged_python="python3", runner=FakeRunner([]))
+        identity = self.identity()
+        identity["run_id"] = "not-a-uuid"
+        with self.assertRaises(DProbeError):
+            probes.launch(identity)
+        identity = self.identity()
+        identity["netdev"] = "invalid interface name"
+        with self.assertRaises(DProbeError):
+            probes.radio(identity)
 
 
 if __name__ == "__main__":
