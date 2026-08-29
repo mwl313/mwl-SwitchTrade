@@ -28,6 +28,7 @@ public sealed class SettingsScreenViewModel : ScreenViewModel
             SelectDeviceAsync, () => IsServiceReady && SelectedDevice?.IsSelectable == true);
         CopySupportPathCommand = new RelayCommand(
             () => Shell.Copy(SupportFilePath, "Support file location copied"), () => HasSupportFile);
+        OpenDiagnosticsCommand = new RelayCommand(Shell.OpenProductionDiagnostics, () => IsServiceReady);
     }
 
     public override string Title => "Settings";
@@ -95,6 +96,7 @@ public sealed class SettingsScreenViewModel : ScreenViewModel
     public AsyncCommand DiagnosticCommand { get; }
     public AsyncCommand SelectDeviceCommand { get; }
     public RelayCommand CopySupportPathCommand { get; }
+    public RelayCommand OpenDiagnosticsCommand { get; }
 
     public override Task OnNavigatedToAsync() => LoadAsync();
 
@@ -184,5 +186,6 @@ public sealed class SettingsScreenViewModel : ScreenViewModel
         SupportCommand.RaiseCanExecuteChanged();
         DiagnosticCommand.RaiseCanExecuteChanged();
         SelectDeviceCommand.RaiseCanExecuteChanged();
+        OpenDiagnosticsCommand.RaiseCanExecuteChanged();
     }
 }

@@ -9,5 +9,6 @@
   <DataTemplate DataType="{x:Type vm:JoinPrivateRoomScreenViewModel}"><views:JoinPrivateRoomView /></DataTemplate>
   <DataTemplate DataType="{x:Type vm:PublicRoomsScreenViewModel}"><views:PublicRoomsView /></DataTemplate>
   <DataTemplate DataType="{x:Type vm:SettingsScreenViewModel}"><views:SettingsView /></DataTemplate>
+  <DataTemplate DataType="{x:Type vm:ProductionDiagnosticsScreenViewModel}"><views:ProductionDiagnosticsView /></DataTemplate>
   <DataTemplate DataType="{x:Type vm:TradeRoomScreenViewModel}"><views:TradeRoomView /></DataTemplate>
 </ResourceDictionary>

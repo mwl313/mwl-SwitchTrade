@@ -165,6 +165,13 @@ class RunLogger:
                 for path in sorted(run_dir.glob("diagnostic-*.txt")):
                     if path.is_file() and not path.is_symlink():
                         entries.append((path.relative_to(self.run_dir).as_posix(), path))
+        production_root = self.run_dir / "production-diagnostics"
+        if production_root.is_dir() and not production_root.is_symlink():
+            for run_dir in sorted(production_root.iterdir()):
+                report = run_dir / "production-diagnostic-report.json"
+                if (run_dir.is_dir() and not run_dir.is_symlink() and report.is_file() and
+                        not report.is_symlink()):
+                    entries.append((report.relative_to(self.run_dir).as_posix(), report))
         launch_root = self.run_dir / "endpoint-launches"
         if launch_root.is_dir() and not launch_root.is_symlink():
             allowed_launch_file = re.compile(

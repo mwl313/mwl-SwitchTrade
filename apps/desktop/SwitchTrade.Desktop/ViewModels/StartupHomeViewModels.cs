@@ -12,7 +12,7 @@ public sealed class RecoveryScreenViewModel : ScreenViewModel
         RetryCommand = new AsyncCommand(shell.InitializeAsync);
         AbandonLocalAuthorityCommand = new AsyncCommand(shell.AbandonLocalAuthorityAsync);
         ReturnHomeCommand = new RelayCommand(shell.ReturnHomeFromAuthorityRecovery);
-        SettingsCommand = new RelayCommand(shell.OpenSettings);
+        SettingsCommand = new AsyncCommand(shell.OpenSettingsAsync);
     }
 
     public override string Title => "SwitchTrade needs attention";
@@ -25,7 +25,7 @@ public sealed class RecoveryScreenViewModel : ScreenViewModel
     public AsyncCommand RetryCommand { get; }
     public AsyncCommand AbandonLocalAuthorityCommand { get; }
     public RelayCommand ReturnHomeCommand { get; }
-    public RelayCommand SettingsCommand { get; }
+    public AsyncCommand SettingsCommand { get; }
 
     public void NotifyRecoveryChanged()
     {

@@ -49,7 +49,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         RoomCoordinator = new ActiveTradeRoomCoordinator(gateway);
         _currentScreen = new StartupScreenViewModel(this);
         BackCommand = new AsyncCommand(GoBackAsync, () => CanGoBack);
-        SettingsCommand = new RelayCommand(OpenSettings);
+        SettingsCommand = new AsyncCommand(OpenSettingsAsync);
     }
 
     public ScreenViewModel CurrentScreen
@@ -122,7 +122,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public bool CanGoBack => _history.Count > 0 && CurrentScreen is not HomeScreenViewModel;
     public AsyncCommand BackCommand { get; }
-    public RelayCommand SettingsCommand { get; }
+    public AsyncCommand SettingsCommand { get; }
 
     public async Task InitializeAsync()
     {
@@ -382,11 +382,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public void OpenPrivateJoin() => Navigate(new JoinPrivateRoomScreenViewModel(this));
     public void OpenPublicRooms() => Navigate(new PublicRoomsScreenViewModel(this));
 
-    public void OpenSettings()
+    public async Task OpenSettingsAsync()
     {
         if (CurrentScreen is SettingsScreenViewModel) return;
+        if (CurrentScreen is ProductionDiagnosticsScreenViewModel diagnostics &&
+            !await diagnostics.CancelAndCleanupAsync()) return;
         Navigate(new SettingsScreenViewModel(this));
     }
+
+    public void OpenProductionDiagnostics() => Navigate(new ProductionDiagnosticsScreenViewModel(this));
 
     public void OpenTradeRoom(
         TradeRoomInfo room,
@@ -409,6 +413,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public async Task GoBackAsync()
     {
         if (!CanGoBack) return;
+        if (CurrentScreen is ProductionDiagnosticsScreenViewModel diagnostics &&
+            !await diagnostics.CancelAndCleanupAsync()) return;
         if (CurrentScreen is TradeRoomScreenViewModel)
         {
             if (!await ConfirmAndReleaseRoomAsync()) return;
@@ -423,6 +429,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public async Task<bool> CanCloseAsync()
     {
+        if (CurrentScreen is ProductionDiagnosticsScreenViewModel diagnostics &&
+            !await diagnostics.CancelAndCleanupAsync()) return false;
         if (!RoomCoordinator.HasRoom) return true;
         if (_dialogs.Show(ReleaseDialog()) != DialogChoice.Primary) return false;
         if (await RoomCoordinator.ReleaseRoomAsync()) return true;
@@ -513,6 +521,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         _startupCancellation?.Cancel();
         _startupCancellation?.Dispose();
+        CurrentScreen.OnNavigatedFrom();
         _activeTradeRoom?.Dispose();
         Gateway.Dispose();
     }

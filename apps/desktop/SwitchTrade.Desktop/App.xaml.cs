@@ -439,6 +439,18 @@ public partial class App : Application
         public Task<HardwareDiagnosticViewData> RunHardwareDiagnosticsAsync(
             string usbId, CancellationToken cancellationToken = default) =>
             Task.FromResult(new HardwareDiagnosticViewData("self-test", "partial", "Self-test", ""));
+        public Task<ProductionDiagnosticViewData> StartProductionDiagnosticAsync(
+            ProductionDiagnosticTest test, string usbId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Diagnostic(test));
+        public Task<ProductionDiagnosticViewData> GetProductionDiagnosticAsync(
+            string runId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Diagnostic(ProductionDiagnosticTest.Automated));
+        public Task<ProductionDiagnosticViewData> ContinueProductionDiagnosticAsync(
+            string runId, string checkpointId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Diagnostic(ProductionDiagnosticTest.Automated));
+        public Task<ProductionDiagnosticViewData> CancelProductionDiagnosticAsync(
+            string runId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Diagnostic(ProductionDiagnosticTest.Automated));
         public Task<LivePartyProjection?> TryGetPartiesAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<LivePartyProjection?>(null);
         public Task RepairAdapterAsync(CancellationToken cancellationToken = default)
@@ -449,6 +461,10 @@ public partial class App : Application
         public Task<string> CreateSupportBundleAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult("");
         public void Dispose() { }
+
+        private static ProductionDiagnosticViewData Diagnostic(ProductionDiagnosticTest test) => new(
+            "self-test", test, "passed", "completed", "relay_exchange_passed", null, null,
+            null, [], []);
     }
 
     private sealed class SelfTestHttpHandler(

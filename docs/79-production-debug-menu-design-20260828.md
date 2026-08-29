@@ -1,8 +1,8 @@
 # Production debug menu design — 2026-08-28
 
-> Status: proposed; not yet implemented.
+> Status: implemented in source; installed-runtime and physical qualification remain required.
 > UI location: **Settings → Advanced → Production diagnostics**.
-> Contract: proposed `production-diagnostic.v1`.
+> Contract: `production-diagnostic.v1`.
 > Prerequisite: fix the critical false-start and repeated-launch defects documented in
 > `FUTURE_TODO.md` before using this design as qualification evidence.
 
@@ -108,8 +108,8 @@ must create the mirrored AP that the Switch can discover.
 
 **A second active Switch hosting the same room invalidates this test.** The Switches could associate
 directly and bypass SwitchTrade. The debug UI must tell the user to stop every other hosted room before
-continuing, and the result must identify the BSSID created by the selected adapter as the association
-target.
+continuing. The result is scoped to the selected adapter, but reports retain no BSSID or other hardware
+address.
 
 The primary AP input is a versioned, known-good advertisement fixture sent by the synthetic peer
 through the real relay. A live capture from another Switch may be used only after that Switch has

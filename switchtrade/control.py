@@ -28,6 +28,10 @@ from switchtrade.diagnostics import RunLogger, default_runs_root, redact_text
 from switchtrade.endpoint import runtime_plan
 from switchtrade.hardware import DEFAULT_PROFILE_PATH, host_engines_public, load_profiles
 from switchtrade.process_guard import AlreadyRunningError, SingleInstanceLock
+from switchtrade.production_diagnostics import (
+    AP_FIXTURE, DIAGNOSTIC_CONTRACT, DEFINITIONS, DiagnosticFailure,
+    ProductionDiagnostics, SyntheticDiagnosticPeer, TIMEOUTS, fixture_metadata,
+)
 from switchtrade.relay_client import RelayClient, RelayError
 
 
@@ -193,6 +197,15 @@ class HardwareSelectionRequest(BaseModel):
     instance_id: str = Field(min_length=1, max_length=512, pattern=r"^[^\x00-\x1f\x7f]+$")
 
 
+class ProductionDiagnosticRequest(BaseModel):
+    test: str = Field(pattern="^(automated|room_detection|ap_association|recommended)$")
+    usb_id: str = Field(pattern="^[0-9A-Fa-f]{4}:[0-9A-Fa-f]{4}$")
+
+
+class ProductionDiagnosticContinueRequest(BaseModel):
+    checkpoint_id: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9_.-]+$")
+
+
 @dataclass
 class Group:
     name: str
@@ -224,6 +237,7 @@ class Runtime:
         self.launch_lock = threading.Lock()
         self.launch_cancel_generation = 0
         self.log = RunLogger("control-api", runs_root, {"profile_path": str(profile_path)})
+        self.diagnostics = ProductionDiagnostics(self.log.run_dir / "production-diagnostics")
         self.relay_url = relay_url
         self.relay = RelayClient(relay_url)
         self.relay_capabilities: set[str] = set()
@@ -725,7 +739,10 @@ def endpoint_command(identity: str, passcode: str, relay_url: str,
                      member_token_file: Path | None = None,
                      allow_experimental_hardware: bool = False,
                      launch_nonce: str | None = None,
-                     launch_ack_file: Path | None = None) -> list[str]:
+                     launch_ack_file: Path | None = None,
+                     diagnostic_run_id: str | None = None,
+                     diagnostic_checkpoint: str | None = None,
+                     diagnostic_nonce: str | None = None) -> list[str]:
     if identity in {"host", "guest"} and switch_room_role is None:
         args = ["--role", identity]
     else:
@@ -749,6 +766,12 @@ def endpoint_command(identity: str, passcode: str, relay_url: str,
     if member_token_file:
         args += ["--member-token-file", _wsl_path(member_token_file)
                  if os.name == "nt" else str(member_token_file)]
+    if diagnostic_run_id:
+        args += ["--diagnostic-run-id", diagnostic_run_id]
+    if diagnostic_checkpoint:
+        args += ["--diagnostic-checkpoint", diagnostic_checkpoint]
+    if diagnostic_nonce:
+        args += ["--diagnostic-nonce", diagnostic_nonce]
     if os.name == "nt":
         distro = os.environ.get("SWITCHTRADE_WSL_DISTRO", "SwitchTrade")
         root = os.environ.get("SWITCHTRADE_WSL_ROOT", "/opt/switchtrade")
@@ -797,6 +820,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 )
         app.state.runtime = runtime
         yield
+        runtime.diagnostics.cancel_active()
         runtime.stop_endpoint()
         try:
             runtime.release_hardware()
@@ -1330,7 +1354,10 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                        member_token_file: Path | None = None,
                        allow_experimental_hardware: bool = False,
                        retry: bool = False,
-                       launch_generation: int | None = None) -> dict:
+                       launch_generation: int | None = None,
+                       diagnostic_run_id: str | None = None,
+                       diagnostic_checkpoint: str | None = None,
+                       diagnostic_nonce: str | None = None) -> dict:
         try:
             plan = runtime_plan(
                 tunnel_seat, usb_id, switch_room_role=switch_room_role,
@@ -1414,6 +1441,9 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                     "started_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     "stdout": stdout_path.name, "stderr": stderr_path.name,
                 }
+                if diagnostic_run_id:
+                    launch_record["diagnostic_run_id"] = diagnostic_run_id
+                    launch_record["diagnostic_checkpoint"] = diagnostic_checkpoint
 
                 def write_launch_record(**updates) -> None:
                     launch_record.update(updates)
@@ -1437,6 +1467,8 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                     "allow_experimental_hardware": allow_experimental_hardware,
                     "radio_checked": False, "tunnel_connected": False,
                     "failure_stage": None, "recovery_action": None,
+                    "diagnostic_run_id": diagnostic_run_id,
+                    "diagnostic_checkpoint": diagnostic_checkpoint,
                 })
                 command = endpoint_command(
                     plan["tunnel_seat"], code, state.relay_url, plan["usb_id"],
@@ -1446,6 +1478,9 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                     allow_experimental_hardware=allow_experimental_hardware,
                     launch_nonce=launch_nonce,
                     launch_ack_file=state.endpoint_launch_ack,
+                    diagnostic_run_id=diagnostic_run_id,
+                    diagnostic_checkpoint=diagnostic_checkpoint,
+                    diagnostic_nonce=diagnostic_nonce,
                 )
                 try:
                     with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
@@ -1543,6 +1578,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             deadline = time.monotonic() + ENDPOINT_STARTUP_TIMEOUT_SECONDS
             acknowledgement = None
             initialized = None
+            diagnostic_complete = False
             while time.monotonic() < deadline:
                 if state.launch_was_canceled(generation):
                     fail_start(
@@ -1572,6 +1608,12 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                     isinstance(candidate_state.get("process_start_ticks"), int)
                 ):
                     initialized = candidate_state
+                    diagnostic_complete = bool(
+                        diagnostic_checkpoint and
+                        candidate_state.get("state") == "diagnostic_checkpoint_passed" and
+                        candidate_state.get("diagnostic_run_id") == diagnostic_run_id and
+                        candidate_state.get("diagnostic_checkpoint") == diagnostic_checkpoint
+                    )
 
                 exit_code = process.poll()
                 if initialized and initialized.get("state") == "failed":
@@ -1583,7 +1625,8 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                         action=str(initialized.get("recovery_action") or "retry"),
                         exit_code=exit_code,
                     )
-                if acknowledgement and initialized and exit_code is None:
+                if acknowledgement and initialized and (exit_code is None or
+                                                        (diagnostic_complete and exit_code == 0)):
                     break
                 if exit_code is not None:
                     if state.launch_was_canceled(generation):
@@ -1786,9 +1829,17 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             )
         state.clear_authority()
 
+    def require_no_diagnostic(state: Runtime) -> None:
+        if state.diagnostics.running():
+            raise ControlApiError(
+                409, "diagnostic_active", "Finish or cancel the active production diagnostic first.",
+                stage="diagnostics", recoverable=True, primary_action="return_to_diagnostics",
+            )
+
     @app.post("/api/v1/trade-room")
     def create_trade_room(payload: CreateGroup, request: Request) -> dict:
         state = runtime(request)
+        require_no_diagnostic(state)
         require_no_active_room(state)
         state.require_relay_contract()
         try:
@@ -1811,6 +1862,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     @app.post("/api/v1/trade-room/join")
     def join_trade_room(payload: JoinGroup, request: Request) -> dict:
         state = runtime(request)
+        require_no_diagnostic(state)
         require_no_active_room(state)
         state.require_relay_contract()
         try:
@@ -1856,6 +1908,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     def join_public_trade_room(
             listing_id: str, payload: JoinPublicRoom, request: Request) -> dict:
         state = runtime(request)
+        require_no_diagnostic(state)
         require_no_active_room(state)
         state.require_relay_contract()
         try:
@@ -1899,6 +1952,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     @app.post("/api/v1/trade-room/connect")
     def connect_trade_room(payload: ConnectTradeRoom, request: Request) -> dict:
         state = runtime(request)
+        require_no_diagnostic(state)
         state.require_relay_contract()
         if "manual-switch-role.v1" not in state.relay_capabilities:
             raise ControlApiError(
@@ -2011,6 +2065,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     @app.post("/api/v1/hardware/selection")
     def select_hardware(payload: HardwareSelectionRequest, request: Request) -> dict:
         state = runtime(request)
+        require_no_diagnostic(state)
         if state.endpoint_running():
             raise HTTPException(status_code=409, detail="End the current connection before changing adapters")
         usb_id = payload.usb_id.lower()
@@ -2029,6 +2084,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     @app.post("/api/v1/hardware/diagnostics")
     def hardware_diagnostics(payload: HardwareDiagnosticRequest, request: Request) -> dict:
         state = runtime(request)
+        require_no_diagnostic(state)
         if state.endpoint_running():
             raise ControlApiError(
                 409, "session_active", "End the current connection before checking the adapter",
@@ -2117,6 +2173,366 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     def hardware_diagnostics_legacy(payload: HardwareDiagnosticRequest, request: Request) -> dict:
         return hardware_diagnostics(payload, request)
 
+    def validate_diagnostic_start(state: Runtime, usb_id: str) -> None:
+        if state.endpoint_running() or state.read_authority().get("member_token"):
+            raise DiagnosticFailure(
+                "DIAG_NORMAL_SESSION_ACTIVE",
+                "End the active Trade Room or connection before running production diagnostics.",
+            )
+        selected = state.read_hardware_selection()
+        if not selected.get("usb_id"):
+            raise DiagnosticFailure("DIAG_ADAPTER_NOT_SELECTED",
+                                    "Select and authorize a USB Wi-Fi adapter first.")
+        if selected.get("usb_id", "").lower() != usb_id.lower():
+            raise DiagnosticFailure("DIAG_ADAPTER_CHANGED",
+                                    "The selected adapter does not match the diagnostic adapter.")
+        try:
+            runtime_plan("member_a", usb_id, switch_room_role="creator")
+            runtime_plan("member_b", usb_id, switch_room_role="finder")
+        except ValueError as error:
+            raise DiagnosticFailure("DIAG_RADIO_GATE_FAILED", str(error)) from error
+        state.public_capabilities()
+        if state.relay_failure is not None:
+            raise DiagnosticFailure("DIAG_RELAY_UNREACHABLE",
+                                    "The hosted relay is not ready for production diagnostics.")
+        if "manual-switch-role.v1" not in state.relay_capabilities:
+            raise DiagnosticFailure(
+                "DIAG_RELAY_CONTRACT_INCOMPATIBLE",
+                "The hosted relay does not support the production Switch-role contract.",
+            )
+
+    def diagnostic_preflight(state: Runtime, run, usb_id: str) -> None:
+        run.transition("preflight", "preflight")
+        validate_diagnostic_start(state, usb_id)
+        run.stage("preflight", "passed", "DIAG_PREFLIGHT_PASSED",
+                  "The selected adapter, installed contracts, and hosted relay are ready.")
+        run.transition("running", "preflight")
+
+    def diagnostic_hardware_gate(state: Runtime, run, usb_id: str) -> None:
+        try:
+            selected_usb_id = attach_selected_hardware(state)
+        except ControlApiError as error:
+            raise DiagnosticFailure("DIAG_RADIO_GATE_FAILED", error.message) from error
+        try:
+            if selected_usb_id != usb_id.lower():
+                raise DiagnosticFailure("DIAG_ADAPTER_CHANGED",
+                                        "The selected adapter changed before it reached Linux.")
+            command = hardware_diagnostic_command(
+                selected_usb_id, "quick", "host", state.log.run_dir / "hardware-diagnostics",
+                active_check=True,
+            )
+            try:
+                result = subprocess.run(
+                    command, cwd=Path(__file__).resolve().parents[1], capture_output=True,
+                    text=True, timeout=TIMEOUTS["preflight"], check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise DiagnosticFailure("DIAG_RADIO_GATE_FAILED",
+                                        "The production hardware gate did not complete.") from error
+            report = None
+            for line in reversed(result.stdout.splitlines()):
+                try:
+                    candidate = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(candidate, dict) and candidate.get("contract_version") == "hardware-diagnostic.v1":
+                    report = candidate
+                    break
+            if report is None or report.get("overall_status") == "failed":
+                raise DiagnosticFailure("DIAG_RADIO_GATE_FAILED",
+                                        "The production hardware gate did not pass.")
+            run.stage("hardware", "passed", "DIAG_HARDWARE_GATE_PASSED",
+                      "The selected adapter passed the production hardware gate.",
+                      details={"overall_status": report.get("overall_status", "unknown"),
+                               "hardware_run_id": report.get("run_id", "unknown")})
+            run.set_result("hardware_gate_passed")
+        finally:
+            state.release_hardware()
+
+    def diagnostic_room_pair(state: Runtime, local_switch_role: str) -> dict:
+        """Create an ephemeral two-seat authoritative room without touching saved room authority."""
+        owner = owner_room = None
+        try:
+            local_is_owner = local_switch_role == "creator"
+            owner = state.relay.create_trade_room({
+                "name": "Production diagnostic", "visibility": "private",
+                "trainer_display_name": "Diagnostic peer" if not local_is_owner else "Diagnostic local",
+                "game": "FireRed", "language": "English", "offering": "", "wanted": "", "note": "",
+            }, state.client_id)
+            owner_room = owner["room"]
+            joined = state.relay.join_trade_room(owner_room["room_code"],
+                                                 "Diagnostic local" if not local_is_owner else "Diagnostic peer",
+                                                 f"{state.client_id}-diagnostic")
+            local = owner if local_is_owner else joined
+            peer = joined if local_is_owner else owner
+            owner_role = local_switch_role if local_is_owner else (
+                "finder" if local_switch_role == "creator" else "creator")
+            room = state.relay.room_command(
+                owner_room["room_id"], owner["member_token"], "/ready",
+                {"ready": True, "switch_room_role": owner_role},
+                expected_version=owner_room["room_version"],
+            )
+            room = state.relay.room_command(
+                owner_room["room_id"], local["member_token"], "/ready",
+                {"ready": True, "switch_room_role": local_switch_role},
+                expected_version=room["room_version"],
+            )
+            attempt = room.get("attempt") or {}
+            if not attempt.get("role_locked") or not attempt.get("attempt_id"):
+                raise DiagnosticFailure("DIAG_PRIVATE_ROOM_FAILED",
+                                        "The private diagnostic room did not create an authoritative attempt.")
+            return {
+                "room_id": owner_room["room_id"], "room_code": owner_room["room_code"],
+                "owner_token": owner["member_token"], "local_token": local["member_token"],
+                "peer_token": peer["member_token"], "attempt_id": attempt["attempt_id"],
+                "local_seat": "member_a" if local_is_owner else "member_b",
+            }
+        except DiagnosticFailure:
+            if owner is not None and owner_room is not None:
+                try:
+                    snapshot = state.relay.room(owner_room["room_id"], owner["member_token"])
+                    state.relay.room_command(
+                        owner_room["room_id"], owner["member_token"], "", method="DELETE",
+                        expected_version=snapshot["room_version"],
+                    )
+                except RelayError:
+                    pass
+            raise
+        except RelayError as error:
+            if owner is not None and owner_room is not None:
+                try:
+                    snapshot = state.relay.room(owner_room["room_id"], owner["member_token"])
+                    state.relay.room_command(
+                        owner_room["room_id"], owner["member_token"], "", method="DELETE",
+                        expected_version=snapshot["room_version"],
+                    )
+                except RelayError:
+                    pass
+            code = "DIAG_RELAY_UNREACHABLE" if error.stage == "relay" else "DIAG_PRIVATE_ROOM_FAILED"
+            raise DiagnosticFailure(code, "The private diagnostic room could not be prepared.") from error
+
+    def close_diagnostic_room(state: Runtime, room: dict) -> None:
+        try:
+            snapshot = state.relay.room(room["room_id"], room["owner_token"])
+            state.relay.room_command(room["room_id"], room["owner_token"], "", method="DELETE",
+                                     expected_version=snapshot["room_version"])
+        except RelayError as error:
+            raise DiagnosticFailure("DIAG_CLEANUP_FAILED",
+                                    "The private diagnostic room could not be closed.") from error
+
+    def diagnostic_endpoint_failure(endpoint: dict, checkpoint: str) -> DiagnosticFailure:
+        code = str(endpoint.get("error_code") or "")
+        if code == "endpoint_start_canceled":
+            return DiagnosticFailure("DIAG_CANCELED", "The diagnostic was canceled.")
+        if code == "radio.switch_room_not_found":
+            return DiagnosticFailure("DIAG_SWITCH_ROOM_NOT_FOUND",
+                                     "No compatible Switch room was found before the deadline.")
+        if code.startswith("relay"):
+            return DiagnosticFailure("DIAG_RELAY_UNREACHABLE",
+                                     "The endpoint could not connect to the hosted relay.")
+        if code.startswith("cleanup"):
+            return DiagnosticFailure("DIAG_CLEANUP_FAILED",
+                                     "Endpoint cleanup did not complete.")
+        if checkpoint == "ap_association":
+            return DiagnosticFailure("DIAG_AP_START_FAILED",
+                                     "The production access point did not start or accept the Switch.")
+        if checkpoint == "room_detection":
+            return DiagnosticFailure("DIAG_SWITCH_ROOM_JOIN_FAILED",
+                                     "The production wrapper could not join the detected Switch room.")
+        return DiagnosticFailure("DIAG_WRAPPER_EARLY_EXIT",
+                                 "The production wrapper exited before the diagnostic checkpoint.")
+
+    def wait_for_diagnostic_endpoint(state: Runtime, run, checkpoint: str, timeout: int) -> dict:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if run.canceled():
+                state.cancel_launch()
+                raise DiagnosticFailure("DIAG_CANCELED", "The diagnostic was canceled.")
+            endpoint = state.read_endpoint()
+            if (endpoint.get("diagnostic_run_id") == run.run_id and
+                    endpoint.get("diagnostic_checkpoint") == checkpoint):
+                if endpoint.get("state") == "diagnostic_checkpoint_passed":
+                    return endpoint
+                if endpoint.get("state") == "failed":
+                    raise diagnostic_endpoint_failure(endpoint, checkpoint)
+            process = state.endpoint
+            if process is not None and process.poll() is not None:
+                raise DiagnosticFailure("DIAG_WRAPPER_EARLY_EXIT",
+                                        "The production wrapper exited before the diagnostic checkpoint.")
+            time.sleep(0.1)
+        raise DiagnosticFailure("DIAG_ENDPOINT_INIT_TIMEOUT",
+                                "The production endpoint did not reach its diagnostic checkpoint.")
+
+    def run_diagnostic_endpoint(state: Runtime, run, usb_id: str, local_switch_role: str,
+                                checkpoint: str, *, fixture: bytes | None = None) -> dict:
+        room = peer = None
+        token_file = run.root / f"{local_switch_role}-member-token"
+        cleanup_ok = True
+        try:
+            if run.canceled():
+                raise DiagnosticFailure("DIAG_CANCELED", "The diagnostic was canceled.")
+            try:
+                selected_usb_id = attach_selected_hardware(state)
+            except ControlApiError as error:
+                raise DiagnosticFailure("DIAG_RADIO_GATE_FAILED", error.message) from error
+            if selected_usb_id != usb_id.lower():
+                raise DiagnosticFailure("DIAG_ADAPTER_CHANGED",
+                                        "The selected adapter changed before endpoint launch.")
+            room = diagnostic_room_pair(state, local_switch_role)
+            peer = SyntheticDiagnosticPeer(
+                state.relay_url, room["room_code"],
+                "guest" if room["local_seat"] == "member_a" else "host",
+                room["peer_token"], room["attempt_id"], fixture=fixture,
+            )
+            peer.start()
+            token_file.write_text(room["local_token"], encoding="utf-8")
+            os.chmod(token_file, 0o600)
+            nonce = secrets.token_hex(16) if checkpoint == "relay" else None
+            try:
+                launch_session(
+                    state, code=room["room_code"], tunnel_seat=room["local_seat"],
+                    switch_room_role=local_switch_role, usb_id=usb_id,
+                    attempt_id=room["attempt_id"], member_token_file=token_file, retry=True,
+                    diagnostic_run_id=run.run_id, diagnostic_checkpoint=checkpoint,
+                    diagnostic_nonce=nonce,
+                )
+            except ControlApiError as error:
+                raise diagnostic_endpoint_failure({"error_code": error.code}, checkpoint) from error
+            return wait_for_diagnostic_endpoint(
+                state, run, checkpoint,
+                TIMEOUTS["room_detection"] if checkpoint == "room_detection" else
+                TIMEOUTS["ap_association"] if checkpoint == "ap_association" else TIMEOUTS["endpoint"],
+            )
+        finally:
+            try:
+                state.stop_endpoint()
+                state.clear_session_state()
+            except Exception:
+                cleanup_ok = False
+            if peer is not None:
+                try:
+                    peer.stop()
+                except Exception:
+                    cleanup_ok = False
+            if room is not None:
+                try:
+                    close_diagnostic_room(state, room)
+                except DiagnosticFailure:
+                    cleanup_ok = False
+            token_file.unlink(missing_ok=True)
+            try:
+                state.release_hardware()
+            except Exception:
+                cleanup_ok = False
+            if not cleanup_ok:
+                raise DiagnosticFailure("DIAG_CLEANUP_FAILED",
+                                        "The diagnostic did not clean up its endpoint, room, or adapter.")
+
+    def run_automated_diagnostic(state: Runtime, run, usb_id: str) -> None:
+        diagnostic_hardware_gate(state, run, usb_id)
+        for switch_role in ("creator", "finder"):
+            run.stage(f"{switch_role}_relay", "running", "DIAG_STAGE_RUNNING",
+                      f"Running the production wrapper as {switch_role}.")
+            endpoint = run_diagnostic_endpoint(state, run, usb_id, switch_role, "relay")
+            run.stage(f"{switch_role}_relay", "passed", "DIAG_RELAY_EXCHANGE_PASSED",
+                      f"The {switch_role} wrapper completed a real relay nonce exchange.",
+                      details={"endpoint_pid": endpoint.get("pid")})
+        run.set_result("relay_exchange_passed")
+
+    def run_room_detection_diagnostic(state: Runtime, run, usb_id: str) -> None:
+        run.await_continue(
+            "open_switch_room",
+            "On one Switch only, open the Wireless Club Direct Corner and become Group Leader. Do not join from another Switch, then select Continue.",
+        )
+        run.stage("switch_room_detection", "running", "DIAG_STAGE_RUNNING",
+                  "Scanning and joining the real Switch-hosted room.")
+        endpoint = run_diagnostic_endpoint(state, run, usb_id, "creator", "room_detection")
+        run.stage("switch_room_detection", "passed", "DIAG_SWITCH_ROOM_JOINED",
+                  "The production wrapper detected, parsed, and joined the Switch room.",
+                  details={"advertisement_sha256": endpoint.get("advertisement_sha256")})
+        run.set_result("switch_room_joined")
+
+    def run_ap_association_diagnostic(state: Runtime, run, usb_id: str) -> None:
+        run.await_continue(
+            "search_diagnostic_ap",
+            "Stop every Switch-hosted room. On one Switch only, search for a group and join the SwitchTrade diagnostic room. A competing Switch host makes this run invalid; then select Continue.",
+        )
+        run.stage("ap_association", "running", "DIAG_STAGE_RUNNING",
+                  "Opening the production LDN access point and waiting for Switch association.",
+                  details={"fixture": fixture_metadata()})
+        run_diagnostic_endpoint(state, run, usb_id, "finder", "ap_association", fixture=AP_FIXTURE)
+        run.stage("ap_association", "passed", "DIAG_SWITCH_ASSOCIATED",
+                  "The Switch associated with the app-hosted diagnostic room.",
+                  details={"fixture": fixture_metadata()})
+        run.set_result("switch_associated")
+
+    def run_production_diagnostic(state: Runtime, run) -> None:
+        try:
+            diagnostic_preflight(state, run, run.usb_id)
+            if run.test in {"automated", "recommended"}:
+                run_automated_diagnostic(state, run, run.usb_id)
+            if run.test in {"room_detection", "recommended"}:
+                run_room_detection_diagnostic(state, run, run.usb_id)
+            if run.test in {"ap_association", "recommended"}:
+                run_ap_association_diagnostic(state, run, run.usb_id)
+            result = ("local_prequalification_passed" if run.test == "recommended" else
+                      DEFINITIONS[run.test].result_limit)
+            run.finish("passed", result_level=result)
+        except DiagnosticFailure:
+            raise
+        finally:
+            state.log.event("production_diagnostic_finished", diagnostic_run_id=run.run_id,
+                            test=run.test)
+
+    @app.post("/api/v1/production-diagnostics", status_code=202)
+    def start_production_diagnostic(payload: ProductionDiagnosticRequest, request: Request) -> dict:
+        state = runtime(request)
+        try:
+            validate_diagnostic_start(state, payload.usb_id.lower())
+            run = state.diagnostics.start(
+                payload.test, payload.usb_id.lower(),
+                lambda diagnostic_run: run_production_diagnostic(state, diagnostic_run),
+            )
+        except DiagnosticFailure as error:
+            raise ControlApiError(
+                409, error.code.lower(), error.message, stage="diagnostics",
+                recoverable=True, primary_action="return_to_diagnostics",
+            ) from error
+        state.log.event("production_diagnostic_started", diagnostic_run_id=run["run_id"],
+                        test=payload.test, usb_id=payload.usb_id.lower())
+        return run
+
+    @app.get("/api/v1/production-diagnostics/{run_id}")
+    def get_production_diagnostic(run_id: str, request: Request) -> dict:
+        state = runtime(request)
+        run = state.diagnostics.get(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="production diagnostic not found")
+        return run
+
+    @app.post("/api/v1/production-diagnostics/{run_id}/continue")
+    def continue_production_diagnostic(
+            run_id: str, payload: ProductionDiagnosticContinueRequest, request: Request) -> dict:
+        state = runtime(request)
+        if not state.diagnostics.continue_run(run_id, payload.checkpoint_id):
+            raise ControlApiError(
+                409, "diagnostic_checkpoint_invalid", "This diagnostic checkpoint is no longer waiting.",
+                stage="diagnostics", recoverable=True, primary_action="refresh_diagnostics",
+            )
+        return state.diagnostics.get(run_id) or {"run_id": run_id}
+
+    @app.delete("/api/v1/production-diagnostics/{run_id}")
+    def cancel_production_diagnostic(run_id: str, request: Request) -> dict:
+        state = runtime(request)
+        if not state.diagnostics.cancel(run_id):
+            current = state.diagnostics.get(run_id)
+            if current is None:
+                raise HTTPException(status_code=404, detail="production diagnostic not found")
+            return current
+        state.cancel_launch()
+        state.stop_endpoint()
+        return state.diagnostics.get(run_id) or {"run_id": run_id, "status": "cleaning"}
+
     @app.get("/api/groups/public")
     def public_groups(request: Request) -> dict:
         state = runtime(request)
@@ -2127,6 +2543,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     @app.post("/api/groups")
     def create_group(payload: CreateGroup, request: Request) -> dict:
         state = runtime(request)
+        require_no_diagnostic(state)
         try:
             code = state.relay.create_session()
         except RelayError as error:
@@ -2144,6 +2561,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     @app.post("/api/groups/join")
     def join_group(payload: JoinGroup, request: Request) -> dict:
         state = runtime(request)
+        require_no_diagnostic(state)
         code = payload.passcode.upper()
         try:
             state.relay.status(code)
@@ -2213,6 +2631,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     @app.post("/api/session/start")
     def start_session(payload: StartSession, request: Request) -> dict:
         state = runtime(request)
+        require_no_diagnostic(state)
         if payload.tunnel_seat and payload.switch_room_role:
             identity = payload.tunnel_seat
             switch_role = payload.switch_room_role
@@ -2246,6 +2665,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     @app.post("/api/v1/app/retry")
     def retry_app(request: Request) -> dict:
         state = runtime(request)
+        require_no_diagnostic(state)
         previous = state.read_endpoint()
         if state.endpoint_running():
             raise HTTPException(status_code=409, detail="the current session is still running")
@@ -2281,6 +2701,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     @app.post("/api/v1/app/repair")
     def repair_app(payload: RepairRequest, request: Request) -> dict:
         state = runtime(request)
+        require_no_diagnostic(state)
         if state.endpoint_running():
             raise ControlApiError(
                 409, "session_active", "End the current connection before checking the adapter",

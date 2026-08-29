@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -190,6 +191,9 @@ def _connection(transport, role: str, name: str, log: EndpointLog):
 
 
 def run_endpoint(args) -> int:
+    diagnostic_run_id = getattr(args, "diagnostic_run_id", None)
+    diagnostic_checkpoint = getattr(args, "diagnostic_checkpoint", None)
+    diagnostic_nonce = getattr(args, "diagnostic_nonce", None)
     identity = args.tunnel_seat or args.role
     if identity is None:
         raise ValueError("--tunnel-seat is required")
@@ -214,6 +218,10 @@ def run_endpoint(args) -> int:
         "wsl_distro": os.environ.get("WSL_DISTRO_NAME"),
         "launch_nonce": args.launch_nonce,
         "process_start_ticks": process_start_ticks(),
+        "diagnostic_run_id": diagnostic_run_id,
+        "diagnostic_checkpoint": diagnostic_checkpoint,
+        "diagnostic_nonce_hash": (hashlib.sha256(diagnostic_nonce.encode("ascii")).hexdigest()
+                                  if diagnostic_nonce else None),
     })
     state.write("initializing", radio_checked=False, tunnel_connected=False,
                 failure_stage=None, recovery_action=None, **plan)
@@ -254,6 +262,21 @@ def run_endpoint(args) -> int:
         else:
             raise TimeoutError("the authenticated RFU peer did not become ready")
 
+        if diagnostic_checkpoint == "relay":
+            challenge = b"STDIAG1:" + diagnostic_nonce.encode("ascii")
+            tunnel.send(challenge, kind=Kind.RFU)
+            expected = b"STDIAG2:" + diagnostic_nonce.encode("ascii")
+            deadline = time.monotonic() + args.connect_timeout
+            while time.monotonic() < deadline and not stopping:
+                if any(frame.kind == Kind.RFU and frame.payload == expected for frame in tunnel.poll()):
+                    state.write("diagnostic_checkpoint_passed", radio_checked=False,
+                                tunnel_connected=True, diagnostic_result="relay_exchange_passed",
+                                failure_stage=None, recovery_action=None, **plan)
+                    outcome = "completed"
+                    return 0
+                time.sleep(0.02)
+            raise TimeoutError("the diagnostic relay nonce exchange did not complete")
+
         failure_stage = "radio"
         if plan["switch_room_role"] == "creator":
             log.info("Create a Direct Connection room on the leader Switch.")
@@ -266,6 +289,13 @@ def run_endpoint(args) -> int:
                 raise RuntimeError("leader room did not expose application_data")
             tunnel.advertise(transport.app_data)
             log.info("Leader room mirrored to the remote endpoint.")
+            if diagnostic_checkpoint == "room_detection":
+                state.write("diagnostic_checkpoint_passed", radio_checked=True,
+                            tunnel_connected=True, diagnostic_result="switch_room_joined",
+                            advertisement_sha256=hashlib.sha256(transport.app_data).hexdigest(),
+                            failure_stage=None, recovery_action=None, **plan)
+                outcome = "completed"
+                return 0
         else:
             advertisement = _wait_advertisement(tunnel, args.room_timeout, log)
             log.info("Opening the mirrored room for the joining Switch.")
@@ -275,6 +305,20 @@ def run_endpoint(args) -> int:
                 host_engine=plan["host_engine"],
             )
             transport.start(timeout=args.radio_timeout)
+            if diagnostic_checkpoint == "ap_association":
+                state.write("diagnostic_ap_started", radio_checked=True, tunnel_connected=True,
+                            diagnostic_result="ap_started", failure_stage=None,
+                            recovery_action=None, **plan)
+                deadline = time.monotonic() + args.room_timeout
+                while time.monotonic() < deadline and not stopping:
+                    if getattr(transport, "_peer", None) is not None:
+                        state.write("diagnostic_checkpoint_passed", radio_checked=True,
+                                    tunnel_connected=True, diagnostic_result="switch_associated",
+                                    failure_stage=None, recovery_action=None, **plan)
+                        outcome = "completed"
+                        return 0
+                    time.sleep(0.1)
+                raise TimeoutError("the Switch did not associate with the diagnostic access point")
 
         radio_ready = True
         state.write("radio_ready", radio_checked=True, tunnel_connected=True,
@@ -391,6 +435,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--member-token-file")
     parser.add_argument("--launch-nonce", required=True)
     parser.add_argument("--launch-ack-file", required=True)
+    parser.add_argument("--diagnostic-run-id")
+    parser.add_argument("--diagnostic-checkpoint",
+                        choices=("relay", "room_detection", "ap_association"))
+    parser.add_argument("--diagnostic-nonce")
     parser.add_argument("--connect-timeout", type=float, default=20)
     parser.add_argument("--radio-timeout", type=float, default=60)
     parser.add_argument("--room-timeout", type=float, default=300)
@@ -401,6 +449,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     try:
         args = build_parser().parse_args()
+        if args.diagnostic_checkpoint == "relay" and (
+                not args.diagnostic_nonce or len(args.diagnostic_nonce) < 16):
+            raise ValueError("--diagnostic-nonce is required for relay diagnostics")
         if os.environ.get("SWITCHTRADE_ENDPOINT_LOCK_HELD") == "1":
             raise SystemExit(run_endpoint(args))
         with SingleInstanceLock("endpoint"):

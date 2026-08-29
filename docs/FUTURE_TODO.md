@@ -93,8 +93,8 @@ section. None should be presented as a current beta capability.
 3. **URGENT: Add a production-path, single-machine diagnostic before resuming separated testing.**
    **Status (2026-08-28): the existing adapter-check workflow is fixed in source and now uses the
    production attach, Linux-enumeration, radio-preparation, driver, RX, and exact-device cleanup gates.
-   The full `production-diagnostic.v1` debug menu, synthetic peer, guided checks, installed qualification,
-   and physical qualification remain pending.**
+   The `production-diagnostic.v1` debug menu, synthetic peer, and guided checks are implemented in source.
+   Installed qualification (including repeated one-PC runs) and physical qualification remain pending.**
    Implement the approved design in
    [`79-production-debug-menu-design-20260828.md`](79-production-debug-menu-design-20260828.md).
    Extend the existing hardware diagnostics instead of creating mock wrappers. The automated tier must

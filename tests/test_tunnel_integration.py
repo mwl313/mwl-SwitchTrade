@@ -25,6 +25,7 @@ from switchtrade.rfu_tunnel import (Direction, HEADER, Kind, MAGIC, MAX_PAYLOAD_
 from switchtrade.relay_client import RelayClient
 from switchtrade.tunnel_client import TunnelClient
 from switchtrade.control import create_app, endpoint_command
+from switchtrade.production_diagnostics import SyntheticDiagnosticPeer
 from relay.authority import uuid7
 from fastapi.testclient import TestClient
 
@@ -129,6 +130,38 @@ class TunnelIntegrationTest(unittest.TestCase):
         attempt_id = room["attempt"]["attempt_id"]
         self.assertTrue(room["attempt"]["role_locked"])
         return attempt_id
+
+    def test_synthetic_diagnostic_peer_returns_nonce_over_authoritative_tunnel(self):
+        relay = RelayClient(self.base)
+        first = relay.create_trade_room({
+            "name": "Diagnostic", "visibility": "private", "trainer_display_name": "Peer",
+            "game": "FireRed", "language": "English", "offering": "", "wanted": "", "note": "",
+        }, "diagnostic-peer")
+        second = relay.join_trade_room(first["room"]["room_code"], "Local", "diagnostic-local")
+        attempt_id = self._prepare_authority_attempt(first, second)
+        peer = SyntheticDiagnosticPeer(
+            self.base, first["room"]["room_code"], "host", first["member_token"], attempt_id)
+        local = TunnelClient(
+            self.base, first["room"]["room_code"], "guest", member_token=second["member_token"],
+            attempt_id=attempt_id, heartbeat_interval=0.2).start()
+        try:
+            peer.start()
+            self.assertTrue(local.wait_connected(5))
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                try:
+                    local.send(b"STDIAG1:nonce", kind=Kind.RFU)
+                    break
+                except ConnectionError:
+                    time.sleep(0.02)
+            else:
+                self.fail("diagnostic tunnel never became ready")
+            response = self._wait(local, Kind.RFU)
+            self.assertEqual(response.payload, b"STDIAG2:nonce")
+        finally:
+            local.stop()
+            peer.stop()
+            self._close_authority_room(first["room"]["room_id"], first["member_token"])
 
     @staticmethod
     def _wait(client: TunnelClient, kind: Kind, timeout: float = 5):

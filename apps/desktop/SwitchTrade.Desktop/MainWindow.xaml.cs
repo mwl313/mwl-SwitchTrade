@@ -87,7 +87,7 @@ public partial class MainWindow : Window
         if (e.Handled) return;
         if (e.Key == Key.OemComma && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
         {
-            _viewModel.OpenSettings();
+            await _viewModel.OpenSettingsAsync();
             e.Handled = true;
         }
         else if (e.Key == Key.F5)

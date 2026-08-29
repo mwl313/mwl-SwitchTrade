@@ -78,14 +78,11 @@
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
           <StackPanel Margin="18,22,12,32">
             <TextBlock Text="Advanced" Style="{StaticResource SectionTitle}" />
-            <Border Style="{StaticResource WarningNotice}">
-              <TextBlock Text="Experimental adapters are untested with SwitchTrade and may not connect or trade reliably. They can be selected without repeated confirmation; run diagnostics before relying on them. Quarantined cards remain blocked." />
-            </Border>
-            <TextBlock Text="Host/AP engines" FontWeight="SemiBold" Margin="0,18,0,8" />
-            <TextBlock Text="HostTransport + ldn.create_network() — Available and default" />
-            <TextBlock Text="hostapd AP engine — In Development (not selectable)" Style="{StaticResource SecondaryText}" Margin="0,5,0,0" />
-            <TextBlock Text="direct nl80211 AP engine — In Development (not selectable)" Style="{StaticResource SecondaryText}" Margin="0,5,0,16" />
-            <TextBlock Text="Driver, USB, and runtime details appear here only for troubleshooting. Normal trading should not require this section." />
+            <TextBlock Text="Production diagnostics" FontWeight="SemiBold" Margin="0,4,0,8" />
+            <TextBlock Text="Run repeatable checks on this PC before separating two computers and two Switches. Diagnostics use the installed wrapper, selected USB adapter, hosted relay, and production radio path." TextWrapping="Wrap" />
+            <TextBlock Text="The selected adapter is temporarily controlled during a run. No public Trade Room is created, and a passed result does not certify a complete physical trade." Style="{StaticResource SecondaryText}" TextWrapping="Wrap" Margin="0,8,0,0" />
+            <Button Content="Open debug menu" Command="{Binding OpenDiagnosticsCommand}"
+                    Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left" Margin="0,16,0,0" />
           </StackPanel>
         </ScrollViewer>
       </TabItem>

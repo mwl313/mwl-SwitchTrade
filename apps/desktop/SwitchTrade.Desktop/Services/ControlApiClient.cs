@@ -43,6 +43,14 @@ public interface IControlGateway : IDisposable
         string usbId, string instanceId, string busId, CancellationToken cancellationToken = default);
     Task<HardwareDiagnosticViewData> RunHardwareDiagnosticsAsync(
         string usbId, CancellationToken cancellationToken = default);
+    Task<ProductionDiagnosticViewData> StartProductionDiagnosticAsync(
+        ProductionDiagnosticTest test, string usbId, CancellationToken cancellationToken = default);
+    Task<ProductionDiagnosticViewData> GetProductionDiagnosticAsync(
+        string runId, CancellationToken cancellationToken = default);
+    Task<ProductionDiagnosticViewData> ContinueProductionDiagnosticAsync(
+        string runId, string checkpointId, CancellationToken cancellationToken = default);
+    Task<ProductionDiagnosticViewData> CancelProductionDiagnosticAsync(
+        string runId, CancellationToken cancellationToken = default);
     Task<LivePartyProjection?> TryGetPartiesAsync(CancellationToken cancellationToken = default);
     Task RepairAdapterAsync(CancellationToken cancellationToken = default);
     Task<string> CreateSupportBundleAsync(CancellationToken cancellationToken = default);
@@ -436,6 +444,88 @@ public sealed class ControlApiClient : IControlGateway
             reportPath);
     }
 
+    public async Task<ProductionDiagnosticViewData> StartProductionDiagnosticAsync(
+        ProductionDiagnosticTest test, string usbId, CancellationToken cancellationToken = default) =>
+        ToProductionDiagnostic(await PostAsync<ProductionDiagnosticDto>(
+            "/api/v1/production-diagnostics",
+            new { test = ProductionDiagnosticName(test), usb_id = usbId }, cancellationToken));
+
+    public async Task<ProductionDiagnosticViewData> ContinueProductionDiagnosticAsync(
+        string runId, string checkpointId, CancellationToken cancellationToken = default) =>
+        ToProductionDiagnostic(await PostAsync<ProductionDiagnosticDto>(
+            $"/api/v1/production-diagnostics/{Uri.EscapeDataString(runId)}/continue",
+            new { checkpoint_id = checkpointId }, cancellationToken));
+
+    public Task<ProductionDiagnosticViewData> GetProductionDiagnosticAsync(
+        string runId, CancellationToken cancellationToken = default) =>
+        ReadProductionDiagnosticAsync(HttpMethod.Get,
+            $"/api/v1/production-diagnostics/{Uri.EscapeDataString(runId)}", cancellationToken);
+
+    public Task<ProductionDiagnosticViewData> CancelProductionDiagnosticAsync(
+        string runId, CancellationToken cancellationToken = default) =>
+        ReadProductionDiagnosticAsync(HttpMethod.Delete,
+            $"/api/v1/production-diagnostics/{Uri.EscapeDataString(runId)}", cancellationToken);
+
+    private async Task<ProductionDiagnosticViewData> ReadProductionDiagnosticAsync(
+        HttpMethod method, string path, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(method, path);
+            using var response = await _http.SendAsync(request, cancellationToken);
+            await EnsureSuccess(response, cancellationToken);
+            var value = await response.Content.ReadFromJsonAsync<ProductionDiagnosticDto>(JsonOptions, cancellationToken);
+            return ToProductionDiagnostic(value ?? throw new UserFacingException(
+                "SwitchTrade received an incomplete diagnostic response.", "invalid_response"));
+        }
+        catch (HttpRequestException)
+        {
+            throw new UserFacingException("SwitchTrade’s local service is not available.", "local_service_unavailable");
+        }
+        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new UserFacingException("SwitchTrade took too long to respond. Try again.", "request_timeout");
+        }
+        catch (JsonException)
+        {
+            throw new UserFacingException("SwitchTrade received an incomplete diagnostic response.", "invalid_response");
+        }
+        catch (NotSupportedException)
+        {
+            throw new UserFacingException("SwitchTrade received an incompatible diagnostic response.", "invalid_response");
+        }
+    }
+
+    private static string ProductionDiagnosticName(ProductionDiagnosticTest test) => test switch
+    {
+        ProductionDiagnosticTest.Automated => "automated",
+        ProductionDiagnosticTest.RoomDetection => "room_detection",
+        ProductionDiagnosticTest.ApAssociation => "ap_association",
+        ProductionDiagnosticTest.Recommended => "recommended",
+        _ => throw new ArgumentOutOfRangeException(nameof(test)),
+    };
+
+    private static ProductionDiagnosticViewData ToProductionDiagnostic(ProductionDiagnosticDto value)
+    {
+        var test = value.Test switch
+        {
+            "room_detection" => ProductionDiagnosticTest.RoomDetection,
+            "ap_association" => ProductionDiagnosticTest.ApAssociation,
+            "recommended" => ProductionDiagnosticTest.Recommended,
+            _ => ProductionDiagnosticTest.Automated,
+        };
+        var stages = (value.Stages ?? []).Select(stage => new ProductionDiagnosticStageViewData(
+            stage.Name ?? "diagnostic", stage.Status ?? "unknown", stage.Code ?? "DIAG_UNKNOWN",
+            stage.Message ?? "No stage detail available.")).ToArray();
+        var checkpoint = value.Checkpoint is null ? null : new ProductionDiagnosticCheckpointViewData(
+            value.Checkpoint.Id ?? "checkpoint", value.Checkpoint.Instructions ?? "Follow the on-screen instructions.",
+            DateTimeOffset.TryParse(value.Checkpoint.DeadlineUtc, out var deadline) ? deadline : null);
+        return new ProductionDiagnosticViewData(
+            value.RunId ?? "unknown", test, value.Status ?? "unknown", value.CurrentStage ?? "created",
+            value.ResultLevel, value.Failure?.Code, value.Failure?.Message, checkpoint,
+            stages, value.Limitations ?? []);
+    }
+
     private static async Task<string> SaveDiagnosticReportAsync(
         JsonElement report, string runId, CancellationToken cancellationToken)
     {
@@ -766,6 +856,14 @@ public sealed class ControlApiClient : IControlGateway
 
     private static UserFacingException ProblemException(ProblemDto? problem)
     {
+        if (problem?.Code is { } diagnosticCode &&
+            (diagnosticCode.StartsWith("diag_", StringComparison.Ordinal) ||
+             diagnosticCode.StartsWith("diagnostic_", StringComparison.Ordinal)))
+        {
+            return new UserFacingException(
+                problem.Message ?? "Production diagnostics could not start.", diagnosticCode, problem.Stage,
+                problem.Recoverable, problem.PrimaryAction, problem.CorrelationId);
+        }
         var message = problem?.Code switch
         {
             "adapter_disconnected" => "The selected adapter is no longer connected.",
@@ -965,6 +1063,26 @@ public sealed class ControlApiClient : IControlGateway
         [property: JsonPropertyName("overall_status")] string? OverallStatus,
         IReadOnlyList<HardwareIncompatibilityDto>? Incompatibilities);
     private sealed record HardwareIncompatibilityDto(string? Code, string? Action);
+    private sealed record ProductionDiagnosticDto(
+        [property: JsonPropertyName("run_id")] string? RunId,
+        string? Test,
+        string? Status,
+        [property: JsonPropertyName("current_stage")] string? CurrentStage,
+        [property: JsonPropertyName("result_level")] string? ResultLevel,
+        ProductionDiagnosticFailureDto? Failure,
+        ProductionDiagnosticCheckpointDto? Checkpoint,
+        IReadOnlyList<ProductionDiagnosticStageDto>? Stages,
+        IReadOnlyList<string>? Limitations);
+    private sealed record ProductionDiagnosticFailureDto(string? Code, string? Message);
+    private sealed record ProductionDiagnosticCheckpointDto(
+        string? Id,
+        string? Instructions,
+        [property: JsonPropertyName("deadline_utc")] string? DeadlineUtc);
+    private sealed record ProductionDiagnosticStageDto(
+        string? Name,
+        string? Status,
+        string? Code,
+        string? Message);
     private sealed record HardwareDevicesResponse(IReadOnlyList<HardwareDeviceDto>? Devices);
     private sealed record HardwareDeviceDto(
         [property: JsonPropertyName("bus_id")] string? BusId,
