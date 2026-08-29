@@ -25,7 +25,8 @@ public sealed class ProductionDiagnosticsScreenViewModel : ScreenViewModel
         CancelCommand = new RelayCommand(CancelAsync, () => IsActive && !Busy);
         SupportCommand = new RelayCommand(CreateSupportAsync, () => Run?.IsTerminal == true && !Busy);
         RunAgainCommand = new RelayCommand(RunAgainAsync,
-            () => _lastTest is not null && Run?.IsTerminal == true && !Busy && Adapter is not null);
+            () => _lastTest is not null && Run?.IsTerminal == true && Run?.CleanupPassed == true &&
+                  !Busy && Adapter is not null);
     }
 
     public override string Title => "Production diagnostics";
@@ -50,6 +51,7 @@ public sealed class ProductionDiagnosticsScreenViewModel : ScreenViewModel
             OnPropertyChanged(nameof(HasCheckpoint));
             OnPropertyChanged(nameof(CheckpointDeadline));
             OnPropertyChanged(nameof(ResultSummary));
+            OnPropertyChanged(nameof(CleanupSummary));
             StartCommand.RaiseCanExecuteChanged();
             ContinueCommand.RaiseCanExecuteChanged();
             CancelCommand.RaiseCanExecuteChanged();
@@ -89,15 +91,20 @@ public sealed class ProductionDiagnosticsScreenViewModel : ScreenViewModel
     public bool IsActive => Run is not null && !Run.IsTerminal;
     public bool HasRun => Run is not null;
     public bool HasCheckpoint => Run?.IsWaiting == true;
-    public string CurrentStage => Run is null ? "Not running" : $"{Run.Status} · {Run.CurrentStage}";
+    public string CurrentStage => Run is null ? "Not running" : $"{StatusLabel(Run.Status)} · {Run.CurrentStage}";
     public string CheckpointInstructions => Run?.Checkpoint?.Instructions ?? "";
     public string CheckpointDeadline => Run?.Checkpoint?.Deadline is { } deadline
         ? $"Continue by {deadline.LocalDateTime:t}." : "";
     public string ResultSummary => Run is null ? "" : Run.IsTerminal
         ? Run.FailureCode is { Length: > 0 } code
             ? $"{code}: {Run.FailureMessage ?? "The diagnostic did not complete."}"
-            : Run.Status == "passed" ? $"Passed: {Run.ResultLevel}." : Run.Status
-        : "The diagnostic owns the selected adapter until cleanup finishes.";
+            : Run.Status == "passed" ? $"Passed: {Run.ResultLevel}." : StatusLabel(Run.Status)
+        : Run.Status == "cleaning"
+            ? "Cleaning up the endpoint, relay room, and selected adapter."
+            : Run.Status == "awaiting_user"
+                ? "Waiting for the required user checkpoint; the overall run has not passed yet."
+                : "The overall run is still in progress; a passed stage is not a passed suite.";
+    public string CleanupSummary => Run is null ? "" : $"Cleanup: {StatusLabel(Run.CleanupStatus)}";
     public RelayCommand<ProductionDiagnosticTest> StartCommand { get; }
     public RelayCommand ContinueCommand { get; }
     public RelayCommand CancelCommand { get; }
@@ -220,6 +227,24 @@ public sealed class ProductionDiagnosticsScreenViewModel : ScreenViewModel
         Run = run;
         Stages.Clear();
         foreach (var stage in run.Stages) Stages.Add(stage);
-        StatusMessage = run.IsTerminal ? ResultSummary : $"Running: {run.CurrentStage}";
+        StatusMessage = run.IsTerminal ? ResultSummary : run.Status switch
+        {
+            "awaiting_user" => "Waiting for your action; the diagnostic has not passed yet.",
+            "cleaning" => "Canceling and verifying cleanup…",
+            _ => $"Running: {run.CurrentStage}. Overall result pending.",
+        };
     }
+
+    private static string StatusLabel(string status) => status switch
+    {
+        "awaiting_user" => "Waiting for user",
+        "cleaning" => "Cleaning",
+        "passed" => "Passed",
+        "failed" => "Failed",
+        "canceled" => "Canceled",
+        "partial" => "Partial",
+        "pending" => "Pending",
+        "running" => "Running",
+        _ => status,
+    };
 }

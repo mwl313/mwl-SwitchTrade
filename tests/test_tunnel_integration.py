@@ -503,6 +503,12 @@ class TunnelIntegrationTest(unittest.TestCase):
                             "Description": "Realtek RTL8192EU",
                             "InstanceId": instance_id,
                         }]})
+                    elif "python3" in command and any(
+                            "/sys/bus/usb/devices" in str(part) for part in command):
+                        result.stdout = json.dumps({
+                            "status": "present", "interface_present": True,
+                            "phy_present": True,
+                        })
                     return result
 
                 processes = []

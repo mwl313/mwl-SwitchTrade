@@ -36,7 +36,36 @@ def acknowledge_initialized(runtime, command, pid: int) -> None:
     }), encoding="utf-8")
 
 
+def is_linux_radio_probe(command) -> bool:
+    return "python3" in command and any("/sys/bus/usb/devices" in str(part) for part in command)
+
+
+def linux_radio_probe_result(present: bool):
+    return MagicMock(returncode=0, stdout=json.dumps({
+        "status": "present" if present else "absent",
+        "interface_present": present,
+        "phy_present": present,
+    }), stderr="")
+
+
 class Gate4RuntimeContractTests(unittest.TestCase):
+    def test_hardware_selection_failures_use_structured_control_errors(self):
+        def run(command, **_kwargs):
+            if command[:2] == ["usbipd.exe", "state"]:
+                return MagicMock(returncode=0, stdout=json.dumps({"Devices": []}), stderr="")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with tempfile.TemporaryDirectory() as temporary, patch(
+                "switchtrade.control.subprocess.run", side_effect=run):
+            with TestClient(create_app(runs_root=temporary)) as client:
+                response = client.post("/api/v1/hardware/selection", json={
+                    "usb_id": "0bda:818b", "bus_id": "2-4",
+                    "instance_id": r"USB\VID_0BDA&PID_818B\MISSING",
+                })
+        self.assertEqual(response.status_code, 404, response.text)
+        self.assertEqual(response.json()["code"], "adapter_not_available")
+        self.assertEqual(response.json()["stage"], "hardware_selection")
+
     @unittest.skipUnless(os.name != "nt" and shutil.which("bash"),
                          "requires a native POSIX bash with flock and timeout")
     def test_endpoint_shell_holds_launch_lock_until_child_exits(self):
@@ -868,6 +897,8 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                             "PersistedGuid": "shared-radio", "Description": "RTL8192EU",
                             "InstanceId": instance_id,
                         }]}), stderr="")
+                    if is_linux_radio_probe(command):
+                        return linux_radio_probe_result(True)
                     return MagicMock(returncode=0, stdout="", stderr="")
 
                 with patch("switchtrade.control.subprocess.run", side_effect=repair_run) as run:
@@ -1268,6 +1299,8 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                             "PersistedGuid": "shared-radio", "Description": "ALFA AWUS036ACHM",
                             "InstanceId": instance_id,
                         }]}), stderr="")
+                    if is_linux_radio_probe(command):
+                        return linux_radio_probe_result(True)
                     return MagicMock(
                         returncode=0, stdout=json.dumps(fake_report) + "\n", stderr="")
 
@@ -1351,6 +1384,8 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                         "Description": "Realtek RTL8192EU", "InstanceId": instance_id,
                     },
                 ]})
+            elif is_linux_radio_probe(command):
+                return linux_radio_probe_result(attached[0])
             return result
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -1378,6 +1413,131 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                     self.assertIsNone(runtime.owned_hardware)
                     self.assertFalse(runtime.hardware_attachment_file.exists())
 
+    def test_attach_prepares_cold_driver_before_waiting_for_netdev_and_phy(self):
+        instance_id = r"USB\VID_0BDA&PID_818B\DELAYED-RADIO"
+        attached = False
+        probe_count = 0
+        driver_loaded = False
+        commands = []
+
+        def run(command, **_kwargs):
+            nonlocal attached, probe_count, driver_loaded
+            commands.append(command)
+            result = MagicMock(returncode=0, stdout="", stderr="")
+            if command[:2] == ["usbipd.exe", "attach"]:
+                attached = True
+            elif command[:2] == ["usbipd.exe", "detach"]:
+                attached = False
+            elif command[:2] == ["usbipd.exe", "state"]:
+                result.stdout = json.dumps({"Devices": [{
+                    "BusId": "2-4",
+                    "ClientIPAddress": "172.20.0.1" if attached else None,
+                    "PersistedGuid": "shared-radio", "Description": "Realtek RTL8192EU",
+                    "InstanceId": instance_id,
+                }]})
+            elif "switchtrade-radio-quiesce" in command:
+                return result
+            elif "--driver-only" in command:
+                self.assertTrue(attached)
+                driver_loaded = True
+                return result
+            elif is_linux_radio_probe(command):
+                probe_count += 1
+                driver_ready = attached and driver_loaded and probe_count >= 4
+                return MagicMock(returncode=0, stdout=json.dumps({
+                    "status": "present" if attached else "absent",
+                    "interface_present": driver_ready,
+                    "phy_present": driver_ready,
+                }), stderr="")
+            return result
+
+        with tempfile.TemporaryDirectory() as temporary, patch(
+                "switchtrade.control.subprocess.run", side_effect=run):
+            with TestClient(create_app(runs_root=temporary)) as client:
+                runtime = client.app.state.runtime
+                runtime.write_hardware_selection("0bda:818b", instance_id, "2-4")
+                response = client.post("/api/v1/app/repair", json={"action": "recheck_adapter"})
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertGreaterEqual(probe_count, 5)
+                self.assertEqual(sum("--driver-only" in command for command in commands), 1)
+                self.assertIsNone(runtime.owned_hardware)
+
+    def test_linux_ghost_device_makes_cleanup_fail_and_preserves_ownership(self):
+        instance_id = r"USB\VID_0BDA&PID_818B\GHOST-RADIO"
+        attached = False
+        stale_linux_device = False
+
+        def run(command, **_kwargs):
+            nonlocal attached, stale_linux_device
+            result = MagicMock(returncode=0, stdout="", stderr="")
+            if command[:2] == ["usbipd.exe", "attach"]:
+                attached = True
+            elif command[:2] == ["usbipd.exe", "detach"]:
+                attached = False
+                stale_linux_device = True
+            elif command[:2] == ["usbipd.exe", "state"]:
+                result.stdout = json.dumps({"Devices": [{
+                    "BusId": "2-4", "ClientIPAddress": "172.20.0.1" if attached else None,
+                    "PersistedGuid": "shared-radio", "Description": "Realtek RTL8192EU",
+                    "InstanceId": instance_id,
+                }]})
+            elif is_linux_radio_probe(command):
+                return linux_radio_probe_result(attached or stale_linux_device)
+            return result
+
+        with tempfile.TemporaryDirectory() as temporary, patch(
+                "switchtrade.control.subprocess.run", side_effect=run), patch(
+                "switchtrade.control.LINUX_RADIO_CLEANUP_TIMEOUT_SECONDS", 0.25):
+            with TestClient(create_app(runs_root=temporary)) as client:
+                runtime = client.app.state.runtime
+                runtime.write_hardware_selection("0bda:818b", instance_id, "2-4")
+                response = client.post("/api/v1/app/repair", json={"action": "recheck_adapter"})
+                self.assertEqual(response.status_code, 503, response.text)
+                self.assertEqual(response.json()["code"], "adapter_linux_cleanup_timeout")
+                self.assertIsNotNone(runtime.owned_hardware)
+                self.assertTrue(runtime.hardware_attachment_file.exists())
+                stale_linux_device = False
+
+    def test_stale_linux_interface_makes_cleanup_fail_even_after_usb_disappears(self):
+        instance_id = r"USB\VID_0BDA&PID_818B\STALE-INTERFACE"
+        attached = False
+        stale_interface = False
+
+        def run(command, **_kwargs):
+            nonlocal attached, stale_interface
+            result = MagicMock(returncode=0, stdout="", stderr="")
+            if command[:2] == ["usbipd.exe", "attach"]:
+                attached = True
+            elif command[:2] == ["usbipd.exe", "detach"]:
+                attached = False
+                stale_interface = True
+            elif command[:2] == ["usbipd.exe", "state"]:
+                result.stdout = json.dumps({"Devices": [{
+                    "BusId": "2-4", "ClientIPAddress": "172.20.0.1" if attached else None,
+                    "PersistedGuid": "shared-radio", "Description": "Realtek RTL8192EU",
+                    "InstanceId": instance_id,
+                }]})
+            elif is_linux_radio_probe(command):
+                return MagicMock(returncode=0, stdout=json.dumps({
+                    "status": "present" if attached else "absent",
+                    "interface_present": attached or stale_interface,
+                    "phy_present": attached,
+                }), stderr="")
+            return result
+
+        with tempfile.TemporaryDirectory() as temporary, patch(
+                "switchtrade.control.subprocess.run", side_effect=run), patch(
+                "switchtrade.control.LINUX_RADIO_CLEANUP_TIMEOUT_SECONDS", 0.25):
+            with TestClient(create_app(runs_root=temporary)) as client:
+                runtime = client.app.state.runtime
+                runtime.write_hardware_selection("0bda:818b", instance_id, "2-4")
+                response = client.post("/api/v1/app/repair", json={"action": "recheck_adapter"})
+                self.assertEqual(response.status_code, 503, response.text)
+                self.assertEqual(response.json()["code"], "adapter_linux_cleanup_timeout")
+                self.assertIsNotNone(runtime.owned_hardware)
+                self.assertTrue(runtime.hardware_attachment_file.exists())
+                stale_interface = False
+
     def test_startup_recovers_only_the_exact_persisted_owned_attachment(self):
         owned_instance = r"USB\VID_0BDA&PID_818B\OWNED-RADIO"
         other_instance = r"USB\VID_0BDA&PID_818B\OTHER-RADIO"
@@ -1404,6 +1564,8 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                         "InstanceId": other_instance,
                     },
                 ]})
+            elif is_linux_radio_probe(command):
+                return linux_radio_probe_result(attached["2-4"])
             return result
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -1426,6 +1588,68 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                            if command[:2] == ["usbipd.exe", "detach"]]
         self.assertEqual(detach_commands, [["usbipd.exe", "detach", "--busid", "2-4"]])
 
+    def test_startup_recovers_interrupted_diagnostic_room_adapter_and_report(self):
+        instance_id = r"USB\VID_0BDA&PID_818B\INTERRUPTED"
+        attached = True
+
+        def run(command, **_kwargs):
+            nonlocal attached
+            result = MagicMock(returncode=0, stdout="", stderr="")
+            if command[:2] == ["usbipd.exe", "detach"]:
+                attached = False
+            elif command[:2] == ["usbipd.exe", "state"]:
+                result.stdout = json.dumps({"Devices": [{
+                    "BusId": "2-4", "ClientIPAddress": "172.20.0.1" if attached else None,
+                    "PersistedGuid": "shared-radio", "Description": "Realtek RTL8192EU",
+                    "InstanceId": instance_id,
+                }]})
+            elif is_linux_radio_probe(command):
+                return linux_radio_probe_result(attached)
+            return result
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime_root = root / "runtime"
+            runtime_root.mkdir()
+            old_run = root / "20260829T000000Z-oldrun" / "production-diagnostics" / "diag-run"
+            old_run.mkdir(parents=True)
+            report = old_run / "production-diagnostic-report.json"
+            report.write_text(json.dumps({
+                "contract_version": "production-diagnostic.v1", "run_id": "diag-run",
+                "status": "running", "cleanup": {"status": "pending"},
+            }), encoding="utf-8")
+            token_file = old_run / "creator-member-token"
+            token_file.write_text("secret-member-token", encoding="utf-8")
+            (runtime_root / "hardware-attachment.json").write_text(json.dumps({
+                "schema": 1, "usb_id": "0bda:818b", "bus_id": "2-4",
+                "instance_id": instance_id, "owner_run_id": "old-control",
+            }), encoding="utf-8")
+            guard = runtime_root / "production-diagnostic-recovery.json"
+            guard.write_text(json.dumps({
+                "schema": 1, "run_id": "diag-run", "report_path": str(report.resolve()),
+                "status": "active", "adapter": {
+                    "usb_id": "0bda:818b", "instance_id": instance_id, "bus_id": "2-4",
+                },
+                "room": {"room_id": "room-1", "owner_token": "owner-secret"},
+                "token_file": str(token_file.resolve()),
+            }), encoding="utf-8")
+
+            with patch("switchtrade.control.subprocess.run", side_effect=run), patch(
+                    "switchtrade.control.RelayClient.room",
+                    return_value={"room_version": 4}), patch(
+                    "switchtrade.control.RelayClient.room_command",
+                    return_value={"status": "closed"}) as close:
+                with TestClient(create_app(runs_root=temporary)) as client:
+                    self.assertFalse(guard.exists())
+                    self.assertFalse(token_file.exists())
+                    self.assertIsNone(client.app.state.runtime.owned_hardware)
+                    recovered = json.loads(report.read_text(encoding="utf-8"))
+                    self.assertEqual(recovered["failure"]["code"], "DIAG_RUN_INTERRUPTED")
+                    self.assertEqual(recovered["cleanup"]["status"], "passed")
+                    self.assertTrue(recovered["cleanup"]["recovered"])
+                    close.assert_called_once()
+        self.assertFalse(attached)
+
     def test_parallel_room_poll_and_connect_attach_and_launch_once(self):
         instance_id = r"USB\VID_0BDA&PID_818B\RADIO-B"
         attached = [False]
@@ -1437,6 +1661,8 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 attach_calls.append(command)
                 time.sleep(0.05)
                 attached[0] = True
+            elif command[:2] == ["usbipd.exe", "detach"]:
+                attached[0] = False
             elif command[:2] == ["usbipd.exe", "state"]:
                 result.stdout = json.dumps({"Devices": [{
                     "BusId": "2-4",
@@ -1445,6 +1671,8 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                     "Description": "Realtek RTL8192EU",
                     "InstanceId": instance_id,
                 }]})
+            elif is_linux_radio_probe(command):
+                return linux_radio_probe_result(attached[0])
             return result
 
         room = {
@@ -1499,6 +1727,10 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 self.assertEqual(len(attach_calls), 1)
                 popen.assert_called_once()
                 self.assertEqual(runtime.endpoint_session, "ABC123")
+                with patch("switchtrade.control.subprocess.run", side_effect=run):
+                    runtime.stop_endpoint()
+                    runtime.clear_session_state()
+                    runtime.release_hardware()
 
     def test_connect_requires_local_adapter_before_publishing_ready(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1536,6 +1768,8 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                     "PersistedGuid": "shared-radio", "Description": "Realtek RTL8192EU",
                     "InstanceId": instance_id,
                 }]})
+            elif is_linux_radio_probe(command):
+                return linux_radio_probe_result(attached)
             return result
 
         base_room = {
@@ -1610,6 +1844,8 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                     "PersistedGuid": "shared-radio", "Description": "Realtek RTL8192EU",
                     "InstanceId": instance_id,
                 }]})
+            elif is_linux_radio_probe(command):
+                return linux_radio_probe_result(attached)
             return result
 
         room = {

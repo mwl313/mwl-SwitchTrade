@@ -136,10 +136,12 @@ public sealed record ProductionDiagnosticViewData(
     string? FailureMessage,
     ProductionDiagnosticCheckpointViewData? Checkpoint,
     IReadOnlyList<ProductionDiagnosticStageViewData> Stages,
-    IReadOnlyList<string> Limitations)
+    IReadOnlyList<string> Limitations,
+    string CleanupStatus)
 {
     public bool IsTerminal => Status is "passed" or "partial" or "failed" or "canceled";
     public bool IsWaiting => Status == "awaiting_user" && Checkpoint is not null;
+    public bool CleanupPassed => CleanupStatus == "passed";
 }
 
 public sealed record HardwareDeviceViewData(

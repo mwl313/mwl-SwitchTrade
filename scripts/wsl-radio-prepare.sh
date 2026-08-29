@@ -39,6 +39,7 @@ Options:
   --reset-on-rx-failure  Explicit recovery: USB-reset once after an RX timeout
   --allow-experimental-hardware
                          Deprecated compatibility flag; candidates no longer require confirmation
+  --driver-only          Prepare and validate the profile driver, then exit before RX health
   --status               Report attached USB devices/drivers without mutation
   --list-profiles        Print supported profiles without mutation
 EOF
@@ -277,6 +278,7 @@ while (($#)); do
         --role) [[ $# -ge 2 ]] || die "--role needs a value"; REQUIRED_ROLE=$2; shift 2 ;;
         --reset-on-rx-failure) RESET_ON_RX_FAILURE=1; shift ;;
         --allow-experimental-hardware) shift ;;
+        --driver-only) MODE=driver; shift ;;
         --status) MODE=status; shift ;;
         --list-profiles) MODE=profiles; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -388,6 +390,8 @@ if [[ $module_file != - ]]; then
     fi
 fi
 msg "[driver] PASS usb=$USB_ID strategy=$strategy driver=$driver iface=$iface roles=$roles status=$status auto_select=$auto_select engine=$host_engine${REQUIRED_ROLE:+ required_role=$REQUIRED_ROLE}"
+
+[[ $MODE != driver ]] || exit 0
 
 health_args=()
 (( RESET_ON_RX_FAILURE == 0 )) || health_args+=(--reset-on-rx-failure)

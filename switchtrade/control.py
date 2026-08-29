@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 import base64
+import hashlib
 import os
 import json
 import re
@@ -30,7 +31,8 @@ from switchtrade.hardware import DEFAULT_PROFILE_PATH, host_engines_public, load
 from switchtrade.process_guard import AlreadyRunningError, SingleInstanceLock
 from switchtrade.production_diagnostics import (
     AP_FIXTURE, DIAGNOSTIC_CONTRACT, DEFINITIONS, DiagnosticFailure,
-    ProductionDiagnostics, SyntheticDiagnosticPeer, TIMEOUTS, fixture_metadata,
+    ProductionDiagnostics, SyntheticDiagnosticPeer, TIMEOUTS, diagnostic_member_pair,
+    fixture_metadata,
 )
 from switchtrade.relay_client import RelayClient, RelayError
 
@@ -40,6 +42,11 @@ ROOM_CONTRACT = "room-control.v1"
 PARTY_CONTRACT = "party-commit.v1"
 PUBLIC_DIRECTORY_CONTRACT = "public-directory.v1"
 RFU_CONTRACT = "rfu-tunnel.v1"
+LINUX_RADIO_ATTACH_TIMEOUT_SECONDS = 30
+LINUX_USB_ENUMERATION_TIMEOUT_SECONDS = 8
+LINUX_RADIO_CLEANUP_TIMEOUT_SECONDS = 8
+LINUX_DRIVER_QUIESCE_TIMEOUT_SECONDS = 20
+LINUX_DRIVER_PREPARE_TIMEOUT_SECONDS = 40
 
 ATTEMPT_FAILURES = {
     "relay.peer_lost": ("relay", True, "retry"),
@@ -232,12 +239,11 @@ class Runtime:
         self.groups: dict[str, Group] = {}
         self.lock = threading.RLock()
         self.hardware_lock = threading.RLock()
-        self.release_hardware: Callable[[], None] = lambda: None
+        self.release_hardware: Callable[[], dict] = lambda: {}
         self.attempt_lock = threading.Lock()
         self.launch_lock = threading.Lock()
         self.launch_cancel_generation = 0
         self.log = RunLogger("control-api", runs_root, {"profile_path": str(profile_path)})
-        self.diagnostics = ProductionDiagnostics(self.log.run_dir / "production-diagnostics")
         self.relay_url = relay_url
         self.relay = RelayClient(relay_url)
         self.relay_capabilities: set[str] = set()
@@ -249,6 +255,11 @@ class Runtime:
         runtime_root = (Path(runs_root) / "runtime" if runs_root else
                         default_runs_root().parent / "runtime")
         runtime_root.mkdir(parents=True, exist_ok=True)
+        self.diagnostics = ProductionDiagnostics(
+            self.log.run_dir / "production-diagnostics",
+            recovery_file=runtime_root / "production-diagnostic-recovery.json",
+            report_root=self.log.root,
+        )
         self.endpoint_state = runtime_root / "endpoint-state.json"
         self.party_state = runtime_root / "party-state.json"
         self.authority_state = runtime_root / "room-authority.json"
@@ -691,14 +702,16 @@ class Runtime:
             raise RuntimeError("verified WSL endpoint could not be stopped")
         return True
 
-    def stop_endpoint(self) -> None:
+    def stop_endpoint(self) -> dict:
         self.cancel_launch()
+        forced = False
         process = self.endpoint
         if process and process.poll() is None:
             process.terminate()
             try:
                 process.wait(timeout=10)
             except subprocess.TimeoutExpired:
+                forced = True
                 process.kill()
                 process.wait(timeout=5)
         endpoint = self.read_endpoint()
@@ -713,9 +726,17 @@ class Runtime:
                    self._verified_endpoint_pid(self.read_endpoint()) == pid):
                 time.sleep(0.1)
             if signaled and self._verified_endpoint_pid(self.read_endpoint()) == pid:
+                forced = True
                 self._signal_endpoint_pid(pid, "KILL", self.read_endpoint())
+                deadline = time.monotonic() + 5
+                while (time.monotonic() < deadline and
+                       self._verified_endpoint_pid(self.read_endpoint()) == pid):
+                    time.sleep(0.1)
+                if self._verified_endpoint_pid(self.read_endpoint()) == pid:
+                    raise RuntimeError("verified endpoint did not stop")
         self.endpoint = None
         self.endpoint_session = None
+        return {"endpoint_stopped": True, "endpoint_forced": forced}
 
     def clear_session_state(self) -> None:
         self.endpoint_state.unlink(missing_ok=True)
@@ -811,7 +832,9 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         runtime = Runtime(profile_path, run_path, relay_url or os.environ.get(
             "SWITCHTRADE_RELAY_URL", "http://127.0.0.1:8788"))
         runtime.release_hardware = lambda: release_owned_hardware(runtime)
-        if runtime.owned_hardware is not None and not runtime.endpoint_running():
+        if runtime.diagnostics.cleanup_incomplete:
+            recover_incomplete_diagnostic(runtime)
+        elif runtime.owned_hardware is not None and not runtime.endpoint_running():
             try:
                 runtime.release_hardware()
             except ControlApiError as error:
@@ -821,13 +844,21 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         app.state.runtime = runtime
         yield
         runtime.diagnostics.cancel_active()
-        runtime.stop_endpoint()
-        try:
-            runtime.release_hardware()
-        except ControlApiError as error:
+        runtime.cancel_launch()
+        cleanup_idle = runtime.diagnostics.wait_for_idle(TIMEOUTS["cleanup"])
+        if not cleanup_idle:
             runtime.log.event(
-                "hardware_shutdown_cleanup_failed", level="error", code=error.code,
+                "diagnostic_shutdown_cleanup_timeout", level="error",
+                code="DIAG_CLEANUP_FAILED",
             )
+        if cleanup_idle:
+            runtime.stop_endpoint()
+            try:
+                runtime.release_hardware()
+            except ControlApiError as error:
+                runtime.log.event(
+                    "hardware_shutdown_cleanup_failed", level="error", code=error.code,
+                )
         runtime.log.close("api_stopped")
 
     app = FastAPI(title="SwitchTrade Control API", version=__version__, lifespan=lifespan)
@@ -1032,15 +1063,27 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             result = subprocess.run(
                 ["usbipd.exe", "state"], capture_output=True, text=True, timeout=5, check=False)
         except (OSError, subprocess.TimeoutExpired) as error:
-            raise HTTPException(status_code=503, detail="Windows USB inventory is unavailable") from error
+            raise ControlApiError(
+                503, "adapter_inventory_unavailable", "Windows USB inventory is unavailable",
+                stage="hardware_inventory", recoverable=True, primary_action="retry",
+            ) from error
         if result.returncode != 0:
-            raise HTTPException(status_code=503, detail="Windows USB inventory is unavailable")
+            raise ControlApiError(
+                503, "adapter_inventory_unavailable", "Windows USB inventory is unavailable",
+                stage="hardware_inventory", recoverable=True, primary_action="retry",
+            )
         try:
             devices = json.loads(result.stdout).get("Devices", [])
         except (AttributeError, ValueError) as error:
-            raise HTTPException(status_code=503, detail="Windows USB inventory is invalid") from error
+            raise ControlApiError(
+                503, "adapter_inventory_invalid", "Windows USB inventory is invalid",
+                stage="hardware_inventory", recoverable=True, primary_action="retry",
+            ) from error
         if not isinstance(devices, list):
-            raise HTTPException(status_code=503, detail="Windows USB inventory is invalid")
+            raise ControlApiError(
+                503, "adapter_inventory_invalid", "Windows USB inventory is invalid",
+                stage="hardware_inventory", recoverable=True, primary_action="retry",
+            )
         profiles = {profile.usb_id: profile for profile in state.profiles}
         selected = state.read_hardware_selection()
         inventory = []
@@ -1073,107 +1116,319 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             })
         return inventory
 
-    def linux_usb_enumerated(usb_id: str) -> bool:
+    def linux_radio_probe(usb_id: str, timeout: float = 2) -> dict:
         script = (
-            "wanted=$1; for vendor in /sys/bus/usb/devices/*/idVendor; do "
-            "[ -r \"$vendor\" ] || continue; dev=${vendor%/idVendor}; "
-            "id=$(cat \"$vendor\"):$(cat \"$dev/idProduct\" 2>/dev/null); "
-            "[ \"${id,,}\" = \"$wanted\" ] && exit 0; done; exit 3"
+            "import json,pathlib,sys\n"
+            "wanted=sys.argv[1].lower(); devices=[]\n"
+            "for vendor in pathlib.Path('/sys/bus/usb/devices').glob('*/idVendor'):\n"
+            " try:\n"
+            "  dev=vendor.parent; found=(vendor.read_text().strip()+':'+(dev/'idProduct').read_text().strip()).lower()\n"
+            "  if found==wanted: devices.append(dev.resolve())\n"
+            " except OSError: pass\n"
+            "def linked(root):\n"
+            " for item in root.glob('*/device'):\n"
+            "  try:\n"
+            "   target=item.resolve()\n"
+            "   if any(target==dev or dev in target.parents for dev in devices): return True\n"
+            "  except OSError: pass\n"
+            " return False\n"
+            "print(json.dumps({'status':'present' if devices else 'absent',"
+            "'interface_present':linked(pathlib.Path('/sys/class/net')),"
+            "'phy_present':linked(pathlib.Path('/sys/class/ieee80211'))},separators=(',',':')))\n"
         )
-        command = ["bash", "-c", script, "switchtrade-usb", usb_id]
+        command = ["python3", "-c", script, usb_id]
         if os.name == "nt":
             command = [
                 "wsl.exe", "-d", os.environ.get("SWITCHTRADE_WSL_DISTRO", "SwitchTrade"),
                 "--", *command,
             ]
         try:
-            return subprocess.run(
-                command, capture_output=True, text=True, timeout=2, check=False,
-            ).returncode == 0
+            result = subprocess.run(
+                command, capture_output=True, text=True, timeout=timeout, check=False,
+            )
         except (OSError, subprocess.TimeoutExpired):
-            return False
+            return {"status": "unknown", "interface_present": None, "phy_present": None}
+        if result.returncode != 0:
+            return {"status": "unknown", "interface_present": None, "phy_present": None}
+        try:
+            value = json.loads(result.stdout)
+        except (TypeError, ValueError):
+            return {"status": "unknown", "interface_present": None, "phy_present": None}
+        if (not isinstance(value, dict) or value.get("status") not in {"present", "absent"} or
+                not isinstance(value.get("interface_present"), bool) or
+                not isinstance(value.get("phy_present"), bool)):
+            return {"status": "unknown", "interface_present": None, "phy_present": None}
+        return value
 
-    def release_owned_hardware(state: Runtime) -> None:
+    def wait_linux_radio_state(usb_id: str, desired: str, timeout: float = 8,
+                               *, require_radio: bool = True) -> dict:
+        deadline = time.monotonic() + timeout
+        consecutive = 0
+        last = {"status": "unknown", "interface_present": None, "phy_present": None}
+        while time.monotonic() < deadline:
+            last = linux_radio_probe(usb_id, timeout=min(2, max(0.2, deadline - time.monotonic())))
+            matches = last["status"] == desired
+            if desired == "present" and require_radio:
+                # usbipd reports the device before the kernel driver has necessarily
+                # finished registering its netdev and PHY. Starting lsusb/iw during
+                # that probe window can wedge this adapter's next enumeration.
+                matches = matches and last["interface_present"] and last["phy_present"]
+            if desired == "absent":
+                matches = matches and not last["interface_present"] and not last["phy_present"]
+            consecutive = consecutive + 1 if matches else 0
+            if consecutive >= 2:
+                return last
+            time.sleep(0.1)
+        return last
+
+    def prepare_linux_radio_driver(state: Runtime, usb_id: str) -> None:
+        root = Path(__file__).resolve().parents[1]
+        command = [str(root / "scripts" / "wsl-radio-prepare.sh"),
+                   "--driver-only", "--usb-id", usb_id]
+        if os.name == "nt":
+            distro = os.environ.get("SWITCHTRADE_WSL_DISTRO", "SwitchTrade")
+            wsl_root = os.environ.get("SWITCHTRADE_WSL_ROOT", "/opt/switchtrade")
+            command = [
+                "wsl.exe", "-d", distro, "-u", "root", "--cd", wsl_root, "--",
+                "./scripts/wsl-radio-prepare.sh", "--driver-only", "--usb-id", usb_id,
+            ]
+        try:
+            result = subprocess.run(
+                command, capture_output=True, text=True,
+                timeout=LINUX_DRIVER_PREPARE_TIMEOUT_SECONDS, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise ControlApiError(
+                503, "adapter_linux_driver_prepare_unavailable",
+                "Linux could not prepare the selected radio driver",
+                stage="hardware_attach", recoverable=True,
+                primary_action="retry_attach",
+            ) from error
+        if result.returncode != 0:
+            state.log.event(
+                "hardware_driver_prepare_failed", level="error", usb_id=usb_id,
+                exit_code=result.returncode,
+                output=redact_text((result.stderr or result.stdout)[-2000:]),
+            )
+            raise ControlApiError(
+                503, "adapter_linux_driver_prepare_failed",
+                "Linux could not prepare the selected radio driver",
+                stage="hardware_attach", recoverable=True,
+                primary_action="repair_adapter",
+            )
+        state.log.event("hardware_gate_passed", gate="driver_prepared", usb_id=usb_id)
+
+    def quiesce_linux_driver(usb_id: str) -> None:
+        """Synchronously unbind only the selected USB device before usbipd detaches it."""
+        script = (
+            "import pathlib,sys\n"
+            "wanted=sys.argv[1].lower(); failures=[]\n"
+            "for vendor in pathlib.Path('/sys/bus/usb/devices').glob('*/idVendor'):\n"
+            " try:\n"
+            "  dev=vendor.parent; found=(vendor.read_text().strip()+':'+(dev/'idProduct').read_text().strip()).lower()\n"
+            " except OSError: continue\n"
+            " if found!=wanted: continue\n"
+            " for interface in list(dev.glob('*:*')):\n"
+            "  driver=interface/'driver'\n"
+            "  if not driver.is_symlink(): continue\n"
+            "  try: (driver.resolve()/'unbind').write_text(interface.name)\n"
+            "  except FileNotFoundError: pass\n"
+            "  except OSError as error: failures.append(type(error).__name__)\n"
+            "sys.exit(4 if failures else 0)\n"
+        )
+        command = ["python3", "-c", script, usb_id, "switchtrade-radio-quiesce"]
+        if os.name == "nt":
+            command = [
+                "wsl.exe", "-d", os.environ.get("SWITCHTRADE_WSL_DISTRO", "SwitchTrade"),
+                "-u", "root", "--", *command,
+            ]
+        try:
+            result = subprocess.run(
+                command, capture_output=True, text=True,
+                timeout=LINUX_DRIVER_QUIESCE_TIMEOUT_SECONDS, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise ControlApiError(
+                503, "adapter_linux_quiesce_unavailable",
+                "Linux could not quiesce the selected radio driver before USB detachment",
+                stage="hardware_cleanup", recoverable=True,
+                primary_action="restart_backend",
+            ) from error
+        if result.returncode != 0:
+            raise ControlApiError(
+                503, "adapter_linux_quiesce_failed",
+                "Linux could not release the selected radio driver before USB detachment",
+                stage="hardware_cleanup", recoverable=True,
+                primary_action="restart_backend",
+            )
+
+    def release_owned_hardware(state: Runtime) -> dict:
         if state.owned_hardware is None:
-            return
+            return {
+                "hardware_owned": False, "windows_usb_detached": True,
+                "linux_driver_quiesced": True,
+                "linux_usb_absent": True, "interface_absent": True,
+                "phy_absent": True, "radio_quiescent": True,
+            }
         with state.hardware_lock:
             owned = state.owned_hardware
             if owned is None:
-                return
-            try:
-                inventory = usbipd_inventory(state)
-            except HTTPException as error:
-                raise ControlApiError(
-                    503, "adapter_detach_unavailable",
-                    "Windows USB inventory is unavailable while returning the adapter",
-                    stage="hardware_cleanup", recoverable=True,
-                    primary_action="retry_cleanup",
-                ) from error
+                return {
+                    "hardware_owned": False, "windows_usb_detached": True,
+                    "linux_driver_quiesced": True,
+                    "linux_usb_absent": True, "interface_absent": True,
+                    "phy_absent": True, "radio_quiescent": True,
+                }
+            inventory = usbipd_inventory(state)
             device = next((item for item in inventory if
                            item["instance_id"].casefold() == owned["instance_id"].casefold()), None)
-            if device is None or not device["attached"]:
-                state.clear_hardware_attachment()
-                state.log.event(
-                    "hardware_attachment_released", usb_id=owned["usb_id"],
-                    bus_id=owned["bus_id"], already_detached=True,
-                )
-                return
-            try:
-                result = subprocess.run(
-                    ["usbipd.exe", "detach", "--busid", device["bus_id"]],
-                    capture_output=True, text=True, timeout=15, check=False,
-                )
-            except (OSError, subprocess.TimeoutExpired) as error:
-                state.log.event(
-                    "hardware_detach_failed", level="error", usb_id=owned["usb_id"],
-                    bus_id=device["bus_id"], error_type=type(error).__name__,
-                )
-                raise ControlApiError(
-                    503, "adapter_detach_unavailable",
-                    "Windows USB detachment did not complete",
-                    stage="hardware_cleanup", recoverable=True,
-                    primary_action="retry_cleanup",
-                ) from error
-            if result.returncode != 0:
-                state.log.event(
-                    "hardware_detach_failed", level="error", usb_id=owned["usb_id"],
-                    bus_id=device["bus_id"], exit_code=result.returncode,
-                    output=result.stdout[-2000:], error=result.stderr[-2000:],
-                )
-                raise ControlApiError(
-                    503, "adapter_detach_failed",
-                    "The selected adapter could not be returned to Windows",
-                    stage="hardware_cleanup", recoverable=True,
-                    primary_action="retry_cleanup",
-                )
-            for _attempt in range(40):
+            already_detached = device is None or not device["attached"]
+            detach_bus = device["bus_id"] if device is not None else owned["bus_id"]
+            quiesce_linux_driver(owned["usb_id"])
+            if not already_detached:
                 try:
-                    current_inventory = usbipd_inventory(state)
-                except HTTPException as error:
+                    result = subprocess.run(
+                        ["usbipd.exe", "detach", "--busid", detach_bus],
+                        capture_output=True, text=True, timeout=15, check=False,
+                    )
+                except (OSError, subprocess.TimeoutExpired) as error:
+                    state.log.event(
+                        "hardware_detach_failed", level="error", usb_id=owned["usb_id"],
+                        bus_id=detach_bus, error_type=type(error).__name__,
+                    )
                     raise ControlApiError(
                         503, "adapter_detach_unavailable",
-                        "Windows USB inventory is unavailable while verifying adapter cleanup",
+                        "Windows USB detachment did not complete",
                         stage="hardware_cleanup", recoverable=True,
                         primary_action="retry_cleanup",
                     ) from error
+                if result.returncode != 0:
+                    state.log.event(
+                        "hardware_detach_failed", level="error", usb_id=owned["usb_id"],
+                        bus_id=detach_bus, exit_code=result.returncode,
+                        output=result.stdout[-2000:], error=result.stderr[-2000:],
+                    )
+                    raise ControlApiError(
+                        503, "adapter_detach_failed",
+                        "The selected adapter could not be returned to Windows",
+                        stage="hardware_cleanup", recoverable=True,
+                        primary_action="retry_cleanup",
+                    )
+            windows_detached = False
+            for _attempt in range(40):
+                current_inventory = usbipd_inventory(state)
                 current = next((item for item in current_inventory if
                                 item["instance_id"].casefold() == owned["instance_id"].casefold()), None)
                 if current is None or not current["attached"]:
-                    state.clear_hardware_attachment()
-                    state.log.event(
-                        "hardware_attachment_released", usb_id=owned["usb_id"],
-                        bus_id=device["bus_id"], already_detached=False,
-                    )
-                    return
+                    windows_detached = True
+                    break
                 time.sleep(0.1)
-            raise ControlApiError(
-                503, "adapter_detach_verification_failed",
-                "Windows did not confirm that the selected adapter returned from WSL",
-                stage="hardware_cleanup", recoverable=True,
-                primary_action="retry_cleanup",
+            if not windows_detached:
+                raise ControlApiError(
+                    503, "adapter_detach_verification_failed",
+                    "Windows did not confirm that the selected adapter returned from WSL",
+                    stage="hardware_cleanup", recoverable=True,
+                    primary_action="retry_cleanup",
+                )
+            linux = wait_linux_radio_state(
+                owned["usb_id"], "absent", timeout=LINUX_RADIO_CLEANUP_TIMEOUT_SECONDS)
+            linux_clean = (
+                linux["status"] == "absent" and
+                linux["interface_present"] is False and
+                linux["phy_present"] is False
+            )
+            if not linux_clean:
+                code = ("adapter_linux_cleanup_unavailable" if linux["status"] == "unknown" else
+                        "adapter_linux_cleanup_timeout")
+                raise ControlApiError(
+                    503, code,
+                    "Linux did not confirm that the selected adapter and radio interfaces were released",
+                    stage="hardware_cleanup", recoverable=True,
+                    primary_action="restart_backend",
+                )
+            state.clear_hardware_attachment()
+            state.log.event(
+                "hardware_attachment_released", usb_id=owned["usb_id"],
+                bus_id=detach_bus, already_detached=already_detached,
+                linux_driver_quiesced=True, linux_usb_absent=True,
+                interface_absent=True, phy_absent=True,
+            )
+            return {
+                "hardware_owned": True, "windows_usb_detached": True,
+                "linux_driver_quiesced": True,
+                "linux_usb_absent": True, "interface_absent": True,
+                "phy_absent": True, "radio_quiescent": True,
+            }
+
+    def recover_incomplete_diagnostic(state: Runtime) -> None:
+        recovery = state.diagnostics.recovery_state()
+        if not recovery:
+            return
+        evidence = {
+            "endpoint_stopped": False, "synthetic_peer_stopped": True,
+            "relay_room_closed": recovery.get("room") is None,
+            "credential_file_deleted": recovery.get("token_file") is None,
+            "hardware_owned": bool(recovery.get("adapter")),
+            "windows_usb_detached": False, "linux_driver_quiesced": False,
+            "linux_usb_absent": False,
+            "interface_absent": False, "phy_absent": False, "radio_quiescent": False,
+        }
+        try:
+            evidence.update(state.stop_endpoint())
+            state.clear_session_state()
+            room = recovery.get("room")
+            if isinstance(room, dict) and room.get("room_id") and room.get("owner_token"):
+                try:
+                    snapshot = state.relay.room(room["room_id"], room["owner_token"])
+                    state.relay.room_command(
+                        room["room_id"], room["owner_token"], "", method="DELETE",
+                        expected_version=snapshot["room_version"],
+                    )
+                except RelayError as error:
+                    if error.status not in {404, 410} and error.code not in {
+                            "room_not_found", "room_not_active"}:
+                        raise
+                evidence["relay_room_closed"] = True
+            token_path = recovery.get("token_file")
+            if isinstance(token_path, str) and token_path:
+                token = Path(token_path).resolve()
+                report = Path(str(recovery.get("report_path", ""))).resolve()
+                token.relative_to(report.parent)
+                token.unlink(missing_ok=True)
+                evidence["credential_file_deleted"] = True
+            adapter = recovery.get("adapter") or {}
+            required = ("usb_id", "instance_id", "bus_id")
+            if state.owned_hardware is None and all(isinstance(adapter.get(key), str) and
+                                                    adapter[key] for key in required):
+                state.write_hardware_attachment(
+                    adapter["usb_id"], adapter["instance_id"], adapter["bus_id"])
+            if state.owned_hardware is not None:
+                evidence.update(state.release_hardware())
+            elif isinstance(adapter.get("usb_id"), str):
+                linux = wait_linux_radio_state(
+                    adapter["usb_id"], "absent", timeout=LINUX_RADIO_CLEANUP_TIMEOUT_SECONDS)
+                if (linux["status"] != "absent" or
+                        linux["interface_present"] is not False or
+                        linux["phy_present"] is not False):
+                    raise RuntimeError("Linux radio state is not clean after interrupted diagnostic")
+                evidence.update(
+                    windows_usb_detached=True, linux_driver_quiesced=True,
+                    linux_usb_absent=True,
+                    interface_absent=True, phy_absent=True, radio_quiescent=True,
+                )
+            state.diagnostics.complete_recovery(evidence)
+            state.log.event(
+                "production_diagnostic_recovery_completed",
+                diagnostic_run_id=recovery.get("run_id"),
+            )
+        except (ControlApiError, RelayError, OSError, RuntimeError, ValueError) as error:
+            state.diagnostics.fail_recovery(type(error).__name__)
+            state.log.event(
+                "production_diagnostic_recovery_failed", level="error",
+                diagnostic_run_id=recovery.get("run_id"), error_type=type(error).__name__,
             )
 
-    def _attach_selected_hardware(state: Runtime) -> str | None:
+    def _attach_selected_hardware(state: Runtime, *, cleanup_on_failure: bool = True) -> str | None:
         selected = state.read_hardware_selection()
         if not selected:
             return None
@@ -1183,7 +1438,10 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             item["instance_id"].casefold() == selected_instance.casefold() if selected_instance
             else item["bus_id"] == selected.get("bus_id"))), None)
         if device is None or not device["selectable"]:
-            raise HTTPException(status_code=409, detail="Select an available Wi-Fi adapter in Settings")
+            raise ControlApiError(
+                409, "adapter_not_available", "Select an available Wi-Fi adapter in Settings",
+                stage="hardware_attach", recoverable=True, primary_action="select_adapter",
+            )
         if device["bus_id"] != selected.get("bus_id") or not selected_instance:
             state.write_hardware_selection(
                 device["usb_id"], device["instance_id"], device["bus_id"])
@@ -1220,14 +1478,15 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                     capture_output=True, text=True, timeout=15, check=False,
                 )
             except (OSError, subprocess.TimeoutExpired) as error:
-                try:
-                    release_owned_hardware(state)
-                except ControlApiError as cleanup_error:
-                    state.log.event(
-                        "hardware_attach_cleanup_failed", level="error",
-                        code=cleanup_error.code, usb_id=device["usb_id"],
-                        bus_id=device["bus_id"],
-                    )
+                if cleanup_on_failure:
+                    try:
+                        release_owned_hardware(state)
+                    except ControlApiError as cleanup_error:
+                        state.log.event(
+                            "hardware_attach_cleanup_failed", level="error",
+                            code=cleanup_error.code, usb_id=device["usb_id"],
+                            bus_id=device["bus_id"],
+                        )
                 state.log.event(
                     "hardware_attach_failed", level="error", usb_id=device["usb_id"],
                     bus_id=device["bus_id"], error_type=type(error).__name__,
@@ -1239,14 +1498,15 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                     primary_action="retry_attach",
                 ) from error
             if result.returncode != 0:
-                try:
-                    release_owned_hardware(state)
-                except ControlApiError as cleanup_error:
-                    state.log.event(
-                        "hardware_attach_cleanup_failed", level="error",
-                        code=cleanup_error.code, usb_id=device["usb_id"],
-                        bus_id=device["bus_id"],
-                    )
+                if cleanup_on_failure:
+                    try:
+                        release_owned_hardware(state)
+                    except ControlApiError as cleanup_error:
+                        state.log.event(
+                            "hardware_attach_cleanup_failed", level="error",
+                            code=cleanup_error.code, usb_id=device["usb_id"],
+                            bus_id=device["bus_id"],
+                        )
                 state.log.event(
                     "hardware_attach_failed", level="error", usb_id=device["usb_id"],
                     bus_id=device["bus_id"], exit_code=result.returncode,
@@ -1267,14 +1527,15 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                     break
                 time.sleep(0.1)
             if not attached:
-                try:
-                    release_owned_hardware(state)
-                except ControlApiError as cleanup_error:
-                    state.log.event(
-                        "hardware_attach_cleanup_failed", level="error",
-                        code=cleanup_error.code, usb_id=device["usb_id"],
-                        bus_id=device["bus_id"],
-                    )
+                if cleanup_on_failure:
+                    try:
+                        release_owned_hardware(state)
+                    except ControlApiError as cleanup_error:
+                        state.log.event(
+                            "hardware_attach_cleanup_failed", level="error",
+                            code=cleanup_error.code, usb_id=device["usb_id"],
+                            bus_id=device["bus_id"],
+                        )
                 state.log.event(
                     "hardware_attach_failed", level="error", usb_id=device["usb_id"],
                     bus_id=device["bus_id"], code="adapter_attach_verification_failed",
@@ -1289,21 +1550,50 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 "hardware_gate_passed", gate="attached", usb_id=device["usb_id"],
                 bus_id=device["bus_id"],
             )
-        enumerated = False
-        for _attempt in range(80):
-            if linux_usb_enumerated(device["usb_id"]):
-                enumerated = True
-                break
-            time.sleep(0.1)
-        if not enumerated:
+        linux = wait_linux_radio_state(
+            device["usb_id"], "present", timeout=LINUX_USB_ENUMERATION_TIMEOUT_SECONDS,
+            require_radio=False)
+        if linux["status"] != "present":
             state.log.event(
                 "hardware_attach_failed", level="error", usb_id=device["usb_id"],
                 bus_id=device["bus_id"], code="adapter_linux_enumeration_timeout",
+                linux_status=linux["status"],
             )
-            if state.owned_hardware is not None:
+            if cleanup_on_failure and state.owned_hardware is not None:
                 release_owned_hardware(state)
+            code = ("adapter_linux_enumeration_unavailable" if linux["status"] == "unknown" else
+                    "adapter_linux_enumeration_timeout")
             raise ControlApiError(
-                503, "adapter_linux_enumeration_timeout",
+                503, code,
+                "Linux did not enumerate the selected adapter before the deadline",
+                stage="hardware_attach", recoverable=True,
+                primary_action="retry_attach",
+            )
+        try:
+            prepare_linux_radio_driver(state, device["usb_id"])
+        except ControlApiError:
+            if cleanup_on_failure and state.owned_hardware is not None:
+                release_owned_hardware(state)
+            raise
+        linux = wait_linux_radio_state(
+            device["usb_id"], "present", timeout=LINUX_RADIO_ATTACH_TIMEOUT_SECONDS)
+        linux_ready = (linux["status"] == "present" and
+                       linux["interface_present"] is True and
+                       linux["phy_present"] is True)
+        if not linux_ready:
+            state.log.event(
+                "hardware_attach_failed", level="error", usb_id=device["usb_id"],
+                bus_id=device["bus_id"], code="adapter_linux_enumeration_timeout",
+                linux_status=linux["status"],
+                interface_present=linux["interface_present"],
+                phy_present=linux["phy_present"],
+            )
+            if cleanup_on_failure and state.owned_hardware is not None:
+                release_owned_hardware(state)
+            code = ("adapter_linux_enumeration_unavailable" if linux["status"] == "unknown" else
+                    "adapter_linux_enumeration_timeout")
+            raise ControlApiError(
+                503, code,
                 "Linux did not enumerate the selected adapter before the deadline",
                 stage="hardware_attach", recoverable=True,
                 primary_action="retry_attach",
@@ -1314,11 +1604,11 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         )
         return device["usb_id"]
 
-    def attach_selected_hardware(state: Runtime) -> str | None:
+    def attach_selected_hardware(state: Runtime, *, cleanup_on_failure: bool = True) -> str | None:
         # usbipd bus ownership changes while attach is running. A single process-wide lock keeps
         # polling and button requests from issuing competing attach commands for the same device.
         with state.hardware_lock:
-            return _attach_selected_hardware(state)
+            return _attach_selected_hardware(state, cleanup_on_failure=cleanup_on_failure)
 
     def end_local_session(state: Runtime) -> None:
         with state.lock:
@@ -1366,7 +1656,10 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         except RelayError as error:
             raise relay_api_error(error) from error
         except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
+            raise ControlApiError(
+                400, "runtime_plan_invalid", str(error), stage="endpoint",
+                recoverable=False, primary_action="return_to_diagnostics",
+            ) from error
         launch_key = attempt_id or code
         generation = (state.current_launch_generation()
                       if launch_generation is None else launch_generation)
@@ -1501,7 +1794,8 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                         "endpoint_launch_failed", level="error", attempt_id=launch_key,
                         launch_nonce=launch_nonce, error=type(error).__name__,
                     )
-                    state.release_hardware()
+                    if diagnostic_run_id is None:
+                        state.release_hardware()
                     raise ControlApiError(
                         503, "endpoint_start_failed", message, stage="endpoint",
                         recoverable=True, primary_action="retry",
@@ -1565,7 +1859,8 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                     output=detail,
                 )
                 state.endpoint_launch_ack.unlink(missing_ok=True)
-                state.release_hardware()
+                if diagnostic_run_id is None:
+                    state.release_hardware()
                 raise ControlApiError(
                     503, code_value, message, stage=stage,
                     recoverable=True, primary_action=action,
@@ -1668,6 +1963,8 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             )
             return {"status": initialized.get("state", "initializing"),
                     "session_id": code, "hardware": plan,
+                    "attempt_id": launch_key, "launch_nonce": launch_nonce,
+                    "endpoint_pid": initialized["pid"],
                     "run_id": state.log.run_id}
 
     def launch_authoritative_attempt(state: Runtime, room: dict, *,
@@ -2067,15 +2364,24 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         state = runtime(request)
         require_no_diagnostic(state)
         if state.endpoint_running():
-            raise HTTPException(status_code=409, detail="End the current connection before changing adapters")
+            raise ControlApiError(
+                409, "session_active", "End the current connection before changing adapters",
+                stage="hardware_selection", recoverable=True, primary_action="end_session",
+            )
         usb_id = payload.usb_id.lower()
         device = next((item for item in usbipd_inventory(state)
                        if item["bus_id"] == payload.bus_id and item["usb_id"] == usb_id and
                        item["instance_id"].casefold() == payload.instance_id.casefold()), None)
         if device is None:
-            raise HTTPException(status_code=404, detail="The selected adapter is no longer connected")
+            raise ControlApiError(
+                404, "adapter_not_available", "The selected adapter is no longer connected",
+                stage="hardware_selection", recoverable=True, primary_action="refresh_adapters",
+            )
         if not device["selectable"]:
-            raise HTTPException(status_code=409, detail="This adapter is quarantined and cannot trade")
+            raise ControlApiError(
+                409, "adapter_quarantined", "This adapter is quarantined and cannot trade",
+                stage="hardware_selection", recoverable=False, primary_action="select_adapter",
+            )
         state.write_hardware_selection(usb_id, device["instance_id"], device["bus_id"])
         state.log.event("hardware_selected", usb_id=usb_id, bus_id=payload.bus_id,
                         experimental=device["experimental"])
@@ -2208,108 +2514,255 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                   "The selected adapter, installed contracts, and hosted relay are ready.")
         run.transition("running", "preflight")
 
-    def diagnostic_hardware_gate(state: Runtime, run, usb_id: str) -> None:
-        try:
-            selected_usb_id = attach_selected_hardware(state)
-        except ControlApiError as error:
-            raise DiagnosticFailure("DIAG_RADIO_GATE_FAILED", error.message) from error
-        try:
-            if selected_usb_id != usb_id.lower():
+    class DiagnosticResources:
+        """Owns the one adapter and ephemeral resources for a diagnostic run."""
+
+        def __init__(self, state: Runtime, run):
+            self.state = state
+            self.run = run
+            self.selection = state.read_hardware_selection()
+            self.hardware_acquired = False
+            self.room: dict | None = None
+            self.peer: SyntheticDiagnosticPeer | None = None
+            self.token_file: Path | None = None
+            self.evidence = {
+                "endpoint_stopped": True, "endpoint_forced": False,
+                "synthetic_peer_stopped": True, "relay_room_closed": True,
+                "credential_file_deleted": True, "hardware_owned": False,
+                "windows_usb_detached": True, "linux_driver_quiesced": True,
+                "linux_usb_absent": True,
+                "interface_absent": True, "phy_absent": True,
+                "radio_quiescent": True,
+            }
+            state.diagnostics.update_recovery(run.run_id, adapter={
+                key: self.selection.get(key) for key in ("usb_id", "instance_id", "bus_id")
+            })
+
+        def ensure_hardware(self) -> str:
+            selected = self.state.read_hardware_selection()
+            expected_instance = str(self.selection.get("instance_id", ""))
+            if (selected.get("usb_id", "").lower() != self.run.usb_id or
+                    str(selected.get("instance_id", "")).casefold() != expected_instance.casefold()):
+                raise DiagnosticFailure("DIAG_ADAPTER_CHANGED",
+                                        "The selected adapter changed during the diagnostic.")
+            if self.hardware_acquired:
+                owned = self.state.owned_hardware or {}
+                linux = linux_radio_probe(self.run.usb_id)
+                if (str(owned.get("instance_id", "")).casefold() != expected_instance.casefold() or
+                        linux["status"] != "present"):
+                    raise DiagnosticFailure("DIAG_RADIO_GATE_FAILED",
+                                            "The diagnostic lost ownership of the selected adapter.")
+                return self.run.usb_id
+            try:
+                selected_usb_id = attach_selected_hardware(
+                    self.state, cleanup_on_failure=False)
+            except ControlApiError as error:
+                owned = self.state.owned_hardware or {}
+                self.hardware_acquired = (
+                    str(owned.get("instance_id", "")).casefold() == expected_instance.casefold())
+                raise DiagnosticFailure("DIAG_RADIO_GATE_FAILED",
+                                        f"{error.code}: {error.message}") from error
+            if selected_usb_id != self.run.usb_id:
                 raise DiagnosticFailure("DIAG_ADAPTER_CHANGED",
                                         "The selected adapter changed before it reached Linux.")
-            command = hardware_diagnostic_command(
-                selected_usb_id, "quick", "host", state.log.run_dir / "hardware-diagnostics",
-                active_check=True,
+            owned = self.state.owned_hardware or {}
+            if str(owned.get("instance_id", "")).casefold() != expected_instance.casefold():
+                raise DiagnosticFailure("DIAG_ADAPTER_CHANGED",
+                                        "Hardware ownership does not match the selected adapter.")
+            self.hardware_acquired = True
+            self.evidence.update(
+                hardware_owned=True, windows_usb_detached=False, linux_usb_absent=False,
+                interface_absent=False, phy_absent=False, radio_quiescent=False,
             )
-            try:
-                result = subprocess.run(
-                    command, cwd=Path(__file__).resolve().parents[1], capture_output=True,
-                    text=True, timeout=TIMEOUTS["preflight"], check=False,
-                )
-            except (OSError, subprocess.TimeoutExpired) as error:
-                raise DiagnosticFailure("DIAG_RADIO_GATE_FAILED",
-                                        "The production hardware gate did not complete.") from error
-            report = None
-            for line in reversed(result.stdout.splitlines()):
-                try:
-                    candidate = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(candidate, dict) and candidate.get("contract_version") == "hardware-diagnostic.v1":
-                    report = candidate
-                    break
-            if report is None or report.get("overall_status") == "failed":
-                raise DiagnosticFailure("DIAG_RADIO_GATE_FAILED",
-                                        "The production hardware gate did not pass.")
-            run.stage("hardware", "passed", "DIAG_HARDWARE_GATE_PASSED",
-                      "The selected adapter passed the production hardware gate.",
-                      details={"overall_status": report.get("overall_status", "unknown"),
-                               "hardware_run_id": report.get("run_id", "unknown")})
-            run.set_result("hardware_gate_passed")
-        finally:
-            state.release_hardware()
+            self.state.diagnostics.update_recovery(
+                self.run.run_id, status="hardware_owned", adapter={
+                    key: owned.get(key) for key in ("usb_id", "instance_id", "bus_id")
+                })
+            return selected_usb_id
 
-    def diagnostic_room_pair(state: Runtime, local_switch_role: str) -> dict:
+        def register_room(self, room: dict) -> None:
+            self.room = room
+            self.evidence["relay_room_closed"] = False
+            self.state.diagnostics.update_recovery(self.run.run_id, room={
+                "room_id": room["room_id"], "owner_token": room["owner_token"],
+            })
+
+        def register_peer(self, peer: SyntheticDiagnosticPeer) -> None:
+            self.peer = peer
+            self.evidence["synthetic_peer_stopped"] = False
+
+        def register_token_file(self, token_file: Path) -> None:
+            self.token_file = token_file
+            self.evidence["credential_file_deleted"] = False
+            self.state.diagnostics.update_recovery(
+                self.run.run_id, token_file=str(token_file.resolve()))
+
+        def cleanup_stage(self, preceding: DiagnosticFailure | None = None) -> None:
+            errors = []
+            try:
+                stopped = self.state.stop_endpoint()
+                self.evidence.update(stopped)
+                self.state.clear_session_state()
+            except Exception as error:
+                self.evidence["endpoint_stopped"] = False
+                errors.append(f"endpoint:{type(error).__name__}")
+            if self.peer is not None:
+                try:
+                    self.peer.stop()
+                    self.peer = None
+                    self.evidence["synthetic_peer_stopped"] = True
+                except Exception as error:
+                    errors.append(f"peer:{type(error).__name__}")
+            if self.room is not None:
+                try:
+                    close_diagnostic_room(self.state, self.room)
+                    self.room = None
+                    self.evidence["relay_room_closed"] = True
+                    self.state.diagnostics.update_recovery(self.run.run_id, room=None)
+                except DiagnosticFailure as error:
+                    errors.append(f"room:{error.code}")
+            if self.token_file is not None:
+                try:
+                    self.token_file.unlink(missing_ok=True)
+                    self.token_file = None
+                    self.evidence["credential_file_deleted"] = True
+                    self.state.diagnostics.update_recovery(self.run.run_id, token_file=None)
+                except OSError as error:
+                    errors.append(f"credential:{type(error).__name__}")
+            if errors:
+                raise DiagnosticFailure(
+                    "DIAG_CLEANUP_FAILED",
+                    "The diagnostic stage did not release every endpoint or relay resource.",
+                    preceding=preceding,
+                )
+
+        def final_cleanup(self) -> dict:
+            started = time.monotonic()
+            errors = []
+            try:
+                self.cleanup_stage()
+            except DiagnosticFailure as error:
+                errors.append(error.code)
+            owned = self.state.owned_hardware or {}
+            owns_selected = (
+                str(owned.get("instance_id", "")).casefold() ==
+                str(self.selection.get("instance_id", "")).casefold()
+            )
+            if self.hardware_acquired or owns_selected:
+                try:
+                    self.evidence.update(self.state.release_hardware())
+                except ControlApiError as error:
+                    errors.append(error.code)
+                    self.evidence.update(
+                        windows_usb_detached=False, linux_driver_quiesced=False,
+                        linux_usb_absent=False,
+                        interface_absent=False, phy_absent=False, radio_quiescent=False,
+                    )
+            self.evidence["duration_ms"] = round((time.monotonic() - started) * 1000)
+            self.state.diagnostics.update_recovery(
+                self.run.run_id, cleanup_evidence=self.evidence,
+                status="cleaned" if not errors else "unresolved",
+            )
+            return {
+                "status": "passed" if not errors else "failed",
+                "evidence": dict(self.evidence),
+                **({"failure_codes": errors} if errors else {}),
+            }
+
+    def diagnostic_hardware_gate(state: Runtime, run, resources: DiagnosticResources) -> None:
+        selected_usb_id = resources.ensure_hardware()
+        command = hardware_diagnostic_command(
+            selected_usb_id, "quick", "host", state.log.run_dir / "hardware-diagnostics",
+            active_check=True,
+        )
+        try:
+            result = subprocess.run(
+                command, cwd=Path(__file__).resolve().parents[1], capture_output=True,
+                text=True, timeout=TIMEOUTS["preflight"], check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise DiagnosticFailure("DIAG_RADIO_GATE_FAILED",
+                                    "The production hardware gate did not complete.") from error
+        report = None
+        for line in reversed(result.stdout.splitlines()):
+            try:
+                candidate = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(candidate, dict) and candidate.get("contract_version") == "hardware-diagnostic.v1":
+                report = candidate
+                break
+        if report is None or report.get("overall_status") == "failed":
+            raise DiagnosticFailure("DIAG_RADIO_GATE_FAILED",
+                                    "The production hardware gate did not pass.")
+        run.stage("hardware", "passed", "DIAG_HARDWARE_GATE_PASSED",
+                  "Hardware stage passed — the diagnostic suite is continuing.",
+                  details={"overall_status": report.get("overall_status", "unknown"),
+                           "hardware_run_id": report.get("run_id", "unknown")})
+        run.set_result("hardware_gate_passed")
+
+    def diagnostic_room_pair(state: Runtime, resources: DiagnosticResources,
+                             local_switch_role: str) -> dict:
         """Create an ephemeral two-seat authoritative room without touching saved room authority."""
-        owner = owner_room = None
         try:
             local_is_owner = local_switch_role == "creator"
             owner = state.relay.create_trade_room({
                 "name": "Production diagnostic", "visibility": "private",
-                "trainer_display_name": "Diagnostic peer" if not local_is_owner else "Diagnostic local",
+                "trainer_display_name": "Diagnostic local" if local_is_owner else "Diagnostic peer",
                 "game": "FireRed", "language": "English", "offering": "", "wanted": "", "note": "",
             }, state.client_id)
             owner_room = owner["room"]
-            joined = state.relay.join_trade_room(owner_room["room_code"],
-                                                 "Diagnostic local" if not local_is_owner else "Diagnostic peer",
-                                                 f"{state.client_id}-diagnostic")
-            local = owner if local_is_owner else joined
-            peer = joined if local_is_owner else owner
-            owner_role = local_switch_role if local_is_owner else (
-                "finder" if local_switch_role == "creator" else "creator")
-            room = state.relay.room_command(
-                owner_room["room_id"], owner["member_token"], "/ready",
-                {"ready": True, "switch_room_role": owner_role},
-                expected_version=owner_room["room_version"],
-            )
-            room = state.relay.room_command(
-                owner_room["room_id"], local["member_token"], "/ready",
-                {"ready": True, "switch_room_role": local_switch_role},
-                expected_version=room["room_version"],
-            )
-            attempt = room.get("attempt") or {}
-            if not attempt.get("role_locked") or not attempt.get("attempt_id"):
-                raise DiagnosticFailure("DIAG_PRIVATE_ROOM_FAILED",
-                                        "The private diagnostic room did not create an authoritative attempt.")
-            return {
+            resources.register_room({
                 "room_id": owner_room["room_id"], "room_code": owner_room["room_code"],
-                "owner_token": owner["member_token"], "local_token": local["member_token"],
-                "peer_token": peer["member_token"], "attempt_id": attempt["attempt_id"],
-                "local_seat": "member_a" if local_is_owner else "member_b",
+                "owner_token": owner["member_token"],
+            })
+            joined = state.relay.join_trade_room(
+                owner_room["room_code"], "Diagnostic peer" if local_is_owner else "Diagnostic local",
+                f"{state.client_id}-diagnostic",
+            )
+            pair = diagnostic_member_pair(owner, joined, local_switch_role)
+            room = owner_room
+            for member, role in ((pair["local"], pair["local_role"]),
+                                 (pair["peer"], pair["peer_role"])):
+                room = state.relay.room_command(
+                    owner_room["room_id"], member["member_token"], "/ready",
+                    {"ready": True, "switch_room_role": role},
+                    expected_version=room["room_version"],
+                )
+            local_room = state.relay.room(owner_room["room_id"], pair["local"]["member_token"])
+            attempt = local_room.get("attempt") or {}
+            local_member = next(
+                (member for member in local_room.get("members", []) if member.get("is_local")), {})
+            peer_member = next(
+                (member for member in local_room.get("members", []) if not member.get("is_local")), {})
+            valid = (
+                attempt.get("role_locked") is True and bool(attempt.get("attempt_id")) and
+                attempt.get("local_switch_role") == pair["local_role"] and
+                local_member.get("seat") == pair["local_seat"] and
+                local_member.get("switch_room_role") == pair["local_role"] and
+                peer_member.get("switch_room_role") == pair["peer_role"]
+            )
+            if not valid:
+                raise DiagnosticFailure(
+                    "DIAG_PRIVATE_ROOM_FAILED",
+                    "The private diagnostic room did not lock the expected seats and Switch roles.",
+                )
+            result = {
+                "room_id": owner_room["room_id"], "room_code": owner_room["room_code"],
+                "owner_token": owner["member_token"],
+                "local_token": pair["local"]["member_token"],
+                "peer_token": pair["peer"]["member_token"],
+                "attempt_id": attempt["attempt_id"], "local_seat": pair["local_seat"],
             }
+            resources.register_room(result)
+            return result
         except DiagnosticFailure:
-            if owner is not None and owner_room is not None:
-                try:
-                    snapshot = state.relay.room(owner_room["room_id"], owner["member_token"])
-                    state.relay.room_command(
-                        owner_room["room_id"], owner["member_token"], "", method="DELETE",
-                        expected_version=snapshot["room_version"],
-                    )
-                except RelayError:
-                    pass
             raise
         except RelayError as error:
-            if owner is not None and owner_room is not None:
-                try:
-                    snapshot = state.relay.room(owner_room["room_id"], owner["member_token"])
-                    state.relay.room_command(
-                        owner_room["room_id"], owner["member_token"], "", method="DELETE",
-                        expected_version=snapshot["room_version"],
-                    )
-                except RelayError:
-                    pass
-            code = "DIAG_RELAY_UNREACHABLE" if error.stage == "relay" else "DIAG_PRIVATE_ROOM_FAILED"
-            raise DiagnosticFailure(code, "The private diagnostic room could not be prepared.") from error
+            raise DiagnosticFailure(
+                "DIAG_PRIVATE_ROOM_FAILED",
+                "The private diagnostic room could not be prepared.",
+            ) from error
 
     def close_diagnostic_room(state: Runtime, room: dict) -> None:
         try:
@@ -2317,11 +2770,14 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             state.relay.room_command(room["room_id"], room["owner_token"], "", method="DELETE",
                                      expected_version=snapshot["room_version"])
         except RelayError as error:
+            if error.status in {404, 410} or error.code in {"room_not_found", "room_not_active"}:
+                return
             raise DiagnosticFailure("DIAG_CLEANUP_FAILED",
                                     "The private diagnostic room could not be closed.") from error
 
     def diagnostic_endpoint_failure(endpoint: dict, checkpoint: str) -> DiagnosticFailure:
         code = str(endpoint.get("error_code") or "")
+        stage = str(endpoint.get("failure_stage") or endpoint.get("stage") or "")
         if code == "endpoint_start_canceled":
             return DiagnosticFailure("DIAG_CANCELED", "The diagnostic was canceled.")
         if code == "radio.switch_room_not_found":
@@ -2333,6 +2789,10 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         if code.startswith("cleanup"):
             return DiagnosticFailure("DIAG_CLEANUP_FAILED",
                                      "Endpoint cleanup did not complete.")
+        if stage in {"radio", "hardware", "hardware_attach", "hardware_inventory"} or code.startswith(
+                ("adapter_", "radio.")):
+            return DiagnosticFailure("DIAG_RADIO_GATE_FAILED",
+                                     "The production radio stage did not complete.")
         if checkpoint == "ap_association":
             return DiagnosticFailure("DIAG_AP_START_FAILED",
                                      "The production access point did not start or accept the Switch.")
@@ -2342,8 +2802,10 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         return DiagnosticFailure("DIAG_WRAPPER_EARLY_EXIT",
                                  "The production wrapper exited before the diagnostic checkpoint.")
 
-    def wait_for_diagnostic_endpoint(state: Runtime, run, checkpoint: str, timeout: int) -> dict:
+    def wait_for_diagnostic_endpoint(state: Runtime, run, checkpoint: str, timeout: int,
+                                     identity: dict, nonce: str | None) -> dict:
         deadline = time.monotonic() + timeout
+        ap_ready_reported = False
         while time.monotonic() < deadline:
             if run.canceled():
                 state.cancel_launch()
@@ -2351,6 +2813,27 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             endpoint = state.read_endpoint()
             if (endpoint.get("diagnostic_run_id") == run.run_id and
                     endpoint.get("diagnostic_checkpoint") == checkpoint):
+                expected = (
+                    endpoint.get("attempt_id") == identity["attempt_id"] and
+                    endpoint.get("launch_nonce") == identity["launch_nonce"] and
+                    endpoint.get("pid") == identity["endpoint_pid"]
+                )
+                if nonce is not None:
+                    expected = expected and endpoint.get("diagnostic_nonce_hash") == hashlib.sha256(
+                        nonce.encode("ascii")).hexdigest()
+                if not expected:
+                    raise DiagnosticFailure(
+                        "DIAG_LAUNCH_IDENTITY_MISMATCH",
+                        "The endpoint acknowledgement did not match this diagnostic launch.",
+                    )
+                if (checkpoint == "ap_association" and
+                        endpoint.get("state") == "diagnostic_ap_started" and not ap_ready_reported):
+                    run.stage(
+                        "ap_association", "running", "DIAG_AP_READY",
+                        "The diagnostic access point is ready. Search for and join it from one Switch now.",
+                        details={"fixture": fixture_metadata()},
+                    )
+                    ap_ready_reported = True
                 if endpoint.get("state") == "diagnostic_checkpoint_passed":
                     return endpoint
                 if endpoint.get("state") == "failed":
@@ -2363,126 +2846,157 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         raise DiagnosticFailure("DIAG_ENDPOINT_INIT_TIMEOUT",
                                 "The production endpoint did not reach its diagnostic checkpoint.")
 
-    def run_diagnostic_endpoint(state: Runtime, run, usb_id: str, local_switch_role: str,
-                                checkpoint: str, *, fixture: bytes | None = None) -> dict:
-        room = peer = None
+    def run_diagnostic_endpoint(state: Runtime, run, resources: DiagnosticResources,
+                                local_switch_role: str, checkpoint: str,
+                                *, fixture: bytes | None = None) -> dict:
         token_file = run.root / f"{local_switch_role}-member-token"
-        cleanup_ok = True
+        failure = None
         try:
             if run.canceled():
                 raise DiagnosticFailure("DIAG_CANCELED", "The diagnostic was canceled.")
-            try:
-                selected_usb_id = attach_selected_hardware(state)
-            except ControlApiError as error:
-                raise DiagnosticFailure("DIAG_RADIO_GATE_FAILED", error.message) from error
-            if selected_usb_id != usb_id.lower():
-                raise DiagnosticFailure("DIAG_ADAPTER_CHANGED",
-                                        "The selected adapter changed before endpoint launch.")
-            room = diagnostic_room_pair(state, local_switch_role)
+            resources.ensure_hardware()
+            room = diagnostic_room_pair(state, resources, local_switch_role)
             peer = SyntheticDiagnosticPeer(
                 state.relay_url, room["room_code"],
                 "guest" if room["local_seat"] == "member_a" else "host",
                 room["peer_token"], room["attempt_id"], fixture=fixture,
             )
+            resources.register_peer(peer)
             peer.start()
             token_file.write_text(room["local_token"], encoding="utf-8")
             os.chmod(token_file, 0o600)
+            resources.register_token_file(token_file)
             nonce = secrets.token_hex(16) if checkpoint == "relay" else None
             try:
-                launch_session(
+                identity = launch_session(
                     state, code=room["room_code"], tunnel_seat=room["local_seat"],
-                    switch_room_role=local_switch_role, usb_id=usb_id,
+                    switch_room_role=local_switch_role, usb_id=run.usb_id,
                     attempt_id=room["attempt_id"], member_token_file=token_file, retry=True,
                     diagnostic_run_id=run.run_id, diagnostic_checkpoint=checkpoint,
                     diagnostic_nonce=nonce,
                 )
             except ControlApiError as error:
-                raise diagnostic_endpoint_failure({"error_code": error.code}, checkpoint) from error
+                raise diagnostic_endpoint_failure({
+                    "error_code": error.code, "failure_stage": error.stage,
+                }, checkpoint) from error
             return wait_for_diagnostic_endpoint(
                 state, run, checkpoint,
                 TIMEOUTS["room_detection"] if checkpoint == "room_detection" else
                 TIMEOUTS["ap_association"] if checkpoint == "ap_association" else TIMEOUTS["endpoint"],
+                identity, nonce,
             )
+        except DiagnosticFailure as error:
+            failure = error
+            raise
         finally:
             try:
-                state.stop_endpoint()
-                state.clear_session_state()
-            except Exception:
-                cleanup_ok = False
-            if peer is not None:
-                try:
-                    peer.stop()
-                except Exception:
-                    cleanup_ok = False
-            if room is not None:
-                try:
-                    close_diagnostic_room(state, room)
-                except DiagnosticFailure:
-                    cleanup_ok = False
-            token_file.unlink(missing_ok=True)
-            try:
-                state.release_hardware()
-            except Exception:
-                cleanup_ok = False
-            if not cleanup_ok:
-                raise DiagnosticFailure("DIAG_CLEANUP_FAILED",
-                                        "The diagnostic did not clean up its endpoint, room, or adapter.")
+                resources.cleanup_stage(preceding=failure)
+            except DiagnosticFailure:
+                raise
 
-    def run_automated_diagnostic(state: Runtime, run, usb_id: str) -> None:
-        diagnostic_hardware_gate(state, run, usb_id)
+    def run_automated_diagnostic(state: Runtime, run, resources: DiagnosticResources) -> None:
+        diagnostic_hardware_gate(state, run, resources)
         for switch_role in ("creator", "finder"):
             run.stage(f"{switch_role}_relay", "running", "DIAG_STAGE_RUNNING",
                       f"Running the production wrapper as {switch_role}.")
-            endpoint = run_diagnostic_endpoint(state, run, usb_id, switch_role, "relay")
+            endpoint = run_diagnostic_endpoint(state, run, resources, switch_role, "relay")
             run.stage(f"{switch_role}_relay", "passed", "DIAG_RELAY_EXCHANGE_PASSED",
                       f"The {switch_role} wrapper completed a real relay nonce exchange.",
                       details={"endpoint_pid": endpoint.get("pid")})
         run.set_result("relay_exchange_passed")
 
-    def run_room_detection_diagnostic(state: Runtime, run, usb_id: str) -> None:
+    def run_room_detection_diagnostic(state: Runtime, run, resources: DiagnosticResources) -> None:
         run.await_continue(
             "open_switch_room",
             "On one Switch only, open the Wireless Club Direct Corner and become Group Leader. Do not join from another Switch, then select Continue.",
         )
         run.stage("switch_room_detection", "running", "DIAG_STAGE_RUNNING",
                   "Scanning and joining the real Switch-hosted room.")
-        endpoint = run_diagnostic_endpoint(state, run, usb_id, "creator", "room_detection")
+        endpoint = run_diagnostic_endpoint(state, run, resources, "creator", "room_detection")
         run.stage("switch_room_detection", "passed", "DIAG_SWITCH_ROOM_JOINED",
                   "The production wrapper detected, parsed, and joined the Switch room.",
                   details={"advertisement_sha256": endpoint.get("advertisement_sha256")})
         run.set_result("switch_room_joined")
 
-    def run_ap_association_diagnostic(state: Runtime, run, usb_id: str) -> None:
+    def run_ap_association_diagnostic(state: Runtime, run, resources: DiagnosticResources) -> None:
         run.await_continue(
             "search_diagnostic_ap",
-            "Stop every Switch-hosted room. On one Switch only, search for a group and join the SwitchTrade diagnostic room. A competing Switch host makes this run invalid; then select Continue.",
+            "Stop every Switch-hosted room, then select Continue to start the diagnostic access point. Wait for the AP-ready message before searching from one Switch.",
         )
         run.stage("ap_association", "running", "DIAG_STAGE_RUNNING",
-                  "Opening the production LDN access point and waiting for Switch association.",
+                  "Starting the production LDN access point. Do not search from the Switch yet.",
                   details={"fixture": fixture_metadata()})
-        run_diagnostic_endpoint(state, run, usb_id, "finder", "ap_association", fixture=AP_FIXTURE)
+        run_diagnostic_endpoint(state, run, resources, "finder", "ap_association", fixture=AP_FIXTURE)
         run.stage("ap_association", "passed", "DIAG_SWITCH_ASSOCIATED",
                   "The Switch associated with the app-hosted diagnostic room.",
                   details={"fixture": fixture_metadata()})
         run.set_result("switch_associated")
 
     def run_production_diagnostic(state: Runtime, run) -> None:
+        resources = None
+        primary = None
+        result = None
         try:
             diagnostic_preflight(state, run, run.usb_id)
+            resources = DiagnosticResources(state, run)
             if run.test in {"automated", "recommended"}:
-                run_automated_diagnostic(state, run, run.usb_id)
+                run_automated_diagnostic(state, run, resources)
             if run.test in {"room_detection", "recommended"}:
-                run_room_detection_diagnostic(state, run, run.usb_id)
+                run_room_detection_diagnostic(state, run, resources)
             if run.test in {"ap_association", "recommended"}:
-                run_ap_association_diagnostic(state, run, run.usb_id)
+                run_ap_association_diagnostic(state, run, resources)
             result = ("local_prequalification_passed" if run.test == "recommended" else
                       DEFINITIONS[run.test].result_limit)
-            run.finish("passed", result_level=result)
-        except DiagnosticFailure:
-            raise
+        except DiagnosticFailure as error:
+            primary = error
+        except ControlApiError as error:
+            code = "DIAG_CLEANUP_FAILED" if error.stage == "hardware_cleanup" else "DIAG_RADIO_GATE_FAILED"
+            primary = DiagnosticFailure(code, f"{error.code}: {error.message}")
+        except Exception as error:
+            state.log.event(
+                "production_diagnostic_internal_error", level="error",
+                diagnostic_run_id=run.run_id, error_type=type(error).__name__,
+            )
+            primary = DiagnosticFailure(
+                "DIAG_INTERNAL_ERROR",
+                f"The diagnostic stopped unexpectedly ({type(error).__name__}).",
+            )
         finally:
+            run.begin_cleanup()
+            cleanup = resources.final_cleanup() if resources is not None else {
+                "status": "passed", "evidence": {
+                    "endpoint_stopped": True, "synthetic_peer_stopped": True,
+                    "relay_room_closed": True, "credential_file_deleted": True,
+                    "hardware_owned": False, "windows_usb_detached": True,
+                    "linux_driver_quiesced": True,
+                    "linux_usb_absent": True, "interface_absent": True,
+                    "phy_absent": True, "radio_quiescent": True, "duration_ms": 0,
+                },
+            }
+            cleanup_ok = cleanup["status"] == "passed"
+            run.stage(
+                "cleanup", "passed" if cleanup_ok else "failed",
+                "DIAG_CLEANUP_PASSED" if cleanup_ok else "DIAG_CLEANUP_FAILED",
+                "Diagnostic resources were released and verified." if cleanup_ok else
+                "Diagnostic cleanup could not be fully verified.",
+                details=cleanup.get("evidence", {}),
+            )
+            if not cleanup_ok:
+                run.finish(
+                    "failed", code="DIAG_CLEANUP_FAILED",
+                    message="The diagnostic did not prove endpoint, relay, and radio cleanup.",
+                    cleanup_ok=False, cleanup=cleanup, preceding_failure=primary,
+                )
+            elif primary is not None:
+                run.finish(
+                    "canceled" if primary.code == "DIAG_CANCELED" else "failed",
+                    code=primary.code, message=primary.message, result_level=primary.result_level,
+                    cleanup=cleanup, preceding_failure=primary.preceding,
+                )
+            else:
+                run.finish("passed", result_level=result, cleanup=cleanup)
             state.log.event("production_diagnostic_finished", diagnostic_run_id=run.run_id,
-                            test=run.test)
+                            test=run.test, cleanup=cleanup["status"])
 
     @app.post("/api/v1/production-diagnostics", status_code=202)
     def start_production_diagnostic(payload: ProductionDiagnosticRequest, request: Request) -> dict:
@@ -2530,7 +3044,6 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 raise HTTPException(status_code=404, detail="production diagnostic not found")
             return current
         state.cancel_launch()
-        state.stop_endpoint()
         return state.diagnostics.get(run_id) or {"run_id": run_id, "status": "cleaning"}
 
     @app.get("/api/groups/public")
@@ -2810,8 +3323,17 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     def shutdown_app(request: Request, background_tasks: BackgroundTasks) -> dict:
         state = runtime(request)
         cleanup_code = None
+        if state.diagnostics.cancel_active():
+            state.cancel_launch()
+        if not state.diagnostics.wait_for_idle(TIMEOUTS["cleanup"]):
+            cleanup_code = "diagnostic_cleanup_timeout"
+            state.log.event(
+                "diagnostic_shutdown_cleanup_timeout", level="error",
+                code="DIAG_CLEANUP_FAILED",
+            )
         try:
-            end_local_session(state)
+            if cleanup_code is None:
+                end_local_session(state)
         except ControlApiError as error:
             cleanup_code = error.code
             state.log.event(

@@ -106,6 +106,11 @@ run_prepare "$cold" -- bash -c \
 assert_contains "$cold/output" "cold-loading in-tree module rtl8xxxu"
 assert_contains "$cold/output" "wlan7 0bda:818b phy7"
 
+driver_only="$(new_case driver-only)"
+run_prepare "$driver_only" --driver-only > "$driver_only/output" 2>&1
+assert_contains "$driver_only/output" "cold-loading in-tree module rtl8xxxu"
+[[ ! -s $driver_only/timeout.count ]] || fail "driver-only preparation ran RX health"
+
 probing="$(new_case probing)"
 probing_dev="$probing/sys/bus/usb/devices/1-1"
 mkdir -p "$probing/sys/class/ieee80211/phy7"

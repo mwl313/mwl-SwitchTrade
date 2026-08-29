@@ -51,6 +51,7 @@
           <TextBlock Text="Run status" Style="{StaticResource SectionTitle}" />
           <TextBlock Text="{Binding CurrentStage}" FontFamily="{StaticResource MonoFontFamily}" Margin="0,6,0,0" />
           <TextBlock Text="{Binding ResultSummary}" TextWrapping="Wrap" Margin="0,8,0,0" />
+          <TextBlock Text="{Binding CleanupSummary}" Style="{StaticResource SecondaryText}" Margin="0,4,0,0" />
           <ItemsControl ItemsSource="{Binding Stages}" Margin="0,14,0,0">
             <ItemsControl.ItemTemplate>
               <DataTemplate>

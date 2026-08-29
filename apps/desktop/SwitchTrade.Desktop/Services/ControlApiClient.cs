@@ -523,7 +523,7 @@ public sealed class ControlApiClient : IControlGateway
         return new ProductionDiagnosticViewData(
             value.RunId ?? "unknown", test, value.Status ?? "unknown", value.CurrentStage ?? "created",
             value.ResultLevel, value.Failure?.Code, value.Failure?.Message, checkpoint,
-            stages, value.Limitations ?? []);
+            stages, value.Limitations ?? [], value.Cleanup?.Status ?? "pending");
     }
 
     private static async Task<string> SaveDiagnosticReportAsync(
@@ -1072,7 +1072,8 @@ public sealed class ControlApiClient : IControlGateway
         ProductionDiagnosticFailureDto? Failure,
         ProductionDiagnosticCheckpointDto? Checkpoint,
         IReadOnlyList<ProductionDiagnosticStageDto>? Stages,
-        IReadOnlyList<string>? Limitations);
+        IReadOnlyList<string>? Limitations,
+        ProductionDiagnosticCleanupDto? Cleanup);
     private sealed record ProductionDiagnosticFailureDto(string? Code, string? Message);
     private sealed record ProductionDiagnosticCheckpointDto(
         string? Id,
@@ -1083,6 +1084,7 @@ public sealed class ControlApiClient : IControlGateway
         string? Status,
         string? Code,
         string? Message);
+    private sealed record ProductionDiagnosticCleanupDto(string? Status);
     private sealed record HardwareDevicesResponse(IReadOnlyList<HardwareDeviceDto>? Devices);
     private sealed record HardwareDeviceDto(
         [property: JsonPropertyName("bus_id")] string? BusId,

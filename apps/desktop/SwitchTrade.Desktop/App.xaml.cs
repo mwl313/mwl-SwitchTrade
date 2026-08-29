@@ -87,6 +87,18 @@ public partial class App : Application
             var hardwareContractWorks = hardware.InstanceId.EndsWith("RADIO-A", StringComparison.Ordinal) &&
                                         !hardware.IsShared &&
                                         selectionBody.Contains("instance_id", StringComparison.Ordinal);
+            using var diagnosticContractClient = new ControlApiClient(new SelfTestHttpHandler(_ =>
+                Task.FromResult(JsonResponse("""
+                    {"contract_version":"production-diagnostic.v1","run_id":"diag-1",
+                    "test":"automated","status":"cleaning","current_stage":"cleanup",
+                    "result_level":"hardware_gate_passed","stages":[],"limitations":[],
+                    "cleanup":{"status":"pending","evidence":{}}}
+                    """))));
+            var diagnosticProjection = diagnosticContractClient.GetProductionDiagnosticAsync(
+                "diag-1").GetAwaiter().GetResult();
+            var diagnosticCleanupContractWorks = diagnosticProjection.Status == "cleaning" &&
+                                                 !diagnosticProjection.IsTerminal &&
+                                                 !diagnosticProjection.CleanupPassed;
             using var roomContractClient = new ControlApiClient(new SelfTestHttpHandler(_ =>
                 Task.FromResult(JsonResponse("""
                     {"room_id":"room-1","room_version":8,"name":"Resumed Room",
@@ -336,8 +348,9 @@ public partial class App : Application
                       deadlineRecoveryVisible && deadlineReturnHomeWorks &&
                       unmatchedEnvelopeSurvives &&
                       unmatchedRecoveryVisible && confirmedAbandonWorks &&
-                      canceledAbandonPreservesAuthority && hardwareContractWorks &&
-                      malformedInventoryContained && timedOutInventoryContained &&
+                       canceledAbandonPreservesAuthority && hardwareContractWorks &&
+                       diagnosticCleanupContractWorks &&
+                       malformedInventoryContained && timedOutInventoryContained &&
                       lastGoodInventorySurvives && adapterAuthorizationRecoveryWorks ? 0 : 1);
             return;
         }
@@ -464,7 +477,7 @@ public partial class App : Application
 
         private static ProductionDiagnosticViewData Diagnostic(ProductionDiagnosticTest test) => new(
             "self-test", test, "passed", "completed", "relay_exchange_passed", null, null,
-            null, [], []);
+            null, [], [], "passed");
     }
 
     private sealed class SelfTestHttpHandler(
