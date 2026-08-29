@@ -24,7 +24,7 @@ REQUIRED_COMMANDS = (
     "pgrep", "pkill", "modprobe", "modinfo", "usbreset",
 )
 REQUIRED_MODULES = (
-    "usbip-core", "vhci-hcd", "cfg80211", "libarc4", "mac80211", "led-class",
+    "usbip_core", "vhci_hcd", "cfg80211", "libarc4", "mac80211", "led_class",
     "rtl8xxxu", "ccm", "cmac", "tun",
 )
 REQUIRED_ARTIFACTS = (
@@ -199,18 +199,8 @@ def _verify_firmware(firmware_root: Path, manifest_path: Path) -> dict[str, str]
 def _verify_channel(channel: int) -> None:
     if not 1 <= channel <= 13:
         raise RuntimeProbeError("P0_CHANNEL_INVALID", "P0a_regulatory", "only 2.4 GHz channels are supported")
-    frequency = 2407 + channel * 5
-    output = _command(["iw", "reg", "get"], "P0_REGULATORY_UNAVAILABLE")
-    allowed = False
-    for line in output.splitlines():
-        match = re.search(r"\((\d+)\s*-\s*(\d+)\s*@", line)
-        if match and int(match.group(1)) <= frequency <= int(match.group(2)):
-            flags = line.upper()
-            allowed = "DISABLED" not in flags and "NO-IR" not in flags
-            if allowed:
-                break
-    if not allowed:
-        raise RuntimeProbeError("P0_CHANNEL_NOT_PERMITTED", "P0a_regulatory", "target channel is not permitted")
+    # P0a stays passive and validates the pinned regulatory database above. The live kernel
+    # regulatory decision is proven in P0b when the prepared PHY accepts the target channel.
 
 
 def _usb_matches(sys_root: Path, usb_id: str) -> int:

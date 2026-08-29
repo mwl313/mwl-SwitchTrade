@@ -100,5 +100,7 @@ Before Milestone 3 may begin:
    inactive-port, adapter-change, and recovery cases.
 5. Confirm zero orphan worker/endpoint PIDs, active interfaces, stale locks, unintended detach, or
    unresolved recovery records.
+6. Repeat the boundary checks from a non-ASCII Windows profile with UTF-8 Linux output, redirected
+   UTF-16LE Windows output, spaces/non-ASCII paths, and malformed-output fail-closed cases.
 
 Only that installed evidence can change this document to “Milestone 2 exit gate passed.”

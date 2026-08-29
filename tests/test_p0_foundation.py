@@ -12,12 +12,14 @@ from unittest import mock
 
 from switchtrade.connection.coordinator import ConnectionCoordinator, Phase, RunMode
 from switchtrade.connection.p0 import (
-    P0Error, PassiveValidator, USB_ID, UsbLease, parse_usbipd_state,
+    P0Error, PassiveValidator, USB_ID, UsbLease, _decode_native_output, parse_usbipd_state,
 )
-from switchtrade.connection.p0_harness import P0Harness, _installed_release
+from switchtrade.connection.p0_harness import P0Harness, _installed_release, _wsl_linux_usb_probe
 from switchtrade.connection.radio_worker import (
     REQUIRED_MODULES, RadioWorkerError, _validate_ticket, build_side_ready,
 )
+from switchtrade.connection.runtime_probe import RuntimeProbeError, _verify_channel
+from switchtrade.connection.runtime_probe import REQUIRED_MODULES as PASSIVE_REQUIRED_MODULES
 
 
 INSTANCE = r"USB\VID_0BDA&PID_818B\RADIO-A"
@@ -135,6 +137,41 @@ class PassiveP0Tests(unittest.TestCase):
             "cat", "/opt/switchtrade/.switchtrade-release.json",
         ], 10)])
 
+    def test_native_output_decoder_accepts_wsl_utf16_and_usbipd_utf8(self):
+        self.assertEqual(_decode_native_output("WSL version: 2.7.12.0\r\n".encode("utf-16-le")),
+                         "WSL version: 2.7.12.0\r\n")
+        self.assertEqual(_decode_native_output(b'{"Devices":[]}'), '{"Devices":[]}')
+
+    def test_passive_channel_check_does_not_require_loaded_cfg80211(self):
+        _verify_channel(1)
+        _verify_channel(13)
+        for channel in (0, 14):
+            with self.assertRaises(RuntimeProbeError) as caught:
+                _verify_channel(channel)
+            self.assertEqual(caught.exception.code, "P0_CHANNEL_INVALID")
+
+    def test_windows_usb_probe_runs_inside_selected_wsl_runtime(self):
+        calls = []
+
+        def runner(command, timeout):
+            calls.append((command, timeout))
+            return completed(command, json.dumps({
+                "status": "absent", "matches": 0, "interface_present": False,
+                "phy_present": False, "interfaces_up": 0,
+            }))
+
+        value = _wsl_linux_usb_probe(
+            USB_ID, distro="SwitchTrade-test", packaged_python="/runtime/python", runner=runner)
+
+        self.assertEqual(value["status"], "absent")
+        self.assertEqual(calls[0][0][:7], [
+            "wsl.exe", "-d", "SwitchTrade-test", "-u", "root", "--", "/runtime/python",
+        ])
+        self.assertEqual(calls[0][0][-1], USB_ID)
+
+    def test_passive_and_active_module_identities_use_kernel_names(self):
+        self.assertEqual(PASSIVE_REQUIRED_MODULES, REQUIRED_MODULES)
+
 
 class StatefulUsbRunner:
     def __init__(self, *, attached=False, fail_attach=False):
@@ -191,6 +228,8 @@ class UsbLeaseTests(unittest.TestCase):
         self.assertTrue(cleanup["detached_by_run"])
         self.assertEqual(sum(call[:2] == ["usbipd.exe", "attach"] for call in runner.calls), 1)
         self.assertEqual(sum(call[:2] == ["usbipd.exe", "detach"] for call in runner.calls), 1)
+        self.assertTrue(any(call[-4:] == ["modprobe", "-a", "usbip-core", "vhci-hcd"]
+                            for call in runner.calls))
         self.assertFalse((self.root / "recovery.json").exists())
 
     def test_pre_attached_adapter_is_never_detached(self):

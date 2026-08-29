@@ -67,6 +67,27 @@ The authoritative attempt binds these axes explicitly. A launch acknowledgement 
 its seat, Switch-room role, attempt ID, run ID, launch nonce, endpoint PID, and adapter identity all
 match that binding.
 
+### 1.2 Unicode, locale, and process-boundary invariant
+
+ABC+D must work when the Windows account name, profile path, installation path, room display text,
+and diagnostic destination contain non-ASCII characters. No stage may assume an English locale or
+that redirected Windows-native output is UTF-8. In particular:
+
+- invoke Windows, WSL, `usbipd`, and endpoint processes with typed argument vectors rather than a
+  constructed shell command line;
+- decode each native boundary according to its actual contract, including UTF-8 and redirected
+  UTF-16LE Windows output, before parsing versions or JSON;
+- write canonical machine contracts as UTF-8 and accept a BOM only at explicitly documented legacy
+  Windows boundaries;
+- convert Windows and WSL paths structurally and prove round trips for spaces and non-ASCII user
+  names; never interpolate a user path into Linux shell text;
+- redact and bound logs after decoding without changing machine-readable identity or failure codes;
+- include Korean/non-ASCII profile paths, English and Korean Windows locales, UTF-8/UTF-16LE native
+  output, and malformed-byte fail-closed cases in every affected milestone's acceptance tests.
+
+An encoding, locale, or path-conversion failure is its own factual gate failure. It must not be
+reported as a radio, relay, room, or cleanup failure.
+
 ## 2. Readiness rule
 
 Every stage has three different concepts:

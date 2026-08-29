@@ -51,6 +51,9 @@ Execution status:
   remain available only to standalone hardware diagnostics.
 - Reserve `0.3.0-beta.1`, with MSI/bundle version `0.3.0`, for the first packaged ABC+D release.
   Preserve existing MSI and bundle UpgradeCodes.
+- Treat Unicode paths, non-English Windows locales, and mixed native output encodings as release
+  invariants. Process launches use typed argument vectors; JSON remains UTF-8; redirected UTF-16LE
+  Windows output is decoded at its boundary; Windows/WSL path conversion is structural and tested.
 
 ## 3. Milestones
 
@@ -101,9 +104,12 @@ close/reopen leaves no backend on dead pipes; unverified cleanup blocks new work
   preparation, and actual RX.
 - Keep the proven 30-second driver-probe allowance inside a 45-second containing budget. Record prior
   ownership, attach once only when required, and detach only if this run attached the adapter.
+- Run P0 from a non-ASCII Windows profile and cover UTF-8 Linux output, UTF-16LE redirected Windows
+  output, spaces/non-ASCII paths, malformed output, and locale-independent version/JSON parsing.
 
 Exit gate: cold-boot P0 passes on both PCs; delayed enumeration, partial probe, stale sysfs, command
-timeout, inactive usbip port, and adapter changes classify correctly; cleanup restores prior ownership.
+timeout, inactive usbip port, adapter changes, and encoding/path faults classify correctly; cleanup
+restores prior ownership.
 
 ### Milestone 3 — Direct A admission
 
@@ -220,6 +226,8 @@ two-PC/two-Switch test, and only then repetition and packaging.
   save, stable return, native close, and distributed D, plus one cancel-and-retry cycle.
 - Require zero duplicate launches, orphan PIDs, stale interfaces/PHYs, unintended USB ownership,
   unresolved rooms/recovery records/locks, or false diagnostic qualification.
+- Repeat the installed lifecycle and P0/A/B/D checks with non-ASCII user/profile paths and supported
+  English/Korean Windows locales; verify native UTF-8/UTF-16LE output and support files round-trip.
 - Build `0.3.0-beta.1` only after those gates. Verify source/package hashes, clean install, upgrade from
   `0.2.6-beta.2`, Repair, uninstall, reinstall, and coordinated rollback on clean Windows 10 22H2 and
   Windows 11. Repair must not reinstall healthy WSL or usbipd components.

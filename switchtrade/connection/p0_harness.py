@@ -19,7 +19,7 @@ from switchtrade.connection.coordinator import (
     ConnectionCoordinator, ConnectionCoordinatorError, FunctionalOutcome, Phase, RunMode,
 )
 from switchtrade.connection.p0 import (
-    P0Error, PassiveValidator, UsbAdapter, UsbLease, atomic_json, run_command,
+    P0Error, PassiveValidator, UsbAdapter, UsbLease, atomic_json, linux_usb_probe, run_command,
 )
 from switchtrade.diagnostics import default_runs_root
 from switchtrade.relay_client import RelayClient
@@ -27,6 +27,39 @@ from switchtrade.relay_client import RelayClient
 
 WorkerFactory = Callable[[list[str], Path, Path], subprocess.Popen]
 LeaseFactory = Callable[[UsbAdapter, Path], UsbLease]
+
+
+def _unknown_linux_usb() -> dict:
+    return {
+        "status": "unknown", "matches": None, "interface_present": None,
+        "phy_present": None, "interfaces_up": None,
+    }
+
+
+def _wsl_linux_usb_probe(
+    usb_id: str,
+    *,
+    distro: str,
+    packaged_python: str,
+    runner=run_command,
+) -> dict:
+    program = (
+        "import json,sys; from switchtrade.connection.p0 import linux_usb_probe; "
+        "print(json.dumps(linux_usb_probe(sys.argv[1]),sort_keys=True,separators=(',',':')))"
+    )
+    try:
+        result = runner([
+            "wsl.exe", "-d", distro, "-u", "root", "--",
+            packaged_python, "-c", program, usb_id,
+        ], 5)
+        value = json.loads(result.stdout) if result.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired, TypeError, ValueError):
+        return _unknown_linux_usb()
+    if (not isinstance(value, dict) or value.get("status") not in {"present", "absent", "unknown"} or
+            not all(name in value for name in (
+                "matches", "interface_present", "phy_present", "interfaces_up"))):
+        return _unknown_linux_usb()
+    return value
 
 
 def _wsl_path(path: Path) -> str:
@@ -208,8 +241,15 @@ class P0Harness:
         self.validator = validator
         self.root = Path(root)
         self.worker_factory = worker_factory
-        self.lease_factory = lease_factory or (lambda adapter, recovery: UsbLease(
-            adapter, recovery, distro=distro))
+        if lease_factory is None:
+            probe = (
+                (lambda usb_id: _wsl_linux_usb_probe(
+                    usb_id, distro=distro, packaged_python=packaged_python))
+                if os.name == "nt" else linux_usb_probe
+            )
+            lease_factory = lambda adapter, recovery: UsbLease(
+                adapter, recovery, distro=distro, probe=probe)
+        self.lease_factory = lease_factory
         self.distro = distro
         self.runtime_root = runtime_root
         self.packaged_python = packaged_python

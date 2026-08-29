@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import locale
 import os
 from pathlib import Path
 import re
@@ -57,9 +58,33 @@ class UsbAdapter:
 Runner = Callable[[list[str], float], subprocess.CompletedProcess[str]]
 
 
+def _decode_native_output(value: bytes | str | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    sample = value[:256]
+    even_nulls = sample[0::2].count(0)
+    odd_nulls = sample[1::2].count(0)
+    if odd_nulls >= 2 and odd_nulls > even_nulls * 2:
+        return value.decode("utf-16-le")
+    if even_nulls >= 2 and even_nulls > odd_nulls * 2:
+        return value.decode("utf-16-be")
+    for encoding in ("utf-8-sig", locale.getpreferredencoding(False)):
+        try:
+            return value.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return value.decode("utf-8", errors="replace")
+
+
 def run_command(command: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        command, capture_output=True, text=True, timeout=timeout, check=False,
+    result = subprocess.run(
+        command, capture_output=True, timeout=timeout, check=False,
+    )
+    return subprocess.CompletedProcess(
+        result.args, result.returncode,
+        _decode_native_output(result.stdout), _decode_native_output(result.stderr),
     )
 
 
@@ -473,7 +498,7 @@ class UsbLease:
                     "pre-attached adapter does not belong to this SwitchTrade runtime",
                 )
         else:
-            prerequisite = ["modprobe", "usbip-core", "vhci-hcd"]
+            prerequisite = ["modprobe", "-a", "usbip-core", "vhci-hcd"]
             if os.name == "nt":
                 prerequisite = [
                     "wsl.exe", "-d", self.distro, "-u", "root", "--", *prerequisite,

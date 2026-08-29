@@ -31,7 +31,10 @@ path. No open item may be presented as a current production capability.
    Passive and active runtime, module, firmware, and integrity hashes must agree. Unknown cleanup,
    an active interface, a changed bus identity, an inactive usbip port, or missing recovery evidence
    fails closed and blocks another run. This path is deliberately isolated from `0.2.6-beta.2`; close
-   this item only after the new installed runtime passes cold P0 and direct A/B on both PCs.
+   this item only after the new installed runtime passes cold P0 and direct A/B on both PCs. The same
+   qualification must run from a non-ASCII Windows profile and prove locale-independent UTF-8/
+   UTF-16LE process output, JSON, log, and Windows/WSL path handling; encoding failures retain their
+   own factual gate instead of being mislabeled as radio or relay failures.
 
 2. **CRITICAL — URGENT: Preserve relay frame order and truthful P0/A/B/C/D diagnostic stages.**
    **Status (2026-08-29): confirmed regression; not fixed.**
