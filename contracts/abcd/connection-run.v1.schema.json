@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://switchtrade.local/contracts/connection-run.v1.schema.json",
+  "title": "SwitchTrade connection-run.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "schema",
+    "run_id",
+    "revision",
+    "created_utc",
+    "updated_utc",
+    "phase",
+    "current_gate",
+    "last_passed_gate",
+    "functional",
+    "cleanup",
+    "recovery_required",
+    "cancel_requested",
+    "identity",
+    "ownership",
+    "history"
+  ],
+  "properties": {
+    "contract_version": { "const": "connection-run.v1" },
+    "schema": { "const": 1 },
+    "run_id": { "type": "string", "format": "uuid" },
+    "revision": { "type": "integer", "minimum": 1 },
+    "created_utc": { "type": "string", "format": "date-time" },
+    "updated_utc": { "type": "string", "format": "date-time" },
+    "phase": {
+      "enum": ["created", "preflight", "running", "awaiting_user", "closing", "cleaning", "terminal"]
+    },
+    "current_gate": { "type": ["string", "null"], "maxLength": 96 },
+    "last_passed_gate": { "type": ["string", "null"], "maxLength": 96 },
+    "functional": { "$ref": "#/$defs/functional" },
+    "cleanup": { "$ref": "#/$defs/cleanup" },
+    "recovery_required": { "type": "boolean" },
+    "cancel_requested": { "type": "boolean" },
+    "identity": { "$ref": "#/$defs/identity" },
+    "ownership": { "$ref": "#/$defs/ownership" },
+    "history": {
+      "type": "array",
+      "maxItems": 128,
+      "items": { "$ref": "#/$defs/historyItem" }
+    }
+  },
+  "$defs": {
+    "functional": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "code", "message"],
+      "properties": {
+        "status": { "enum": ["pending", "passed", "failed", "canceled", "interrupted"] },
+        "code": { "type": ["string", "null"], "maxLength": 96 },
+        "message": { "type": ["string", "null"], "maxLength": 500 }
+      }
+    },
+    "cleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "verified", "code", "message", "evidence", "failures"],
+      "properties": {
+        "status": { "enum": ["pending", "verified", "failed"] },
+        "verified": { "type": "boolean" },
+        "code": { "type": ["string", "null"], "maxLength": 96 },
+        "message": { "type": ["string", "null"], "maxLength": 500 },
+        "evidence": {
+          "type": "object",
+          "maxProperties": 64,
+          "additionalProperties": { "type": ["boolean", "integer", "null"] }
+        },
+        "failures": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "message", "utc"],
+            "properties": {
+              "code": { "type": "string", "maxLength": 96 },
+              "message": { "type": ["string", "null"], "maxLength": 500 },
+              "utc": { "type": "string", "format": "date-time" }
+            }
+          }
+        }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "release", "mode", "run_generation", "stage_generation", "room_id", "room_version",
+        "attempt_id", "role_lock_version", "authority_seat", "switch_role", "ldn_role",
+        "rfu_role", "tunnel_direction", "launch_nonce", "wrapper_pid", "endpoint_pid",
+        "process_start_ticks", "endpoint_start_ticks", "adapter_instance_id", "usb_id", "bus_id",
+        "phy", "netdev"
+      ],
+      "properties": {
+        "release": { "type": "string", "maxLength": 64 },
+        "mode": {
+          "enum": [
+            "normal", "p0_harness", "direct_a", "direct_b", "c_harness",
+            "diagnostic_automated", "diagnostic_a", "diagnostic_b", "diagnostic_suite"
+          ]
+        },
+        "run_generation": { "type": "integer", "minimum": 1 },
+        "stage_generation": { "type": "integer", "minimum": 1 },
+        "room_id": { "type": ["string", "null"], "maxLength": 128 },
+        "room_version": { "type": ["integer", "null"], "minimum": 1 },
+        "attempt_id": { "type": ["string", "null"], "maxLength": 128 },
+        "role_lock_version": { "type": ["integer", "null"], "minimum": 1 },
+        "authority_seat": { "enum": ["member_a", "member_b", null] },
+        "switch_role": { "enum": ["a_room_joiner", "b_ap_host", null] },
+        "ldn_role": { "enum": ["station", "ap", null] },
+        "rfu_role": { "enum": ["parent", "child", null] },
+        "tunnel_direction": { "enum": ["a_to_b", "b_to_a", null] },
+        "launch_nonce": { "type": ["string", "null"], "maxLength": 128 },
+        "wrapper_pid": { "type": ["integer", "null"], "minimum": 1 },
+        "endpoint_pid": { "type": ["integer", "null"], "minimum": 1 },
+        "process_start_ticks": { "type": ["integer", "null"], "minimum": 1 },
+        "endpoint_start_ticks": { "type": ["integer", "null"], "minimum": 1 },
+        "adapter_instance_id": { "type": ["string", "null"], "maxLength": 512 },
+        "usb_id": { "type": ["string", "null"], "maxLength": 32 },
+        "bus_id": { "type": ["string", "null"], "maxLength": 64 },
+        "phy": { "type": ["string", "null"], "maxLength": 64 },
+        "netdev": { "type": ["string", "null"], "maxLength": 64 }
+      }
+    },
+    "ownership": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "wrapper_acquired", "p0_side_ready", "launch_reserved", "endpoint_started",
+        "wrapper_count", "launch_count"
+      ],
+      "properties": {
+        "wrapper_acquired": { "type": "boolean" },
+        "p0_side_ready": { "type": "boolean" },
+        "launch_reserved": { "type": "boolean" },
+        "endpoint_started": { "type": "boolean" },
+        "wrapper_count": { "type": "integer", "minimum": 0, "maximum": 1 },
+        "launch_count": { "type": "integer", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "historyItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "event", "phase", "gate", "utc"],
+      "properties": {
+        "revision": { "type": "integer", "minimum": 1 },
+        "event": { "type": "string", "maxLength": 96 },
+        "phase": {
+          "enum": ["created", "preflight", "running", "awaiting_user", "closing", "cleaning", "terminal"]
+        },
+        "gate": { "type": ["string", "null"], "maxLength": 96 },
+        "utc": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}
