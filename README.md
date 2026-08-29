@@ -100,6 +100,10 @@ Implementation proceeds in this order:
    orchestration and other unreachable legacy paths.
 7. Qualify source and installed runtime in P0 → A → B → C → D order before packaging another release.
 
+Milestones 0 and 1 are complete in source. The isolated `connection-run.v1` coordinator now owns
+serialized state, launch identity, and cleanup guards, but it is not connected to normal rooms,
+diagnostics, WSL, or hardware yet. No physical ABC+D capability is claimed by this foundation.
+
 The [definitive TODO](docs/FUTURE_TODO.md) records implementation and qualification status. A passing
 test for the previous behavior does not close an ABC+D gate unless it proves the gate's current
 contract.

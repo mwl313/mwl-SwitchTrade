@@ -271,8 +271,14 @@ path. No open item may be presented as a current production capability.
 6. Validate the replacement installer on clean Windows 10 22H2 and Windows 11 systems.
 7. Deploy and verify a relay supporting `rfu-tunnel.v1` and `manual-switch-role.v1`.
 8. Create one shared API contract source for Python and C#.
+   **Status (2026-08-29):** `connection-run.v1` now has a canonical JSON schema and Python projection
+   tests in Milestone 1. C# validation and the remaining v2 contracts are still open for their cutover
+   milestones.
 9. Build a real WPF ↔ local control ↔ relay integration harness.
 10. Split the oversized backend orchestration module along existing responsibility boundaries.
+    **Status (2026-08-29):** the new serialized connection coordinator exists as an isolated package;
+    the legacy backend remains untouched and active until the later atomic cutover, so this item is
+    not closed.
 11. Split the oversized frontend API and state classes without changing the frozen contracts.
 12. Add WPF UI Automation for dropdowns, navigation, room state, reconnect, leave/close, and stale
    errors.

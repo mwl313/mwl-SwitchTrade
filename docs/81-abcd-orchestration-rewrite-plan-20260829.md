@@ -24,6 +24,14 @@ and existing tests. Their corrections are incorporated here:
 - The separate validation relay is staging for the identical production artifact, never an alternate
   diagnostic stack.
 
+Execution status:
+
+- Milestone 0 passed in `fd9e50a`; see
+  [`82-abcd-milestone-0-baseline-20260829.md`](82-abcd-milestone-0-baseline-20260829.md).
+- Milestone 1 passed in `b7c5c9a`; see
+  [`83-abcd-milestone-1-coordinator-20260829.md`](83-abcd-milestone-1-coordinator-20260829.md).
+- Milestone 2 has not started.
+
 ## 2. Architecture and interface decisions
 
 - Add one concrete ABC+D connection package containing a serialized `ConnectionCoordinator`, one

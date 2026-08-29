@@ -19,6 +19,8 @@ part of the public repository or release package.
   components.
 - [ABC+D Milestone 0 Baseline](82-abcd-milestone-0-baseline-20260829.md) — reproducible baseline,
   reuse-admission ledger, explicit replacement boundary, and known retained failures.
+- [ABC+D Milestone 1 Coordinator](83-abcd-milestone-1-coordinator-20260829.md) — serialized run state,
+  identity-bound launch ownership, restart recovery, cleanup guard, tests, and deliberate limits.
 - [Future TODO](FUTURE_TODO.md) — definitive implementation and qualification ledger for that
   architecture.
 - [Known Issues](KNOWN_ISSUES.md) — authoritative beta defect register, evidence, workarounds, and
