@@ -14,7 +14,10 @@ from switchtrade.connection.coordinator import ConnectionCoordinator, Phase, Run
 from switchtrade.connection.p0 import (
     P0Error, PassiveValidator, USB_ID, UsbLease, _decode_native_output, parse_usbipd_state,
 )
-from switchtrade.connection.p0_harness import P0Harness, _installed_release, _wsl_linux_usb_probe
+from switchtrade.connection.p0_harness import (
+    P0Harness, _installed_release, _wsl_linux_usb_probe, _wsl_netdev_exists,
+    _wsl_process_start_ticks,
+)
 from switchtrade.connection.radio_worker import (
     REQUIRED_MODULES, RadioWorkerError, _validate_ticket, build_side_ready,
 )
@@ -169,20 +172,42 @@ class PassiveP0Tests(unittest.TestCase):
         ])
         self.assertEqual(calls[0][0][-1], USB_ID)
 
+    def test_windows_recovery_probes_process_and_netdev_in_selected_wsl_runtime(self):
+        calls = []
+
+        def runner(command, timeout):
+            calls.append((command, timeout))
+            return completed(command, "12345" if command[-1] == "74" else "true")
+
+        self.assertEqual(_wsl_process_start_ticks(
+            74, distro="SwitchTrade-test", packaged_python="/runtime/python", runner=runner,
+        ), 12345)
+        self.assertTrue(_wsl_netdev_exists(
+            "wlan0", distro="SwitchTrade-test", packaged_python="/runtime/python", runner=runner,
+        ))
+        for command, _timeout in calls:
+            self.assertEqual(command[:7], [
+                "wsl.exe", "-d", "SwitchTrade-test", "-u", "root", "--", "/runtime/python",
+            ])
+
     def test_passive_and_active_module_identities_use_kernel_names(self):
         self.assertEqual(PASSIVE_REQUIRED_MODULES, REQUIRED_MODULES)
 
 
 class StatefulUsbRunner:
-    def __init__(self, *, attached=False, fail_attach=False):
+    def __init__(self, *, attached=False, fail_attach=False, missing_state_reads_after_detach=0):
         self.attached = attached
         self.fail_attach = fail_attach
+        self.missing_state_reads_after_detach = missing_state_reads_after_detach
         self.bus_id = "4-18"
         self.calls = []
 
     def __call__(self, command, timeout):
         self.calls.append(list(command))
         if command[:2] == ["usbipd.exe", "state"]:
+            if not self.attached and self.missing_state_reads_after_detach > 0:
+                self.missing_state_reads_after_detach -= 1
+                return completed(command, json.dumps({"Devices": []}))
             return completed(command, usb_state(attached=self.attached, bus_id=self.bus_id))
         if command[0] == "modprobe" or "modprobe" in command:
             return completed(command)
@@ -248,6 +273,27 @@ class UsbLeaseTests(unittest.TestCase):
         self.assertFalse(cleanup["detached_by_run"])
         self.assertFalse(any(call[:2] == ["usbipd.exe", "attach"] for call in runner.calls))
         self.assertFalse(any(call[:2] == ["usbipd.exe", "detach"] for call in runner.calls))
+
+    def test_post_detach_windows_reenumeration_gap_is_retried(self):
+        runner = StatefulUsbRunner()
+        probe = lambda _usb: {
+            "status": "present" if runner.attached else "absent",
+            "matches": 1 if runner.attached else 0,
+            "interface_present": runner.attached, "phy_present": runner.attached,
+            "interfaces_up": 0,
+        }
+        lease = UsbLease(
+            self.adapter(), self.root / "recovery.json",
+            runner=runner, probe=probe, deadline=1,
+        )
+        lease.acquire()
+        runner.missing_state_reads_after_detach = 2
+
+        cleanup = lease.release()
+
+        self.assertTrue(cleanup["prior_state_restored"])
+        self.assertTrue(cleanup["windows_state_verified"])
+        self.assertFalse((self.root / "recovery.json").exists())
 
     def test_unknown_linux_cleanup_is_failure_and_keeps_recovery_state(self):
         runner = StatefulUsbRunner()

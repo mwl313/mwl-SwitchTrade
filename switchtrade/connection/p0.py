@@ -472,6 +472,22 @@ class UsbLease:
             raise P0Error("P0_ADAPTER_IDENTITY_CHANGED", "P0b_lease", "selected adapter identity changed")
         return matches[0]
 
+    def _current_after_detach(self) -> UsbAdapter | None:
+        """Allow Windows' bounded post-detach re-enumeration gap without losing identity."""
+        matches = [
+            item for item in self._inventory()
+            if item.instance_id.casefold() == self.adapter.instance_id.casefold()
+        ]
+        if not matches:
+            return None
+        if (len(matches) != 1 or matches[0].usb_id != self.adapter.usb_id or
+                matches[0].bus_id != self.adapter.bus_id):
+            raise P0Error(
+                "P0_ADAPTER_IDENTITY_CHANGED", "D10_usb_return",
+                "selected adapter identity changed during USB return",
+            )
+        return matches[0]
+
     def _persist(self, *, attach_intent: bool) -> None:
         atomic_json(self.recovery_file, {
             "schema": 1,
@@ -576,11 +592,13 @@ class UsbLease:
                 )
             deadline = time.monotonic() + self.deadline
             stable = 0
+            windows_seen = False
             while time.monotonic() < deadline:
-                now = self._current()
+                now = self._current_after_detach()
                 linux = self.probe(self.adapter.usb_id)
+                windows_seen = windows_seen or now is not None
                 matches = (
-                    not now.attached and linux.get("status") == "absent" and
+                    now is not None and not now.attached and linux.get("status") == "absent" and
                     linux.get("matches") == 0 and linux.get("interface_present") is False and
                     linux.get("phy_present") is False and linux.get("interfaces_up") == 0
                 )
@@ -589,7 +607,11 @@ class UsbLease:
                     break
                 time.sleep(0.1)
             if stable < 3:
-                code = "P0_CLEANUP_UNKNOWN" if linux.get("status") == "unknown" else "P0_CLEANUP_FAILED"
+                code = (
+                    "P0_CLEANUP_UNKNOWN"
+                    if not windows_seen or linux.get("status") == "unknown"
+                    else "P0_CLEANUP_FAILED"
+                )
                 raise P0Error(code, "D10_usb_return", "adapter release could not be verified")
         else:
             linux = self.probe(self.adapter.usb_id)

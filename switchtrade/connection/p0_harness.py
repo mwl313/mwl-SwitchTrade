@@ -62,6 +62,70 @@ def _wsl_linux_usb_probe(
     return value
 
 
+def _wsl_process_start_ticks(
+    pid: int,
+    *,
+    distro: str,
+    packaged_python: str,
+    runner=run_command,
+) -> int | None:
+    program = (
+        "import json,sys; from pathlib import Path; p=Path('/proc')/sys.argv[1]/'stat'; "
+        "print('null' if not p.exists() else json.dumps(int(p.read_text(encoding='ascii').rsplit(')',1)[1].split()[19])))"
+    )
+    try:
+        result = runner([
+            "wsl.exe", "-d", distro, "-u", "root", "--",
+            packaged_python, "-c", program, str(pid),
+        ], 5)
+        if result.returncode != 0:
+            raise ValueError("process probe failed")
+        value = json.loads(result.stdout)
+    except (OSError, subprocess.TimeoutExpired, TypeError, ValueError) as error:
+        raise P0Error(
+            "P0_RECOVERY_PROCESS_UNKNOWN", "D8_endpoint_verification",
+            "recovered worker process identity is unavailable",
+        ) from error
+    if value is None:
+        return None
+    if not isinstance(value, int) or value <= 0:
+        raise P0Error(
+            "P0_RECOVERY_PROCESS_UNKNOWN", "D8_endpoint_verification",
+            "recovered worker process identity is invalid",
+        )
+    return value
+
+
+def _wsl_netdev_exists(
+    netdev: str,
+    *,
+    distro: str,
+    packaged_python: str,
+    runner=run_command,
+) -> bool:
+    program = (
+        "import json,sys; from pathlib import Path; "
+        "print(json.dumps((Path('/sys/class/net')/sys.argv[1]).exists()))"
+    )
+    try:
+        result = runner([
+            "wsl.exe", "-d", distro, "-u", "root", "--",
+            packaged_python, "-c", program, netdev,
+        ], 5)
+        value = json.loads(result.stdout) if result.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired, TypeError, ValueError) as error:
+        raise P0Error(
+            "P0_RADIO_QUIESCE_FAILED", "D9_radio_quiescence",
+            "recovery could not inspect the selected netdev",
+        ) from error
+    if not isinstance(value, bool):
+        raise P0Error(
+            "P0_RADIO_QUIESCE_FAILED", "D9_radio_quiescence",
+            "recovery netdev evidence is invalid",
+        )
+    return value
+
+
 def _wsl_path(path: Path) -> str:
     value = str(path.resolve())
     if len(value) >= 3 and value[1:3] == ":\\":
@@ -241,14 +305,17 @@ class P0Harness:
         self.validator = validator
         self.root = Path(root)
         self.worker_factory = worker_factory
+        self.command_runner = run_command
         if lease_factory is None:
-            probe = (
+            self.linux_probe = (
                 (lambda usb_id: _wsl_linux_usb_probe(
                     usb_id, distro=distro, packaged_python=packaged_python))
                 if os.name == "nt" else linux_usb_probe
             )
             lease_factory = lambda adapter, recovery: UsbLease(
-                adapter, recovery, distro=distro, probe=probe)
+                adapter, recovery, distro=distro, probe=self.linux_probe)
+        else:
+            self.linux_probe = linux_usb_probe
         self.lease_factory = lease_factory
         self.distro = distro
         self.runtime_root = runtime_root
@@ -305,12 +372,11 @@ class P0Harness:
                 "runtime, module, or firmware evidence changed between P0a and P0b",
             )
 
-    @staticmethod
-    def _process_start_ticks(pid: int) -> int | None:
+    def _process_start_ticks(self, pid: int) -> int | None:
         if os.name == "nt":
-            raise P0Error(
-                "P0_RECOVERY_PROCESS_UNKNOWN", "D8_endpoint_verification",
-                "P0 recovery must run inside the installed WSL runtime",
+            return _wsl_process_start_ticks(
+                pid, distro=self.distro, packaged_python=self.packaged_python,
+                runner=self.command_runner,
             )
         path = Path("/proc") / str(pid) / "stat"
         try:
@@ -390,7 +456,18 @@ class P0Harness:
                     time.sleep(0.1)
                 actual = self._process_start_ticks(wrapper_pid)
                 if actual == start_ticks:
-                    os.kill(wrapper_pid, signal.SIGTERM)
+                    if os.name == "nt":
+                        result = self.command_runner([
+                            "wsl.exe", "-d", self.distro, "-u", "root", "--",
+                            "kill", "-TERM", str(wrapper_pid),
+                        ], 5)
+                        if result.returncode != 0 and self._process_start_ticks(wrapper_pid) == start_ticks:
+                            raise P0Error(
+                                "P0_RECOVERY_PROCESS_STILL_ACTIVE", "D8_endpoint_verification",
+                                "interrupted worker could not be signalled",
+                            )
+                    else:
+                        os.kill(wrapper_pid, signal.SIGTERM)
                     deadline = time.monotonic() + 3
                     while time.monotonic() < deadline and self._process_start_ticks(wrapper_pid) == start_ticks:
                         time.sleep(0.1)
@@ -401,26 +478,41 @@ class P0Harness:
                     )
                 evidence["worker_exited"] = True
             if isinstance(netdev, str) and netdev:
-                try:
-                    result = subprocess.run(
-                        ["ip", "link", "set", netdev, "down"],
-                        capture_output=True, text=True, timeout=2, check=False,
-                    )
-                except (OSError, subprocess.TimeoutExpired) as error:
-                    raise P0Error(
-                        "P0_RADIO_QUIESCE_FAILED", "D9_radio_quiescence",
-                        "recovery could not quiesce the selected netdev",
-                    ) from error
-                # A missing netdev is already quiescent; other failures remain uncertain.
-                if result.returncode != 0 and "does not exist" not in (result.stderr or "").lower():
-                    raise P0Error(
-                        "P0_RADIO_QUIESCE_FAILED", "D9_radio_quiescence",
-                        "recovery could not quiesce the selected netdev",
-                    )
+                if os.name == "nt":
+                    if _wsl_netdev_exists(
+                            netdev, distro=self.distro, packaged_python=self.packaged_python,
+                            runner=self.command_runner):
+                        result = self.command_runner([
+                            "wsl.exe", "-d", self.distro, "-u", "root", "--",
+                            "ip", "link", "set", "dev", netdev, "down",
+                        ], 5)
+                        if result.returncode != 0:
+                            raise P0Error(
+                                "P0_RADIO_QUIESCE_FAILED", "D9_radio_quiescence",
+                                "recovery could not quiesce the selected netdev",
+                            )
+                else:
+                    try:
+                        result = subprocess.run(
+                            ["ip", "link", "set", "dev", netdev, "down"],
+                            capture_output=True, text=True, timeout=2, check=False,
+                        )
+                    except (OSError, subprocess.TimeoutExpired) as error:
+                        raise P0Error(
+                            "P0_RADIO_QUIESCE_FAILED", "D9_radio_quiescence",
+                            "recovery could not quiesce the selected netdev",
+                        ) from error
+                    # A missing netdev is already quiescent; other failures remain uncertain.
+                    if result.returncode != 0 and "does not exist" not in (result.stderr or "").lower():
+                        raise P0Error(
+                            "P0_RADIO_QUIESCE_FAILED", "D9_radio_quiescence",
+                            "recovery could not quiesce the selected netdev",
+                        )
             evidence["radio_quiescent"] = True
             recovery_file = self.root / run_id / "p0-usb-recovery.json"
             if recovery_file.exists():
-                lease = UsbLease.from_recovery(recovery_file, distro=self.distro)
+                lease = UsbLease.from_recovery(
+                    recovery_file, distro=self.distro, probe=self.linux_probe)
                 usb = lease.release()
                 evidence["prior_usb_state_restored"] = usb["prior_state_restored"]
             elif run["ownership"]["wrapper_acquired"]:
