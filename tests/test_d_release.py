@@ -336,6 +336,61 @@ class LocalDReleaseTests(unittest.TestCase):
         self.assertTrue(second["run"]["cleanup"]["verified"])
         self.assertEqual(second["run"]["cleanup"]["failures"][0]["code"], "D_LOCAL_CLEANUP_FAILED")
 
+    def test_d10_failure_is_secondary_and_keeps_the_cleanup_guard(self):
+        run, room, d5_path = self.prepare()
+        events = []
+
+        class FailingLease:
+            def release(self):
+                events.append("D10")
+                raise RuntimeError("usbipd response unavailable")
+
+        _worker, result = self.release(
+            run, room, d5_path, events=events, lease=FailingLease())
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["report"]["failures"][0]["code"], "D_USB_RETURN_FAILED")
+        self.assertEqual(result["run"]["functional"]["status"], "canceled")
+        self.assertTrue(result["run"]["recovery_required"])
+
+    def test_lost_d11_response_repairs_report_without_repeating_release(self):
+        run, room, d5_path = self.prepare()
+        events = []
+
+        class LostResponseCoordinator:
+            def __init__(self, inner):
+                self.inner = inner
+
+            def __getattr__(self, name):
+                return getattr(self.inner, name)
+
+            def complete_cleanup(self, *args, **kwargs):
+                self.inner.complete_cleanup(*args, **kwargs)
+                raise RuntimeError("D11 response lost")
+
+        worker = LocalDRelease(
+            coordinator=LostResponseCoordinator(self.coordinator), run_id=run["run_id"],
+            d5_state_path=d5_path,
+            release_state_path=self.root / run["run_id"] / "d-local-release.json",
+            launch_probe=self.launch_absent(events), radio_probe=self.radio_quiescent(events),
+            usb_lease=FakeLease(events), stable_samples=3,
+            sample_interval=0.1, radio_timeout=0.3,
+            monotonic=FakeClock().monotonic, sleep=lambda _seconds: None,
+        )
+        with self.assertRaisesRegex(RuntimeError, "response lost"):
+            worker.release(room)
+        self.assertTrue(self.coordinator.snapshot(run["run_id"])["cleanup"]["verified"])
+        self.assertEqual(
+            json.loads(worker.release_state_path.read_text(encoding="utf-8"))["status"],
+            "running",
+        )
+
+        worker.coordinator = self.coordinator
+        recovered = worker.release(room)
+        self.assertEqual(recovered["status"], "passed")
+        self.assertEqual(recovered["report"]["last_passed_gate"], "D11_RELEASE")
+        self.assertFalse(d5_path.exists())
+        self.assertEqual(events, ["D8", "D9", "D9", "D9", "D10"])
+
     def test_final_report_projection_matches_strict_contract(self):
         run, room, d5_path = self.prepare()
         events = []

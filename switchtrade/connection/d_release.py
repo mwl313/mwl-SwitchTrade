@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from pathlib import Path
 import re
 import time
@@ -35,6 +36,10 @@ _DIAGNOSTIC_MODES = {
     RunMode.DIAGNOSTIC_B.value, RunMode.DIAGNOSTIC_SUITE.value,
 }
 _CODE = re.compile(r"[A-Z][A-Z0-9_.-]{0,95}")
+_REPORT_FIELDS = {
+    "contract_version", "schema", "run_id", "attempt_id", "status", "last_passed_gate",
+    "shared_barrier_status", "shared_cleanup_verified", "evidence", "failures",
+}
 
 
 class LocalDRelease:
@@ -200,14 +205,44 @@ class LocalDRelease:
     def _persist(self, report: dict) -> None:
         atomic_json(self.release_state_path, report, private=True)
 
+    def _finish_terminal_report(self, run: dict) -> dict:
+        """Finish the local evidence file after a lost D11 response without repeating teardown."""
+        try:
+            report = json.loads(self.release_state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise DControlError(
+                "D_RELEASE_REPORT_INVALID", GATES[5],
+                "the verified terminal run has no recoverable local release report",
+            ) from error
+        valid = (
+            isinstance(report, dict) and set(report) == _REPORT_FIELDS and
+            report.get("contract_version") == CONTRACT_VERSION and report.get("schema") == 1 and
+            report.get("run_id") == self.run_id and
+            report.get("attempt_id") == run["identity"].get("attempt_id") and
+            report.get("status") in {"running", "passed"} and
+            report.get("last_passed_gate") in {GATES[4], GATES[5]} and
+            isinstance(report.get("evidence"), dict) and report.get("failures") == []
+        )
+        if not valid:
+            raise DControlError(
+                "D_RELEASE_REPORT_INVALID", GATES[5],
+                "the verified terminal run's local release report is inconsistent",
+            )
+        self.d5_state_path.unlink(missing_ok=True)
+        if report["status"] != "passed" or report["last_passed_gate"] != GATES[5]:
+            report["status"] = "passed"
+            report["last_passed_gate"] = GATES[5]
+            self._persist(report)
+        return report
+
     def release(self, room: dict) -> dict:
         """Run D7-D11 once D6 is terminal; return factual local cleanup state."""
         run = self.coordinator.snapshot(self.run_id)
         if not isinstance(run, dict):
             raise DControlError("D_RUN_STATE_INVALID", GATES[0], "the coordinator run is unavailable")
         if run["phase"] == Phase.TERMINAL.value and run["cleanup"]["verified"]:
-            self.d5_state_path.unlink(missing_ok=True)
-            return {"status": "passed", "run": run, "report": None}
+            report = self._finish_terminal_report(run)
+            return {"status": "passed", "run": run, "report": report}
         if run["phase"] == Phase.TERMINAL.value:
             run = self.coordinator.retry_cleanup(self.run_id)
         elif run["phase"] not in {Phase.CLOSING.value, Phase.CLEANING.value}:

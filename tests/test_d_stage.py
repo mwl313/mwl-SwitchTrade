@@ -35,9 +35,11 @@ class Clock:
 
 
 class Simulation:
-    def __init__(self, disconnect_after=None, log=None):
+    def __init__(self, disconnect_after=None, log=None, tick_error=None, close_error=None):
         self.disconnect_after = disconnect_after
         self.log = log
+        self.tick_error = tick_error
+        self.close_error = close_error
         self.host_disconnected = False
         self.ticks = 0
         self.closes = 0
@@ -46,6 +48,8 @@ class Simulation:
         if self.log is not None:
             self.log.append("simulation.tick")
         self.ticks += 1
+        if self.tick_error:
+            raise RuntimeError(self.tick_error)
         if self.disconnect_after is not None and self.ticks >= self.disconnect_after:
             self.host_disconnected = True
 
@@ -53,10 +57,12 @@ class Simulation:
         if self.log is not None:
             self.log.append("simulation.close")
         self.closes += 1
+        if self.close_error:
+            raise RuntimeError(self.close_error)
 
 
 class Bridge:
-    def __init__(self, result=None, stop_error=None, log=None):
+    def __init__(self, result=None, drain_error=None, stop_error=None, log=None):
         self.result = result or {
             "admission_stopped": True,
             "pending_local_frames": 0,
@@ -66,6 +72,7 @@ class Bridge:
             "error_code": None,
         }
         self.stop_error = stop_error
+        self.drain_error = drain_error
         self.log = log
         self.run_id = RUN_ID
         self.attempt_id = "attempt-d"
@@ -82,6 +89,8 @@ class Bridge:
         if self.log is not None:
             self.log.append("bridge.drain")
         self.drains += 1
+        if self.drain_error:
+            raise RuntimeError(self.drain_error)
         return dict(self.result)
 
     def stop_transport(self):
@@ -93,14 +102,17 @@ class Bridge:
 
 
 class Observer:
-    def __init__(self, log=None):
+    def __init__(self, log=None, error=None):
         self.calls = []
         self.log = log
+        self.error = error
 
     def stop(self, *, clear):
         if self.log is not None:
             self.log.append("observer.stop")
         self.calls.append(clear)
+        if self.error:
+            raise RuntimeError(self.error)
 
 
 class Transport:
@@ -181,6 +193,35 @@ class EndpointDStageTests(unittest.TestCase):
         self.assertEqual((simulation.closes, bridge.stops, transport.stops), (1, 1, 1))
         self.assertTrue(report["evidence"]["bridge_transport_exited"])
         self.assertFalse(report["evidence"]["ldn_released"])
+
+    def test_d2_exception_is_bounded_and_d3_d4_still_release(self):
+        gates = []
+        simulation = Simulation(tick_error="native tick failed")
+        bridge, observer, transport = Bridge(), Observer(), Transport()
+        report = self.stage(
+            simulation=simulation, bridge=bridge, observer=observer, transport=transport,
+            clock=Clock(), gates=gates,
+        ).run()
+        self.assertEqual(report["failures"][0]["code"], "D_CLOSE_TAIL_FAILED")
+        self.assertEqual([item["gate"] for item in gates], [GATES[1], GATES[2]])
+        self.assertEqual((bridge.drains, bridge.stops, transport.stops), (1, 1, 1))
+
+    def test_all_d3_faults_are_bounded_and_d4_still_releases(self):
+        gates = []
+        simulation = Simulation(disconnect_after=1, close_error="simulation close failed")
+        bridge = Bridge(drain_error="drain failed", stop_error="bridge stop failed")
+        observer = Observer(error="observer stop failed")
+        transport = Transport()
+        report = self.stage(
+            simulation=simulation, bridge=bridge, observer=observer, transport=transport,
+            clock=Clock(), gates=gates,
+        ).run()
+        self.assertEqual([item["code"] for item in report["failures"]], [
+            "D_BRIDGE_DRAIN_FAILED", "D_OBSERVER_STOP_FAILED",
+            "D_SIMULATION_CLOSE_FAILED", "D_BRIDGE_TRANSPORT_STOP_FAILED",
+        ])
+        self.assertEqual([item["gate"] for item in gates], [GATES[0], GATES[2]])
+        self.assertEqual((bridge.drains, bridge.stops, transport.stops), (1, 1, 1))
 
     def test_completed_intent_requires_trade_complete(self):
         invalid = intent("completed")
