@@ -141,10 +141,10 @@ current proof generation to the attempt, credential-derived seat, complementary 
 identity, advertisement hash, and relay-owned activation generation. It preserves byte-exact Pia
 Reliable payloads behind a bounded 256-frame pre-barrier queue and requires current-generation
 bidirectional RFU before `C_RFU_ACTIVE`. Local real-process smoke and the full `443 passed, 3 skipped`
-audit suite passed. The redeployed validation relay also passed ten consecutive public C0-C2 smokes
-plus normal/reversed roles and delayed A/B; private zero-orphan and remaining negative/reconnect
-evidence are pending. This does not claim physical A/B, distributed D, diagnostic/application
-cutover, or a trade.
+audit suite passed. The source-identical deployed relay passed ten consecutive public C0-C2 smokes,
+normal/reversed roles, delayed A/B, single-worker identity, and private zero-orphan metrics. The M6
+software/deployed exit gate is accepted. This does not claim physical A/B, distributed D,
+diagnostic/application cutover, or a trade.
 
 The [definitive TODO](docs/FUTURE_TODO.md) records implementation and qualification status. A passing
 test for the previous behavior does not close an ABC+D gate unless it proves the gate's current

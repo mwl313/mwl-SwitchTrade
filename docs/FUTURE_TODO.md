@@ -105,9 +105,9 @@ path. No open item may be presented as a current production capability.
    and normal application to the factual v2 C gates.
 
 3. **CRITICAL — URGENT: Add the attempt-scoped A_READY/B_READY activation barrier.**
-   **Status (2026-08-30): source and local real-process C2 exit matrix passed at `d2130fe`;
-   repeated validation-relay C2 smoke passed; private zero-orphan, public negative/reconnect,
-   physical two-PC proof, and M8/M9 product cutover remain open.**
+   **Status (2026-08-30): M6 software/deployed exit accepted at `d2130fe`; source-identical public
+   C2 smoke, single-worker identity, and private zero-orphan checks passed. Physical two-PC proof and
+   M8/M9 product cutover remain open.**
    The current `rfu-tunnel.v1` controls include `PEER_READY` and `ADVERTISEMENT`, but no physical
    side-ready message. In the normal finder path, `HostTransport.start()` returns when the AP opens,
    before `_peer` proves that the Joining Switch associated; the endpoint then constructs
@@ -132,9 +132,10 @@ path. No open item may be presented as a current production capability.
    Reliable byte/flag transport, and current-generation bidirectional RFU activation. Disconnect and
    peer-send loss revoke both owned transport slots and require fresh nonce and side-ready proof.
    Focused tests passed 49 cases; the full fixed audit runtime passed 443 tests with three intentional
-   skips; and the extended local hosting smoke passed C0-C2. Keep this item open until that exact code
-   passes the public validation-relay matrix and a later two-PC/two-Switch run proves simultaneous
-   physical A_READY/B_READY through the product coordinator.
+   skips; and the extended local hosting smoke passed C0-C2. The source-identical deployed relay then
+   passed repeated public C2 smoke in both role assignments, delayed A/B, single-worker identity, and
+   private zero-orphan metrics. Keep this product blocker open until a later two-PC/two-Switch run
+   proves simultaneous physical A_READY/B_READY through the production coordinator.
 
 4. **CRITICAL — URGENT: Make D cleanup two-sided, attempt-scoped, and outcome-preserving.**
    **Status (2026-08-29): confirmed architecture gap; not implemented.**

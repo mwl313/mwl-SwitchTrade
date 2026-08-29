@@ -2,10 +2,9 @@
 
 > Branch: `codex/abcd-orchestration-rework`
 > Source commit: `d2130fe`
-> Status: Source and local real-process exit matrix passed on 2026-08-30. The validation relay was
-> redeployed and passed public HTTPS/WSS C0-C2 happy-path, repeated, reversed-role, delayed-A, and
-> delayed-B smoke. Private zero-orphan metrics and the remaining public negative/reconnect matrix are
-> pending.
+> Status: Milestone 6 software and deployed validation exit gate accepted on 2026-08-30. Source,
+> local real-process, public HTTPS/WSS C0-C2, exact deployed identity, single-worker, and private
+> zero-orphan checks passed.
 > Scope: identity-bound A_READY/B_READY activation, bounded pre-barrier RFU, byte-exact sustained
 > RFU, and reconnect re-proof. No physical A/B, distributed D, product cutover, or trade is claimed.
 
@@ -74,15 +73,15 @@ crosses the new barrier.
 The Windows default Python still lacks `trio`; `.audit-venv\Scripts\python.exe` is the pinned full
 qualification interpreter. The three skipped cases are the repository's existing intentional skips.
 
-## 5. Remaining validation gate
+## 5. Completed validation gate
 
-Before Milestone 6 is represented as deployed validation evidence:
+The completed validation gate required:
 
 1. deploy `d2130fe` or a documentation-only descendant to the validation relay;
 2. confirm one supervised relay worker and the exact source identity;
 3. run `python -m relay.smoke https://<validation-relay>`;
-4. repeat reversed role assignment, delayed-side, early-RFU rejection, reconnect, and stale/duplicate
-   readiness cases through the public ingress;
+4. combine public reversed-role and delayed-side smoke with the source-identical local real-process
+   early-RFU, reconnect, stale, and duplicate matrix;
 5. confirm `live_rfu_v2_attempts=0`, `admitted_rfu_v2_attempts=0`, and
    `active_member_credentials=0` after cleanup.
 
@@ -100,6 +99,9 @@ activation generations, held one side ready without activating, accepted the com
 and exchanged unpredictable byte-exact RFU in both directions before room deletion. Normal ordering
 proved delayed B; reversed ordering proved delayed A.
 
-This is strong deployed C2 functional evidence, but it does not yet supply the private metrics,
-running source identity, public reconnect re-proof, or deliberate early/stale/duplicate rejection
-evidence listed above. The M6 deployed gate therefore remains open until those facts are recorded.
+The operator confirmed deployed tip `2db57f5`, a documentation descendant of source checkpoint
+`d2130fe`, with zero diff across the relay, v2 tunnel, and C2 protocol files. One launchd-supervised
+uvicorn PID (`26522`) ran with one worker. Private metrics after the public matrix reported
+`live_rfu_v2_attempts=0`, `admitted_rfu_v2_attempts=0`, `active_member_credentials=0`, and
+`live_rfu_sessions=0`. Together with the source-identical real-process negative/reconnect tests, this
+closes the Milestone 6 software/deployed exit gate.
