@@ -8,7 +8,8 @@ path. No open item may be presented as a current production capability.
 ## Critical and urgent blockers
 
 1. **CRITICAL — URGENT: Restore the complete WSL LDN prerequisite gate.**
-   **Status (2026-08-29): confirmed regression; not fixed.**
+   **Status (2026-08-29): isolated Milestone 2 source replacement implemented; the installed app is
+   not cut over and cold physical qualification is pending, so this blocker remains open.**
    The installed `0.2.6-beta.2` runtime contains the correct kernel and the `ccm`, `cmac`, and `tun`
    modules, but the production wrapper does not load them and does not verify `/dev/net/tun` before
    entering the LDN path. A real Switch-hosted room was observed and decoded three times, then every
@@ -23,6 +24,14 @@ path. No open item may be presented as a current production capability.
    diagnostics must call this same gate. Cold-boot acceptance requires
    all modules initially unloaded, one successful A-side Switch room join, one successful B-side AP
    association, and verified cleanup without manual `modprobe` or a warm-runtime dependency.
+
+   The new source-only P0 path now loads and verifies the complete ordered module set, verifies
+   `/dev/net/tun`, performs actual RX, keeps one Linux radio lock through an identity-bound endpoint
+   canary, attaches the exact saved InstanceId at most once, and returns only a run-acquired adapter.
+   Passive and active runtime, module, firmware, and integrity hashes must agree. Unknown cleanup,
+   an active interface, a changed bus identity, an inactive usbip port, or missing recovery evidence
+   fails closed and blocks another run. This path is deliberately isolated from `0.2.6-beta.2`; close
+   this item only after the new installed runtime passes cold P0 and direct A/B on both PCs.
 
 2. **CRITICAL — URGENT: Preserve relay frame order and truthful P0/A/B/C/D diagnostic stages.**
    **Status (2026-08-29): confirmed regression; not fixed.**

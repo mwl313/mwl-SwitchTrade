@@ -100,9 +100,12 @@ Implementation proceeds in this order:
    orchestration and other unreachable legacy paths.
 7. Qualify source and installed runtime in P0 → A → B → C → D order before packaging another release.
 
-Milestones 0 and 1 are complete in source. The isolated `connection-run.v1` coordinator now owns
-serialized state, launch identity, and cleanup guards, but it is not connected to normal rooms,
-diagnostics, WSL, or hardware yet. No physical ABC+D capability is claimed by this foundation.
+Milestones 0 and 1 are complete in source. Milestone 2 now has an isolated CLI-first P0
+implementation: strict passive runtime/relay validation, exact Windows USB lease ownership, the full
+ordered Linux module/TUN/RX gate, a long-lived WSL radio worker, identity-bound single launch, and
+restart-safe cleanup. It is intentionally not connected to the legacy normal-room, diagnostics, or
+desktop paths. Cold installed-runtime qualification on both PCs is still required before Milestone 2
+can close, and no physical A, B, C, or trade capability is claimed by this source foundation.
 
 The [definitive TODO](docs/FUTURE_TODO.md) records implementation and qualification status. A passing
 test for the previous behavior does not close an ABC+D gate unless it proves the gate's current
@@ -115,6 +118,7 @@ contract.
 - [Development History](docs/DEVELOPMENT_HISTORY.md)
 - [ABC+D Connection Architecture](docs/80-abc-connection-architecture-20260829.md)
 - [ABC+D Orchestration Rewrite Plan](docs/81-abcd-orchestration-rewrite-plan-20260829.md)
+- [ABC+D Milestone 2 P0 Source Evidence](docs/84-abcd-milestone-2-p0-source-20260829.md)
 - [Definitive TODO](docs/FUTURE_TODO.md)
 - [Known Issues](docs/KNOWN_ISSUES.md)
 - [Relay deployment](relay/DEPLOYMENT.md)
