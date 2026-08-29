@@ -40,6 +40,11 @@ Execution status:
   cleanup hang; the bounded, checkpointed candidate's final real one-Switch confirmation is pending.
   On 2026-08-30 the owner directed that confirmation to remain explicit qualification debt and
   authorized Milestone 5 to begin without treating Milestone 4 as accepted.
+- Milestone 5 source checkpoint `162f779` added P0/launch-bound `rfu-tunnel.v2`, strict contiguous
+  ordering, reconnect nonce re-proof, exact advertisement-hash delivery, and factual C0/C1 stages.
+  Local real-process validation passed; the immutable external validation-relay image build, deploy,
+  HTTPS smoke, and deployed failure matrix remain open, so Milestone 5 is not yet accepted. See
+  [`88-abcd-milestone-5-c0-c1-20260830.md`](88-abcd-milestone-5-c0-c1-20260830.md).
 
 ## 2. Architecture and interface decisions
 

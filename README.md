@@ -127,6 +127,12 @@ cleanup. The bounded run-local cleanup fix is installed and awaiting one confirm
 not yet claim formal Direct B acceptance, B1,
 `B_READY`, relay delivery, or a trade.
 
+Milestone 5 is in progress at source checkpoint `162f779`. A separate P0- and launch-bound
+`rfu-tunnel.v2` path now passes local real-process tests for strict late-peer ordering, both role
+assignments, unpredictable bidirectional probes, reconnect re-proof, exact advertisement-hash
+delivery, stale/gap/wrong-attempt rejection, and restart cleanup. The external immutable validation
+relay has not been built or deployed yet, so C0/C1 are not accepted production capabilities.
+
 The [definitive TODO](docs/FUTURE_TODO.md) records implementation and qualification status. A passing
 test for the previous behavior does not close an ABC+D gate unless it proves the gate's current
 contract.
@@ -142,6 +148,7 @@ contract.
 - [ABC+D Milestone 2 Qualification Guide](docs/85-abcd-milestone-2-qualification-guide-20260829.md)
 - [ABC+D Milestone 3 Direct A Qualification Evidence](docs/86-abcd-milestone-3-direct-a-20260829.md)
 - [ABC+D Milestone 4 Direct B Qualification Evidence](docs/87-abcd-milestone-4-direct-b-20260829.md)
+- [ABC+D Milestone 5 C0/C1 Source Checkpoint](docs/88-abcd-milestone-5-c0-c1-20260830.md)
 - [Definitive TODO](docs/FUTURE_TODO.md)
 - [Known Issues](docs/KNOWN_ISSUES.md)
 - [Relay deployment](relay/DEPLOYMENT.md)
