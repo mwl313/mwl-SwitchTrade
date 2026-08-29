@@ -305,6 +305,8 @@ class DirectBStage:
         self.cleanup = {
             "ldn_context_released": True,
             "radio_quiescent": False,
+            "ldn_last_checkpoint": "not_started",
+            "ap_stop_timed_out": False,
         }
         self.compatibility = {
             "beacon_head": False,
@@ -375,11 +377,35 @@ class DirectBStage:
         )
         key = derivation.derive_data_key(param.server_random, param.password)
         async with wlan.create_factory() as factory:
+            self.cleanup["ldn_last_checkpoint"] = "factory_entered"
             async with factory._create_interface(
                 param.phyname, param.ifname, wlan.nl80211.NL80211_IFTYPE_AP
             ) as attributes:
+                self.cleanup["ldn_last_checkpoint"] = "ap_interface_created"
+                base_wlan = factory._wlan
+                self_trio = self.trio
+                self_timeout = self.teardown_timeout
+                cleanup = self.cleanup
+
+                class RunWlan:
+                    def __getattr__(self, name):
+                        return getattr(base_wlan, name)
+
+                    async def request(self, command, attrs=None, flags=0, header=b""):
+                        attrs = {} if attrs is None else attrs
+                        if command != wlan.nl80211.NL80211_CMD_STOP_AP:
+                            return await base_wlan.request(command, attrs, flags, header)
+                        result = []
+                        with self_trio.move_on_after(
+                            min(self_timeout, 2.0), shield=True
+                        ) as stop_scope:
+                            result = await base_wlan.request(command, attrs, flags, header)
+                        if stop_scope.cancelled_caught:
+                            cleanup["ap_stop_timed_out"] = True
+                        return result
+
                 ap = wlan.AccessPoint(
-                    factory._wlan,
+                    RunWlan(),
                     factory._router,
                     param.ifname,
                     attributes[wlan.nl80211.NL80211_ATTR_IFINDEX],
@@ -394,9 +420,11 @@ class DirectBStage:
                 )
                 self.compatibility["beacon_head"] = True
                 async with ap.create():
+                    self.cleanup["ldn_last_checkpoint"] = "ap_started"
                     async with factory.create_monitor(
                         param.phyname_monitor, param.ifname_monitor
                     ) as monitor:
+                        self.cleanup["ldn_last_checkpoint"] = "monitor_created"
                         receive_frame = monitor.recv_frame
 
                         async def receive_compat():
@@ -414,6 +442,7 @@ class DirectBStage:
                         monitor.recv_frame = receive_compat
                         self.compatibility["monitor_ccmp"] = True
                         async with factory.create_tap(param.ifname_tap, monitor.address()) as tap:
+                            self.cleanup["ldn_last_checkpoint"] = "tap_created"
                             network = ldn.APNetwork(ap, monitor, tap, param, derivation, key)
                             control_done = self.trio.Event()
                             send_custom = ap.send_custom_frame
@@ -451,7 +480,14 @@ class DirectBStage:
                             network._destroy_network = destroy_remote_only
                             self.compatibility["remote_destroy"] = True
                             async with network.start():
+                                self.cleanup["ldn_last_checkpoint"] = "network_started"
                                 yield network, control_done
+                            self.cleanup["ldn_last_checkpoint"] = "network_released"
+                        self.cleanup["ldn_last_checkpoint"] = "tap_released"
+                    self.cleanup["ldn_last_checkpoint"] = "monitor_released"
+                self.cleanup["ldn_last_checkpoint"] = "ap_released"
+            self.cleanup["ldn_last_checkpoint"] = "ap_interface_released"
+        self.cleanup["ldn_last_checkpoint"] = "factory_released"
 
     async def _hold(self, network) -> None:
         leave_type = getattr(self.ldn, "LeaveEvent", ())

@@ -63,6 +63,7 @@ class FakeKeyDerivation:
 
 class FakeAccessPoint:
     def __init__(self, _wlan, _router, name, index, address, ssid, channel, key, maximum):
+        self._wlan = _wlan
         self._name = name
         self._index = index
         self._address = address
@@ -82,7 +83,10 @@ class FakeAccessPoint:
     @contextlib.asynccontextmanager
     async def create(self):
         self.created_head = self._create_beacon_head()
-        yield
+        try:
+            yield
+        finally:
+            await self._wlan.request(16, {1: self._index})
 
     async def send_custom_frame(self, address, frame):
         self.sent.append((bytes(address), bytes(frame)))
@@ -112,9 +116,21 @@ class FakeTap(Named):
     pass
 
 
+class FakeNetlink:
+    def __init__(self, hang_stop=False):
+        self.hang_stop = hang_stop
+        self.commands = []
+
+    async def request(self, command, _attrs=None, _flags=0, _header=b""):
+        self.commands.append(command)
+        if self.hang_stop and command == 16:
+            await trio.sleep_forever()
+        return []
+
+
 class LowLevelFactory:
-    def __init__(self):
-        self._wlan = object()
+    def __init__(self, netlink=None):
+        self._wlan = netlink or FakeNetlink()
         self._router = object()
 
     async def __aenter__(self):
@@ -177,6 +193,7 @@ class LowLevelWlan:
         NL80211_IFTYPE_AP=3,
         NL80211_ATTR_IFINDEX=1,
         NL80211_ATTR_MAC=2,
+        NL80211_CMD_STOP_AP=16,
     )
     AccessPoint = FakeAccessPoint
     DataFrame = type("DataFrame", (), {})
@@ -193,6 +210,16 @@ class LowLevelLdn(FakeLdn):
     APNetwork = LowLevelAPNetwork
     DisconnectFrame = FakeDisconnectFrame
     DISCONNECT_NETWORK_DESTROYED = 3
+
+
+class HangingStopWlan(LowLevelWlan):
+    @staticmethod
+    def create_factory():
+        return LowLevelFactory(FakeNetlink(hang_stop=True))
+
+
+class HangingStopLdn(LowLevelLdn):
+    wlan = HangingStopWlan
 
 
 class FakeNetwork:
@@ -369,6 +396,20 @@ class DirectBContractTests(unittest.TestCase):
         self.assertIs(FakeAccessPoint._create_beacon_head, original_beacon)
         self.assertIs(FakeMonitor.recv_frame, original_receive)
         self.assertIs(LowLevelAPNetwork._destroy_network, original_destroy)
+        self.assertEqual(stage.cleanup["ldn_last_checkpoint"], "factory_released")
+
+    def test_joined_ap_stop_timeout_falls_through_to_interface_release(self):
+        stage = make_stage(ldn_module=HangingStopLdn, teardown_timeout=0.01)
+
+        async def exercise():
+            param = stage._build_param({"key": b"value"})
+            async with stage._tracked_network_context(stage._create_network(param)):
+                pass
+
+        trio.run(exercise)
+        self.assertTrue(stage.cleanup["ap_stop_timed_out"])
+        self.assertTrue(stage.cleanup["ldn_context_released"])
+        self.assertEqual(stage.cleanup["ldn_last_checkpoint"], "factory_released")
 
     def test_full_direct_path_passes_b2_through_b10_without_raw_identity(self):
         emitted = []
@@ -474,7 +515,12 @@ class DirectBContractTests(unittest.TestCase):
         report = {
             "status": "passed",
             "failure": None,
-            "cleanup": {"ldn_context_released": False, "radio_quiescent": False},
+            "cleanup": {
+                "ldn_context_released": False,
+                "radio_quiescent": False,
+                "ldn_last_checkpoint": "ap_started",
+                "ap_stop_timed_out": True,
+            },
         }
 
         class FakeStage:
@@ -507,6 +553,8 @@ class DirectBContractTests(unittest.TestCase):
         self.assertEqual(written, [{
             "ldn_context_released": False,
             "radio_quiescent": True,
+            "ldn_last_checkpoint": "ap_started",
+            "ap_stop_timed_out": True,
         }])
 
 

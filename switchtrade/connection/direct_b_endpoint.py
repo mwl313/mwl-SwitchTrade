@@ -59,18 +59,11 @@ def run(args: argparse.Namespace) -> int:
         teardown_timeout=args.teardown_timeout,
     )
     report = trio.run(stage.run)
-    ldn_context_released = report["cleanup"]["ldn_context_released"]
     try:
         quiesce_selected_phy(args.phy, args.tap_ifname)
-        report["cleanup"] = {
-            "ldn_context_released": ldn_context_released,
-            "radio_quiescent": True,
-        }
+        report["cleanup"]["radio_quiescent"] = True
     except BStageError:
-        report["cleanup"] = {
-            "ldn_context_released": ldn_context_released,
-            "radio_quiescent": False,
-        }
+        report["cleanup"]["radio_quiescent"] = False
     atomic_json(args.report, report)
 
     if report["status"] != "passed":

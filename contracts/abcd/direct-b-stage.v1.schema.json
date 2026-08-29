@@ -120,7 +120,16 @@
       "required": ["ldn_context_released", "radio_quiescent"],
       "properties": {
         "ldn_context_released": { "type": "boolean" },
-        "radio_quiescent": { "type": "boolean" }
+        "radio_quiescent": { "type": "boolean" },
+        "ldn_last_checkpoint": {
+          "enum": [
+            "not_started", "factory_entered", "ap_interface_created", "ap_started",
+            "monitor_created", "tap_created", "network_started", "network_released",
+            "tap_released", "monitor_released", "ap_released", "ap_interface_released",
+            "factory_released"
+          ]
+        },
+        "ap_stop_timed_out": { "type": "boolean" }
       }
     }
   }
