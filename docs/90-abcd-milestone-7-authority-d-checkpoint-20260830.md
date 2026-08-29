@@ -2,6 +2,7 @@
 
 > Branch: `codex/abcd-orchestration-rework`
 > Source commit: `d815562`
+> Validation-smoke commit: `40fecf3`
 > Status: M7 authority slice complete; Milestone 7 remains open.
 > Scope: D1 closing intent, D5 authority acknowledgement, D6 two-side/forced barrier, and relay
 > transport retirement. This checkpoint does not implement or claim local D2-D4 or D7-D11.
@@ -66,6 +67,9 @@ existing SHA-256 launch identity.
 
 - Focused authority and real-process tunnel matrix: `62 passed`.
 - Full audit runtime: `450 passed, 3 skipped`.
+- Source-identical local uvicorn smoke passed both normal and reversed role assignments through C0-C2,
+  D1, one-sided D5 non-terminal behavior, two-sided D6, post-terminal retry, and room close. Final
+  metrics were zero for active credentials, v1/v2 sessions, and v2 admissions.
 - Tests cover two-sided cancellation, failed outcomes, false completion rejection, stale launch
   identity, legacy-path rejection, primary/secondary error separation, forced-side evidence, barrier
   timeout, relay restart, exact post-terminal HTTP retry, and transport retirement.
