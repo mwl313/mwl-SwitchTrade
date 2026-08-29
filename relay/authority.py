@@ -33,6 +33,7 @@ RECONNECT_SECONDS = 90
 SECRET_RESPONSE_SECONDS = 10 * 60
 COMMAND_RETENTION_SECONDS = 24 * 60 * 60
 AUTHORITY_RETENTION_SECONDS = 14 * 24 * 60 * 60
+D_BARRIER_SECONDS = 30
 TERMINAL_ATTEMPT_PHASES = {"completed", "canceled", "failed"}
 ATTEMPT_PHASE_ORDER = {
     "creator_guidance": 0,
@@ -46,6 +47,13 @@ ATTEMPT_PHASE_ORDER = {
     "completed": 7,
     "canceled": 7,
     "failed": 7,
+}
+D_OUTCOMES = {"completed", "canceled", "failed"}
+D_CODE = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,95}")
+D_GATE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}")
+D_QUIESCENT_FIELDS = {
+    "endpoint_exited", "transport_exited", "threads_exited",
+    "ldn_released", "interfaces_absent", "forced",
 }
 
 
@@ -584,6 +592,189 @@ class AuthorityStore:
             room, member_id = self._credentials(bearer)
             return self._public(room, member_id)
 
+    @staticmethod
+    def _d_identity(room: dict, member_id: str, attempt_id: str) -> tuple[dict, dict]:
+        attempt = room.get("attempt") or {}
+        if attempt.get("attempt_id") != attempt_id:
+            raise AuthorityError(409, "connection attempt is stale")
+        member = next(
+            (item for item in room["members"] if item["member_id"] == member_id), None
+        )
+        if member is None or member.get("online_state") == "left":
+            raise AuthorityError(409, "connection member is not active")
+        return attempt, member
+
+    def _terminalize_d(self, room: dict, attempt: dict, *, barrier_status: str,
+                       cleanup_status: str, secondary_failure_code: str | None,
+                       now: float | None = None) -> None:
+        """Apply the single authority-owned D6 terminal transition."""
+        state = attempt["d"]
+        state["barrier_status"] = barrier_status
+        state["cleanup_status"] = cleanup_status
+        state["secondary_failure_code"] = secondary_failure_code
+        state["terminalized_at"] = _utc(now)
+        attempt["phase"] = state["outcome"]
+        attempt["recoverable_error"] = (
+            state["primary_failure_code"] if state["outcome"] == "failed" else None
+        )
+        attempt["updated_at"] = _utc(now)
+        room["state"] = "ready_check"
+        for member in room["members"]:
+            if member["online_state"] != "left":
+                member["ready_state"] = "not_ready"
+                member["switch_room_role"] = None
+
+    def begin_d_closing(self, room_id: str, bearer: str, command_id: str,
+                        attempt_id: str, payload: dict,
+                        expected_version: int) -> dict:
+        """Freeze one attempt outcome before either side tears down local resources."""
+        with self._transaction():
+            room, member_id = self._credentials(bearer, room_id)
+            scope = f"member:{member_id}:d-closing:{attempt_id}"
+            if cached := self._command_response(scope, command_id):
+                return cached
+            attempt, member = self._d_identity(room, member_id, attempt_id)
+            if payload.get("contract_version") != "d-closing-intent.v1":
+                raise AuthorityError(400, "D closing contract is incompatible")
+            if payload.get("attempt_id") != attempt_id:
+                raise AuthorityError(409, "connection attempt is stale")
+            activation = payload.get("activation_generation")
+            if (isinstance(activation, bool) or not isinstance(activation, int) or
+                    activation != attempt.get("activation_generation")):
+                raise AuthorityError(409, "D activation generation is stale")
+            outcome = payload.get("outcome")
+            code = payload.get("primary_failure_code")
+            gate = payload.get("last_passed_gate")
+            if outcome not in D_OUTCOMES or not isinstance(gate, str) or not D_GATE.fullmatch(gate):
+                raise AuthorityError(400, "D closing intent is invalid")
+            if outcome == "failed":
+                if not isinstance(code, str) or not D_CODE.fullmatch(code):
+                    raise AuthorityError(400, "D failed outcome requires a primary failure code")
+            elif code is not None:
+                raise AuthorityError(400, "D non-failed outcome cannot carry a failure code")
+            if outcome == "completed" and gate != "C_TRADE_COMPLETE":
+                raise AuthorityError(409, "D completed outcome requires C_TRADE_COMPLETE")
+
+            existing = attempt.get("d")
+            requested = (outcome, code, gate, activation)
+            if existing is not None:
+                recorded = (
+                    existing.get("outcome"), existing.get("primary_failure_code"),
+                    existing.get("last_passed_gate"), existing.get("activation_generation"),
+                )
+                if recorded != requested:
+                    raise AuthorityError(409, "D closing intent conflicts with the recorded outcome")
+                response = self._public(room, member_id)
+                self._remember(scope, command_id, response)
+                return response
+            if attempt.get("phase") in TERMINAL_ATTEMPT_PHASES:
+                raise AuthorityError(409, "connection attempt is not active")
+            if expected_version != room["room_version"]:
+                raise AuthorityError(409, "room version conflict")
+
+            attempt["phase"] = "closing"
+            attempt["updated_at"] = _utc()
+            deadline = time.time() + D_BARRIER_SECONDS
+            attempt["d"] = {
+                "contract_version": "distributed-d.v1",
+                "activation_generation": activation,
+                "intent_generation": activation,
+                "outcome": outcome,
+                "primary_failure_code": code,
+                "last_passed_gate": gate,
+                "initiated_by_seat": member["seat"],
+                "started_at": _utc(),
+                "deadline_at": _utc(deadline),
+                "sides": {"member_a": None, "member_b": None},
+                "barrier_status": "waiting_for_sides",
+                "cleanup_status": "pending",
+                "secondary_failure_code": None,
+                "terminalized_at": None,
+            }
+            room["room_version"] += 1
+            self._event(room, "attempt.closing", member_id, {
+                "outcome": outcome, "primary_failure_code": code, "last_passed_gate": gate,
+            })
+            self._save(room)
+            response = self._public(room, member_id)
+            self._remember(scope, command_id, response)
+            return response
+
+    def acknowledge_d_quiescent(self, room_id: str, bearer: str, command_id: str,
+                                attempt_id: str, payload: dict,
+                                expected_version: int) -> dict:
+        """Record one seat's D5 evidence and terminalize only at the two-seat D6 barrier."""
+        with self._transaction():
+            room, member_id = self._credentials(bearer, room_id)
+            scope = f"member:{member_id}:d-quiescent:{attempt_id}"
+            if cached := self._command_response(scope, command_id):
+                return cached
+            attempt, member = self._d_identity(room, member_id, attempt_id)
+            state = attempt.get("d")
+            if state is None or attempt.get("phase") not in {"closing", *TERMINAL_ATTEMPT_PHASES}:
+                raise AuthorityError(409, "D closing intent is required")
+            if payload.get("contract_version") != "d-side-quiescent.v1":
+                raise AuthorityError(400, "D quiescent contract is incompatible")
+            if (payload.get("attempt_id") != attempt_id or
+                    payload.get("source_seat") != member["seat"] or
+                    payload.get("activation_generation") != state["activation_generation"]):
+                raise AuthorityError(409, "D quiescent identity is stale")
+            evidence = payload.get("evidence")
+            if (not isinstance(evidence, dict) or set(evidence) != D_QUIESCENT_FIELDS or
+                    any(not isinstance(value, bool) for value in evidence.values())):
+                raise AuthorityError(400, "D quiescent evidence is invalid")
+            report = {
+                "run_id": payload.get("run_id"),
+                "stage_generation": payload.get("stage_generation"),
+                "launch_identity_sha256": payload.get("launch_identity_sha256"),
+                "evidence": dict(evidence),
+                "acknowledged_at": _utc(),
+            }
+            if (not isinstance(report["run_id"], str) or
+                    not isinstance(report["stage_generation"], int) or
+                    isinstance(report["stage_generation"], bool) or report["stage_generation"] < 1 or
+                    not isinstance(report["launch_identity_sha256"], str) or
+                    not re.fullmatch(r"[0-9a-f]{64}", report["launch_identity_sha256"])):
+                raise AuthorityError(400, "D quiescent launch identity is invalid")
+
+            seat = member["seat"]
+            existing = state["sides"][seat]
+            if existing is not None:
+                comparable = {key: existing[key] for key in (
+                    "run_id", "stage_generation", "launch_identity_sha256", "evidence"
+                )}
+                if comparable != {key: report[key] for key in comparable}:
+                    raise AuthorityError(409, "D quiescent evidence conflicts with the recorded side")
+                response = self._public(room, member_id)
+                self._remember(scope, command_id, response)
+                return response
+            if expected_version != room["room_version"]:
+                raise AuthorityError(409, "room version conflict")
+            state["sides"][seat] = report
+            both = all(state["sides"].values())
+            if both:
+                verified = all(
+                    all(value for key, value in side["evidence"].items() if key != "forced") and
+                    side["evidence"]["forced"] is False
+                    for side in state["sides"].values()
+                )
+                self._terminalize_d(
+                    room, attempt, barrier_status="two_side_terminal",
+                    cleanup_status="verified" if verified else "failed",
+                    secondary_failure_code=None if verified else "D_SIDE_CLEANUP_FAILED",
+                )
+            else:
+                attempt["updated_at"] = _utc()
+            room["room_version"] += 1
+            self._event(room, "attempt.d_side_quiescent", member_id, {
+                "seat": seat, "barrier_status": state["barrier_status"],
+                "cleanup_status": state["cleanup_status"],
+            })
+            self._save(room)
+            response = self._public(room, member_id)
+            self._remember(scope, command_id, response)
+            return response
+
     def member_for_code(self, room_code: str, bearer: str,
                         attempt_id: str | None = None) -> dict | None:
         with self._lock:
@@ -639,7 +830,7 @@ class AuthorityStore:
             "phase": "connecting_switches", "creator_member_id": creator,
             "role_locked": True, "role_lock_version": room["room_version"] + 1,
             "started_at": _utc(), "updated_at": _utc(), "retry_count": 0,
-            "recoverable_error": None,
+            "recoverable_error": None, "d": None,
         }
         room["state"] = "connection_attempt"
 
@@ -923,6 +1114,8 @@ class AuthorityStore:
                     attempt.get("attempt_id") != attempt_id or
                     attempt.get("phase") in {None, "completed", "canceled", "failed"}):
                 return False
+            if attempt.get("phase") == "closing":
+                return False
             attempt["phase"] = "failed"
             attempt["recoverable_error"] = code
             attempt["updated_at"] = _utc()
@@ -936,6 +1129,26 @@ class AuthorityStore:
             self._save(room)
             return True
 
+    def force_d_barrier(self, room_id: str, attempt_id: str, code: str) -> bool:
+        """Finish an unrecoverable D barrier without replacing its functional result."""
+        if not isinstance(code, str) or not D_CODE.fullmatch(code):
+            raise AuthorityError(400, "D secondary failure code is invalid")
+        with self._transaction():
+            room = self._load(room_id)
+            attempt = room.get("attempt") or {}
+            if (room.get("state") in {"closed", "expired"} or
+                    attempt.get("attempt_id") != attempt_id or
+                    attempt.get("phase") != "closing" or attempt.get("d") is None):
+                return False
+            self._terminalize_d(
+                room, attempt, barrier_status="forced_failure", cleanup_status="failed",
+                secondary_failure_code=code,
+            )
+            room["room_version"] += 1
+            self._event(room, "attempt.d_barrier_forced", None, {"code": code})
+            self._save(room)
+            return True
+
     def fail_active_attempts(self, code: str) -> int:
         """Invalidate process-local transports after a relay process restart."""
         with self._lock:
@@ -945,12 +1158,16 @@ class AuthorityStore:
             room = json.loads(row["document"])
             attempt = room.get("attempt") or {}
             attempt_id = attempt.get("attempt_id")
-            if attempt_id and self.fail_transport_attempt(row["room_id"], attempt_id, code):
+            if (attempt_id and attempt.get("phase") == "closing" and
+                    self.force_d_barrier(row["room_id"], attempt_id, "D_RELAY_RESTART")):
+                failed += 1
+            elif attempt_id and self.fail_transport_attempt(row["room_id"], attempt_id, code):
                 failed += 1
         return failed
 
-    def sweep_presence(self) -> None:
+    def sweep_presence(self) -> list[tuple[str, str]]:
         now = time.time()
+        expired_d: list[tuple[str, str]] = []
         with self._transaction():
             rows = self._db.execute("SELECT room_id,document FROM rooms").fetchall()
             for row in rows:
@@ -958,6 +1175,23 @@ class AuthorityStore:
                 if room["state"] in {"closed", "expired"}:
                     continue
                 changed = False
+                attempt = room.get("attempt") or {}
+                d_state = attempt.get("d") or {}
+                if attempt.get("phase") == "closing" and d_state.get("deadline_at"):
+                    deadline = datetime.fromisoformat(
+                        d_state["deadline_at"].replace("Z", "+00:00")).timestamp()
+                    if deadline <= now:
+                        self._terminalize_d(
+                            room, attempt, barrier_status="forced_timeout",
+                            cleanup_status="failed",
+                            secondary_failure_code="D_BARRIER_TIMEOUT", now=now,
+                        )
+                        room["room_version"] += 1
+                        self._event(room, "attempt.d_barrier_timeout", None, {
+                            "code": "D_BARRIER_TIMEOUT",
+                        })
+                        expired_d.append((room["room_code"], attempt["attempt_id"]))
+                        changed = True
                 for member in room["members"]:
                     if (member["online_state"] == "online" and
                             now - member.get("last_seen_epoch", now) > OFFLINE_DETECTION_SECONDS):
@@ -977,7 +1211,8 @@ class AuthorityStore:
                                 (room["room_id"], member["member_id"]),
                             )
                             attempt = room.get("attempt")
-                            if attempt and attempt.get("phase") not in {"completed", "canceled", "failed"}:
+                            if (attempt and attempt.get("phase") not in
+                                    {"closing", "completed", "canceled", "failed"}):
                                 attempt["phase"] = "failed"
                                 attempt["recoverable_error"] = "member.reconnect_expired"
                                 attempt["updated_at"] = _utc(now)
@@ -1001,3 +1236,4 @@ class AuthorityStore:
                 "DELETE FROM rooms WHERE expires_at<? AND json_extract(document, '$.state') IN ('closed','expired')",
                 (now - AUTHORITY_RETENTION_SECONDS,),
             )
+        return expired_d

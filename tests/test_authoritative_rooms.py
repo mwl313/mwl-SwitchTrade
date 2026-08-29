@@ -358,6 +358,235 @@ class AuthoritativeRoomTests(unittest.TestCase):
         self.assertEqual(restarted["attempt"]["phase"], "failed")
         self.assertEqual(restarted["attempt"]["recoverable_error"], "relay.restart")
 
+    def test_distributed_d_preserves_intent_and_requires_both_quiescent_sides(self):
+        first = self._create()
+        second = self._join(first["room"]["room_code"])
+        room_id = first["room"]["room_id"]
+        for credential, role in ((first, "creator"), (second, "finder")):
+            room = self._mutate(room_id, credential["member_token"], "/ready", {
+                "ready": True, "switch_room_role": role,
+            }).json()
+        attempt = room["attempt"]
+        intent = {
+            "contract_version": "d-closing-intent.v1",
+            "attempt_id": attempt["attempt_id"],
+            "activation_generation": attempt["activation_generation"],
+            "outcome": "canceled", "primary_failure_code": None,
+            "last_passed_gate": "C_BRIDGE_READY",
+        }
+        closing = relay_server.authority.begin_d_closing(
+            room_id, first["member_token"], _command(), attempt["attempt_id"],
+            intent, room["room_version"],
+        )
+        self.assertEqual(closing["attempt"]["phase"], "closing")
+        self.assertEqual(closing["attempt"]["d"]["barrier_status"], "waiting_for_sides")
+        self.assertFalse(relay_server.authority.fail_transport_attempt(
+            room_id, attempt["attempt_id"], "relay.peer_lost"))
+        self.assertEqual(
+            relay_server.authority.snapshot(room_id, first["member_token"])
+            ["attempt"]["phase"], "closing",
+        )
+
+        def acknowledgement(seat, run_id):
+            return {
+                "contract_version": "d-side-quiescent.v1",
+                "attempt_id": attempt["attempt_id"],
+                "activation_generation": attempt["activation_generation"],
+                "source_seat": seat, "run_id": run_id, "stage_generation": 1,
+                "launch_identity_sha256": "a" * 64,
+                "evidence": {
+                    "endpoint_exited": True, "transport_exited": True,
+                    "threads_exited": True, "ldn_released": True,
+                    "interfaces_absent": True, "forced": False,
+                },
+            }
+
+        first_ack = relay_server.authority.acknowledge_d_quiescent(
+            room_id, first["member_token"], _command(), attempt["attempt_id"],
+            acknowledgement("member_a", str(uuid.uuid4())), closing["room_version"],
+        )
+        self.assertEqual(first_ack["attempt"]["phase"], "closing")
+        self.assertIsNone(first_ack["attempt"]["d"]["sides"]["member_b"])
+        second_ack = relay_server.authority.acknowledge_d_quiescent(
+            room_id, second["member_token"], _command(), attempt["attempt_id"],
+            acknowledgement("member_b", str(uuid.uuid4())), first_ack["room_version"],
+        )
+        self.assertEqual(second_ack["attempt"]["phase"], "canceled")
+        self.assertEqual(second_ack["attempt"]["d"]["barrier_status"], "two_side_terminal")
+        self.assertEqual(second_ack["attempt"]["d"]["cleanup_status"], "verified")
+        self.assertTrue(all(
+            member["ready_state"] == "not_ready" for member in second_ack["members"]
+        ))
+
+    def test_distributed_d_rejects_false_completion_and_keeps_cleanup_secondary(self):
+        first = self._create()
+        second = self._join(first["room"]["room_code"])
+        room_id = first["room"]["room_id"]
+        for credential, role in ((first, "creator"), (second, "finder")):
+            room = self._mutate(room_id, credential["member_token"], "/ready", {
+                "ready": True, "switch_room_role": role,
+            }).json()
+        attempt = room["attempt"]
+        invalid = {
+            "contract_version": "d-closing-intent.v1",
+            "attempt_id": attempt["attempt_id"],
+            "activation_generation": attempt["activation_generation"],
+            "outcome": "completed", "primary_failure_code": None,
+            "last_passed_gate": "C_RFU_ACTIVE",
+        }
+        with self.assertRaises(AuthorityError):
+            relay_server.authority.begin_d_closing(
+                room_id, first["member_token"], _command(), attempt["attempt_id"],
+                invalid, room["room_version"],
+            )
+        invalid.update(
+            outcome="failed", primary_failure_code="C_RFU_LOST",
+            last_passed_gate="C_BRIDGE_READY",
+        )
+        closing = relay_server.authority.begin_d_closing(
+            room_id, first["member_token"], _command(), attempt["attempt_id"],
+            invalid, room["room_version"],
+        )
+        conflict = {**invalid, "outcome": "canceled", "primary_failure_code": None}
+        with self.assertRaises(AuthorityError):
+            relay_server.authority.begin_d_closing(
+                room_id, second["member_token"], _command(), attempt["attempt_id"],
+                conflict, closing["room_version"],
+            )
+
+        reports = []
+        for seat, forced in (("member_a", False), ("member_b", True)):
+            reports.append({
+                "contract_version": "d-side-quiescent.v1",
+                "attempt_id": attempt["attempt_id"],
+                "activation_generation": attempt["activation_generation"],
+                "source_seat": seat, "run_id": str(uuid.uuid4()), "stage_generation": 1,
+                "launch_identity_sha256": "b" * 64,
+                "evidence": {
+                    "endpoint_exited": True, "transport_exited": True,
+                    "threads_exited": True, "ldn_released": True,
+                    "interfaces_absent": not forced, "forced": forced,
+                },
+            })
+        first_ack = relay_server.authority.acknowledge_d_quiescent(
+            room_id, first["member_token"], _command(), attempt["attempt_id"],
+            reports[0], closing["room_version"],
+        )
+        terminal = relay_server.authority.acknowledge_d_quiescent(
+            room_id, second["member_token"], _command(), attempt["attempt_id"],
+            reports[1], first_ack["room_version"],
+        )
+        self.assertEqual(terminal["attempt"]["phase"], "failed")
+        self.assertEqual(terminal["attempt"]["recoverable_error"], "C_RFU_LOST")
+        self.assertEqual(terminal["attempt"]["d"]["cleanup_status"], "failed")
+
+    def test_distributed_d_deadline_forces_cleanup_failure_without_changing_outcome(self):
+        first = self._create()
+        second = self._join(first["room"]["room_code"])
+        room_id = first["room"]["room_id"]
+        for credential, role in ((first, "creator"), (second, "finder")):
+            room = self._mutate(room_id, credential["member_token"], "/ready", {
+                "ready": True, "switch_room_role": role,
+            }).json()
+        attempt = room["attempt"]
+        with patch("relay.authority.D_BARRIER_SECONDS", -1):
+            closing = relay_server.authority.begin_d_closing(
+                room_id, first["member_token"], _command(), attempt["attempt_id"], {
+                    "contract_version": "d-closing-intent.v1",
+                    "attempt_id": attempt["attempt_id"],
+                    "activation_generation": attempt["activation_generation"],
+                    "outcome": "canceled", "primary_failure_code": None,
+                    "last_passed_gate": "C_BRIDGE_READY",
+                }, room["room_version"],
+            )
+        expired = relay_server.authority.sweep_presence()
+        self.assertEqual(expired, [(room["room_code"], attempt["attempt_id"])])
+        terminal = relay_server.authority.snapshot(room_id, first["member_token"])
+        self.assertEqual(terminal["attempt"]["phase"], "canceled")
+        self.assertEqual(terminal["attempt"]["d"]["barrier_status"], "forced_timeout")
+        self.assertEqual(terminal["attempt"]["d"]["cleanup_status"], "failed")
+        self.assertEqual(
+            terminal["attempt"]["d"]["secondary_failure_code"], "D_BARRIER_TIMEOUT")
+        self.assertIsNone(terminal["attempt"]["recoverable_error"])
+        self.assertGreater(terminal["room_version"], closing["room_version"])
+        self.assertEqual(relay_server.authority.sweep_presence(), [])
+
+    def test_relay_restart_forces_d_barrier_and_preserves_primary_failure(self):
+        first = self._create()
+        second = self._join(first["room"]["room_code"])
+        room_id = first["room"]["room_id"]
+        for credential, role in ((first, "creator"), (second, "finder")):
+            room = self._mutate(room_id, credential["member_token"], "/ready", {
+                "ready": True, "switch_room_role": role,
+            }).json()
+        attempt = room["attempt"]
+        relay_server.authority.begin_d_closing(
+            room_id, first["member_token"], _command(), attempt["attempt_id"], {
+                "contract_version": "d-closing-intent.v1",
+                "attempt_id": attempt["attempt_id"],
+                "activation_generation": attempt["activation_generation"],
+                "outcome": "failed", "primary_failure_code": "C_RFU_LOST",
+                "last_passed_gate": "C_RFU_ACTIVE",
+            }, room["room_version"],
+        )
+        self.assertEqual(relay_server.authority.fail_active_attempts("relay.restart"), 1)
+        terminal = relay_server.authority.snapshot(room_id, first["member_token"])
+        self.assertEqual(terminal["attempt"]["phase"], "failed")
+        self.assertEqual(terminal["attempt"]["recoverable_error"], "C_RFU_LOST")
+        self.assertEqual(terminal["attempt"]["d"]["barrier_status"], "forced_failure")
+        self.assertEqual(
+            terminal["attempt"]["d"]["secondary_failure_code"], "D_RELAY_RESTART")
+        self.assertEqual(relay_server.authority.fail_active_attempts("relay.restart"), 0)
+
+    def test_distributed_d_authority_projection_matches_strict_schema(self):
+        schema = json.loads((
+            Path(__file__).resolve().parents[1] / "contracts" / "abcd" /
+            "distributed-d.v1.schema.json"
+        ).read_text(encoding="utf-8"))
+        first = self._create()
+        second = self._join(first["room"]["room_code"])
+        for credential, role in ((first, "creator"), (second, "finder")):
+            room = self._mutate(first["room"]["room_id"], credential["member_token"],
+                                "/ready", {"ready": True, "switch_room_role": role}).json()
+        attempt = room["attempt"]
+        closing = relay_server.authority.begin_d_closing(
+            room["room_id"], first["member_token"], _command(), attempt["attempt_id"], {
+                "contract_version": "d-closing-intent.v1",
+                "attempt_id": attempt["attempt_id"],
+                "activation_generation": attempt["activation_generation"],
+                "outcome": "canceled", "primary_failure_code": None,
+                "last_passed_gate": "C_BRIDGE_READY",
+            }, room["room_version"],
+        )
+        self.assertEqual(set(closing["attempt"]["d"]), set(schema["required"]))
+        self.assertFalse(schema["additionalProperties"])
+
+    def test_legacy_attempt_cannot_enter_distributed_d(self):
+        first = self._create()
+        second = self._join(first["room"]["room_code"])
+        for credential, role in ((first, "creator"), (second, "finder")):
+            room = self._mutate(first["room"]["room_id"], credential["member_token"],
+                                "/ready", {"ready": True, "switch_room_role": role}).json()
+        attempt = room["attempt"]
+        response = self.client.post(
+            f"/v2/trade-rooms/{room['room_id']}/attempts/{attempt['attempt_id']}/closing",
+            headers={
+                "Authorization": f"Bearer {first['member_token']}",
+                "X-Command-ID": _command(), "If-Match": str(room["room_version"]),
+            },
+            json={
+                "contract_version": "d-closing-intent.v1",
+                "attempt_id": attempt["attempt_id"],
+                "activation_generation": attempt["activation_generation"],
+                "outcome": "canceled", "primary_failure_code": None,
+                "last_passed_gate": "C_BRIDGE_READY",
+            },
+        )
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["code"], "d_attempt_not_admitted")
+        unchanged = relay_server.authority.snapshot(room["room_id"], first["member_token"])
+        self.assertIsNone(unchanged["attempt"]["d"])
+
     def test_attempt_phases_only_move_forward_and_terminal_failure_is_immutable(self):
         first = self._create()
         second = self._join(first["room"]["room_code"])

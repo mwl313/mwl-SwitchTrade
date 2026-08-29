@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://switchtrade.local/contracts/d-closing-intent.v1.schema.json",
+  "title": "SwitchTrade D1 closing intent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version", "attempt_id", "activation_generation", "outcome",
+    "primary_failure_code", "last_passed_gate"
+  ],
+  "properties": {
+    "contract_version": { "const": "d-closing-intent.v1" },
+    "attempt_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "activation_generation": { "type": "integer", "minimum": 1 },
+    "outcome": { "enum": ["completed", "canceled", "failed"] },
+    "primary_failure_code": {
+      "type": ["string", "null"],
+      "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,95}$"
+    },
+    "last_passed_gate": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+    }
+  }
+}

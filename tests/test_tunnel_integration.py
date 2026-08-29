@@ -33,6 +33,7 @@ from switchtrade.relay_client import RelayClient, RelayError
 from switchtrade.tunnel_client import TunnelClient
 from switchtrade.tunnel_client_v2 import TunnelClientV2
 from switchtrade.connection.c2 import C2Bridge
+from switchtrade.c2_protocol import launch_identity_hash
 from switchtrade.control import create_app, endpoint_command
 from switchtrade.production_diagnostics import SyntheticDiagnosticPeer
 from relay.authority import uuid7
@@ -946,6 +947,93 @@ class TunnelIntegrationTest(unittest.TestCase):
             first_client.stop()
             if replacement is not None:
                 replacement.stop()
+            second_client.stop()
+            self._close_authority_room(first["room"]["room_id"], first["member_token"])
+
+    def test_v2_distributed_d_waits_for_both_launch_bound_sides(self):
+        relay = RelayClient(self.base)
+        first = relay.create_trade_room({
+            "name": "V2 distributed D", "visibility": "private",
+            "trainer_display_name": "A", "game": "FireRed", "language": "English",
+            "offering": "", "wanted": "", "note": "",
+        }, "v2-d-a")
+        second = relay.join_trade_room(first["room"]["room_code"], "B", "v2-d-b")
+        attempt_id = self._prepare_v2_attempt(first, second)
+        first_client = self._v2_client(first, attempt_id, "member_a").start()
+        second_client = self._v2_client(second, attempt_id, "member_b").start()
+        try:
+            self.assertTrue(first_client.wait_data_plane(5))
+            self.assertTrue(second_client.wait_data_plane(5))
+            room = relay.room(first["room"]["room_id"], first["member_token"])
+            activation = room["attempt"]["activation_generation"]
+            closing_payload = {
+                "contract_version": "d-closing-intent.v1",
+                "attempt_id": attempt_id, "activation_generation": activation,
+                "outcome": "canceled", "primary_failure_code": None,
+                "last_passed_gate": "C_BRIDGE_READY",
+            }
+            room = relay.begin_distributed_d(
+                room["room_id"], attempt_id, first["member_token"], closing_payload,
+                expected_version=room["room_version"],
+            )
+            self.assertEqual(room["attempt"]["phase"], "closing")
+
+            def acknowledgement(credential, seat):
+                launch = credential["_v2_launch"]
+                return {
+                    "contract_version": "d-side-quiescent.v1",
+                    "attempt_id": attempt_id, "activation_generation": activation,
+                    "source_seat": seat, "run_id": launch["run_id"],
+                    "stage_generation": launch["stage_generation"],
+                    "launch_identity_sha256": launch_identity_hash(
+                        launch["run_id"], launch["stage_generation"],
+                        launch["launch_nonce"], launch["endpoint_pid"],
+                    ),
+                    "evidence": {
+                        "endpoint_exited": True, "transport_exited": True,
+                        "threads_exited": True, "ldn_released": True,
+                        "interfaces_absent": True, "forced": False,
+                    },
+                }
+
+            invalid = acknowledgement(first, "member_a")
+            invalid["launch_identity_sha256"] = "0" * 64
+            with self.assertRaises(RelayError) as raised:
+                relay.acknowledge_distributed_d(
+                    room["room_id"], attempt_id, first["member_token"], invalid,
+                    expected_version=room["room_version"],
+                )
+            self.assertEqual(raised.exception.status, 409)
+
+            first_client.stop()
+            first_ack = relay.acknowledge_distributed_d(
+                room["room_id"], attempt_id, first["member_token"],
+                acknowledgement(first, "member_a"),
+                expected_version=room["room_version"],
+            )
+            self.assertEqual(first_ack["attempt"]["phase"], "closing")
+            second_client.stop()
+            second_payload = acknowledgement(second, "member_b")
+            terminal = relay.acknowledge_distributed_d(
+                room["room_id"], attempt_id, second["member_token"],
+                second_payload,
+                expected_version=first_ack["room_version"],
+            )
+            self.assertEqual(terminal["attempt"]["phase"], "canceled")
+            self.assertEqual(terminal["attempt"]["d"]["cleanup_status"], "verified")
+            replay = relay.acknowledge_distributed_d(
+                room["room_id"], attempt_id, second["member_token"], second_payload,
+                expected_version=first_ack["room_version"],
+            )
+            self.assertEqual(replay["room_version"], terminal["room_version"])
+            self.assertEqual(replay["attempt"]["phase"], "canceled")
+            intent_replay = relay.begin_distributed_d(
+                room["room_id"], attempt_id, first["member_token"], closing_payload,
+                expected_version=room["room_version"],
+            )
+            self.assertEqual(intent_replay["room_version"], terminal["room_version"])
+        finally:
+            first_client.stop()
             second_client.stop()
             self._close_authority_room(first["room"]["room_id"], first["member_token"])
 

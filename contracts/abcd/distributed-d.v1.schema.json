@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://switchtrade.local/contracts/distributed-d.v1.schema.json",
+  "title": "SwitchTrade distributed D authority projection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version", "activation_generation", "intent_generation", "outcome",
+    "primary_failure_code", "last_passed_gate", "initiated_by_seat", "started_at",
+    "deadline_at", "sides", "barrier_status", "cleanup_status",
+    "secondary_failure_code", "terminalized_at"
+  ],
+  "properties": {
+    "contract_version": { "const": "distributed-d.v1" },
+    "activation_generation": { "type": "integer", "minimum": 1 },
+    "intent_generation": { "type": "integer", "minimum": 1 },
+    "outcome": { "enum": ["completed", "canceled", "failed"] },
+    "primary_failure_code": { "type": ["string", "null"], "maxLength": 96 },
+    "last_passed_gate": { "type": "string", "maxLength": 96 },
+    "initiated_by_seat": { "enum": ["member_a", "member_b"] },
+    "started_at": { "type": "string", "format": "date-time" },
+    "deadline_at": { "type": "string", "format": "date-time" },
+    "sides": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["member_a", "member_b"],
+      "properties": {
+        "member_a": { "$ref": "#/$defs/sideOrNull" },
+        "member_b": { "$ref": "#/$defs/sideOrNull" }
+      }
+    },
+    "barrier_status": {
+      "enum": ["waiting_for_sides", "two_side_terminal", "forced_timeout", "forced_failure"]
+    },
+    "cleanup_status": { "enum": ["pending", "verified", "failed"] },
+    "secondary_failure_code": { "type": ["string", "null"], "maxLength": 96 },
+    "terminalized_at": { "type": ["string", "null"], "format": "date-time" }
+  },
+  "$defs": {
+    "sideOrNull": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "run_id", "stage_generation", "launch_identity_sha256", "evidence",
+            "acknowledged_at"
+          ],
+          "properties": {
+            "run_id": { "type": "string", "format": "uuid" },
+            "stage_generation": { "type": "integer", "minimum": 1 },
+            "launch_identity_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "evidence": { "$ref": "#/$defs/evidence" },
+            "acknowledged_at": { "type": "string", "format": "date-time" }
+          }
+        }
+      ]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endpoint_exited", "transport_exited", "threads_exited", "ldn_released",
+        "interfaces_absent", "forced"
+      ],
+      "properties": {
+        "endpoint_exited": { "type": "boolean" },
+        "transport_exited": { "type": "boolean" },
+        "threads_exited": { "type": "boolean" },
+        "ldn_released": { "type": "boolean" },
+        "interfaces_absent": { "type": "boolean" },
+        "forced": { "type": "boolean" }
+      }
+    }
+  }
+}

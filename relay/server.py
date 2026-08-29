@@ -35,7 +35,7 @@ from switchtrade.rfu_tunnel_v2 import (
     TunnelV2Error,
 )
 from switchtrade.c2_protocol import SideReady, launch_identity_hash
-from relay.authority import AuthorityError, AuthorityStore
+from relay.authority import AuthorityError, AuthorityStore, TERMINAL_ATTEMPT_PHASES
 
 HEARTBEAT_TIMEOUT = 30.0
 PEER_SEND_TIMEOUT = 2.0
@@ -93,6 +93,12 @@ ERROR_CODES = {
     "rate limit exceeded": ("rate_limited", "relay", True, "retry_later"),
     "rate limit capacity exceeded": ("rate_limited", "relay", True, "retry_later"),
     "relay session capacity exceeded": ("relay_capacity", "relay", True, "retry_later"),
+    "D attempt is not v2-admitted": (
+        "d_attempt_not_admitted", "cleanup", False, "restart_attempt"),
+    "D launch identity is not admitted": (
+        "d_launch_not_admitted", "cleanup", False, "recover_cleanup"),
+    "D launch identity is stale": (
+        "d_launch_identity_stale", "cleanup", False, "recover_cleanup"),
 }
 
 
@@ -182,6 +188,37 @@ class V2ReadyPayload(StrictPayload):
     ready: bool = True
     switch_room_role: Literal["creator", "finder"] | None = None
     p0: V2P0Proof | None = None
+
+
+class DClosingPayload(StrictPayload):
+    contract_version: Literal["d-closing-intent.v1"]
+    attempt_id: str = Field(min_length=1, max_length=128)
+    activation_generation: int = Field(ge=1)
+    outcome: Literal["completed", "canceled", "failed"]
+    primary_failure_code: str | None = Field(
+        default=None, pattern=r"^[A-Za-z][A-Za-z0-9_.-]{0,95}$"
+    )
+    last_passed_gate: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$")
+
+
+class DQuiescentEvidence(StrictPayload):
+    endpoint_exited: bool
+    transport_exited: bool
+    threads_exited: bool
+    ldn_released: bool
+    interfaces_absent: bool
+    forced: bool
+
+
+class DQuiescentPayload(StrictPayload):
+    contract_version: Literal["d-side-quiescent.v1"]
+    attempt_id: str = Field(min_length=1, max_length=128)
+    activation_generation: int = Field(ge=1)
+    source_seat: Literal["member_a", "member_b"]
+    run_id: uuid.UUID
+    stage_generation: int = Field(ge=1)
+    launch_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evidence: DQuiescentEvidence
 
 
 class TransferPayload(StrictPayload):
@@ -476,7 +513,9 @@ async def structured_request_log(request: Request, call_next):
                 return _error_response(request, 413, "request body is too large")
             body.extend(chunk)
         request._body = bytes(body)
-    authority.sweep_presence()
+    expired_d = authority.sweep_presence()
+    for room_code, attempt_id in expired_d:
+        await _disconnect_v2_room(room_code, "distributed D barrier timeout", attempt_id)
     _prune_sessions()
     route = request.url.path.split("?")[0]
     try:
@@ -653,6 +692,83 @@ async def ready_trade_room_v2(room_id: str, payload: V2ReadyPayload,
             "activation_generation": admission.activation_generation if active else None,
         }
         return room
+
+
+@app.post("/v2/trade-rooms/{room_id}/attempts/{attempt_id}/closing")
+async def begin_distributed_d(room_id: str, attempt_id: str,
+                              payload: DClosingPayload, request: Request) -> dict:
+    """Record D1 before local bridge, endpoint, LDN, or hardware teardown."""
+    token = _bearer(request)
+    before = _translate_authority(lambda: authority.snapshot(room_id, token))
+    room_code = before["room_code"]
+    member_id = before["local_member_id"]
+    attempt = before.get("attempt") or {}
+    d_state = attempt.get("d") or {}
+    with v2_admission_lock:
+        admission = v2_attempt_admissions.get((room_code, attempt_id))
+        admitted = (
+            admission is not None and
+            admission.activation_generation == payload.activation_generation and
+            member_id in admission.proofs
+        )
+    recorded_retry = (
+        attempt.get("attempt_id") == attempt_id and
+        d_state.get("activation_generation") == payload.activation_generation and
+        d_state.get("outcome") == payload.outcome and
+        d_state.get("primary_failure_code") == payload.primary_failure_code and
+        d_state.get("last_passed_gate") == payload.last_passed_gate
+    )
+    if not admitted and not recorded_retry:
+        raise HTTPException(status_code=409, detail="D attempt is not v2-admitted")
+    return _translate_authority(lambda: authority.begin_d_closing(
+        room_id, token, _command_id(request), attempt_id,
+        payload.model_dump(mode="json"), _expected_version(request),
+    ))
+
+
+@app.post("/v2/trade-rooms/{room_id}/attempts/{attempt_id}/quiescent")
+async def acknowledge_distributed_d(room_id: str, attempt_id: str,
+                                    payload: DQuiescentPayload, request: Request) -> dict:
+    """Accept D5 only from the P0/launch-bound seat and retire transport at D6."""
+    token = _bearer(request)
+    before = _translate_authority(lambda: authority.snapshot(room_id, token))
+    member_id = before["local_member_id"]
+    room_code = before["room_code"]
+    member = next(item for item in before["members"] if item["member_id"] == member_id)
+    with v2_admission_lock:
+        admission = v2_attempt_admissions.get((room_code, attempt_id))
+        launch = admission.launches.get(member_id) if admission is not None else None
+    if launch is not None:
+        expected_hash = launch_identity_hash(
+            launch["run_id"], launch["stage_generation"],
+            launch["launch_nonce"], launch["endpoint_pid"],
+        )
+        launch_matches = (
+            str(payload.run_id) == launch["run_id"] and
+            payload.stage_generation == launch["stage_generation"] and
+            payload.launch_identity_sha256 == expected_hash
+        )
+        if not launch_matches:
+            raise HTTPException(status_code=409, detail="D launch identity is stale")
+    else:
+        attempt = before.get("attempt") or {}
+        recorded = ((attempt.get("d") or {}).get("sides") or {}).get(member["seat"])
+        payload_evidence = payload.evidence.model_dump(mode="json")
+        recorded_retry = recorded is not None and all((
+            recorded.get("run_id") == str(payload.run_id),
+            recorded.get("stage_generation") == payload.stage_generation,
+            recorded.get("launch_identity_sha256") == payload.launch_identity_sha256,
+            recorded.get("evidence") == payload_evidence,
+        ))
+        if not recorded_retry:
+            raise HTTPException(status_code=409, detail="D launch identity is not admitted")
+    room = _translate_authority(lambda: authority.acknowledge_d_quiescent(
+        room_id, token, _command_id(request), attempt_id,
+        payload.model_dump(mode="json"), _expected_version(request),
+    ))
+    if (room.get("attempt") or {}).get("phase") in TERMINAL_ATTEMPT_PHASES:
+        await _disconnect_v2_room(room_code, "distributed D terminal barrier", attempt_id)
+    return room
 
 
 @app.post("/v1/trade-rooms/{room_id}/heartbeat")

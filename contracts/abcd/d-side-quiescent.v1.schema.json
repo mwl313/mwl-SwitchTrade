@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://switchtrade.local/contracts/d-side-quiescent.v1.schema.json",
+  "title": "SwitchTrade D5 side-quiescent acknowledgement",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version", "attempt_id", "activation_generation", "source_seat",
+    "run_id", "stage_generation", "launch_identity_sha256", "evidence"
+  ],
+  "properties": {
+    "contract_version": { "const": "d-side-quiescent.v1" },
+    "attempt_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "activation_generation": { "type": "integer", "minimum": 1 },
+    "source_seat": { "enum": ["member_a", "member_b"] },
+    "run_id": { "type": "string", "format": "uuid" },
+    "stage_generation": { "type": "integer", "minimum": 1 },
+    "launch_identity_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endpoint_exited", "transport_exited", "threads_exited", "ldn_released",
+        "interfaces_absent", "forced"
+      ],
+      "properties": {
+        "endpoint_exited": { "type": "boolean" },
+        "transport_exited": { "type": "boolean" },
+        "threads_exited": { "type": "boolean" },
+        "ldn_released": { "type": "boolean" },
+        "interfaces_absent": { "type": "boolean" },
+        "forced": { "type": "boolean" }
+      }
+    }
+  }
+}
