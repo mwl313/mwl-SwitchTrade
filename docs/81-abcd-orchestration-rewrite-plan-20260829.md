@@ -30,7 +30,13 @@ Execution status:
   [`82-abcd-milestone-0-baseline-20260829.md`](82-abcd-milestone-0-baseline-20260829.md).
 - Milestone 1 passed in `b7c5c9a`; see
   [`83-abcd-milestone-1-coordinator-20260829.md`](83-abcd-milestone-1-coordinator-20260829.md).
-- Milestone 2 has not started.
+- Milestone 2 passed its PC A cold installed-runtime gate; PC B remains qualification debt.
+- Milestone 3 passed A0-A9 on PC A in immutable runtime `abcd-m3-80c4e13`; PC B remains the formal
+  exit-gate debt. The owner directed the project to proceed to Milestone 4 without representing that
+  debt as closed.
+- Milestone 4 is source-complete at `a96f53f`. Immutable PC A runtime `abcd-m4-a96f53f` passed
+  installation, integrity, dependency, kernel, contract, CLI, residue, and detached-USB smoke. The
+  one-Switch B2-B10 physical run is pending.
 
 ## 2. Architecture and interface decisions
 

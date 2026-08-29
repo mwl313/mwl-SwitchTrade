@@ -116,6 +116,14 @@ does not reuse `LiveTransport` lifecycle orchestration and does not claim A10, C
 or a completed trade. PC A run `88f8e357-2e8c-4981-ad87-4cfaa1f93c31` passed A0-A9 and verified
 cleanup; PC B direct A remains the formal Milestone 3 exit debt.
 
+Milestone 4 now has a source-complete Direct B2-B10 harness and an installed immutable PC A
+qualification runtime, `abcd-m4-a96f53f`. It owns one selected PHY, creates the AP/monitor/TAP
+resources through run-local canonical `ldn.create_network()` mechanics, requires a real Switch
+association and Nintendo control-port activity, and keeps functional and cleanup results separate.
+Source regression passed 251 tests with one intentional skip; installed integrity and no-hardware
+smoke passed. The one-Switch physical B2-B10 run is still pending, so this does not yet claim a
+Direct B pass, B1, `B_READY`, relay delivery, or a trade.
+
 The [definitive TODO](docs/FUTURE_TODO.md) records implementation and qualification status. A passing
 test for the previous behavior does not close an ABC+D gate unless it proves the gate's current
 contract.
@@ -130,6 +138,7 @@ contract.
 - [ABC+D Milestone 2 P0 Source Evidence](docs/84-abcd-milestone-2-p0-source-20260829.md)
 - [ABC+D Milestone 2 Qualification Guide](docs/85-abcd-milestone-2-qualification-guide-20260829.md)
 - [ABC+D Milestone 3 Direct A Qualification Evidence](docs/86-abcd-milestone-3-direct-a-20260829.md)
+- [ABC+D Milestone 4 Direct B Qualification Evidence](docs/87-abcd-milestone-4-direct-b-20260829.md)
 - [Definitive TODO](docs/FUTURE_TODO.md)
 - [Known Issues](docs/KNOWN_ISSUES.md)
 - [Relay deployment](relay/DEPLOYMENT.md)

@@ -470,6 +470,11 @@ Do not rebuild another installer until the source and installed runtime pass in 
    cancellation, restart, and cleanup cases. Zero duplicate launches, stale interfaces, orphan rooms,
    or unresolved ownership is permitted.
 
+Current evidence does not change this order. Source commit `a96f53f` implements the isolated Direct
+B2-B10 harness, and immutable PC A runtime `abcd-m4-a96f53f` passed installed no-hardware smoke. A
+real searching Switch has not yet passed B8-B10 on that runtime, so Milestone 4 and B readiness remain
+open.
+
 ## 11. Confirmed critical blockers
 
 1. **Missing WSL LDN prerequisite load:** the production wrapper does not load `ccm`, `cmac`, or
