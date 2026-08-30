@@ -145,8 +145,9 @@ normal/reversed roles, delayed A/B, single-worker identity, and private zero-orp
 software/deployed exit gate is accepted. This does not claim physical A/B, distributed D,
 diagnostic/application cutover, or a trade.
 
-Milestone 7 has authority checkpoint `d815562`, endpoint D2-D4 checkpoint `fdbdd12`, and measured
-local-control checkpoint `f52fe93` hardened at `62f93fa`. The v2-only D1/D5/D6 path freezes
+Milestone 7 has authority checkpoint `d815562`, endpoint D2-D4 checkpoint `fdbdd12`, measured
+local-control checkpoint `f52fe93` hardened at `62f93fa`, and diagnostic D7 checkpoint `f739f53`.
+The v2-only D1/D5/D6 path freezes
 the functional outcome before teardown, authenticates each side's launch-bound quiescence evidence,
 waits for both seats, and preserves primary A/B/C failure across timeout or relay restart. The
 endpoint now performs ordered native close tail, C2 drain/admission seal, observer/capture finalization,
@@ -157,12 +158,16 @@ existing run-owned USB lease. Commit `0d7549d` also puts the real cold-P0 cleanu
 D8/D9 evidence before D10; PC A passed that installed-runtime path under a Korean profile with no
 USB, interface, PHY, process, or recovery residue. The exact `ed382db` relay artifact passed renewed
 two-role public smoke and operator-confirmed zero-orphan metrics. The complete software C2-to-D11
-integration path passes. M7 remains open for PC B, restart/hang/fault injection,
-diagnostic-resource wiring, and Stop/Leave/Close action semantics; the post-review audit is
-`488 passed, 3 skipped`. Commit `9e1621d` additionally recovers a lost D11 response without
-repeating teardown and bounds injected D2/D3/D10 failures. Commit `153365c` uses the installed P0
-path to prove that an endpoint residue blocks USB return and that exact control-process interruption
-recovers through verified D11. Commit `4e3e932` then passed a real Windows-reboot recovery on the
+integration path passes. Commit `f739f53` connects one idempotent production-diagnostic owner to the
+D7 Boolean contract and startup recovery, including terminal relay-room confirmation and retired
+owner-credential recovery. A real one-PC public-relay run stopped the synthetic peer, closed the
+private room, deleted its credential file, and repeated cleanup without residue; a second run proved
+restart recovery after the close response but before local guard removal. M7 remains open for PC B,
+the remaining distributed restart/hang/fault matrix, and Stop/Leave/Close action semantics; the
+post-review audit is `491 passed, 3 skipped`. Commit `9e1621d` additionally recovers a lost D11
+response without repeating teardown and bounds injected D2/D3/D10 failures. Commit `153365c` uses
+the installed P0 path to prove that endpoint residue blocks USB return and exact control-process
+interruption recovers through verified D11. Commit `4e3e932` then passed a real Windows-reboot recovery on the
 same durable run despite normal Windows USB bus renumbering, while retaining fail-closed attached
 device ownership. This partial path is not advertised as a production capability.
 

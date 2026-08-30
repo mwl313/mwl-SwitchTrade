@@ -10,11 +10,13 @@
 > D11 response-loss recovery commit: `9e1621d`
 > P0 endpoint-hang/control-restart qualification commit: `153365c`
 > Windows-reboot recovery fix: `4e3e932`
+> Diagnostic D7 resource checkpoint: `f739f53`
 > Deployed relay artifact checkpoint: `ed382db`
-> Status: M7 authority, endpoint D2-D4, and measured local D5/D7-D11 happy-path slices complete;
+> Status: M7 authority, endpoint D2-D4, measured local D5/D7-D11, and production diagnostic D7
+> resource slices complete;
 > the installed PC A D8-D11, endpoint/control-interruption, and local Windows-reboot paths are
 > qualified. Milestone 7 remains open for PC B, the distributed restart matrix,
-> diagnostic-resource, and product-action qualification.
+> and product-action qualification.
 > Scope: D1 closing intent, endpoint D2-D4, D5 authority acknowledgement, D6 two-side/forced
 > barrier, relay transport retirement, measured local D5 evidence, and ordered local release.
 
@@ -115,6 +117,21 @@ existing SHA-256 launch identity.
 - Local-release tests prove D7 -> D8 -> D9 -> D10 -> D11 order, exact D6 evidence comparison,
   endpoint-active and unknown-radio detach prevention, diagnostic cleanup failure, software-only
   ownership, failed-cleanup guard retention, and verified retry.
+- Commit `f739f53` replaces duplicated diagnostic teardown with one `DiagnosticD7Resources` owner.
+  It supplies the exact Boolean-only D7 callback, continues independent cleanup after a peer, room,
+  or credential failure, retries only unresolved resources, and is shared by active diagnostics and
+  startup recovery. Relay close must return a terminal room state. The private recovery record also
+  retains the owner reconnect credential so a restart after relay close but before local guard
+  removal can prove the room is already terminal without treating an arbitrary 401 as success.
+- A real one-PC public-relay qualification created a private two-member diagnostic room, locked
+  complementary roles, connected the production synthetic peer, then proved peer stop, terminal
+  room close, credential-file absence, cleared recovery state, retired owner authorization, and an
+  idempotent second cleanup. A separate real public-relay run closed the room first, retired the
+  owner credential, and proved a fresh control instance cleared the interrupted recovery guard via
+  the reconnect-terminal path. Neither run used a Switch, USB radio, or second PC.
+- Full post-D7 regression passed `491 passed, 3 skipped`. During that run a pre-existing Windows
+  sharing race between endpoint-state reads and session cleanup was exposed; read, write, and clear
+  now share the control-owned `RLock`, and both the focused concurrency suite and full rerun pass.
 - A real local HTTP/WSS relay process passes C2 activation, authoritative D1, endpoint D2-D4,
   measured D5 on each coordinator, two-seat D6, and independent D7-D11 local release.
 - Restart tests prove that a persisted UUIDv7 D5 request can be replayed without remeasurement after
@@ -166,16 +183,18 @@ existing SHA-256 launch identity.
 
 This checkpoint is not the M7 exit gate. The following must be implemented and verified in order:
 
-1. Wire the D7 diagnostic callback to the production diagnostic peer/temporary-room/credential owner;
-   its strict gate exists but product diagnostics are intentionally not migrated before M8.
-2. Repeat the now-qualified real WSL PID/interface/PHY and conditional `UsbLease` path on PC B. PC A
+The D7 diagnostic callback is now wired to the production diagnostic peer/temporary-room/credential
+owner at `f739f53`. This closes the M7 resource-owner slice only; routing all diagnostic actions
+through the new production coordinator remains the explicit Milestone 8 migration.
+
+1. Repeat the now-qualified real WSL PID/interface/PHY and conditional `UsbLease` path on PC B. PC A
    and its non-ASCII profile boundary are complete.
-3. Extend restart and fault injection across every distributed D gate. The software D2/D3/D10 fault
+2. Extend restart and fault injection across every distributed D gate. The software D2/D3/D10 fault
    cases, D11 lost-response recovery, installed endpoint-hang cleanup guard, exact control-process
    interruption, and one real local Windows-reboot D8-D11 recovery now pass on PC A.
-4. Prove Stop, End, Leave, and Close room-action semantics without bypassing D; product routing remains
+3. Prove Stop, End, Leave, and Close room-action semantics without bypassing D; product routing remains
    a Milestone 9 migration boundary.
-5. Extend the deployed check from the completed public two-role smoke and zero-orphan authority
+4. Extend the deployed check from the completed public two-role smoke and zero-orphan authority
    metrics to the complete measured distributed-D harness when a second installed PC is available.
 
 Until those checks pass, normal rooms, production diagnostics, desktop UI, and installers remain on

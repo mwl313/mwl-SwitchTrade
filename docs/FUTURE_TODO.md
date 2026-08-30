@@ -145,8 +145,11 @@ path. No open item may be presented as a current production capability.
    non-ASCII profile with verified USB return and no residue. The exact `ed382db` deployed artifact
    also passed renewed two-role smoke and zero-orphan metrics. The software happy path is complete,
    and `9e1621d` adds bounded D2/D3/D10 failure injection plus restart-safe D11 response-loss report
-   finalization without repeating teardown. PC B matching qualification, the distributed restart
-   matrix, diagnostic-resource wiring, and product action migration remain open, so this blocker is
+   finalization without repeating teardown. Commit `f739f53` wires the production diagnostic
+   peer/private-room/credential owner into the strict D7 callback and startup recovery; real
+   single-PC public-relay cleanup and post-close restart recovery passed, as did the full
+   `491 passed, 3 skipped` regression. PC B matching qualification, the remaining distributed restart
+   matrix, and product action migration remain open, so this blocker is
    not closed. Commit `153365c` and installed PC A runs now prove that run-owned endpoint residue blocks
    USB return, exact PID/start-tick termination permits verified recovery, and an interrupted local
    control process can resume the same durable run through D8-D11. Commit `4e3e932` and real reboot run
