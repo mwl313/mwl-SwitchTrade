@@ -97,7 +97,7 @@ class CStage:
             raise CStageError(code, GATES[3], str(error)) from error
         return self.advertisement_hash
 
-    def receive_advertisement(self, timeout: float = 10.0) -> str:
+    def receive_advertisement_payload(self, timeout: float = 10.0) -> tuple[bytes, str]:
         if self.switch_role != "b_ap_host":
             raise CStageError(
                 "C_DIRECTION_INVALID", GATES[3], "only the B-side may receive an advertisement")
@@ -107,7 +107,7 @@ class CStage:
                 if frame.kind is Kind.ADVERTISEMENT:
                     self.advertisement_hash = self.client.received_advertisement_hash
                     self._pass(GATES[3])
-                    return self.advertisement_hash or ""
+                    return bytes(frame.payload), self.advertisement_hash or ""
             if self.client.last_error_code:
                 error = CStageError(
                     self.client.last_error_code, GATES[3],
@@ -119,6 +119,9 @@ class CStage:
             "C_ADVERTISEMENT_TIMEOUT", GATES[3], "validated advertisement delivery timed out")
         self.failure = {"code": error.code, "gate": error.gate, "message": error.message}
         raise error
+
+    def receive_advertisement(self, timeout: float = 10.0) -> str:
+        return self.receive_advertisement_payload(timeout)[1]
 
     def stop(self) -> None:
         self.client.stop()

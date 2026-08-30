@@ -173,6 +173,13 @@ interruption recovers through verified D11. Commit `4e3e932` then passed a real 
 same durable run despite normal Windows USB bus renumbering, while retaining fail-closed attached
 device ownership. This partial path is not advertised as a production capability.
 
+The source now also contains a GUI-independent physical distributed harness for both real PCs and
+Switches. It reuses the single P0 lease, Direct A/B components, admitted C2 tunnel, endpoint D2-D4,
+measured D5, and D7-D11 release rather than adding a parallel connection stack. One-time invitations
+bind source, release, role, action, and room without exposing bearer credentials in reports. The
+automated suite passes `508 passed, 3 skipped`; installed `0.2.7-beta.1` normal/reversed role and
+End/Close/Stop/Leave evidence is still required before Milestone 7 closes.
+
 The [definitive TODO](docs/FUTURE_TODO.md) records implementation and qualification status. A passing
 test for the previous behavior does not close an ABC+D gate unless it proves the gate's current
 contract.
@@ -191,6 +198,7 @@ contract.
 - [ABC+D Milestone 5 C0/C1 Source Checkpoint](docs/88-abcd-milestone-5-c0-c1-20260830.md)
 - [ABC+D Milestone 6 C2 Source Checkpoint](docs/89-abcd-milestone-6-c2-20260830.md)
 - [ABC+D Milestone 7 Distributed D Checkpoint](docs/90-abcd-milestone-7-authority-d-checkpoint-20260830.md)
+- [ABC+D Milestone 7 Physical Harness](docs/91-abcd-milestone-7-physical-harness-20260830.md)
 - [Definitive TODO](docs/FUTURE_TODO.md)
 - [Known Issues](docs/KNOWN_ISSUES.md)
 - [Relay deployment](relay/DEPLOYMENT.md)

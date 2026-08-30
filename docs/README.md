@@ -24,6 +24,11 @@ part of the public repository or release package.
 - [ABC+D Milestone 7 Distributed D Checkpoint](90-abcd-milestone-7-authority-d-checkpoint-20260830.md)
   — v2-only outcome preservation, ordered endpoint shutdown, measured local D5, launch-bound
   two-side barrier, D7-D11 local release, and the explicit remaining fault-qualification boundary.
+- [ABC+D Milestone 7 Physical Harness](91-abcd-milestone-7-physical-harness-20260830.md) — the
+  GUI-independent two-PC/two-Switch runner and its installed qualification boundary.
+- [M7 two-PC distributed handoff](HANDOFF-M7-TWO-PC-DISTRIBUTED-20260830.md) and
+  [PC B preflight handoff](HANDOFF-PC-B-M7-TWO-SWITCH-PREFLIGHT-20260830.md) — coordinated physical
+  execution and evidence rules.
 - [Future TODO](FUTURE_TODO.md) — definitive implementation and qualification ledger for that
   architecture.
 - [Known Issues](KNOWN_ISSUES.md) — authoritative beta defect register, evidence, workarounds, and

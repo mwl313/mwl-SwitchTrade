@@ -12,8 +12,10 @@ path. No open item may be presented as a current production capability.
    accepted that result as sufficient to begin Milestone 3. The direct A0-A9 endpoint/harness is
    complete and PC A passed its one-Switch installed-runtime qualification with verified cleanup.
    Direct B2-B10 is source-complete and final immutable PC A run
-   `12e6a535-4770-47ae-9fb3-8d06915af053` physically passed B2-B10 plus verified cleanup. PC B
-   P0/direct A/direct B and production-path cutover remain open.**
+   `12e6a535-4770-47ae-9fb3-8d06915af053` physically passed B2-B10 plus verified cleanup. PC B's
+   P0/direct A/direct B evidence has now also been reviewed and accepted. The GUI-independent
+   distributed harness is source-complete for `0.2.7-beta.1`; installed two-PC/two-Switch
+   qualification and production-path cutover remain open.**
    The installed `0.2.6-beta.2` runtime contains the correct kernel and the `ccm`, `cmac`, and `tun`
    modules, but the production wrapper does not load them and does not verify `/dev/net/tun` before
    entering the LDN path. A real Switch-hosted room was observed and decoded three times, then every
@@ -68,7 +70,9 @@ path. No open item may be presented as a current production capability.
    **Completed qualification debt (2026-08-30):** PC A run
    `12e6a535-4770-47ae-9fb3-8d06915af053` against runtime `abcd-m4-9635a1f` passed B2-B10, exited
    through `factory_released`, reported `ldn_context_released=true`, verified radio/USB cleanup, and
-   left no endpoint, interface, PHY, lock, or recovery residue. PC B remains open.
+   left no endpoint, interface, PHY, lock, or recovery residue. PC B's returned P0, Direct A, and
+   Direct B reports were subsequently reviewed and accepted with the same immutable runtime
+   integrity and verified cleanup.
 
 2. **CRITICAL — URGENT: Preserve relay frame order and truthful P0/A/B/C/D diagnostic stages.**
    **Status (2026-08-30): the M5 v2 source and deployed validation-relay functional exit gate passed;
@@ -106,8 +110,9 @@ path. No open item may be presented as a current production capability.
 
 3. **CRITICAL — URGENT: Add the attempt-scoped A_READY/B_READY activation barrier.**
    **Status (2026-08-30): M6 software/deployed exit accepted at `d2130fe`; source-identical public
-   C2 smoke, single-worker identity, and private zero-orphan checks passed. Physical two-PC proof and
-   M8/M9 product cutover remain open.**
+   C2 smoke, single-worker identity, and private zero-orphan checks passed. A GUI-independent
+   physical runner now sustains the admitted Direct A/B contexts and feeds their exact readiness into
+   C2. Physical two-PC proof and M8/M9 product cutover remain open.**
    The current `rfu-tunnel.v1` controls include `PEER_READY` and `ADVERTISEMENT`, but no physical
    side-ready message. In the normal finder path, `HostTransport.start()` returns when the AP opens,
    before `_peer` proves that the Joining Switch associated; the endpoint then constructs
@@ -186,6 +191,9 @@ path. No open item may be presented as a current production capability.
    Acceptance covers successful trade, Stop, room close, peer loss, endpoint hang, app close, relay
    restart, and PC restart at every D gate. No new attempt is enabled until both shared authority and
    the local resource owner have a terminal verified record; repeated cleanup commands are idempotent.
+   The `0.2.7-beta.1` physical runner now routes End, Stop, Leave, and Close through D1 before its
+   reused endpoint D2-D4 and measured D5/D7-D11 owners. This is source evidence only until all four
+   installed two-PC/two-Switch cases pass with shared cleanup verified.
 
 5. **CRITICAL — URGENT: Stop false-positive endpoint startup and unbounded relaunch storms.**
    **Status (2026-08-28): implemented in source; the current-PC single-launch and close/reopen smoke

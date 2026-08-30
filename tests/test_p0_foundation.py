@@ -581,6 +581,37 @@ class RadioWorkerTests(unittest.TestCase):
             _validate_ticket(ticket, report)
         self.assertEqual(caught.exception.code, "P0_LAUNCH_TICKET_INVALID")
 
+    def test_normal_mode_requires_distributed_endpoint_config(self):
+        args = self.args()
+        args.mode = "normal"
+        report = build_side_ready(args, {
+            "SWITCHTRADE_IFACE": "wlan7",
+            "SWITCHTRADE_PHY": "phy7",
+            "SWITCHTRADE_USB_ID": USB_ID,
+            "SWITCHTRADE_P0_RX_PASSED": "1",
+            "SWITCHTRADE_P0_RX_CHANNEL": "6",
+            "SWITCHTRADE_P0_TARGET_CHANNEL": "6",
+        })
+        ticket = {
+            "contract_version": "p0-launch-ticket.v1", "action": "launch",
+            "endpoint": "distributed", "run_id": report["run_id"],
+            "release": report["release"], "run_generation": 1, "stage_generation": 1,
+            "adapter_instance_sha256": "a" * 64, "usb_id": USB_ID, "bus_id": "4-18",
+            "wrapper_pid": report["wrapper_pid"], "process_start_ticks": 12345,
+            "launch_nonce": "n" * 32, "attempt_id": "attempt-1",
+            "endpoint_config": "/mnt/c/private/endpoint.json",
+        }
+        validated = _validate_ticket(ticket, report)
+        self.assertEqual(validated["endpoint"], "distributed")
+        self.assertEqual(validated["endpoint_config"], ticket["endpoint_config"])
+        for changed in (
+            {**ticket, "endpoint_config": None},
+            {**ticket, "endpoint_config": "relative.json"},
+            {**ticket, "endpoint": "probe"},
+        ):
+            with self.assertRaises(RadioWorkerError):
+                _validate_ticket(changed, report)
+
 
 class QueueOutput:
     def __init__(self):
@@ -1096,6 +1127,123 @@ class P0HarnessTests(unittest.TestCase):
             log_text = event_log.read_text(encoding="utf-8").casefold()
             self.assertNotIn("application_data", log_text)
             self.assertNotIn("mac_address", log_text)
+
+    def test_distributed_harness_reuses_one_p0_lease_and_delegates_d_release_once(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            adapter = parse_usbipd_state(usb_state())[0]
+            firmware = {
+                "regulatory.db": "1" * 64,
+                "regulatory.db.p7s": "2" * 64,
+                "rtlwifi/rtl8192eu_nic.bin": "3" * 64,
+            }
+            integrity = "4" * 64
+            validator = SimpleNamespace(
+                requested_identity=lambda: (INSTANCE, USB_ID),
+                validate=lambda: (adapter, {
+                    "runtime": {
+                        "kernel_release": "test-kernel",
+                        "integrity_manifest_sha256": integrity,
+                        "firmware_sha256": firmware,
+                        "module_vermagic": {
+                            name.replace("_", "-"): "test-kernel" for name in REQUIRED_MODULES
+                        },
+                    },
+                }),
+            )
+            leases = []
+            commands = []
+
+            def lease_factory(selected, recovery):
+                lease = FakeLease(selected, recovery)
+                leases.append(lease)
+                return lease
+
+            def worker_factory(command, stdout_path, _stderr_path):
+                commands.append(command)
+                argument = lambda name: command[command.index(name) + 1]
+                report = {
+                    "contract_version": "p0-side-ready.v1", "schema": 1,
+                    "run_id": argument("--run-id"), "release": argument("--release"),
+                    "mode": argument("--mode"),
+                    "run_generation": int(argument("--run-generation")),
+                    "stage_generation": int(argument("--stage-generation")),
+                    "wrapper_pid": 4400, "process_start_ticks": 76543,
+                    "adapter": {
+                        "instance_sha256": adapter.instance_sha256,
+                        "usb_id": USB_ID, "bus_id": "4-18",
+                    },
+                    "radio": {"phy": "phy0", "netdev": "wlan0", "rx_passed": True},
+                    "runtime": {
+                        "kernel_release": "test-kernel",
+                        "integrity_manifest_sha256": integrity,
+                        "firmware_sha256": firmware,
+                        "modules": list(REQUIRED_MODULES),
+                    },
+                }
+                (stdout_path.parent / "p0-side-ready.json").write_text(
+                    json.dumps(report), encoding="utf-8")
+                process = FakeWorkerProcess(report)
+                process._switchtrade_stdout_log = stdout_path.open(
+                    "w", encoding="utf-8", newline="\n")
+                return process
+
+            with ConnectionCoordinator(root / "coordinator", "release-a") as coordinator:
+                class Lifecycle:
+                    abort_calls = cleanup_calls = 0
+
+                    def bind(self, run_id, _run):
+                        return coordinator.bind_authority(
+                            run_id, room_id="room-1", room_version=2,
+                            seat="member_a", switch_role="a_room_joiner")
+
+                    def prepare(self, context):
+                        coordinator.lock_attempt(
+                            context["run_id"], attempt_id="attempt-1", role_lock_version=3)
+                        return {
+                            "attempt_id": "attempt-1",
+                            "endpoint_config": "/mnt/c/private/config.json",
+                        }
+
+                    def drive(self, context):
+                        context["events"].process._exit(0)
+                        return {
+                            "outcome": "canceled", "code": None, "message": None,
+                            "last_passed_gate": "C_RFU_ACTIVE", "endpoint_d_status": "passed",
+                        }
+
+                    def cleanup(self, context):
+                        self.cleanup_calls += 1
+                        coordinator.begin_cleanup(context["run_id"])
+                        usb = context["lease"].release()
+                        coordinator.complete_cleanup(
+                            context["run_id"], verified=True,
+                            evidence={"usb_prior_state_restored": usb["prior_state_restored"]})
+                        return {
+                            "d5_side_quiescent": True, "d6_two_side_terminal": True,
+                            "d11_verified": True,
+                        }
+
+                    def abort(self):
+                        self.abort_calls += 1
+
+                lifecycle = Lifecycle()
+                result = P0Harness(
+                    coordinator, validator, root / "runs",
+                    worker_factory=worker_factory, lease_factory=lease_factory,
+                ).run_distributed(lifecycle)
+                snapshot = coordinator.snapshot(result["run_id"])
+
+            self.assertEqual(result["contract_version"], "distributed-harness-report.v1")
+            self.assertEqual(result["functional_status"], "canceled")
+            self.assertEqual(result["cleanup_status"], "verified")
+            self.assertEqual(snapshot["identity"]["mode"], "normal")
+            self.assertEqual(snapshot["ownership"]["launch_count"], 1)
+            self.assertEqual(leases[0].acquires, 1)
+            self.assertEqual(leases[0].releases, 1)
+            self.assertEqual(lifecycle.cleanup_calls, 1)
+            self.assertEqual(lifecycle.abort_calls, 0)
+            self.assertEqual(commands[0][commands[0].index("--role") + 1], "guest")
 
     def test_restart_recovery_clears_preflight_guard_without_hardware_actions(self):
         with tempfile.TemporaryDirectory() as temporary:

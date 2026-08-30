@@ -223,6 +223,7 @@ def _validate_ticket(ticket: object, report: dict) -> dict:
         return {"action": "stop"}
     endpoint = ticket.get("endpoint")
     expected_endpoint = {
+        "normal": "distributed",
         "p0_harness": "probe",
         "direct_a": "direct_a",
         "direct_b": "direct_b",
@@ -250,10 +251,21 @@ def _validate_ticket(ticket: object, report: dict) -> dict:
         _bounded(attempt_id, "attempt_id", 128)
     elif attempt_id is not None:
         _bounded(attempt_id, "attempt_id", 128)
-    return {
+    result = {
         "action": "launch", "endpoint": endpoint,
         "launch_nonce": nonce, "attempt_id": attempt_id,
     }
+    endpoint_config = ticket.get("endpoint_config")
+    if endpoint == "distributed":
+        value = _bounded(endpoint_config, "endpoint_config", 1024)
+        if not value.startswith("/") or any(character in value for character in "\r\n"):
+            raise RadioWorkerError(
+                "P0_LAUNCH_TICKET_INVALID", "endpoint configuration path is invalid")
+        result["endpoint_config"] = value
+    elif endpoint_config is not None:
+        raise RadioWorkerError(
+            "P0_LAUNCH_TICKET_INVALID", "endpoint configuration is not allowed")
+    return result
 
 
 def serve(args: argparse.Namespace) -> int:
@@ -281,7 +293,21 @@ def serve(args: argparse.Namespace) -> int:
             endpoint=ticket["endpoint"], wrapper_pid=report["wrapper_pid"],
             process_start_ticks=report["process_start_ticks"],
         )
-        if ticket["endpoint"] == "direct_a":
+        if ticket["endpoint"] == "distributed":
+            suffix = report["run_id"].replace("-", "")[:8]
+            endpoint_module = "switchtrade.connection.distributed_endpoint"
+            endpoint_args = [
+                "--config", ticket["endpoint_config"],
+                "--report", str(args.report.with_name("d-endpoint-stage.json")),
+                "--party-state", str(args.report.with_name("party-state.json")),
+                "--phy", report["radio"]["phy"],
+                "--station-ifname", f"sta-a-{suffix}",
+                "--ap-ifname", f"ap-b-{suffix}",
+                "--monitor-ifname", f"mon-b-{suffix}",
+                "--tap-ifname", f"tap-b-{suffix}",
+                "--keys", str(args.runtime_root / "config" / "prod.keys"),
+            ]
+        elif ticket["endpoint"] == "direct_a":
             endpoint_module = "switchtrade.connection.direct_a_endpoint"
             endpoint_args = [
                 "--phy", report["radio"]["phy"],

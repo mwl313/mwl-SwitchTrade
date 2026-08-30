@@ -9,7 +9,9 @@ from pathlib import Path
 import secrets
 import socket
 import time
-from typing import Callable
+from typing import Awaitable, Callable
+
+from .data_plane import open_ldn_data_plane
 
 
 COMMUNICATION_ID = 0x01006FA0233F8000
@@ -183,25 +185,15 @@ def _open_data_plane(network: object):
     """Open the station netdev's Pia sockets; retain no IP or MAC in evidence."""
     interface = network._interface  # ldn 0.0.17 runtime-contract boundary
     ifname = socket.if_indextoname(interface.index())
-    local_ip = network.participant().ip_address
-    tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    rx = None
     try:
-        tx.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        tx.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        tx.bind((local_ip, PIA_PORT))
-        rx = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0800))
-        rx.bind((ifname, 0))
-        rx.setblocking(False)
-        yield {"netdev_resolved": True, "udp_bound": True, "packet_socket_bound": True}
+        with open_ldn_data_plane(network, ifname, {
+            "netdev_resolved": True, "udp_bound": True, "packet_socket_bound": True,
+        }) as plane:
+            yield plane
     except OSError as error:
         raise AStageError(
             "A_DATA_PLANE_FAILED", GATES[9], "Pia data-plane sockets are unavailable"
         ) from error
-    finally:
-        if rx is not None:
-            rx.close()
-        tx.close()
 
 
 class DirectAStage:
@@ -223,6 +215,7 @@ class DirectAStage:
         ldn_module=None,
         trio_module=None,
         data_plane_factory=None,
+        session_handler: Callable[[object, object, bytes], Awaitable[None]] | None = None,
         version_resolver=None,
     ):
         self.run_id = run_id
@@ -238,6 +231,7 @@ class DirectAStage:
         self.ldn = ldn_module
         self.trio = trio_module
         self.data_plane_factory = data_plane_factory or _open_data_plane
+        self.session_handler = session_handler
         self.version_resolver = version_resolver or (lambda: metadata.version("ldn"))
         self.started = time.monotonic()
         self.passed: list[dict] = []
@@ -425,7 +419,11 @@ class DirectAStage:
                                 stage_scope.deadline = (
                                     self.trio.current_time() + self.hold_seconds + 3
                                 )
-                                await self._hold(network)
+                                if self.session_handler is None:
+                                    await self._hold(network)
+                                else:
+                                    stage_scope.deadline = float("inf")
+                                    await self.session_handler(network, plane, advertisement)
                         except AStageError:
                             raise
                         except (OSError, ValueError) as error:

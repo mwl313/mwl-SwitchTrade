@@ -12,7 +12,7 @@ import socket
 import struct
 import subprocess
 import time
-from typing import Callable
+from typing import Awaitable, Callable
 
 from .a_stage import (
     ACCEPT_ALL,
@@ -26,6 +26,7 @@ from .a_stage import (
     validate_advertisement,
 )
 from .b_fixture import FIXTURE, FIXTURE_ID, FIXTURE_NAME, FIXTURE_SHA256
+from .data_plane import open_ldn_data_plane
 
 
 PIA_PORT = 12345
@@ -233,23 +234,13 @@ def _validate_peer(network: object) -> dict:
 def _open_data_plane(network: object):
     tap = network._tap  # ldn 0.0.17 runtime-contract boundary
     ifname = tap.name()
-    local_ip = network.participant().ip_address
-    tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    rx = None
     try:
-        tx.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        tx.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        tx.bind((local_ip, PIA_PORT))
-        rx = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0800))
-        rx.bind((ifname, 0))
-        rx.setblocking(False)
-        yield {"tap_ready": True, "udp_bound": True, "packet_socket_bound": True}
+        with open_ldn_data_plane(network, ifname, {
+            "tap_ready": True, "udp_bound": True, "packet_socket_bound": True,
+        }) as plane:
+            yield plane
     except OSError as error:
         raise BStageError("B_DATA_PLANE_FAILED", GATES[4], "Pia data-plane sockets are unavailable") from error
-    finally:
-        if rx is not None:
-            rx.close()
-        tx.close()
 
 
 class DirectBStage:
@@ -277,6 +268,8 @@ class DirectBStage:
         radio_reset=None,
         data_plane_factory=None,
         network_factory=None,
+        application_data: bytes = FIXTURE,
+        session_handler: Callable[[object, object, bytes], Awaitable[None]] | None = None,
         version_resolver=None,
     ):
         self.run_id = run_id
@@ -298,6 +291,8 @@ class DirectBStage:
         self.radio_reset = radio_reset or (lambda: reset_selected_phy(self.phy))
         self.data_plane_factory = data_plane_factory or _open_data_plane
         self.network_factory = network_factory
+        self.application_data = bytes(application_data)
+        self.session_handler = session_handler
         self.version_resolver = version_resolver or (lambda: metadata.version("ldn"))
         self.started = time.monotonic()
         self.passed: list[dict] = []
@@ -312,6 +307,13 @@ class DirectBStage:
             "beacon_head": False,
             "monitor_ccmp": False,
             "remote_destroy": False,
+        }
+
+    def _advertisement_evidence(self) -> dict:
+        return {
+            "id": FIXTURE_ID if self.application_data == FIXTURE else "attempt-advertisement",
+            "length": len(self.application_data),
+            "sha256": hashlib.sha256(self.application_data).hexdigest(),
         }
 
     def _pass(self, gate: str) -> None:
@@ -343,7 +345,7 @@ class DirectBStage:
         param.local_communication_id = COMMUNICATION_ID
         param.scene_id = SCENE_ID
         param.max_participants = MAX_PARTICIPANTS
-        param.application_data = FIXTURE
+        param.application_data = self.application_data
         param.accept_policy = ACCEPT_ALL
         param.password = GBA_APP_PASSPHRASE
         param.channel = self.channel
@@ -526,7 +528,7 @@ class DirectBStage:
             "result_level": self.result_level,
             "last_passed_gate": self.passed[-1]["gate"] if self.passed else None,
             "gates": list(self.passed),
-            "fixture": {"id": FIXTURE_ID, "length": len(FIXTURE), "sha256": FIXTURE_SHA256},
+            "fixture": self._advertisement_evidence(),
             "radio_reset": None,
             "compatibility": dict(self.compatibility),
             "data_plane": None,
@@ -549,12 +551,12 @@ class DirectBStage:
                 self.trio = trio
             self._policy()
             try:
-                advertisement = validate_advertisement(FIXTURE)
+                advertisement = validate_advertisement(self.application_data)
             except AStageError as error:
                 raise BStageError(
                     "B_FIXTURE_INVALID", GATES[0], "diagnostic fixture is incompatible"
                 ) from error
-            if advertisement["sha256"] != FIXTURE_SHA256:
+            if self.application_data == FIXTURE and advertisement["sha256"] != FIXTURE_SHA256:
                 raise BStageError("B_FIXTURE_HASH_MISMATCH", GATES[0], "diagnostic fixture hash changed")
             self._pass(GATES[0])
 
@@ -619,9 +621,14 @@ class DirectBStage:
                             await self._hold(network)
                             self._pass(GATES[8])
                             functional_complete = True
-                            stage_scope.deadline = (
-                                self.trio.current_time() + self.teardown_timeout
-                            )
+                            if self.session_handler is not None:
+                                stage_scope.deadline = float("inf")
+                                await self.session_handler(
+                                    network, plane, self.application_data)
+                            else:
+                                stage_scope.deadline = (
+                                    self.trio.current_time() + self.teardown_timeout
+                                )
                     stage_scope.deadline = float("inf")
                 if stage_scope.cancelled_caught:
                     if functional_complete:
@@ -666,7 +673,7 @@ class DirectBStage:
                 "result_level": self.result_level,
                 "last_passed_gate": self.passed[-1]["gate"],
                 "gates": list(self.passed),
-                "fixture": {"id": FIXTURE_ID, "length": len(FIXTURE), "sha256": FIXTURE_SHA256},
+                "fixture": self._advertisement_evidence(),
                 "radio_reset": radio_evidence,
                 "compatibility": dict(self.compatibility),
                 "data_plane": {**plane_evidence, "local_hold_completed": True},

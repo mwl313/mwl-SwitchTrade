@@ -167,6 +167,9 @@ def _worker_command(
     required_role = {
         RunMode.DIRECT_A.value: "guest",
         RunMode.DIRECT_B.value: "host",
+        RunMode.NORMAL.value: (
+            "guest" if run["identity"].get("switch_role") == "a_room_joiner" else "host"
+        ),
     }.get(run["identity"]["mode"], "relay")
     radio = [
         "./scripts/wsl-radio-prepare.sh", "--usb-id", adapter.usb_id,
@@ -241,21 +244,31 @@ class WorkerEvents:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise P0Error("P0_WORKER_TIMEOUT", "P0b_worker", "worker checkpoint deadline expired")
-            try:
-                value = self.events.get(timeout=remaining)
-            except queue.Empty as error:
-                raise P0Error("P0_WORKER_TIMEOUT", "P0b_worker", "worker checkpoint deadline expired") from error
+            value = self.next_event(remaining)
             if value is None:
-                raise P0Error("P0_WORKER_EXITED", "P0b_worker", "worker exited before its checkpoint")
-            if isinstance(value, BaseException):
-                raise value
-            if value["event"] == "worker_failed":
                 raise P0Error(
-                    str(value.get("code") or "P0_WORKER_FAILED"), "P0b_worker",
-                    str(value.get("message") or "worker failed"),
-                )
+                    "P0_WORKER_TIMEOUT", "P0b_worker", "worker checkpoint deadline expired")
             if value["event"] in wanted:
                 return value
+
+    def next_event(self, timeout: float) -> dict | None:
+        """Read one event without turning an ordinary polling deadline into a failure."""
+        if timeout < 0:
+            raise ValueError("worker event timeout cannot be negative")
+        try:
+            value = self.events.get(timeout=timeout)
+        except queue.Empty:
+            return None
+        if value is None:
+            raise P0Error("P0_WORKER_EXITED", "P0b_worker", "worker exited before its checkpoint")
+        if isinstance(value, BaseException):
+            raise value
+        if value["event"] == "worker_failed":
+            raise P0Error(
+                str(value.get("code") or "P0_WORKER_FAILED"), "P0b_worker",
+                str(value.get("message") or "worker failed"),
+            )
+        return value
 
     def send(self, value: dict) -> None:
         if self.process.stdin is None or self.process.poll() is not None:
@@ -769,7 +782,18 @@ class P0Harness:
     def run_direct_b(self) -> dict:
         return self._run(mode=RunMode.DIRECT_B, endpoint="direct_b", launch_endpoint=True)
 
-    def _run(self, *, mode: RunMode, endpoint: str, launch_endpoint: bool) -> dict:
+    def run_distributed(self, lifecycle: object) -> dict:
+        """Run one physical side while reusing the canonical P0 and release ownership path."""
+        for method in ("bind", "prepare", "drive", "cleanup", "abort"):
+            if not callable(getattr(lifecycle, method, None)):
+                raise ValueError(f"distributed lifecycle is missing {method}")
+        return self._run(
+            mode=RunMode.NORMAL, endpoint="distributed", launch_endpoint=True,
+            distributed=lifecycle,
+        )
+
+    def _run(self, *, mode: RunMode, endpoint: str, launch_endpoint: bool,
+             distributed: object | None = None) -> dict:
         requested_instance, requested_usb = self.validator.requested_identity()
         run = self.coordinator.start(
             mode, adapter_instance_id=requested_instance, usb_id=requested_usb)
@@ -782,6 +806,7 @@ class P0Harness:
         final_path = run_root / {
             RunMode.DIRECT_A: "direct-a-harness-report.json",
             RunMode.DIRECT_B: "direct-b-harness-report.json",
+            RunMode.NORMAL: "distributed-harness-report.json",
         }.get(mode, "p0-harness-report.json")
         lease = None
         events = None
@@ -797,6 +822,8 @@ class P0Harness:
         cleanup = {}
         release_verified = True
         release_evidence = None
+        distributed_result = None
+        distributed_prepared = False
         try:
             self.coordinator.transition(run_id, Phase.PREFLIGHT, "P0a_release")
             adapter, p0a = self.validator.validate()
@@ -804,6 +831,8 @@ class P0Harness:
                 raise P0Error("P0_ADAPTER_IDENTITY_CHANGED", "P0a_adapter", "selected adapter changed during P0a")
             self.coordinator.pass_gate(run_id, "P0a_PASSIVE_READY")
             run = self.coordinator.transition(run_id, Phase.RUNNING, "P0b_lease")
+            if distributed is not None:
+                run = distributed.bind(run_id, run)
             lease = self.lease_factory(adapter, run_root / "p0-usb-recovery.json")
             lease_evidence = lease.acquire()
             command = _worker_command(
@@ -827,6 +856,20 @@ class P0Harness:
                 phy=p0b["radio"]["phy"], netdev=p0b["radio"]["netdev"])
             if launch_endpoint:
                 nonce = secrets.token_hex(32)
+                launch_extra = {}
+                if distributed is not None:
+                    launch_extra = distributed.prepare({
+                        "run_id": run_id, "run": self.coordinator.snapshot(run_id),
+                        "run_root": run_root, "p0a": p0a, "p0b": p0b,
+                        "adapter": adapter, "launch_nonce": nonce,
+                    })
+                    if (not isinstance(launch_extra, dict) or
+                            set(launch_extra) != {"attempt_id", "endpoint_config"}):
+                        raise P0Error(
+                            "DISTRIBUTED_PREPARE_INVALID", "C0_authority",
+                            "distributed launch preparation returned an invalid binding",
+                        )
+                    distributed_prepared = True
                 self.coordinator.reserve_endpoint_launch(run_id, launch_nonce=nonce)
                 events.send({
                     "contract_version": "p0-launch-ticket.v1",
@@ -842,7 +885,9 @@ class P0Harness:
                     "wrapper_pid": p0b["wrapper_pid"],
                     "process_start_ticks": p0b["process_start_ticks"],
                     "launch_nonce": nonce,
-                    "attempt_id": None,
+                    "attempt_id": launch_extra.get("attempt_id"),
+                    **({"endpoint_config": launch_extra["endpoint_config"]}
+                       if distributed is not None else {}),
                 })
                 events.wait_for({"endpoint_exec"}, 5)
                 endpoint_event = events.wait_for({"endpoint_started"}, 5)
@@ -860,7 +905,21 @@ class P0Harness:
                 endpoint_started = True
                 if self.after_endpoint_started is not None:
                     self.after_endpoint_started(self.coordinator.snapshot(run_id))
-                if mode == RunMode.DIRECT_A:
+                if distributed is not None:
+                    distributed_result = distributed.drive({
+                        "run_id": run_id, "run_root": run_root, "events": events,
+                        "run": self.coordinator.snapshot(run_id), "p0a": p0a, "p0b": p0b,
+                        "adapter": adapter, "launch_nonce": nonce,
+                    })
+                    if (not isinstance(distributed_result, dict) or
+                            distributed_result.get("outcome") not in {
+                                item.value for item in FunctionalOutcome if item is not FunctionalOutcome.PENDING
+                            }):
+                        raise P0Error(
+                            "DISTRIBUTED_RESULT_INVALID", "D1_CLOSING_INTENT",
+                            "distributed lifecycle returned an invalid result",
+                        )
+                elif mode == RunMode.DIRECT_A:
                     while True:
                         checkpoint = events.wait_for(
                             {"a_gate_passed", "a_stage_ready", "a_stage_failed"}, 45)
@@ -920,9 +979,17 @@ class P0Harness:
                             failure = b_stage["failure"]
                             raise P0Error(failure["code"], failure["gate"], failure["message"])
                         break
-            self.coordinator.close_run(run_id, FunctionalOutcome.PASSED)
+            if distributed_result is None:
+                self.coordinator.close_run(run_id, FunctionalOutcome.PASSED)
+            else:
+                outcome = FunctionalOutcome(distributed_result["outcome"])
+                self.coordinator.close_run(
+                    run_id, outcome,
+                    code=distributed_result.get("code"),
+                    message=distributed_result.get("message"),
+                )
             cleanup["lease"] = lease_evidence
-        except (P0Error, ConnectionCoordinatorError, OSError, subprocess.SubprocessError) as error:
+        except Exception as error:
             primary = {
                 "code": getattr(error, "code", "P0_INTERNAL_ERROR"),
                 "gate": getattr(error, "gate", "P0"),
@@ -935,69 +1002,85 @@ class P0Harness:
             except ConnectionCoordinatorError:
                 pass
         try:
-            self.coordinator.begin_cleanup(run_id)
             if events is not None:
                 cleanup["worker"] = events.stop(endpoint_started=endpoint_started)
             elif process is not None and process.poll() is None:
                 process.terminate()
                 process.wait(timeout=3)
-            snapshot = self.coordinator.snapshot(run_id)
-            if (
-                self.release_probes is not None and
-                snapshot["ownership"]["wrapper_acquired"]
-            ):
-                release_evidence, release_verified = self._verify_d8_d9({
-                    **snapshot["identity"], "run_id": run_id,
+            if distributed is not None and distributed_prepared:
+                distributed_cleanup = distributed.cleanup({
+                    "run_id": run_id, "run_root": run_root, "lease": lease,
+                    "worker": cleanup.get("worker"), "endpoint_started": endpoint_started,
+                    "distributed_result": distributed_result,
                 })
-                cleanup["d_release"] = release_evidence
-            if lease is not None and release_verified:
-                cleanup["usb"] = lease.release()
-            worker_verified = (
-                events is None or (
-                    cleanup.get("worker", {}).get("worker_exited") is True and
-                    cleanup.get("worker", {}).get("worker_forced") is False
+                if not isinstance(distributed_cleanup, dict):
+                    raise P0Error(
+                        "DISTRIBUTED_CLEANUP_INVALID", "D11_RELEASE",
+                        "distributed cleanup returned invalid evidence",
+                    )
+                cleanup["distributed"] = distributed_cleanup
+                lease = None
+            else:
+                if distributed is not None:
+                    distributed.abort()
+                self.coordinator.begin_cleanup(run_id)
+                snapshot = self.coordinator.snapshot(run_id)
+                if (
+                    self.release_probes is not None and
+                    snapshot["ownership"]["wrapper_acquired"]
+                ):
+                    release_evidence, release_verified = self._verify_d8_d9({
+                        **snapshot["identity"], "run_id": run_id,
+                    })
+                    cleanup["d_release"] = release_evidence
+                if lease is not None and release_verified:
+                    cleanup["usb"] = lease.release()
+                worker_verified = (
+                    events is None or (
+                        cleanup.get("worker", {}).get("worker_exited") is True and
+                        cleanup.get("worker", {}).get("worker_forced") is False
+                    )
                 )
-            )
-            usb_verified = (
-                lease is None or (
-                    release_verified and
-                    cleanup.get("usb", {}).get("prior_state_restored") is True
+                usb_verified = (
+                    lease is None or (
+                        release_verified and
+                        cleanup.get("usb", {}).get("prior_state_restored") is True
+                    )
                 )
-            )
-            stage_cleanup_verified = self._stage_cleanup_verified(
-                mode, endpoint_started=endpoint_started,
-                a_stage=a_stage, b_stage=b_stage,
-            )
-            cleanup_verified = (
-                worker_verified and release_verified and usb_verified and stage_cleanup_verified
-            )
-            self.coordinator.complete_cleanup(
-                run_id, verified=cleanup_verified,
-                evidence={
-                    "worker_exited": None if events is None else worker_verified,
-                    "prior_usb_state_restored": None if lease is None else usb_verified,
-                    "endpoint_exited": None if not endpoint_started else worker_verified,
-                    "stage_resources_released": (
-                        None if mode not in {RunMode.DIRECT_A, RunMode.DIRECT_B}
-                        else stage_cleanup_verified
-                    ),
-                    "endpoint_identity_absent": (
-                        None if release_evidence is None
-                        else release_evidence["endpoint_identity_absent"]
-                    ),
-                    "radio_stably_quiescent": (
-                        None if release_evidence is None
-                        else release_evidence["radio_stably_quiescent"]
-                    ),
-                    "radio_absence_proven_by_linux_usb": (
-                        None if release_evidence is None
-                        else release_evidence["radio_absence_proven_by_linux_usb"]
-                    ),
-                },
-                code=None if cleanup_verified else "P0_CLEANUP_FAILED",
-                message=None if cleanup_verified else "P0 cleanup could not be verified",
-            )
-        except (P0Error, ConnectionCoordinatorError, OSError, subprocess.SubprocessError) as error:
+                stage_cleanup_verified = self._stage_cleanup_verified(
+                    mode, endpoint_started=endpoint_started,
+                    a_stage=a_stage, b_stage=b_stage,
+                )
+                cleanup_verified = (
+                    worker_verified and release_verified and usb_verified and stage_cleanup_verified
+                )
+                self.coordinator.complete_cleanup(
+                    run_id, verified=cleanup_verified,
+                    evidence={
+                        "worker_exited": None if events is None else worker_verified,
+                        "prior_usb_state_restored": None if lease is None else usb_verified,
+                        "endpoint_exited": None if not endpoint_started else worker_verified,
+                        "stage_resources_released": (
+                            None if mode not in {RunMode.DIRECT_A, RunMode.DIRECT_B}
+                            else stage_cleanup_verified
+                        ),
+                        "endpoint_identity_absent": (
+                            None if release_evidence is None
+                            else release_evidence["endpoint_identity_absent"]
+                        ),
+                        "radio_stably_quiescent": (
+                            None if release_evidence is None
+                            else release_evidence["radio_stably_quiescent"]
+                        ),
+                        "radio_absence_proven_by_linux_usb": (
+                            None if release_evidence is None
+                            else release_evidence["radio_absence_proven_by_linux_usb"]
+                        ),
+                    },
+                    code=None if cleanup_verified else "P0_CLEANUP_FAILED",
+                    message=None if cleanup_verified else "P0 cleanup could not be verified",
+                )
+        except Exception as error:
             cleanup["failure"] = {
                 "code": getattr(error, "code", "P0_CLEANUP_FAILED"),
                 "message": getattr(error, "message", type(error).__name__),
@@ -1015,6 +1098,7 @@ class P0Harness:
             "contract_version": (
                 "direct-a-harness-report.v1" if mode == RunMode.DIRECT_A
                 else "direct-b-harness-report.v1" if mode == RunMode.DIRECT_B
+                else "distributed-harness-report.v1" if mode == RunMode.NORMAL
                 else "p0-harness-report.v1"
             ),
             "schema": 1,
@@ -1024,6 +1108,7 @@ class P0Harness:
             "p0b": p0b,
             "a_stage": a_stage,
             "b_stage": b_stage,
+            "distributed": distributed_result,
             "primary_failure": primary,
             "cleanup": cleanup,
             "functional_status": snapshot["functional"]["status"],
