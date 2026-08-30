@@ -1,6 +1,7 @@
 # ABC+D Milestone 7 physical distributed harness
 
 > Branch: `codex/abcd-orchestration-rework`
+> Canonical source: `0caafce6803549fa26a50bb7c2d34e16a54c71a3`
 > Application version: `0.2.7-beta.1` (Windows/MSI version `0.2.7`)
 > Status: source complete and automated regression passed; installed two-PC/two-Switch evidence is
 > still required.
@@ -72,3 +73,8 @@ plane framing, and one P0 lease/one delegated D release.
 Automated evidence cannot prove real A/B RF conditions or a physical trade. The two role assignments
 and End, Close, Stop, and Leave actions remain the installed physical exit gate documented in
 `HANDOFF-M7-TWO-PC-DISTRIBUTED-20260830.md`.
+
+The replacement installer was built from the clean canonical source as release
+`beta-0caafce68035`. Static embedded-bundle verification and the disposable WSL
+install/verify/repair/uninstall lifecycle both passed. `SwitchTradeSetup.exe` SHA-256 is
+`a5cec5a92b42a75d7c7df59e15053ac6a849d617986f84fe41c7f0ab2ee7db1e`.
