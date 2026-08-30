@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -15,7 +16,9 @@ from switchtrade.connection.distributed_harness import (
     _invitation,
     _recover_distributed,
 )
+from switchtrade.connection.p0_harness import _stable_error_code
 from switchtrade.connection.stage_session import StageSession
+from switchtrade.relay_client import RelayError
 
 
 RUN_ID = "00000000-0000-0000-0000-000000000123"
@@ -141,6 +144,53 @@ class DistributedContractTests(unittest.TestCase):
             self.assertEqual(relay.commands[0][0][2], "")
             self.assertEqual(relay.commands[0][1]["method"], "DELETE")
 
+    def test_invalid_relay_credential_still_runs_exact_local_recovery(self):
+        class Coordinator:
+            def snapshot(self):
+                return {
+                    "run_id": RUN_ID,
+                    "identity": {
+                        "release": "release-a", "switch_role": "a_room_joiner",
+                        "room_id": "room-1", "attempt_id": None,
+                    },
+                    "cleanup": {"verified": False},
+                    "last_passed_gate": "P0_SIDE_READY",
+                }
+
+        class Relay:
+            def room(self, _room_id, _member_token):
+                raise RelayError(
+                    "member credential is invalid", status=401,
+                    code="member_credential_invalid",
+                )
+
+        class Harness:
+            called = False
+
+            def recover(self, _run):
+                self.called = True
+                return {"status": "recovered"}
+
+        harness = Harness()
+        result = _recover_distributed(
+            coordinator=Coordinator(), relay=Relay(), harness=harness,
+            session={
+                "release": "release-a", "switch_role": "a_room_joiner",
+                "room_id": "room-1", "member_token": "expired", "owner": True,
+            },
+            session_path=Path("unused.json"),
+        )
+        self.assertTrue(harness.called)
+        self.assertEqual(result["local_recovery"]["status"], "recovered")
+        self.assertFalse(result["room_finalized"])
+
+    def test_external_error_code_is_normalized_at_coordinator_boundary(self):
+        error = RelayError(
+            "member credential is invalid", status=401,
+            code="member_credential_invalid",
+        )
+        self.assertEqual(_stable_error_code(error), "MEMBER_CREDENTIAL_INVALID")
+
     def test_peer_wait_stays_below_relay_member_rate_limit(self):
         clock = [0.0]
 
@@ -169,6 +219,7 @@ class DistributedContractTests(unittest.TestCase):
 
             def __init__(self):
                 self.member_requests = 0
+                self.heartbeats = 0
 
             def command_id(self):
                 return "command-1"
@@ -182,6 +233,11 @@ class DistributedContractTests(unittest.TestCase):
             def v2_ready(self, *args, **kwargs):
                 self.member_requests += 1
                 return room()
+
+            def room_command(self, *args, **kwargs):
+                self.member_requests += 1
+                self.heartbeats += 1
+                return room(attempt=clock[0] >= 35)
 
         class Coordinator:
             def lock_attempt(self, run_id, **identity):
@@ -221,6 +277,37 @@ class DistributedContractTests(unittest.TestCase):
             self.assertEqual(prepared["attempt_id"], "attempt-1")
             self.assertGreaterEqual(RELAY_POLL_INTERVAL, 1.0)
             self.assertLess(relay.member_requests, 120)
+            self.assertGreaterEqual(relay.heartbeats, 3)
+
+    def test_operator_prompt_keeps_relay_member_alive(self):
+        heartbeat = threading.Event()
+
+        class Relay:
+            base_url = "https://relay.example"
+
+            @staticmethod
+            def room(_room_id, _member_token):
+                return {"room_version": 1}
+
+            @staticmethod
+            def room_command(*_args, **_kwargs):
+                heartbeat.set()
+                return {"room_version": 2}
+
+        lifecycle = DistributedLifecycle(
+            coordinator=object(), relay=Relay(),
+            session={
+                "room_id": "room-1", "member_token": "member-token",
+                "switch_role": "a_room_joiner",
+            },
+            session_path=Path("unused.json"), distro="SwitchTrade",
+            packaged_python="/opt/switchtrade/python",
+        )
+        with patch(
+            "switchtrade.connection.distributed_harness.RELAY_HEARTBEAT_INTERVAL", 0.01,
+        ), patch("builtins.input", side_effect=lambda _message: heartbeat.wait(1)):
+            lifecycle._prompt("waiting")
+        self.assertTrue(heartbeat.is_set())
 
     def test_authority_attempt_requires_complementary_roles_and_locked_generation(self):
         lifecycle = object.__new__(DistributedLifecycle)

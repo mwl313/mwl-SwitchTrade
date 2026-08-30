@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import threading
 import time
 import uuid
 
@@ -36,6 +37,7 @@ ACTIONS = {"end", "stop", "leave", "close"}
 TERMINAL_ATTEMPTS = {"completed", "canceled", "failed"}
 SOURCE_SHA = re.compile(r"[0-9a-f]{40}")
 RELAY_POLL_INTERVAL = 1.0
+RELAY_HEARTBEAT_INTERVAL = 10.0
 
 
 def _status(event: str, **values: object) -> None:
@@ -149,6 +151,7 @@ class DistributedLifecycle:
         self.packaged_python = packaged_python
         self.timeout = timeout
         self.room = relay.room(session["room_id"], session["member_token"])
+        self.last_heartbeat = time.monotonic()
         self.config_path: Path | None = None
         self.d1_path: Path | None = None
         self.last_gate = "P0_SIDE_READY"
@@ -159,7 +162,49 @@ class DistributedLifecycle:
     def relay_role(self) -> str:
         return "creator" if self.session["switch_role"] == "a_room_joiner" else "finder"
 
+    def _heartbeat(self, *, force: bool = False) -> bool:
+        now = time.monotonic()
+        if not force and now - self.last_heartbeat < RELAY_HEARTBEAT_INTERVAL:
+            return False
+        self.room = self.relay.room_command(
+            self.session["room_id"], self.session["member_token"], "/heartbeat",
+            expected_version=self.room["room_version"],
+        )
+        self.last_heartbeat = now
+        return True
+
+    def _refresh_room(self, *, force_heartbeat: bool = False) -> dict:
+        if not self._heartbeat(force=force_heartbeat):
+            self.room = self.relay.room(
+                self.session["room_id"], self.session["member_token"])
+        return self.room
+
+    def _prompt(self, message: str) -> None:
+        """Keep the member present while the operator is physically away from this PC."""
+        stopped = threading.Event()
+        errors: list[Exception] = []
+
+        def keep_alive() -> None:
+            while not stopped.wait(RELAY_HEARTBEAT_INTERVAL):
+                try:
+                    self._heartbeat(force=True)
+                except Exception as error:
+                    errors.append(error)
+                    return
+
+        worker = threading.Thread(target=keep_alive, name="distributed-heartbeat", daemon=True)
+        worker.start()
+        try:
+            input(message)
+        finally:
+            stopped.set()
+            worker.join(timeout=1)
+        if errors:
+            raise errors[0]
+        self._heartbeat(force=True)
+
     def bind(self, run_id: str, run: dict) -> dict:
+        self._refresh_room(force_heartbeat=True)
         member = _local_member(self.room)
         return self.coordinator.bind_authority(
             run_id, room_id=self.session["room_id"], room_version=self.room["room_version"],
@@ -205,7 +250,7 @@ class DistributedLifecycle:
     def prepare(self, context: dict) -> dict:
         self.run_context = context
         command_id = self.relay.command_id()
-        room = self.relay.room(self.session["room_id"], self.session["member_token"])
+        room = self._refresh_room(force_heartbeat=True)
         room = self.relay.v2_ready(
             self.session["room_id"], self.session["member_token"], {
                 "ready": True, "switch_room_role": self.relay_role,
@@ -220,7 +265,7 @@ class DistributedLifecycle:
                     "the second P0-qualified PC did not become ready",
                 )
             time.sleep(RELAY_POLL_INTERVAL)
-            room = self.relay.room(self.session["room_id"], self.session["member_token"])
+            room = self._refresh_room()
         attempt = self._validate_attempt(room)
         self.room = room
         self.coordinator.lock_attempt(
@@ -271,7 +316,12 @@ class DistributedLifecycle:
     def _begin_d(self, outcome: str, *, code: str | None = None) -> dict:
         if self.intent is not None:
             return self.intent
-        attempt = self.room["attempt"]
+        room = self._refresh_room(force_heartbeat=True)
+        authority_intent = self._authority_intent(room)
+        if authority_intent is not None:
+            self.intent = authority_intent
+            return authority_intent
+        attempt = room["attempt"]
         intent = {
             "contract_version": "d-closing-intent.v1",
             "attempt_id": attempt["attempt_id"],
@@ -296,7 +346,7 @@ class DistributedLifecycle:
         return intent
 
     def _poll_authority(self) -> dict | None:
-        self.room = self.relay.room(self.session["room_id"], self.session["member_token"])
+        self._refresh_room()
         intent = self._authority_intent(self.room)
         if intent is not None:
             self.intent = intent
@@ -355,7 +405,7 @@ class DistributedLifecycle:
                         self.intent = peer_intent
                     elif owner and self.last_gate == threshold and not prompted:
                         prompted = True
-                        input(
+                        self._prompt(
                             f"[{action}] checkpoint reached. Complete the Switch-side action, "
                             "then press Enter to begin ordered D cleanup: "
                         )
@@ -367,6 +417,7 @@ class DistributedLifecycle:
                     self.intent = intent_sent
                     while endpoint_report is None:
                         event = events.next_event(max(0.01, min(0.5, deadline - time.monotonic())))
+                        self._heartbeat()
                         if event is not None and event.get("event") == "d_endpoint_completed":
                             endpoint_report = event.get("report")
                             break
@@ -429,26 +480,26 @@ class DistributedLifecycle:
                     "the two-side D6 barrier did not become terminal",
                 )
             time.sleep(RELAY_POLL_INTERVAL)
-            room = self.relay.room(self.session["room_id"], self.session["member_token"])
+            room = self._refresh_room()
         return room
 
     def _room_finalize(self) -> str:
         if self.session["owner"]:
-            input(
+            self._prompt(
                 "Confirm the other PC reports D11_VERIFIED, then press Enter to close the "
                 "one-time qualification room: "
             )
-            room = self.relay.room(self.session["room_id"], self.session["member_token"])
+            room = self.room
             self.relay.room_command(
                 self.session["room_id"], self.session["member_token"], "",
                 method="DELETE", expected_version=room["room_version"],
             )
             return "room_closed"
         if self.session["action"] == "leave":
-            input(
+            self._prompt(
                 "Confirm PC A reports D11_VERIFIED, then press Enter to perform the Leave action: "
             )
-            room = self.relay.room(self.session["room_id"], self.session["member_token"])
+            room = self.room
             self.relay.room_command(
                 self.session["room_id"], self.session["member_token"], "/members/me",
                 method="DELETE", expected_version=room["room_version"],
@@ -458,7 +509,7 @@ class DistributedLifecycle:
         deadline = time.monotonic() + self.timeout
         while time.monotonic() < deadline:
             try:
-                self.relay.room(self.session["room_id"], self.session["member_token"])
+                self._refresh_room()
             except RelayError as error:
                 if error.status == 401:
                     try:
@@ -618,7 +669,6 @@ def _recover_distributed(*, coordinator: ConnectionCoordinator, relay: RelayClie
         session["room_id"] != run["identity"].get("room_id")
     ):
         raise SystemExit("DISTRIBUTED_RECOVERY_STATE_INVALID")
-    room = relay.room(session["room_id"], session["member_token"])
     if run["cleanup"]["verified"]:
         recovery = {
             "status": "already_recovered", "run_id": run["run_id"],
@@ -626,6 +676,15 @@ def _recover_distributed(*, coordinator: ConnectionCoordinator, relay: RelayClie
         }
     else:
         recovery = None
+    try:
+        room = relay.room(session["room_id"], session["member_token"])
+    except RelayError as error:
+        if recovery is None:
+            recovery = harness.recover(run)
+        return {
+            "status": "failed", "code": error.code,
+            "local_recovery": recovery, "room_finalized": False,
+        }
     attempt = room.get("attempt") or {}
     attempt_id = attempt.get("attempt_id")
     if (

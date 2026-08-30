@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import queue
+import re
 import secrets
 import signal
 import subprocess
@@ -37,6 +38,12 @@ from switchtrade.relay_client import RelayClient
 WorkerFactory = Callable[[list[str], Path, Path], subprocess.Popen]
 LeaseFactory = Callable[[UsbAdapter, Path], UsbLease]
 EndpointCheckpoint = Callable[[dict], None]
+_STABLE_CODE = re.compile(r"^[A-Z][A-Z0-9_.-]{0,95}$")
+
+
+def _stable_error_code(error: Exception) -> str:
+    value = str(getattr(error, "code", "P0_INTERNAL_ERROR")).upper()
+    return value if _STABLE_CODE.fullmatch(value) else "P0_INTERNAL_ERROR"
 
 
 def _unknown_linux_usb() -> dict:
@@ -991,7 +998,7 @@ class P0Harness:
             cleanup["lease"] = lease_evidence
         except Exception as error:
             primary = {
-                "code": getattr(error, "code", "P0_INTERNAL_ERROR"),
+                "code": _stable_error_code(error),
                 "gate": getattr(error, "gate", "P0"),
                 "message": getattr(error, "message", type(error).__name__),
             }
