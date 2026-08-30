@@ -32,6 +32,9 @@ class AuthoritativeRoomTests(unittest.TestCase):
         self.previous = relay_server.authority
         relay_server.authority = AuthorityStore(self.database)
         relay_server.sessions.clear()
+        relay_server.v2_sessions.clear()
+        relay_server.v2_pending_admissions.clear()
+        relay_server.v2_attempt_admissions.clear()
         self.client = TestClient(relay_server.app)
 
     def tearDown(self):
@@ -39,6 +42,9 @@ class AuthoritativeRoomTests(unittest.TestCase):
         relay_server.authority.close()
         relay_server.authority = self.previous
         relay_server.sessions.clear()
+        relay_server.v2_sessions.clear()
+        relay_server.v2_pending_admissions.clear()
+        relay_server.v2_attempt_admissions.clear()
         self.temporary.cleanup()
 
     def _create(self, client_id="client-a") -> dict:
@@ -404,6 +410,19 @@ class AuthoritativeRoomTests(unittest.TestCase):
             relay_server.authority.snapshot(room_id, first["member_token"])
             ["attempt"]["phase"], "closing",
         )
+
+        session = relay_server.V2Session(
+            room["room_code"], room_id, attempt["attempt_id"])
+        session.generations[relay_server.SourceSeat.MEMBER_A] = 1
+        key = (room["room_code"], attempt["attempt_id"])
+        relay_server.v2_sessions[key] = session
+        admission = object()
+        relay_server.v2_attempt_admissions[key] = admission
+        with patch.object(relay_server, "V2_RECONNECT_SECONDS", 0):
+            asyncio.run(relay_server._expire_v2_peer(
+                session, relay_server.SourceSeat.MEMBER_A, 1,
+            ))
+        self.assertIs(relay_server.v2_attempt_admissions[key], admission)
 
         def acknowledgement(seat, run_id):
             return {

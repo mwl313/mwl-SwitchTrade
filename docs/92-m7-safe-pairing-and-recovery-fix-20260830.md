@@ -63,3 +63,28 @@ real `0.2.10` same-version Repair qualification after this correction.
 Installed physical evidence remains deliberately open. The acceptance sequence is software pairing on
 both nearby PCs, P0/cleanup on both PCs, two consecutive nearby two-Switch end-to-end passes, verified
 zero residue, and only then the separated-distance run.
+
+## D-PHYS-1-R4 rejection and correction
+
+`D-PHYS-1-R4` is also rejected as physical evidence. Both PCs proved pairing, P0, the locked attempt,
+and `C0_DATA_PLANE_PROVEN`, but no Switch was operated and neither Direct A nor Direct B produced a
+stage report. The run exposed three orchestration defects before any physical gate:
+
+1. `CREATE_SWITCH_ROOM` and `JOIN_SWITCH_GROUP` were notifications rather than approval barriers. The
+   endpoint continued immediately, so Direct A could exhaust its bounded scan before the operator
+   acted. Both checkpoints now require an exact run- and role-bound Continue command. Direct A starts
+   only after the Switch A room is open; Direct B pauses at its AP checkpoint until PC B continues.
+2. `StageSession` replaced a Direct A/B report failure such as `A_ROOM_NOT_OBSERVED` with a generic
+   `DISTRIBUTED_ENDPOINT_FAILED`. It now carries the stable code, failed gate, last passed gate, and
+   bounded message to D1. A completed failed stage is not misreported as an LDN teardown failure when
+   its thread and context have already exited.
+3. Relay transport expiry unconditionally erased the process-local launch admission after 15 seconds,
+   even when D1 had already frozen the attempt in `closing`. This allowed a valid D5 report to fail as
+   `d_launch_not_admitted`. Peer expiry and fatal transport paths now retire admission only when the
+   authority actually converts an active attempt to `relay.peer_lost`; D closing retains the binding
+   until D6 or the bounded D timeout retires it.
+
+Focused distributed/authority/tunnel/D regression passed 115 tests. The complete available audit
+environment passed 365 tests with one intentional skip. This is source-level evidence only. Because
+the correction changes both the relay and installed endpoint/harness payload, the relay must be
+redeployed and both PCs must install one matching immutable build before another physical run.

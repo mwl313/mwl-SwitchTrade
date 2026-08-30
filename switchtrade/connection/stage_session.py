@@ -13,6 +13,18 @@ class StageResources:
     advertisement: bytes
 
 
+class StageSessionError(RuntimeError):
+    """Preserve the stable failure identity returned by a Direct A/B stage."""
+
+    def __init__(self, code: str, gate: str, message: str,
+                 last_passed_gate: str | None = None):
+        super().__init__(message)
+        self.code = code
+        self.gate = gate
+        self.message = message
+        self.last_passed_gate = last_passed_gate
+
+
 class StageSession:
     """Run one Direct stage once; ``stop`` is the sole LDN-context exit owner."""
 
@@ -60,14 +72,27 @@ class StageSession:
 
     def wait_ready(self) -> StageResources:
         if not self._ready.wait(self.timeout):
-            raise TimeoutError("direct stage did not reach its sustained-session checkpoint")
+            raise StageSessionError(
+                "DIRECT_STAGE_READY_TIMEOUT", "DIRECT_STAGE_READY",
+                "direct stage did not reach its sustained-session checkpoint",
+            )
         if self.resources is not None:
             return self.resources
         if self._error is not None:
-            raise RuntimeError("direct stage failed before readiness") from self._error
+            raise self._error
         failure = self.report.get("failure") if isinstance(self.report, dict) else None
-        code = failure.get("code") if isinstance(failure, dict) else "DIRECT_STAGE_FAILED"
-        raise RuntimeError(str(code))
+        if isinstance(failure, dict):
+            raise StageSessionError(
+                str(failure.get("code") or "DIRECT_STAGE_FAILED"),
+                str(failure.get("gate") or "DIRECT_STAGE_READY"),
+                str(failure.get("message") or "direct stage failed before readiness"),
+                str(self.report["last_passed_gate"])
+                if self.report.get("last_passed_gate") is not None else None,
+            )
+        raise StageSessionError(
+            "DIRECT_STAGE_FAILED", "DIRECT_STAGE_READY",
+            "direct stage failed before readiness",
+        )
 
     def stop(self) -> None:
         if self._thread is None:
@@ -79,8 +104,11 @@ class StageSession:
         self._thread = None
         if self._error is not None:
             raise RuntimeError("direct stage failed during LDN teardown") from self._error
-        if not isinstance(self.report, dict) or self.report.get("status") != "passed":
-            raise RuntimeError("direct stage did not complete after LDN teardown")
+        if not isinstance(self.report, dict):
+            raise RuntimeError("direct stage did not report LDN teardown")
+        cleanup = self.report.get("cleanup")
+        if isinstance(cleanup, dict) and cleanup.get("ldn_context_released") is not True:
+            raise RuntimeError("direct stage did not release its LDN context")
 
 
-__all__ = ["StageResources", "StageSession"]
+__all__ = ["StageResources", "StageSession", "StageSessionError"]

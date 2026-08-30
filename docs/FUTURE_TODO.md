@@ -214,7 +214,12 @@ path. No open item may be presented as a current production capability.
    reused endpoint D2-D4 and measured D5/D7-D11 owners. This is source evidence only until all four
    installed two-PC/two-Switch cases pass with shared cleanup verified. Commit `82e7dcc` fixes the
    M7-only relay polling limit failure and pre-attempt recovery crash found during the first physical
-   launch; the production desktop and relay contracts were not changed.
+   launch; the production desktop and relay contracts were not changed. `D-PHYS-1-R4` subsequently
+   proved both P0 sides and C0 data plane but exposed a non-blocking operator checkpoint, loss of the
+   original Direct-stage failure code, and premature launch-admission retirement during D closing.
+   Source now requires an exact Continue command before physical A/B action, preserves the Direct
+   failure identity, and retains D launch admission until D6 or bounded D timeout. Relay redeployment,
+   matching installed payloads on both PCs, and the physical acceptance sequence remain required.
 
 5. **CRITICAL — URGENT: Stop false-positive endpoint startup and unbounded relaunch storms.**
    **Status (2026-08-28): implemented in source; the current-PC single-launch and close/reopen smoke

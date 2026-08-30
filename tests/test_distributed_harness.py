@@ -2,12 +2,19 @@ import argparse
 import json
 import os
 from pathlib import Path
+import queue
 import tempfile
 import threading
 import unittest
+import uuid
 from unittest.mock import patch
 
-from switchtrade.connection.distributed_endpoint import _closing_command, _config
+from switchtrade.connection.distributed_endpoint import (
+    _Commands,
+    _checkpoint_command,
+    _closing_command,
+    _config,
+)
 from switchtrade.connection.distributed_harness import (
     DistributedLifecycle,
     INVITATION_CONTRACT,
@@ -18,7 +25,7 @@ from switchtrade.connection.distributed_harness import (
     _recover_distributed,
 )
 from switchtrade.connection.p0_harness import _stable_error_code
-from switchtrade.connection.stage_session import StageSession
+from switchtrade.connection.stage_session import StageSession, StageSessionError
 from switchtrade.relay_client import RelayError
 
 
@@ -170,6 +177,27 @@ class DistributedContractTests(unittest.TestCase):
                     "action": "closing_intent",
                     "value": {**intent, "activation_generation": 2},
                 }, config)
+
+    def test_operator_continue_is_run_role_and_checkpoint_bound(self):
+        config = {"run_id": RUN_ID}
+        command = {
+            "action": "continue_checkpoint",
+            "checkpoint": "CREATE_SWITCH_ROOM",
+            "run_id": RUN_ID,
+        }
+        self.assertIsNone(_checkpoint_command(command, config, "CREATE_SWITCH_ROOM"))
+        for changed in (
+            {**command, "run_id": str(uuid.uuid4())},
+            {**command, "checkpoint": "JOIN_SWITCH_GROUP"},
+            {**command, "unexpected": True},
+        ):
+            with self.assertRaises(ValueError):
+                _checkpoint_command(changed, config, "CREATE_SWITCH_ROOM")
+
+        commands = object.__new__(_Commands)
+        commands.values = queue.Queue()
+        commands.values.put(command)
+        self.assertIsNone(commands.wait_checkpoint(config, "CREATE_SWITCH_ROOM", 1))
 
     def test_recovery_before_attempt_closes_owner_room_without_peer_prompt(self):
         class Coordinator:
@@ -449,6 +477,37 @@ class DistributedContractTests(unittest.TestCase):
             lifecycle._prompt("waiting")
         self.assertTrue(heartbeat.is_set())
 
+    def test_switch_checkpoint_prompts_before_endpoint_continue(self):
+        order = []
+
+        class Events:
+            @staticmethod
+            def send(value):
+                order.append(("send", value))
+
+        lifecycle = object.__new__(DistributedLifecycle)
+        lifecycle.session = {
+            "switch_role": "a_room_joiner", "test_id": "test-1",
+        }
+        lifecycle.run_context = {"run_id": RUN_ID}
+        lifecycle.last_gate = "C0_DATA_PLANE_PROVEN"
+        lifecycle._prompt = lambda message: order.append(("prompt", message))
+        lifecycle._continue_checkpoint(Events(), {
+            "event": "user_checkpoint", "checkpoint": "CREATE_SWITCH_ROOM",
+            "run_id": RUN_ID,
+        })
+        self.assertEqual([item[0] for item in order], ["prompt", "send"])
+        self.assertEqual(order[1][1], {
+            "action": "continue_checkpoint", "checkpoint": "CREATE_SWITCH_ROOM",
+            "run_id": RUN_ID,
+        })
+
+        with self.assertRaisesRegex(Exception, "changed run or role identity"):
+            lifecycle._continue_checkpoint(Events(), {
+                "event": "user_checkpoint", "checkpoint": "JOIN_SWITCH_GROUP",
+                "run_id": RUN_ID,
+            })
+
     def test_heartbeat_retries_only_explicit_room_version_conflict(self):
         class Relay:
             def __init__(self):
@@ -596,6 +655,32 @@ class StageSessionTests(unittest.TestCase):
         self.assertEqual(resources.transport, "transport")
         self.assertEqual(resources.advertisement, b"advertisement")
         session.stop()
+        session.stop()
+
+    def test_stage_failure_preserves_stable_code_gate_and_message(self):
+        class Stage:
+            session_handler = None
+
+            @staticmethod
+            async def run():
+                return ({
+                    "status": "failed",
+                    "failure": {
+                        "code": "A_ROOM_NOT_OBSERVED",
+                        "gate": "A1_ROOM_DETECTION",
+                        "message": "no Nintendo LDN room was observed",
+                    },
+                }, None)
+
+        session = StageSession(Stage(), timeout=1, stop_timeout=1).start()
+        with self.assertRaises(StageSessionError) as raised:
+            session.wait_ready()
+        self.assertEqual(raised.exception.code, "A_ROOM_NOT_OBSERVED")
+        self.assertEqual(raised.exception.gate, "A1_ROOM_DETECTION")
+        self.assertEqual(
+            raised.exception.message, "no Nintendo LDN room was observed",
+        )
+        self.assertIsNone(raised.exception.last_passed_gate)
         session.stop()
 
 

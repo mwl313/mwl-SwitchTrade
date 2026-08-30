@@ -980,8 +980,12 @@ async def _expire_v2_peer(session: V2Session, seat: SourceSeat, generation: int)
         expired = (session.peers[seat] is None and session.generations[seat] == generation)
     if not expired or v2_sessions.get((session.room_code, session.attempt_id)) is not session:
         return
-    authority.fail_transport_attempt(session.room_id, session.attempt_id, "relay.peer_lost")
-    _retire_v2_admission(session.room_code, session.attempt_id)
+    # D1 freezes the attempt before either endpoint disconnects. A normal D2-D5 teardown may
+    # outlive the reconnect window, so retain its launch binding until D6 (or the bounded D
+    # timeout) consumes it.
+    if authority.fail_transport_attempt(
+            session.room_id, session.attempt_id, "relay.peer_lost"):
+        _retire_v2_admission(session.room_code, session.attempt_id)
     await _disconnect_v2_session(session, "v2 peer reconnect deadline expired")
 
 
@@ -1427,10 +1431,9 @@ async def ws_attempt_v2(websocket: WebSocket, room_code: str, attempt_id: str) -
                         expire_targets.append((peer_seat, session.generations[peer_seat]))
             session.last_activity = time.monotonic()
         if fatal_code:
-            authority.fail_transport_attempt(
-                identity["room_id"], attempt_id, f"relay.{fatal_code.lower()}"
-            )
-            _retire_v2_admission(room_code, attempt_id)
+            if authority.fail_transport_attempt(
+                    identity["room_id"], attempt_id, f"relay.{fatal_code.lower()}"):
+                _retire_v2_admission(room_code, attempt_id)
             await _disconnect_v2_session(session, fatal_code)
         elif v2_sessions.get(key) is session:
             for target_seat, generation in expire_targets:

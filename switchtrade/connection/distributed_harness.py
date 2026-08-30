@@ -36,6 +36,10 @@ ROOM_CONTRACT = "room-control.v1"
 ROLES = {"a_room_joiner", "b_ap_host"}
 ACTIONS = {"end", "stop", "leave", "close"}
 TERMINAL_ATTEMPTS = {"completed", "canceled", "failed"}
+ROLE_CHECKPOINTS = {
+    "a_room_joiner": "CREATE_SWITCH_ROOM",
+    "b_ap_host": "JOIN_SWITCH_GROUP",
+}
 SOURCE_SHA = re.compile(r"[0-9a-f]{40}")
 RELAY_POLL_INTERVAL = 1.0
 RELAY_HEARTBEAT_INTERVAL = 10.0
@@ -471,6 +475,34 @@ class DistributedLifecycle:
             self.intent = intent
         return intent
 
+    def _continue_checkpoint(self, events, event: dict) -> None:
+        checkpoint = event.get("checkpoint")
+        expected = ROLE_CHECKPOINTS[self.session["switch_role"]]
+        if checkpoint != expected or event.get("run_id") != self.run_context["run_id"]:
+            raise P0Error(
+                "DISTRIBUTED_ENDPOINT_IDENTITY_MISMATCH", self.last_gate,
+                "distributed user checkpoint changed run or role identity",
+            )
+        if checkpoint == "CREATE_SWITCH_ROOM":
+            message = (
+                "On Switch A, open the trade room as Group Leader and leave it open. "
+                "Return to PC A and press Enter to start the bounded room scan: "
+            )
+        else:
+            message = (
+                "PC B has prepared the AP path. Press Enter to continue, then use Switch B "
+                "to choose Join Group before the association deadline: "
+            )
+        self._prompt(message)
+        events.send({
+            "action": "continue_checkpoint", "checkpoint": checkpoint,
+            "run_id": self.run_context["run_id"],
+        })
+        _status(
+            "checkpoint_continued", test_id=self.session["test_id"],
+            checkpoint=checkpoint,
+        )
+
     def drive(self, context: dict) -> dict:
         self.run_context = context
         events = context["events"]
@@ -512,6 +544,7 @@ class DistributedLifecycle:
                             "user_checkpoint", test_id=self.session["test_id"],
                             checkpoint=event.get("checkpoint"),
                         )
+                        self._continue_checkpoint(events, event)
                     elif kind == "functional_failed":
                         code = str(event.get("code") or "DISTRIBUTED_ENDPOINT_FAILED")
                         self.last_gate = str(event.get("gate") or self.last_gate)

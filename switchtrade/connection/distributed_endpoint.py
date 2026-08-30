@@ -43,6 +43,7 @@ ROLES = {"a_room_joiner", "b_ap_host"}
 SEATS = {"member_a", "member_b"}
 _CODE = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,95}")
 _GATE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}")
+CHECKPOINTS = {"CREATE_SWITCH_ROOM", "JOIN_SWITCH_GROUP"}
 
 
 def _emit(event: str, **value: object) -> None:
@@ -121,6 +122,24 @@ class _Commands:
             raise value
         return value
 
+    def wait_checkpoint(self, config: dict, checkpoint: str, timeout: float) -> None:
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                error = TimeoutError("distributed operator checkpoint expired")
+                error.code = "DISTRIBUTED_CHECKPOINT_TIMEOUT"
+                error.gate = checkpoint
+                raise error
+            try:
+                value = self.values.get(timeout=min(0.25, remaining))
+            except queue.Empty:
+                continue
+            if isinstance(value, BaseException):
+                raise value
+            _checkpoint_command(value, config, checkpoint)
+            return
+
 
 def _connection(transport: object, role: str):
     our_var = max(2, int.from_bytes(os.urandom(2), "big"))
@@ -177,6 +196,18 @@ def _closing_command(command: dict, config: dict) -> dict:
     return value
 
 
+def _checkpoint_command(command: dict, config: dict, checkpoint: str) -> None:
+    if (
+        checkpoint not in CHECKPOINTS
+        or not isinstance(command, dict)
+        or set(command) != {"action", "checkpoint", "run_id"}
+        or command.get("action") != "continue_checkpoint"
+        or command.get("checkpoint") != checkpoint
+        or command.get("run_id") != config["run_id"]
+    ):
+        raise ValueError("distributed endpoint checkpoint command is stale or invalid")
+
+
 def run(args: argparse.Namespace) -> int:
     if process_start_ticks() != args.process_start_ticks:
         _emit("endpoint_failed", code="DISTRIBUTED_ENDPOINT_IDENTITY_MISMATCH", gate="C0")
@@ -212,6 +243,8 @@ def run(args: argparse.Namespace) -> int:
         c_stage.connect(args.relay_timeout)
         if config["switch_role"] == "a_room_joiner":
             _emit("user_checkpoint", checkpoint="CREATE_SWITCH_ROOM", run_id=args.run_id)
+            commands.wait_checkpoint(config, "CREATE_SWITCH_ROOM", args.room_timeout)
+            _emit("checkpoint_continued", checkpoint="CREATE_SWITCH_ROOM", run_id=args.run_id)
             stage = DirectAStage(
                 run_id=args.run_id, release=args.release, phy=args.phy,
                 ifname=args.station_ifname, keys_path=args.keys,
@@ -232,6 +265,11 @@ def run(args: argparse.Namespace) -> int:
                 _emit("b_gate_passed", run_id=args.run_id, **item)
                 if item["gate"] == "B5_AP_MONITOR_TAP_CREATION":
                     _emit("user_checkpoint", checkpoint="JOIN_SWITCH_GROUP", run_id=args.run_id)
+                    commands.wait_checkpoint(config, "JOIN_SWITCH_GROUP", args.room_timeout)
+                    _emit(
+                        "checkpoint_continued", checkpoint="JOIN_SWITCH_GROUP",
+                        run_id=args.run_id,
+                    )
 
             stage = DirectBStage(
                 run_id=args.run_id, release=args.release, phy=args.phy,
@@ -303,8 +341,13 @@ def run(args: argparse.Namespace) -> int:
             time.sleep(max(0, deadline - time.monotonic()))
     except Exception as error:
         code = getattr(error, "code", "DISTRIBUTED_ENDPOINT_FAILED")
-        gate = getattr(error, "gate", last_gate)
-        _emit("functional_failed", run_id=args.run_id, code=str(code), gate=str(gate))
+        gate = getattr(error, "last_passed_gate", None) or last_gate
+        failure_gate = getattr(error, "gate", None)
+        failure = {"failure_gate": str(failure_gate)} if failure_gate is not None else {}
+        _emit(
+            "functional_failed", run_id=args.run_id, code=str(code), gate=str(gate),
+            **failure,
+        )
         deadline = time.monotonic() + args.closing_timeout
         while closing_intent is None and time.monotonic() < deadline:
             command = commands.poll()
