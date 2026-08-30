@@ -232,6 +232,21 @@ class MeasuredD5ControlTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "D_ENDPOINT_IDENTITY_MISMATCH")
         self.assertEqual(relay.calls, [])
 
+    def test_missing_endpoint_report_cannot_publish_d5(self):
+        run = self.prepare_run()
+        report_path = self.write_endpoint_report(run)
+        report_path.unlink()
+        relay = FakeRelay()
+        control = self.control(
+            run, relay, report_path,
+            process_probe=lambda _pid: None,
+            radio_probe=lambda _identity: {"status": "quiescent", "owned_interfaces": 0},
+        )
+        with self.assertRaises(DControlError) as caught:
+            control.acknowledge(self.authority_room(run))
+        self.assertEqual(caught.exception.code, "D_ENDPOINT_REPORT_INVALID")
+        self.assertEqual(relay.calls, [])
+
     def test_c_harness_has_no_radio_claim_and_does_not_require_a_probe(self):
         run = self.prepare_run(RunMode.C_HARNESS)
         report_path = self.write_endpoint_report(run)

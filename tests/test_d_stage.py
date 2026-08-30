@@ -223,6 +223,21 @@ class EndpointDStageTests(unittest.TestCase):
         self.assertEqual([item["gate"] for item in gates], [GATES[0], GATES[2]])
         self.assertEqual((bridge.drains, bridge.stops, transport.stops), (1, 1, 1))
 
+    def test_d4_fault_preserves_the_frozen_primary_result(self):
+        gates = []
+        report = self.stage(
+            simulation=Simulation(disconnect_after=1), bridge=Bridge(),
+            observer=Observer(), transport=Transport("LDN thread did not exit"),
+            clock=Clock(), gates=gates, closing_intent=intent("failed"),
+        ).run()
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["primary_failure_code"], "C_RFU_LOST")
+        self.assertEqual(report["failures"], [{
+            "code": "D_LDN_TEARDOWN_FAILED", "gate": GATES[2],
+            "message": "LDN thread did not exit",
+        }])
+        self.assertEqual([item["gate"] for item in gates], [GATES[0], GATES[1]])
+
     def test_completed_intent_requires_trade_complete(self):
         invalid = intent("completed")
         invalid["last_passed_gate"] = "C_RFU_ACTIVE"

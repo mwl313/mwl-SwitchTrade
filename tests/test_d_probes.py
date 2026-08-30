@@ -5,6 +5,7 @@ import tempfile
 import unittest
 
 from switchtrade.connection import DProbeError, WslDProbes
+from switchtrade.connection.d_probes import verify_stable_radio_quiescence
 
 
 class FakeRunner:
@@ -109,6 +110,28 @@ class WslDProbesTests(unittest.TestCase):
             distro="SwitchTrade", packaged_python="python3", runner=malformed)
         with self.assertRaises(DProbeError):
             probes.process_start_ticks(5001)
+
+    def test_d9_active_sample_resets_the_required_clean_streak(self):
+        now = [0.0]
+        clean = {
+            "status": "quiescent", "owned_interfaces": 0,
+            "driver_threads": 0, "phy_active": False,
+        }
+        values = [clean, {**clean, "status": "active", "owned_interfaces": 1},
+                  clean, clean, clean]
+        calls = []
+
+        def probe(_identity):
+            calls.append(len(calls))
+            return values[len(calls) - 1]
+
+        evidence, passed = verify_stable_radio_quiescence(
+            probe, self.identity(), stable_samples=3, sample_interval=0.1, timeout=1,
+            monotonic=lambda: now[0], sleep=lambda seconds: now.__setitem__(0, now[0] + seconds),
+        )
+        self.assertTrue(passed)
+        self.assertEqual(evidence, clean)
+        self.assertEqual(len(calls), 5)
 
     def test_probe_identity_and_private_path_inventory_are_bounded(self):
         with self.assertRaises(ValueError):

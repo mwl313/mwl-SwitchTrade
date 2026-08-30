@@ -213,6 +213,22 @@ class LocalDReleaseTests(unittest.TestCase):
         with self.assertRaises(Exception):
             self.coordinator.start(RunMode.C_HARNESS)
 
+    def test_d8_probe_exception_is_unknown_and_never_returns_usb(self):
+        run, room, d5_path = self.prepare()
+        events = []
+
+        def unavailable(_identity):
+            events.append("D8")
+            raise RuntimeError("WSL probe unavailable")
+
+        _worker, result = self.release(
+            run, room, d5_path, events=events,
+            launch_probe=unavailable, lease=FakeLease(events))
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["report"]["failures"][0]["code"], "D_ENDPOINT_UNVERIFIED")
+        self.assertEqual(result["report"]["evidence"]["launch"]["status"], "unknown")
+        self.assertNotIn("D10", events)
+
     def test_unknown_radio_state_never_detaches_usb(self):
         run, room, d5_path = self.prepare()
         events = []
@@ -361,6 +377,21 @@ class LocalDReleaseTests(unittest.TestCase):
         self.assertEqual(result["run"]["functional"]["status"], "canceled")
         self.assertTrue(result["run"]["recovery_required"])
 
+    def test_partial_d10_evidence_is_not_treated_as_usb_return(self):
+        run, room, d5_path = self.prepare()
+        events = []
+        incomplete = FakeLease(events, result={
+            "prior_state_restored": True,
+            "windows_state_verified": True,
+            "linux_state_verified": False,
+            "detached_by_run": True,
+        })
+        _worker, result = self.release(
+            run, room, d5_path, events=events, lease=incomplete)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["report"]["failures"][0]["code"], "D_USB_RETURN_UNVERIFIED")
+        self.assertTrue(result["run"]["recovery_required"])
+
     def test_lost_d11_response_repairs_report_without_repeating_release(self):
         run, room, d5_path = self.prepare()
         events = []
@@ -398,6 +429,41 @@ class LocalDReleaseTests(unittest.TestCase):
         self.assertEqual(recovered["status"], "passed")
         self.assertEqual(recovered["report"]["last_passed_gate"], "D11_RELEASE")
         self.assertFalse(d5_path.exists())
+        self.assertEqual(events, ["D8", "D9", "D9", "D9", "D10"])
+
+    def test_lost_d11_response_with_corrupt_report_fails_closed_without_repeating_release(self):
+        run, room, d5_path = self.prepare()
+        events = []
+
+        class LostResponseCoordinator:
+            def __init__(self, inner):
+                self.inner = inner
+
+            def __getattr__(self, name):
+                return getattr(self.inner, name)
+
+            def complete_cleanup(self, *args, **kwargs):
+                self.inner.complete_cleanup(*args, **kwargs)
+                raise RuntimeError("D11 response lost")
+
+        release_path = self.root / run["run_id"] / "d-local-release.json"
+        worker = LocalDRelease(
+            coordinator=LostResponseCoordinator(self.coordinator), run_id=run["run_id"],
+            d5_state_path=d5_path, release_state_path=release_path,
+            launch_probe=self.launch_absent(events), radio_probe=self.radio_quiescent(events),
+            usb_lease=FakeLease(events), stable_samples=3,
+            sample_interval=0.1, radio_timeout=0.3,
+            monotonic=FakeClock().monotonic, sleep=lambda _seconds: None,
+        )
+        with self.assertRaisesRegex(RuntimeError, "response lost"):
+            worker.release(room)
+        persisted = json.loads(release_path.read_text(encoding="utf-8"))
+        persisted["unexpected"] = True
+        release_path.write_text(json.dumps(persisted), encoding="utf-8")
+        worker.coordinator = self.coordinator
+        with self.assertRaises(DControlError) as caught:
+            worker.release(room)
+        self.assertEqual(caught.exception.code, "D_RELEASE_REPORT_INVALID")
         self.assertEqual(events, ["D8", "D9", "D9", "D9", "D10"])
 
     def test_final_report_projection_matches_strict_contract(self):

@@ -96,6 +96,69 @@ class ProductionDiagnosticsTests(unittest.TestCase):
             self.assertEqual(events, ["peer", "room", "room"])
             self.assertFalse(credential.exists())
 
+    def test_d7_peer_failure_does_not_skip_room_or_credential_cleanup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            events = []
+            credential = Path(temporary) / "member-token"
+            credential.write_text("private", encoding="utf-8")
+
+            class Peer:
+                def __init__(self):
+                    self.calls = 0
+
+                def stop(self):
+                    self.calls += 1
+                    events.append("peer")
+                    if self.calls == 1:
+                        raise RuntimeError("peer stop timed out")
+
+            owner = DiagnosticD7Resources(
+                close_room=lambda _room: events.append("room"),
+                update_recovery=lambda **_value: None,
+            )
+            owner.register_room({"room_id": "room-1", "owner_token": "private"})
+            owner.register_peer(Peer())
+            owner.register_credential(credential)
+
+            self.assertEqual(owner.cleanup(), {
+                "synthetic_peer_stopped": False,
+                "temporary_room_closed": True,
+                "credential_file_absent": True,
+            })
+            self.assertFalse(credential.exists())
+            self.assertEqual(owner.cleanup(), {
+                "synthetic_peer_stopped": True,
+                "temporary_room_closed": True,
+                "credential_file_absent": True,
+            })
+            self.assertEqual(events, ["peer", "room", "peer"])
+
+    def test_d7_credential_delete_failure_is_retryable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            credential = Path(temporary) / "member-token"
+            credential.write_text("private", encoding="utf-8")
+            owner = DiagnosticD7Resources(
+                close_room=lambda _room: None,
+                update_recovery=lambda **_value: None,
+            )
+            owner.register_credential(credential)
+            original_unlink = Path.unlink
+            attempts = 0
+
+            def flaky_unlink(path, *args, **kwargs):
+                nonlocal attempts
+                if path == credential:
+                    attempts += 1
+                    if attempts == 1:
+                        raise PermissionError("credential is temporarily busy")
+                return original_unlink(path, *args, **kwargs)
+
+            with patch.object(Path, "unlink", new=flaky_unlink):
+                self.assertFalse(owner.cleanup()["credential_file_absent"])
+                self.assertTrue(owner.cleanup()["credential_file_absent"])
+            self.assertFalse(credential.exists())
+            self.assertEqual(attempts, 2)
+
     def _wait(self, diagnostics: ProductionDiagnostics, run_id: str, status: str) -> dict:
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:

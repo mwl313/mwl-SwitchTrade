@@ -538,6 +538,43 @@ class AuthoritativeRoomTests(unittest.TestCase):
             terminal["attempt"]["d"]["secondary_failure_code"], "D_RELAY_RESTART")
         self.assertEqual(relay_server.authority.fail_active_attempts("relay.restart"), 0)
 
+    def test_d1_response_loss_replay_after_relay_restart_does_not_change_outcome(self):
+        first = self._create()
+        second = self._join(first["room"]["room_code"])
+        room_id = first["room"]["room_id"]
+        for credential, role in ((first, "creator"), (second, "finder")):
+            room = self._mutate(room_id, credential["member_token"], "/ready", {
+                "ready": True, "switch_room_role": role,
+            }).json()
+        attempt = room["attempt"]
+        command_id = _command()
+        payload = {
+            "contract_version": "d-closing-intent.v1",
+            "attempt_id": attempt["attempt_id"],
+            "activation_generation": attempt["activation_generation"],
+            "outcome": "canceled", "primary_failure_code": None,
+            "last_passed_gate": "C_BRIDGE_READY",
+        }
+        relay_server.authority.begin_d_closing(
+            room_id, first["member_token"], command_id, attempt["attempt_id"],
+            payload, room["room_version"],
+        )
+
+        relay_server.authority.close()
+        relay_server.authority = AuthorityStore(self.database)
+        self.assertEqual(relay_server.authority.fail_active_attempts("relay.restart"), 1)
+        before = relay_server.authority.snapshot(room_id, first["member_token"])
+        relay_server.authority.begin_d_closing(
+            room_id, first["member_token"], command_id, attempt["attempt_id"],
+            payload, room["room_version"],
+        )
+        after = relay_server.authority.snapshot(room_id, first["member_token"])
+        self.assertEqual(after["room_version"], before["room_version"])
+        self.assertEqual(after["attempt"]["phase"], "canceled")
+        self.assertEqual(after["attempt"]["d"]["outcome"], "canceled")
+        self.assertEqual(
+            after["attempt"]["d"]["secondary_failure_code"], "D_RELAY_RESTART")
+
     def test_distributed_d_authority_projection_matches_strict_schema(self):
         schema = json.loads((
             Path(__file__).resolve().parents[1] / "contracts" / "abcd" /
