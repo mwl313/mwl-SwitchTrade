@@ -37,34 +37,44 @@ git fetch origin codex/abcd-orchestration-rework
 git switch --detach 0caafce6803549fa26a50bb7c2d34e16a54c71a3
 git status --short
 
-$manifestPath = Join-Path $env:LOCALAPPDATA 'Programs\SwitchTrade\release-manifest.json'
-$activePath = Join-Path $env:LOCALAPPDATA 'SwitchTrade\state\active-runtime.json'
-$selectionPath = Join-Path $env:LOCALAPPDATA 'SwitchTrade\runtime\hardware-selection.json'
-$manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
-$active = Get-Content -Raw -LiteralPath $activePath | ConvertFrom-Json
-$selection = Get-Content -Raw -LiteralPath $selectionPath | ConvertFrom-Json
+$bridgeDistro = @((@(& wsl.exe --list --quiet) -replace ([char]0), '') |
+  Where-Object { $_ -like 'SwitchTrade-*' })[0]
+if (-not $bridgeDistro) { throw 'No installed SwitchTrade runtime' }
+$localAppDataWsl = (& wsl.exe -d $bridgeDistro -u root -- wslpath -u `
+  $env:LOCALAPPDATA.Replace('\','/')).Trim()
+$active = ((& wsl.exe -d $bridgeDistro -u root -- cat `
+  "$localAppDataWsl/SwitchTrade/state/active-runtime.json") | Out-String) | ConvertFrom-Json
+$manifest = ((& wsl.exe -d $bridgeDistro -u root -- cat `
+  "$localAppDataWsl/Programs/SwitchTrade/release-manifest.json") | Out-String) | ConvertFrom-Json
+$activeDistro = $active.active_runtime
+$selectionWsl = "$localAppDataWsl/SwitchTrade/runtime/hardware-selection.json"
+$selection = "\\wsl.localhost\$activeDistro$($selectionWsl.Replace('/','\'))"
+$selectionValue = Get-Content -Raw -LiteralPath $selection | ConvertFrom-Json
 
 if ((git rev-parse HEAD) -ne '0caafce6803549fa26a50bb7c2d34e16a54c71a3') { throw 'Wrong source' }
 if (git status --short) { throw 'Source tree is dirty' }
 if ($manifest.release_id -ne 'beta-0caafce68035') { throw 'Wrong installed release' }
 if ($active.release_id -ne 'beta-0caafce68035') { throw 'Wrong active runtime' }
-if ($selection.usb_id -ne '0bda:818b') { throw 'Wrong or absent adapter selection' }
+if ($selectionValue.usb_id -ne '0bda:818b') { throw 'Wrong or absent adapter selection' }
+if (((& wsl.exe -d $activeDistro -u root -- cat /opt/switchtrade/.switchtrade-release.json |
+    Out-String) | ConvertFrom-Json).release_id -ne 'beta-0caafce68035') {
+  throw 'Runtime marker mismatch'
+}
 
 $health = Invoke-RestMethod 'https://relay.pangyostonefist.org/health'
 if ($health.status -ne 'ready' -or $health.room_contract -ne 'room-control.v1' -or
     $health.rfu_contracts -notcontains 'rfu-tunnel.v2') { throw 'Relay contract unavailable' }
 ```
 
-The setup UI may be used only to install the immutable runtime and authorize the local adapter. It
-does not control the test. A missing `hardware-selection.json` is normal only before that one-time
-local adapter selection; the physical runner intentionally refuses to guess a device.
+The setup UI may be used only to install the immutable runtime and authorize/select the local
+adapter. It does not control the test. A missing `hardware-selection.json` is normal only before that
+one-time local adapter selection; the physical runner intentionally refuses to guess a device.
+Codex Desktop may virtualize direct `%LOCALAPPDATA%` access. The commands above deliberately read the
+real host installation through WSL and pass that same non-virtualized selection file to the runner.
 
 Define the common command inputs on each PC:
 
 ```powershell
-$active = Get-Content -Raw (Join-Path $env:LOCALAPPDATA 'SwitchTrade\state\active-runtime.json') |
-  ConvertFrom-Json
-$selection = Join-Path $env:LOCALAPPDATA 'SwitchTrade\runtime\hardware-selection.json'
 $python = '.\.audit-venv\Scripts\python.exe'
 ```
 
@@ -75,7 +85,7 @@ PC A starts first:
 ```powershell
 $stateRoot = Join-Path $env:LOCALAPPDATA 'SwitchTrade\qualification-m7-distributed\D-PHYS-1'
 & $python -m switchtrade.connection.distributed_harness `
-  --distro $active.active_runtime --runtime-root /opt/switchtrade `
+  --distro $activeDistro --runtime-root /opt/switchtrade `
   --selection-file $selection --state-root $stateRoot `
   create --role a_room_joiner --action end
 ```
@@ -85,7 +95,7 @@ PC A securely transfers only the printed `ONE_TIME_INVITATION=...` value to PC B
 ```powershell
 $stateRoot = Join-Path $env:LOCALAPPDATA 'SwitchTrade\qualification-m7-distributed\D-PHYS-1'
 & $python -m switchtrade.connection.distributed_harness `
-  --distro $active.active_runtime --runtime-root /opt/switchtrade `
+  --distro $activeDistro --runtime-root /opt/switchtrade `
   --selection-file $selection --state-root $stateRoot `
   join --invitation '<ONE_TIME_INVITATION_FROM_PC_A>'
 ```
@@ -103,7 +113,7 @@ Use a fresh state root. PC A starts:
 ```powershell
 $stateRoot = Join-Path $env:LOCALAPPDATA 'SwitchTrade\qualification-m7-distributed\D-PHYS-2'
 & $python -m switchtrade.connection.distributed_harness `
-  --distro $active.active_runtime --runtime-root /opt/switchtrade `
+  --distro $activeDistro --runtime-root /opt/switchtrade `
   --selection-file $selection --state-root $stateRoot `
   create --role b_ap_host --action close
 ```
@@ -130,7 +140,7 @@ On that PC rerun the same common arguments and state root with:
 
 ```powershell
 & $python -m switchtrade.connection.distributed_harness `
-  --distro $active.active_runtime --runtime-root /opt/switchtrade `
+  --distro $activeDistro --runtime-root /opt/switchtrade `
   --selection-file $selection --state-root $stateRoot recover
 ```
 

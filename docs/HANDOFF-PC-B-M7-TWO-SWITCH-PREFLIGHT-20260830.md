@@ -14,8 +14,8 @@ tests.
 
 1. Download `SwitchTradeSetup.exe` from `v0.2.7-beta.1` and verify SHA-256
    `a5cec5a92b42a75d7c7df59e15053ac6a849d617986f84fe41c7f0ab2ee7db1e`.
-2. Install it, authorize PC B's own RTL8192EU adapter once if setup asks, and close the SwitchTrade
-   GUI.
+2. Install it, open the installed app once, authorize/select PC B's own RTL8192EU adapter, and close
+   the SwitchTrade GUI.
 3. In PC B's clean clone run:
 
 ```powershell
@@ -23,18 +23,29 @@ git fetch origin codex/abcd-orchestration-rework
 git switch --detach 0caafce6803549fa26a50bb7c2d34e16a54c71a3
 git status --short
 
-$manifestPath = Join-Path $env:LOCALAPPDATA 'Programs\SwitchTrade\release-manifest.json'
-$activePath = Join-Path $env:LOCALAPPDATA 'SwitchTrade\state\active-runtime.json'
-$selectionPath = Join-Path $env:LOCALAPPDATA 'SwitchTrade\runtime\hardware-selection.json'
-$manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
-$active = Get-Content -Raw -LiteralPath $activePath | ConvertFrom-Json
-$selection = Get-Content -Raw -LiteralPath $selectionPath | ConvertFrom-Json
+$bridgeDistro = @((@(& wsl.exe --list --quiet) -replace ([char]0), '') |
+  Where-Object { $_ -like 'SwitchTrade-*' })[0]
+if (-not $bridgeDistro) { throw 'No installed SwitchTrade runtime' }
+$localAppDataWsl = (& wsl.exe -d $bridgeDistro -u root -- wslpath -u `
+  $env:LOCALAPPDATA.Replace('\','/')).Trim()
+$active = ((& wsl.exe -d $bridgeDistro -u root -- cat `
+  "$localAppDataWsl/SwitchTrade/state/active-runtime.json") | Out-String) | ConvertFrom-Json
+$manifest = ((& wsl.exe -d $bridgeDistro -u root -- cat `
+  "$localAppDataWsl/Programs/SwitchTrade/release-manifest.json") | Out-String) | ConvertFrom-Json
+$activeDistro = $active.active_runtime
+$selectionWsl = "$localAppDataWsl/SwitchTrade/runtime/hardware-selection.json"
+$selection = "\\wsl.localhost\$activeDistro$($selectionWsl.Replace('/','\'))"
+$selectionValue = Get-Content -Raw -LiteralPath $selection | ConvertFrom-Json
 
 if ((git rev-parse HEAD) -ne '0caafce6803549fa26a50bb7c2d34e16a54c71a3') { throw 'Wrong source' }
 if (git status --short) { throw 'Source tree is dirty' }
 if ($manifest.release_id -ne 'beta-0caafce68035') { throw 'Wrong installed release' }
 if ($active.release_id -ne 'beta-0caafce68035') { throw 'Wrong active runtime' }
-if ($selection.usb_id -ne '0bda:818b') { throw 'Wrong or absent local adapter selection' }
+if ($selectionValue.usb_id -ne '0bda:818b') { throw 'Wrong or absent local adapter selection' }
+if (((& wsl.exe -d $activeDistro -u root -- cat /opt/switchtrade/.switchtrade-release.json |
+    Out-String) | ConvertFrom-Json).release_id -ne 'beta-0caafce68035') {
+  throw 'Runtime marker mismatch'
+}
 
 $health = Invoke-RestMethod 'https://relay.pangyostonefist.org/health'
 if ($health.status -ne 'ready' -or $health.room_contract -ne 'room-control.v1' -or
@@ -61,14 +72,11 @@ data.
 Wait for the fresh one-time invitation from PC A. Then, from the detached canonical source:
 
 ```powershell
-$active = Get-Content -Raw (Join-Path $env:LOCALAPPDATA 'SwitchTrade\state\active-runtime.json') |
-  ConvertFrom-Json
-$selection = Join-Path $env:LOCALAPPDATA 'SwitchTrade\runtime\hardware-selection.json'
 $python = '.\.audit-venv\Scripts\python.exe'
 $stateRoot = Join-Path $env:LOCALAPPDATA 'SwitchTrade\qualification-m7-distributed\D-PHYS-1'
 
 & $python -m switchtrade.connection.distributed_harness `
-  --distro $active.active_runtime --runtime-root /opt/switchtrade `
+  --distro $activeDistro --runtime-root /opt/switchtrade `
   --selection-file $selection --state-root $stateRoot `
   join --invitation '<ONE_TIME_INVITATION_FROM_PC_A>'
 ```
