@@ -15,6 +15,7 @@ from switchtrade.connection import (
     SwitchRole,
 )
 from switchtrade.connection.p0 import atomic_json
+from switchtrade.production_diagnostics import DiagnosticD7Resources
 from switchtrade.relay_client import RelayClient
 
 
@@ -241,21 +242,29 @@ class LocalDReleaseTests(unittest.TestCase):
     def test_diagnostic_resources_are_required_and_failure_does_not_skip_safe_local_checks(self):
         run, room, d5_path = self.prepare(RunMode.DIAGNOSTIC_A)
         events = []
+        token = self.root / "member-token"
+        token.write_text("private", encoding="utf-8")
 
-        def diagnostic_cleanup():
-            events.append("D7")
-            return {
-                "synthetic_peer_stopped": True,
-                "temporary_room_closed": False,
-                "credential_file_absent": True,
-            }
+        class Peer:
+            def stop(self):
+                events.append("D7")
+
+        def room_failure(_room):
+            raise RuntimeError("relay unavailable")
+
+        resources = DiagnosticD7Resources(
+            close_room=room_failure, update_recovery=lambda **_value: None)
+        resources.register_room({"room_id": "room-1", "owner_token": "private"})
+        resources.register_peer(Peer())
+        resources.register_credential(token)
 
         _worker, result = self.release(
             run, room, d5_path, events=events, lease=FakeLease(events),
-            diagnostic_cleanup=diagnostic_cleanup)
+            diagnostic_cleanup=resources.cleanup)
         self.assertEqual(result["status"], "failed")
         self.assertEqual(events, ["D7", "D8", "D9", "D9", "D9", "D10"])
         self.assertEqual(result["report"]["failures"][0]["code"], "D_DIAGNOSTIC_CLEANUP_FAILED")
+        self.assertFalse(token.exists())
 
     def test_d6_must_contain_the_exact_persisted_local_d5(self):
         run, room, d5_path = self.prepare()

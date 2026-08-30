@@ -18,12 +18,84 @@ from switchtrade.control import create_app
 from switchtrade.diagnostics import RunLogger
 from switchtrade.relay_client import RelayError
 from switchtrade.production_diagnostics import (
-    AP_FIXTURE, DIAGNOSTIC_CONTRACT, DiagnosticFailure, ProductionDiagnostics,
-    diagnostic_member_pair, fixture_metadata,
+    AP_FIXTURE, DIAGNOSTIC_CONTRACT, DiagnosticD7Resources, DiagnosticFailure,
+    ProductionDiagnostics, diagnostic_member_pair, fixture_metadata,
 )
 
 
 class ProductionDiagnosticsTests(unittest.TestCase):
+    def test_d7_owner_releases_each_resource_once_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            events = []
+            updates = []
+            credential = Path(temporary) / "member-token"
+            credential.write_text("private", encoding="utf-8")
+
+            class Peer:
+                def stop(self):
+                    events.append("peer")
+
+            owner = DiagnosticD7Resources(
+                close_room=lambda room: events.append(("room", room["room_id"])),
+                update_recovery=lambda **value: updates.append(value),
+            )
+            owner.register_room({"room_id": "room-1", "owner_token": "private"})
+            owner.register_peer(Peer())
+            owner.register_credential(credential)
+
+            first = owner.cleanup()
+            second = owner.cleanup()
+
+            self.assertEqual(first, {
+                "synthetic_peer_stopped": True,
+                "temporary_room_closed": True,
+                "credential_file_absent": True,
+            })
+            self.assertEqual(second, first)
+            self.assertEqual(events, ["peer", ("room", "room-1")])
+            self.assertFalse(credential.exists())
+            self.assertEqual(updates[-2:], [{"room": None}, {"token_file": None}])
+
+    def test_d7_owner_retries_only_the_resource_that_failed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            events = []
+            credential = Path(temporary) / "member-token"
+            credential.write_text("private", encoding="utf-8")
+
+            class Peer:
+                def stop(self):
+                    events.append("peer")
+
+            room_attempts = 0
+
+            def close_room(_room):
+                nonlocal room_attempts
+                room_attempts += 1
+                events.append("room")
+                if room_attempts == 1:
+                    raise RelayError("temporary failure", status=503)
+
+            owner = DiagnosticD7Resources(
+                close_room=close_room,
+                update_recovery=lambda **_value: None,
+            )
+            owner.register_room({"room_id": "room-1", "owner_token": "private"})
+            owner.register_peer(Peer())
+            owner.register_credential(credential)
+
+            self.assertEqual(owner.cleanup(), {
+                "synthetic_peer_stopped": True,
+                "temporary_room_closed": False,
+                "credential_file_absent": True,
+            })
+            self.assertEqual(owner.cleanup(), {
+                "synthetic_peer_stopped": True,
+                "temporary_room_closed": True,
+                "credential_file_absent": True,
+            })
+            self.assertEqual(events, ["peer", "room", "room"])
+            self.assertFalse(credential.exists())
+
     def _wait(self, diagnostics: ProductionDiagnostics, run_id: str, status: str) -> dict:
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
@@ -366,7 +438,7 @@ class ProductionDiagnosticsTests(unittest.TestCase):
 
             def room_command(_room_id, token, path, payload=None, **kwargs):
                 if kwargs.get("method") == "DELETE":
-                    return {"status": "closed"}
+                    return {"state": "closed"}
                 self.assertEqual(path, "/ready")
                 current["roles"][token] = payload["switch_room_role"]
                 current["version"] += 1

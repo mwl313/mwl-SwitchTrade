@@ -1638,7 +1638,7 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                     "switchtrade.control.RelayClient.room",
                     return_value={"room_version": 4}), patch(
                     "switchtrade.control.RelayClient.room_command",
-                    return_value={"status": "closed"}) as close:
+                    return_value={"state": "closed"}) as close:
                 with TestClient(create_app(runs_root=temporary)) as client:
                     self.assertFalse(guard.exists())
                     self.assertFalse(token_file.exists())
@@ -1649,6 +1649,44 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                     self.assertTrue(recovered["cleanup"]["recovered"])
                     close.assert_called_once()
         self.assertFalse(attached)
+
+    def test_startup_recovery_confirms_room_closed_after_owner_token_was_retired(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime_root = root / "runtime"
+            runtime_root.mkdir()
+            old_run = root / "20260829T000000Z-oldrun" / "production-diagnostics" / "diag-run"
+            old_run.mkdir(parents=True)
+            report = old_run / "production-diagnostic-report.json"
+            report.write_text(json.dumps({
+                "contract_version": "production-diagnostic.v1", "run_id": "diag-run",
+                "status": "running", "cleanup": {"status": "pending"},
+            }), encoding="utf-8")
+            guard = runtime_root / "production-diagnostic-recovery.json"
+            guard.write_text(json.dumps({
+                "schema": 1, "run_id": "diag-run", "report_path": str(report.resolve()),
+                "status": "active", "adapter": None,
+                "room": {
+                    "room_id": "room-1", "owner_token": "retired-owner",
+                    "owner_reconnect_token": "owner-reconnect",
+                },
+            }), encoding="utf-8")
+
+            with patch("switchtrade.control.RelayClient.room", side_effect=RelayError(
+                    "member credential is invalid", status=401,
+                    code="member_credential_invalid")), patch(
+                    "switchtrade.control.RelayClient.reconnect_trade_room",
+                    side_effect=RelayError(
+                        "trade room is not active", status=410, code="room_not_active"),
+                    ) as reconnect, patch(
+                    "switchtrade.control.RelayClient.room_command") as close:
+                with TestClient(create_app(runs_root=temporary)):
+                    self.assertFalse(guard.exists())
+
+            recovered = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(recovered["cleanup"]["status"], "passed")
+            reconnect.assert_called_once_with("room-1", "owner-reconnect")
+            close.assert_not_called()
 
     def test_parallel_room_poll_and_connect_attach_and_launch_once(self):
         instance_id = r"USB\VID_0BDA&PID_818B\RADIO-B"

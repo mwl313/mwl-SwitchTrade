@@ -30,7 +30,7 @@ from switchtrade.endpoint import runtime_plan
 from switchtrade.hardware import DEFAULT_PROFILE_PATH, host_engines_public, load_profiles
 from switchtrade.process_guard import AlreadyRunningError, SingleInstanceLock
 from switchtrade.production_diagnostics import (
-    AP_FIXTURE, DIAGNOSTIC_CONTRACT, DEFINITIONS, DiagnosticFailure,
+    AP_FIXTURE, DIAGNOSTIC_CONTRACT, DEFINITIONS, DiagnosticD7Resources, DiagnosticFailure,
     ProductionDiagnostics, SyntheticDiagnosticPeer, TIMEOUTS, diagnostic_member_pair,
     fixture_metadata,
 )
@@ -360,17 +360,19 @@ class Runtime:
         self.owned_hardware = None
 
     def read_endpoint(self) -> dict:
-        try:
-            value = json.loads(self.endpoint_state.read_text(encoding="utf-8"))
-            return value if isinstance(value, dict) else {}
-        except (OSError, ValueError):
-            return {}
+        with self.lock:
+            try:
+                value = json.loads(self.endpoint_state.read_text(encoding="utf-8"))
+                return value if isinstance(value, dict) else {}
+            except (OSError, ValueError):
+                return {}
 
     def write_endpoint(self, value: dict) -> None:
-        temporary = self.endpoint_state.with_suffix(".tmp")
-        temporary.write_text(
-            json.dumps(value, separators=(",", ":")) + "\n", encoding="utf-8")
-        temporary.replace(self.endpoint_state)
+        with self.lock:
+            temporary = self.endpoint_state.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps(value, separators=(",", ":")) + "\n", encoding="utf-8")
+            temporary.replace(self.endpoint_state)
 
     def current_launch_generation(self) -> int:
         with self.lock:
@@ -739,11 +741,12 @@ class Runtime:
         return {"endpoint_stopped": True, "endpoint_forced": forced}
 
     def clear_session_state(self) -> None:
-        self.endpoint_state.unlink(missing_ok=True)
-        self.party_state.unlink(missing_ok=True)
-        self.endpoint_launch_ack.unlink(missing_ok=True)
-        self.endpoint_session = None
-        self.last_published_phase = None
+        with self.lock:
+            self.endpoint_state.unlink(missing_ok=True)
+            self.party_state.unlink(missing_ok=True)
+            self.endpoint_launch_ack.unlink(missing_ok=True)
+            self.endpoint_session = None
+            self.last_published_phase = None
 
 def _wsl_path(path: Path) -> str:
     value = str(path.resolve())
@@ -1376,26 +1379,35 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         try:
             evidence.update(state.stop_endpoint())
             state.clear_session_state()
+            recovery_run_id = recovery.get("run_id")
+            if not isinstance(recovery_run_id, str) or not recovery_run_id:
+                raise ValueError("diagnostic recovery run identity is invalid")
+            d7 = DiagnosticD7Resources(
+                close_room=lambda room: close_diagnostic_room(state, room),
+                update_recovery=lambda **updates: state.diagnostics.update_recovery(
+                    recovery_run_id, **updates),
+            )
             room = recovery.get("room")
-            if isinstance(room, dict) and room.get("room_id") and room.get("owner_token"):
-                try:
-                    snapshot = state.relay.room(room["room_id"], room["owner_token"])
-                    state.relay.room_command(
-                        room["room_id"], room["owner_token"], "", method="DELETE",
-                        expected_version=snapshot["room_version"],
-                    )
-                except RelayError as error:
-                    if error.status not in {404, 410} and error.code not in {
-                            "room_not_found", "room_not_active"}:
-                        raise
-                evidence["relay_room_closed"] = True
+            if room is not None:
+                if not isinstance(room, dict) or not room.get("room_id") or not room.get("owner_token"):
+                    raise ValueError("diagnostic room recovery identity is invalid")
+                d7.register_room(room)
             token_path = recovery.get("token_file")
-            if isinstance(token_path, str) and token_path:
+            if token_path is not None:
+                if not isinstance(token_path, str) or not token_path:
+                    raise ValueError("diagnostic credential recovery identity is invalid")
                 token = Path(token_path).resolve()
                 report = Path(str(recovery.get("report_path", ""))).resolve()
                 token.relative_to(report.parent)
-                token.unlink(missing_ok=True)
-                evidence["credential_file_deleted"] = True
+                d7.register_credential(token)
+            d7_evidence = d7.cleanup()
+            evidence.update(
+                synthetic_peer_stopped=d7_evidence["synthetic_peer_stopped"],
+                relay_room_closed=d7_evidence["temporary_room_closed"],
+                credential_file_deleted=d7_evidence["credential_file_absent"],
+            )
+            if not all(d7_evidence.values()):
+                raise RuntimeError("diagnostic D7 resources remain active or unknown")
             adapter = recovery.get("adapter") or {}
             required = ("usb_id", "instance_id", "bus_id")
             if state.owned_hardware is None and all(isinstance(adapter.get(key), str) and
@@ -2522,9 +2534,11 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             self.run = run
             self.selection = state.read_hardware_selection()
             self.hardware_acquired = False
-            self.room: dict | None = None
-            self.peer: SyntheticDiagnosticPeer | None = None
-            self.token_file: Path | None = None
+            self.d7 = DiagnosticD7Resources(
+                close_room=lambda room: close_diagnostic_room(state, room),
+                update_recovery=lambda **updates: state.diagnostics.update_recovery(
+                    run.run_id, **updates),
+            )
             self.evidence = {
                 "endpoint_stopped": True, "endpoint_forced": False,
                 "synthetic_peer_stopped": True, "relay_room_closed": True,
@@ -2581,21 +2595,25 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             return selected_usb_id
 
         def register_room(self, room: dict) -> None:
-            self.room = room
+            self.d7.register_room(room)
             self.evidence["relay_room_closed"] = False
-            self.state.diagnostics.update_recovery(self.run.run_id, room={
-                "room_id": room["room_id"], "owner_token": room["owner_token"],
-            })
 
         def register_peer(self, peer: SyntheticDiagnosticPeer) -> None:
-            self.peer = peer
+            self.d7.register_peer(peer)
             self.evidence["synthetic_peer_stopped"] = False
 
         def register_token_file(self, token_file: Path) -> None:
-            self.token_file = token_file
+            self.d7.register_credential(token_file)
             self.evidence["credential_file_deleted"] = False
-            self.state.diagnostics.update_recovery(
-                self.run.run_id, token_file=str(token_file.resolve()))
+
+        def d7_cleanup(self) -> dict:
+            result = self.d7.cleanup()
+            self.evidence.update(
+                synthetic_peer_stopped=result["synthetic_peer_stopped"],
+                relay_room_closed=result["temporary_room_closed"],
+                credential_file_deleted=result["credential_file_absent"],
+            )
+            return result
 
         def cleanup_stage(self, preceding: DiagnosticFailure | None = None) -> None:
             errors = []
@@ -2606,29 +2624,9 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             except Exception as error:
                 self.evidence["endpoint_stopped"] = False
                 errors.append(f"endpoint:{type(error).__name__}")
-            if self.peer is not None:
-                try:
-                    self.peer.stop()
-                    self.peer = None
-                    self.evidence["synthetic_peer_stopped"] = True
-                except Exception as error:
-                    errors.append(f"peer:{type(error).__name__}")
-            if self.room is not None:
-                try:
-                    close_diagnostic_room(self.state, self.room)
-                    self.room = None
-                    self.evidence["relay_room_closed"] = True
-                    self.state.diagnostics.update_recovery(self.run.run_id, room=None)
-                except DiagnosticFailure as error:
-                    errors.append(f"room:{error.code}")
-            if self.token_file is not None:
-                try:
-                    self.token_file.unlink(missing_ok=True)
-                    self.token_file = None
-                    self.evidence["credential_file_deleted"] = True
-                    self.state.diagnostics.update_recovery(self.run.run_id, token_file=None)
-                except OSError as error:
-                    errors.append(f"credential:{type(error).__name__}")
+            d7 = self.d7_cleanup()
+            if not all(d7.values()):
+                errors.append("diagnostic:D7")
             if errors:
                 raise DiagnosticFailure(
                     "DIAG_CLEANUP_FAILED",
@@ -2715,6 +2713,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             resources.register_room({
                 "room_id": owner_room["room_id"], "room_code": owner_room["room_code"],
                 "owner_token": owner["member_token"],
+                "owner_reconnect_token": owner.get("reconnect_token"),
             })
             joined = state.relay.join_trade_room(
                 owner_room["room_code"], "Diagnostic peer" if local_is_owner else "Diagnostic local",
@@ -2750,6 +2749,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             result = {
                 "room_id": owner_room["room_id"], "room_code": owner_room["room_code"],
                 "owner_token": owner["member_token"],
+                "owner_reconnect_token": owner.get("reconnect_token"),
                 "local_token": pair["local"]["member_token"],
                 "peer_token": pair["peer"]["member_token"],
                 "attempt_id": attempt["attempt_id"], "local_seat": pair["local_seat"],
@@ -2766,9 +2766,44 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
 
     def close_diagnostic_room(state: Runtime, room: dict) -> None:
         try:
-            snapshot = state.relay.room(room["room_id"], room["owner_token"])
-            state.relay.room_command(room["room_id"], room["owner_token"], "", method="DELETE",
-                                     expected_version=snapshot["room_version"])
+            try:
+                snapshot = state.relay.room(room["room_id"], room["owner_token"])
+            except RelayError as error:
+                if error.status in {404, 410} or error.code in {
+                        "room_not_found", "room_not_active"}:
+                    return
+                reconnect_token = room.get("owner_reconnect_token")
+                if (error.status != 401 or not isinstance(reconnect_token, str) or
+                        not reconnect_token):
+                    raise
+                try:
+                    reconnected = state.relay.reconnect_trade_room(
+                        room["room_id"], reconnect_token)
+                except RelayError as reconnect_error:
+                    if (reconnect_error.status in {404, 410} or
+                            reconnect_error.code in {"room_not_found", "room_not_active"}):
+                        return
+                    raise
+                snapshot = reconnected.get("room") or {}
+                owner_token = reconnected.get("member_token")
+                if not snapshot.get("room_version") or not isinstance(owner_token, str):
+                    raise DiagnosticFailure(
+                        "DIAG_CLEANUP_FAILED",
+                        "The relay returned invalid diagnostic room recovery state.",
+                    )
+                room["owner_token"] = owner_token
+                rotated_reconnect = reconnected.get("reconnect_token")
+                if isinstance(rotated_reconnect, str) and rotated_reconnect:
+                    room["owner_reconnect_token"] = rotated_reconnect
+            closed = state.relay.room_command(
+                room["room_id"], room["owner_token"], "", method="DELETE",
+                expected_version=snapshot["room_version"],
+            )
+            if closed.get("state") not in {"closed", "expired"}:
+                raise DiagnosticFailure(
+                    "DIAG_CLEANUP_FAILED",
+                    "The relay did not confirm that the private diagnostic room is terminal.",
+                )
         except RelayError as error:
             if error.status in {404, 410} or error.code in {"room_not_found", "room_not_active"}:
                 return

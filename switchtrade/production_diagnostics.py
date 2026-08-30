@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import threading
 import time
+from typing import Callable
 import uuid
 
 from switchtrade.rfu_tunnel import Kind
@@ -132,6 +133,74 @@ class SyntheticDiagnosticPeer:
             self.thread.join(timeout=2)
             if self.thread.is_alive():
                 raise RuntimeError("diagnostic peer did not stop")
+
+
+class DiagnosticD7Resources:
+    """Own diagnostic-only peer, room, and credential cleanup for LocalDRelease D7."""
+
+    def __init__(self, *, close_room: Callable[[dict], None],
+                 update_recovery: Callable[..., None]):
+        self.close_room = close_room
+        self.update_recovery = update_recovery
+        self.peer: SyntheticDiagnosticPeer | None = None
+        self.room: dict | None = None
+        self.credential_file: Path | None = None
+
+    def register_room(self, room: dict) -> None:
+        self.room = room
+        recovery_room = {
+            "room_id": room["room_id"], "owner_token": room["owner_token"],
+        }
+        reconnect_token = room.get("owner_reconnect_token")
+        if isinstance(reconnect_token, str) and reconnect_token:
+            recovery_room["owner_reconnect_token"] = reconnect_token
+        self.update_recovery(room=recovery_room)
+
+    def register_peer(self, peer: SyntheticDiagnosticPeer) -> None:
+        self.peer = peer
+
+    def register_credential(self, credential_file: Path) -> None:
+        self.credential_file = Path(credential_file)
+        self.update_recovery(token_file=str(self.credential_file.resolve()))
+
+    def cleanup(self) -> dict:
+        """Return the exact Boolean-only D7 projection; failed resources remain retryable."""
+        peer_stopped = self.peer is None
+        if self.peer is not None:
+            try:
+                self.peer.stop()
+                self.peer = None
+                peer_stopped = True
+            except Exception:
+                peer_stopped = False
+
+        room_closed = self.room is None
+        if self.room is not None:
+            try:
+                self.close_room(self.room)
+                self.update_recovery(room=None)
+                self.room = None
+                room_closed = True
+            except Exception:
+                room_closed = False
+
+        credential_absent = self.credential_file is None
+        if self.credential_file is not None:
+            try:
+                self.credential_file.unlink(missing_ok=True)
+                if self.credential_file.exists():
+                    raise OSError("diagnostic credential file still exists")
+                self.update_recovery(token_file=None)
+                self.credential_file = None
+                credential_absent = True
+            except Exception:
+                credential_absent = False
+
+        return {
+            "synthetic_peer_stopped": peer_stopped,
+            "temporary_room_closed": room_closed,
+            "credential_file_absent": credential_absent,
+        }
 
 
 def _utc() -> str:
