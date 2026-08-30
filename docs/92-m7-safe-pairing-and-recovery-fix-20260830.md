@@ -43,6 +43,22 @@ requires no deployment for this correction.
 - Hosted relay software pairing: creator and peer checkpoints passed, UUID/code bindings matched,
   both authorities released, both recovery files removed, and no hardware action executed.
 
+## Installer qualification correction
+
+The first local `0.2.9 -> 0.2.10` package qualification exposed a separate release-lifecycle defect:
+the provisioner trusted one `wsl --list --quiet` snapshot before removing the previous runtime. A
+transiently omitted name could therefore clear `PreviousName` and the committed cleanup journal while
+the WSL registration and runtime directory still existed. That candidate package is rejected.
+
+Runtime cleanup now treats the per-user WSL registration as authoritative, verifies the ownership
+marker and exact managed location before unregistering, and verifies registration, name, and managed
+directory absence before clearing recovery state. A bounded false-success check retains the committed
+journal. Repair also reconciles older verified runtimes and unregistered managed directories, while an
+ambiguous marker fails closed and unrelated distributions remain untouched. Contract tests cover the
+transient-name omission, unregister false success, orphan reconciliation, and ambiguous-ownership
+paths. The replacement package must repeat static bundle, disposable Unicode-path WSL lifecycle, and
+real `0.2.10` same-version Repair qualification after this correction.
+
 Installed physical evidence remains deliberately open. The acceptance sequence is software pairing on
 both nearby PCs, P0/cleanup on both PCs, two consecutive nearby two-Switch end-to-end passes, verified
 zero residue, and only then the separated-distance run.

@@ -33,7 +33,7 @@ internal sealed partial class ProvisioningEngine(
             return new ProvisionerStatus(1, state, false, null, null, null, null,
                 state == "legacy" ? "Run Setup Repair" : null);
         }
-        if (!names.Contains(active.ActiveName) || wsl.Registration(active.ActiveName) is null)
+        if (wsl.Registration(active.ActiveName) is null)
             return new ProvisionerStatus(1, "corrupt", false, active.ReleaseId, active.ActiveName,
                 active.KernelRelease, active.ControlContract, "Run Setup Repair");
         var kernel = AtomicFile.Read<KernelState>(paths.KernelStatePath);
@@ -69,7 +69,6 @@ internal sealed partial class ProvisioningEngine(
         Progress("uninstall", "state_inspection", 5, "Inspecting owned SwitchTrade resources");
         var active = AtomicFile.Read<ActiveRuntime>(paths.ActivePath);
         var journal = AtomicFile.Read<OperationJournal>(paths.JournalPath);
-        var names = await wsl.NamesAsync(cancellationToken);
         var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (active is not null)
         {
@@ -79,13 +78,9 @@ internal sealed partial class ProvisioningEngine(
         if (journal?.CandidateName is not null) targets.Add(journal.CandidateName);
 
         foreach (var name in targets)
-        {
-            if (!names.Contains(name)) continue;
-            await VerifyOwnedAsync(name, expectedRelease: null, expectedPayload: null, expectedLocation: null, cancellationToken);
-            await wsl.TerminateAsync(name, cancellationToken);
-            await wsl.UnregisterAsync(name, cancellationToken);
-        }
-        if (names.Contains("SwitchTrade")) await RemoveLegacyAsync(cancellationToken);
+            await RemoveOwnedRuntimeAsync(name, null, null, null, cancellationToken);
+        await RemoveOrphanedOwnedRuntimesAsync("", cancellationToken);
+        if (await LegacyExistsAsync(cancellationToken)) await RemoveLegacyAsync(cancellationToken);
 
         Progress("uninstall", "kernel_configuration", 65, "Restoring the previous WSL kernel configuration");
         new KernelManager(paths).Restore();
@@ -209,9 +204,10 @@ internal sealed partial class ProvisioningEngine(
         CancellationToken cancellationToken)
     {
         if (active.PreviousName is not null)
-            await RemoveOwnedRuntimeAsync(active.PreviousName, cancellationToken);
+            await RemoveOwnedRuntimeAsync(active.PreviousName, null, null, null, cancellationToken);
         else if (await LegacyExistsAsync(cancellationToken))
             await RemoveLegacyAsync(cancellationToken);
+        await RemoveOrphanedOwnedRuntimesAsync(active.ActiveName, cancellationToken);
         RemoveLegacyArtifacts(removeOrphanedRuntime: true);
         AtomicFile.Write(paths.ActivePath, active with { PreviousName = null });
         if (File.Exists(paths.JournalPath)) File.Delete(paths.JournalPath);
@@ -231,18 +227,12 @@ internal sealed partial class ProvisioningEngine(
                     "Contact SwitchTrade support");
             contentId = manifest.RuntimeContentId;
         }
-        var names = await wsl.NamesAsync(cancellationToken);
-        if (names.Contains(journal.CandidateName))
-        {
-            await VerifyOwnedAsync(journal.CandidateName, journal.ReleaseId,
-                contentId, journal.CandidateLocation, cancellationToken);
-            await wsl.TerminateAsync(journal.CandidateName, cancellationToken);
-            await wsl.UnregisterAsync(journal.CandidateName, cancellationToken);
-        }
-        if (Directory.Exists(journal.CandidateLocation)) RemoveOwnedTree(journal.CandidateLocation, paths.RuntimeRoot);
+        await RemoveOwnedRuntimeAsync(journal.CandidateName, journal.ReleaseId,
+            contentId, journal.CandidateLocation, cancellationToken);
     }
 
     private async Task<bool> LegacyExistsAsync(CancellationToken cancellationToken) =>
+        wsl.Registration("SwitchTrade") is not null ||
         (await wsl.NamesAsync(cancellationToken)).Contains("SwitchTrade");
 
     private void RemoveLegacyArtifacts(bool removeOrphanedRuntime)
@@ -332,13 +322,56 @@ internal sealed partial class ProvisioningEngine(
         }
     }
 
-    private async Task RemoveOwnedRuntimeAsync(string name, CancellationToken cancellationToken)
+    private async Task RemoveOrphanedOwnedRuntimesAsync(string activeName,
+        CancellationToken cancellationToken)
     {
-        var names = await wsl.NamesAsync(cancellationToken);
-        if (!names.Contains(name)) return;
-        await VerifyOwnedAsync(name, null, null, null, cancellationToken);
+        var candidates = (await wsl.NamesAsync(cancellationToken))
+            .Where(name => name.StartsWith("SwitchTrade-beta-", StringComparison.Ordinal) &&
+                !name.Equals(activeName, StringComparison.OrdinalIgnoreCase))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (Directory.Exists(paths.RuntimeRoot))
+        {
+            foreach (var directory in Directory.EnumerateDirectories(paths.RuntimeRoot))
+            {
+                var name = Path.GetFileName(directory);
+                if (name.StartsWith("SwitchTrade-beta-", StringComparison.Ordinal) &&
+                    !name.Equals(activeName, StringComparison.OrdinalIgnoreCase))
+                    candidates.Add(name);
+            }
+        }
+        foreach (var candidate in candidates)
+            await RemoveOwnedRuntimeAsync(candidate, null, null, null, cancellationToken);
+    }
+
+    private async Task RemoveOwnedRuntimeAsync(string name, string? expectedRelease,
+        string? expectedPayload, string? expectedLocation, CancellationToken cancellationToken)
+    {
+        expectedLocation ??= Path.Combine(paths.RuntimeRoot, name);
+        var registration = wsl.Registration(name);
+        if (registration is null)
+        {
+            if ((await wsl.NamesAsync(cancellationToken)).Contains(name))
+                throw ProvisionerException.State("RUNTIME_REGISTRATION_MISSING",
+                    $"WSL lists a SwitchTrade runtime without a readable registration: {name}",
+                    "Run Setup Repair");
+            RemoveOwnedTree(expectedLocation, paths.RuntimeRoot);
+            return;
+        }
+        await VerifyOwnedAsync(name, expectedRelease, expectedPayload, expectedLocation, cancellationToken);
         await wsl.TerminateAsync(name, cancellationToken);
         await wsl.UnregisterAsync(name, cancellationToken);
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            if (wsl.Registration(name) is null &&
+                !(await wsl.NamesAsync(cancellationToken)).Contains(name))
+            {
+                RemoveOwnedTree(expectedLocation, paths.RuntimeRoot);
+                return;
+            }
+            if (attempt < 4) await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
+        }
+        throw ProvisionerException.Wsl("WSL_UNREGISTER_INCOMPLETE",
+            $"WSL did not fully remove the verified SwitchTrade runtime: {name}");
     }
 
     private async Task VerifyOwnedAsync(string name, string? expectedRelease, string? expectedPayload,

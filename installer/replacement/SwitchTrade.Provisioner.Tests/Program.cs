@@ -23,6 +23,10 @@ try
     await OwnedLegacyRuntimeMigrates();
     await AmbiguousLegacyRuntimeFailsBeforeMutation();
     await PostCommitFaultConverges();
+    await TransientNameOmissionCannotSkipCleanup();
+    await FalseUnregisterSuccessRetainsRecovery();
+    await OrphanedOwnedRuntimesAreReconciled();
+    await AmbiguousOrphanFailsClosed();
     Console.WriteLine("SwitchTrade provisioner contract tests passed.");
     return 0;
 }
@@ -311,6 +315,96 @@ async Task PostCommitFaultConverges()
     await engine.UninstallAsync(CancellationToken.None);
 }
 
+async Task TransientNameOmissionCannotSkipCleanup()
+{
+    var test = Path.Combine(root, "transient-name-omission");
+    var data = Path.Combine(test, "data");
+    var profile = Path.Combine(test, "profile");
+    var package = CreateLifecyclePackage(test);
+    var manifest = ReleaseManifest.LoadVerified(package);
+    var wsl = new FakeWsl(manifest.ReleaseId, manifest.RuntimeContentId, "none");
+    var engine = new ProvisioningEngine(new ProvisionerPaths(data, profile), wsl,
+        new FakeHealth("none"), Guid.NewGuid(), _ => { });
+    await engine.RepairAsync(manifest, package, CancellationToken.None);
+    var old = AtomicFile.Read<ActiveRuntime>(Path.Combine(data, "state", "active-runtime.json"))!;
+    wsl.HideFromNextEnumeration(old.ActiveName);
+    await engine.RepairAsync(manifest, package, CancellationToken.None);
+    Assert(wsl.UnregisterAttempts.Contains(old.ActiveName) && !wsl.Names.Contains(old.ActiveName),
+        "a transient WSL name omission skipped verified previous-runtime cleanup");
+    await engine.UninstallAsync(CancellationToken.None);
+}
+
+async Task FalseUnregisterSuccessRetainsRecovery()
+{
+    var test = Path.Combine(root, "false-unregister-success");
+    var data = Path.Combine(test, "data");
+    var profile = Path.Combine(test, "profile");
+    var package = CreateLifecyclePackage(test);
+    var manifest = ReleaseManifest.LoadVerified(package);
+    var wsl = new FakeWsl(manifest.ReleaseId, manifest.RuntimeContentId, "unregister-noop");
+    var engine = new ProvisioningEngine(new ProvisionerPaths(data, profile), wsl,
+        new FakeHealth("none"), Guid.NewGuid(), _ => { });
+    await engine.RepairAsync(manifest, package, CancellationToken.None);
+    await engine.RepairAsync(manifest, package, CancellationToken.None);
+    var pending = AtomicFile.Read<OperationJournal>(Path.Combine(data, "state", "operation.json"));
+    var active = AtomicFile.Read<ActiveRuntime>(Path.Combine(data, "state", "active-runtime.json"));
+    Assert(pending is { Committed: true } && active is { PreviousName: not null } &&
+        wsl.Names.Contains(active.PreviousName),
+        "an incomplete unregister erased the cleanup recovery identity");
+    await engine.RepairAsync(manifest, package, CancellationToken.None);
+    Assert(wsl.Names.Count(name => name.StartsWith("SwitchTrade-beta-", StringComparison.Ordinal)) == 1,
+        "retry did not converge after an incomplete unregister");
+    await engine.UninstallAsync(CancellationToken.None);
+}
+
+async Task OrphanedOwnedRuntimesAreReconciled()
+{
+    var test = Path.Combine(root, "orphan-reconciliation");
+    var data = Path.Combine(test, "data");
+    var profile = Path.Combine(test, "profile");
+    var package = CreateLifecyclePackage(test);
+    var manifest = ReleaseManifest.LoadVerified(package);
+    var paths = new ProvisionerPaths(data, profile);
+    var wsl = new FakeWsl(manifest.ReleaseId, manifest.RuntimeContentId, "none");
+    var engine = new ProvisioningEngine(paths, wsl, new FakeHealth("none"),
+        Guid.NewGuid(), _ => { });
+    await engine.RepairAsync(manifest, package, CancellationToken.None);
+    var orphan = ProvisioningEngine.RuntimeName("beta-orphan", Guid.NewGuid());
+    var orphanLocation = Path.Combine(paths.RuntimeRoot, orphan);
+    wsl.SeedOwned(orphan, orphanLocation, "beta-orphan", new string('c', 64));
+    var unregistered = ProvisioningEngine.RuntimeName("beta-unregistered", Guid.NewGuid());
+    var unregisteredLocation = Path.Combine(paths.RuntimeRoot, unregistered);
+    Directory.CreateDirectory(unregisteredLocation);
+    await engine.RepairAsync(manifest, package, CancellationToken.None);
+    Assert(!wsl.Names.Contains(orphan) && !Directory.Exists(orphanLocation) &&
+        !Directory.Exists(unregisteredLocation),
+        "verified orphaned runtime storage was not reconciled");
+    Assert(wsl.Names.Contains("Ubuntu"), "orphan reconciliation touched an unrelated distro");
+    await engine.UninstallAsync(CancellationToken.None);
+}
+
+async Task AmbiguousOrphanFailsClosed()
+{
+    var test = Path.Combine(root, "ambiguous-orphan");
+    var data = Path.Combine(test, "data");
+    var profile = Path.Combine(test, "profile");
+    var package = CreateLifecyclePackage(test);
+    var manifest = ReleaseManifest.LoadVerified(package);
+    var paths = new ProvisionerPaths(data, profile);
+    var wsl = new FakeWsl(manifest.ReleaseId, manifest.RuntimeContentId, "none");
+    var engine = new ProvisioningEngine(paths, wsl, new FakeHealth("none"),
+        Guid.NewGuid(), _ => { });
+    await engine.RepairAsync(manifest, package, CancellationToken.None);
+    var ambiguous = ProvisioningEngine.RuntimeName("beta-ambiguous", Guid.NewGuid());
+    var location = Path.Combine(paths.RuntimeRoot, ambiguous);
+    wsl.SeedUnowned(ambiguous, location);
+    await engine.RepairAsync(manifest, package, CancellationToken.None);
+    var pending = AtomicFile.Read<OperationJournal>(paths.JournalPath);
+    Assert(pending is { Committed: true } && wsl.Names.Contains(ambiguous) &&
+        Directory.Exists(location),
+        "ambiguous runtime ownership was deleted or its recovery guard was erased");
+}
+
 async Task InterruptedOlderReleaseConvergesWithNewPackage()
 {
     var test = Path.Combine(root, "cross-release-recovery");
@@ -489,11 +583,23 @@ sealed class FakeWsl(string releaseId, string contentId, string fault) : IWslPla
     private readonly Dictionary<string, RuntimeOwnership> _markers = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _rawMarkers = new(StringComparer.OrdinalIgnoreCase);
     private bool _failed;
+    private string? _hiddenFromNextEnumeration;
 
     public HashSet<string> Names => _registrations.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+    public HashSet<string> UnregisterAttempts { get; } = new(StringComparer.OrdinalIgnoreCase);
     public Task<Version> VersionAsync(CancellationToken cancellationToken) => Task.FromResult(new Version(2, 7, 12));
-    public Task<HashSet<string>> NamesAsync(CancellationToken cancellationToken) => Task.FromResult(Names);
+    public Task<HashSet<string>> NamesAsync(CancellationToken cancellationToken)
+    {
+        var names = Names;
+        if (_hiddenFromNextEnumeration is not null)
+        {
+            names.Remove(_hiddenFromNextEnumeration);
+            _hiddenFromNextEnumeration = null;
+        }
+        return Task.FromResult(names);
+    }
     public WslRegistration? Registration(string name) => _registrations.GetValueOrDefault(name);
+    public void HideFromNextEnumeration(string name) => _hiddenFromNextEnumeration = name;
 
     public void SeedOwned(string name, string location, string markerRelease, string markerContent)
     {
@@ -512,6 +618,13 @@ sealed class FakeWsl(string releaseId, string contentId, string fault) : IWslPla
             schema = 2, owner = "switchtrade-installer", product = "SwitchTrade",
             install_id = installId, release_id = "legacy",
         });
+    }
+
+    public void SeedUnowned(string name, string location)
+    {
+        Directory.CreateDirectory(location);
+        _registrations[name] = new WslRegistration(name, location);
+        _rawMarkers[name] = "{\"schema\":1,\"owner\":\"somebody-else\"}";
     }
 
     public Task InstallAsync(string appliance, string name, string location, CancellationToken cancellationToken)
@@ -556,11 +669,18 @@ sealed class FakeWsl(string releaseId, string contentId, string fault) : IWslPla
     public Task TerminateAsync(string name, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task UnregisterAsync(string name, CancellationToken cancellationToken)
     {
+        UnregisterAttempts.Add(name);
         if (fault == "unregister" && !_failed &&
             name.StartsWith("SwitchTrade-beta-", StringComparison.Ordinal))
         {
             _failed = true;
             throw ProvisionerException.Wsl("INJECTED_UNREGISTER_FAILURE", "injected unregister failure");
+        }
+        if (fault == "unregister-noop" && !_failed &&
+            name.StartsWith("SwitchTrade-beta-", StringComparison.Ordinal))
+        {
+            _failed = true;
+            return Task.CompletedTask;
         }
         _markers.Remove(name);
         _rawMarkers.Remove(name);
