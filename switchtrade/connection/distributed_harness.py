@@ -30,8 +30,9 @@ from switchtrade.diagnostics import default_runs_root
 from switchtrade.relay_client import RelayClient, RelayError
 
 
-INVITATION_CONTRACT = "distributed-invitation.v1"
+INVITATION_CONTRACT = "distributed-invitation.v2"
 SESSION_CONTRACT = "distributed-session.v1"
+ROOM_CONTRACT = "room-control.v1"
 ROLES = {"a_room_joiner", "b_ap_host"}
 ACTIONS = {"end", "stop", "leave", "close"}
 TERMINAL_ATTEMPTS = {"completed", "canceled", "failed"}
@@ -78,11 +79,12 @@ def _decode_invitation(encoded: str) -> dict:
     except (ValueError, UnicodeError, json.JSONDecodeError) as error:
         raise SystemExit("DISTRIBUTED_INVITATION_INVALID") from error
     fields = {
-        "contract_version", "test_id", "source_sha", "release", "room_code",
+        "contract_version", "test_id", "source_sha", "release", "room_id", "room_code",
         "action", "owner_role", "peer_role",
     }
     try:
         uuid.UUID(str(value.get("test_id")))
+        uuid.UUID(str(value.get("room_id")))
     except (AttributeError, TypeError, ValueError) as error:
         raise SystemExit("DISTRIBUTED_INVITATION_INVALID") from error
     if (
@@ -93,11 +95,60 @@ def _decode_invitation(encoded: str) -> dict:
         value.get("peer_role") not in ROLES or value["owner_role"] == value["peer_role"] or
         {value["owner_role"], value["peer_role"]} != ROLES or
         not isinstance(value.get("release"), str) or not 1 <= len(value["release"]) <= 64 or
+        not isinstance(value.get("room_id"), str) or not value["room_id"] or
         not isinstance(value.get("room_code"), str) or
-        re.fullmatch(r"[A-Za-z0-9]{6}", value["room_code"]) is None
+        re.fullmatch(r"[A-Z0-9]{6}", value["room_code"]) is None
     ):
         raise SystemExit("DISTRIBUTED_INVITATION_INVALID")
     return value
+
+
+def _validate_room_identity(
+    room: dict, *, room_id: str, room_code: str, expected_seat: str,
+) -> list[dict]:
+    """Validate authoritative private-room identity, never optional directory metadata."""
+    try:
+        uuid.UUID(str(room_id))
+        valid_room_id = True
+    except (AttributeError, TypeError, ValueError):
+        valid_room_id = False
+    members = room.get("members") if isinstance(room, dict) else None
+    local_id = room.get("local_member_id") if isinstance(room, dict) else None
+    active = [
+        item for item in members or []
+        if isinstance(item, dict) and item.get("online_state") != "left"
+    ]
+    local = next((item for item in active if item.get("member_id") == local_id), None)
+    member_ids = [item.get("member_id") for item in active]
+    seats = [item.get("seat") for item in active]
+    if (
+        not valid_room_id or re.fullmatch(r"[A-Z0-9]{6}", str(room_code)) is None or
+        expected_seat not in {"member_a", "member_b"} or
+        not isinstance(room, dict) or room.get("contract_version") != ROOM_CONTRACT or
+        room.get("room_id") != room_id or room.get("room_code") != room_code or
+        room.get("visibility") != "private" or
+        not isinstance(local, dict) or local.get("seat") != expected_seat or
+        len(member_ids) != len(set(member_ids)) or len(seats) != len(set(seats)) or
+        any(not isinstance(item, str) or not item for item in member_ids) or
+        any(item not in {"member_a", "member_b"} for item in seats)
+    ):
+        raise SystemExit("DISTRIBUTED_INVITATION_IDENTITY_MISMATCH")
+    return active
+
+
+def _validate_room_credential(value: dict) -> tuple[dict, str, str]:
+    if not isinstance(value, dict):
+        raise SystemExit("DISTRIBUTED_ROOM_CREDENTIAL_INVALID")
+    room = value.get("room")
+    member_token = value.get("member_token")
+    reconnect_token = value.get("reconnect_token")
+    if (
+        not isinstance(room, dict) or
+        not isinstance(member_token, str) or len(member_token) < 32 or
+        not isinstance(reconnect_token, str) or len(reconnect_token) < 32
+    ):
+        raise SystemExit("DISTRIBUTED_ROOM_CREDENTIAL_INVALID")
+    return room, member_token, reconnect_token
 
 
 def _local_member(room: dict) -> dict:
@@ -124,11 +175,18 @@ def _strict_session(path: Path) -> dict:
         "contract_version", "schema", "test_id", "source_sha", "release", "action",
         "switch_role", "owner", "room_id", "room_code", "member_token", "reconnect_token",
     }
+    try:
+        uuid.UUID(str(value.get("test_id")))
+        uuid.UUID(str(value.get("room_id")))
+    except (AttributeError, TypeError, ValueError) as error:
+        raise SystemExit("DISTRIBUTED_RECOVERY_STATE_INVALID") from error
     if (
         not isinstance(value, dict) or set(value) != fields or
         value.get("contract_version") != SESSION_CONTRACT or value.get("schema") != 1 or
         value.get("switch_role") not in ROLES or value.get("action") not in ACTIONS or
         not isinstance(value.get("owner"), bool) or
+        SOURCE_SHA.fullmatch(str(value.get("source_sha", ""))) is None or
+        re.fullmatch(r"[A-Z0-9]{6}", str(value.get("room_code", ""))) is None or
         any(not isinstance(value.get(name), str) or not value[name]
             for name in ("test_id", "source_sha", "release", "room_id", "room_code",
                          "member_token", "reconnect_token"))
@@ -162,13 +220,31 @@ class DistributedLifecycle:
     def relay_role(self) -> str:
         return "creator" if self.session["switch_role"] == "a_room_joiner" else "finder"
 
+    def _versioned(self, operation) -> dict:
+        """Retry only the relay's explicit optimistic-version conflict."""
+        for attempt in range(8):
+            current = self.relay.room(
+                self.session["room_id"], self.session["member_token"])
+            try:
+                result = operation(current)
+            except RelayError as error:
+                if error.code != "room_version_conflict" or attempt == 7:
+                    raise
+                time.sleep(0.05)
+                continue
+            self.room = result
+            return result
+        raise AssertionError("unreachable version retry state")
+
     def _heartbeat(self, *, force: bool = False) -> bool:
         now = time.monotonic()
         if not force and now - self.last_heartbeat < RELAY_HEARTBEAT_INTERVAL:
             return False
-        self.room = self.relay.room_command(
-            self.session["room_id"], self.session["member_token"], "/heartbeat",
-            expected_version=self.room["room_version"],
+        self._versioned(
+            lambda current: self.relay.room_command(
+                self.session["room_id"], self.session["member_token"], "/heartbeat",
+                expected_version=current["room_version"],
+            )
         )
         self.last_heartbeat = now
         return True
@@ -202,6 +278,38 @@ class DistributedLifecycle:
         if errors:
             raise errors[0]
         self._heartbeat(force=True)
+
+    def confirm_pairing(self) -> None:
+        """Prove both relay members before allowing any P0 or USB ownership action."""
+        expected_seat = "member_a" if self.session["owner"] else "member_b"
+        deadline = time.monotonic() + self.timeout
+        while True:
+            room = self._refresh_room()
+            active = _validate_room_identity(
+                room, room_id=self.session["room_id"], room_code=self.session["room_code"],
+                expected_seat=expected_seat,
+            )
+            if len(active) == 2 and {item["seat"] for item in active} == {"member_a", "member_b"}:
+                break
+            if len(active) > 2:
+                raise SystemExit("DISTRIBUTED_INVITATION_IDENTITY_MISMATCH")
+            if time.monotonic() >= deadline:
+                raise SystemExit("DISTRIBUTED_PAIRING_TIMEOUT")
+            time.sleep(RELAY_POLL_INTERVAL)
+        _status(
+            "coordination_paired", test_id=self.session["test_id"],
+            role=self.session["switch_role"], usb_attached=False,
+        )
+        self._prompt(
+            "Software pairing is verified and USB is still owned by Windows. "
+            "Confirm the other PC also reports coordination_paired, then press Enter to start P0: "
+        )
+        active = _validate_room_identity(
+            self.room, room_id=self.session["room_id"], room_code=self.session["room_code"],
+            expected_seat=expected_seat,
+        )
+        if len(active) != 2 or {item["seat"] for item in active} != {"member_a", "member_b"}:
+            raise SystemExit("DISTRIBUTED_PEER_LOST_BEFORE_P0")
 
     def bind(self, run_id: str, run: dict) -> dict:
         self._refresh_room(force_heartbeat=True)
@@ -250,13 +358,15 @@ class DistributedLifecycle:
     def prepare(self, context: dict) -> dict:
         self.run_context = context
         command_id = self.relay.command_id()
-        room = self._refresh_room(force_heartbeat=True)
-        room = self.relay.v2_ready(
-            self.session["room_id"], self.session["member_token"], {
-                "ready": True, "switch_room_role": self.relay_role,
-                "p0": self._p0_proof(context),
-            }, expected_version=room["room_version"], command_id=command_id,
+        room = self._versioned(
+            lambda current: self.relay.v2_ready(
+                self.session["room_id"], self.session["member_token"], {
+                    "ready": True, "switch_room_role": self.relay_role,
+                    "p0": self._p0_proof(context),
+                }, expected_version=current["room_version"], command_id=command_id,
+            )
         )
+        self.last_heartbeat = time.monotonic()
         deadline = time.monotonic() + self.timeout
         while not isinstance(room.get("attempt"), dict):
             if time.monotonic() >= deadline:
@@ -316,34 +426,43 @@ class DistributedLifecycle:
     def _begin_d(self, outcome: str, *, code: str | None = None) -> dict:
         if self.intent is not None:
             return self.intent
-        room = self._refresh_room(force_heartbeat=True)
-        authority_intent = self._authority_intent(room)
-        if authority_intent is not None:
-            self.intent = authority_intent
-            return authority_intent
-        attempt = room["attempt"]
-        intent = {
-            "contract_version": "d-closing-intent.v1",
-            "attempt_id": attempt["attempt_id"],
-            "activation_generation": attempt["activation_generation"],
-            "outcome": outcome,
-            "primary_failure_code": code if outcome == "failed" else None,
-            "last_passed_gate": self.last_gate,
-        }
-        state = {
-            "contract_version": "distributed-d1-control.v1", "schema": 1,
-            "run_id": self.run_context["run_id"], "command_id": self.relay.command_id(),
-            "expected_room_version": self.room["room_version"], "intent": intent,
-        }
-        atomic_json(self.d1_path, state, private=True)
-        self.room = self.relay.begin_distributed_d(
-            self.session["room_id"], attempt["attempt_id"], self.session["member_token"],
-            intent, expected_version=state["expected_room_version"],
-            command_id=state["command_id"],
-        )
-        self.intent = intent
-        _status("d1_recorded", test_id=self.session["test_id"], outcome=outcome)
-        return intent
+        command_id = self.relay.command_id()
+        for retry in range(8):
+            room = self._refresh_room(force_heartbeat=True)
+            authority_intent = self._authority_intent(room)
+            if authority_intent is not None:
+                self.intent = authority_intent
+                return authority_intent
+            attempt = room["attempt"]
+            intent = {
+                "contract_version": "d-closing-intent.v1",
+                "attempt_id": attempt["attempt_id"],
+                "activation_generation": attempt["activation_generation"],
+                "outcome": outcome,
+                "primary_failure_code": code if outcome == "failed" else None,
+                "last_passed_gate": self.last_gate,
+            }
+            state = {
+                "contract_version": "distributed-d1-control.v1", "schema": 1,
+                "run_id": self.run_context["run_id"], "command_id": command_id,
+                "expected_room_version": room["room_version"], "intent": intent,
+            }
+            atomic_json(self.d1_path, state, private=True)
+            try:
+                self.room = self.relay.begin_distributed_d(
+                    self.session["room_id"], attempt["attempt_id"],
+                    self.session["member_token"], intent,
+                    expected_version=state["expected_room_version"], command_id=command_id,
+                )
+            except RelayError as error:
+                if error.code != "room_version_conflict" or retry == 7:
+                    raise
+                time.sleep(0.05)
+                continue
+            self.intent = intent
+            _status("d1_recorded", test_id=self.session["test_id"], outcome=outcome)
+            return intent
+        raise AssertionError("unreachable D1 version retry state")
 
     def _poll_authority(self) -> dict | None:
         self._refresh_room()
@@ -489,20 +608,22 @@ class DistributedLifecycle:
                 "Confirm the other PC reports D11_VERIFIED, then press Enter to close the "
                 "one-time qualification room: "
             )
-            room = self.room
-            self.relay.room_command(
-                self.session["room_id"], self.session["member_token"], "",
-                method="DELETE", expected_version=room["room_version"],
+            self._versioned(
+                lambda current: self.relay.room_command(
+                    self.session["room_id"], self.session["member_token"], "",
+                    method="DELETE", expected_version=current["room_version"],
+                )
             )
             return "room_closed"
         if self.session["action"] == "leave":
             self._prompt(
                 "Confirm PC A reports D11_VERIFIED, then press Enter to perform the Leave action: "
             )
-            room = self.room
-            self.relay.room_command(
-                self.session["room_id"], self.session["member_token"], "/members/me",
-                method="DELETE", expected_version=room["room_version"],
+            self._versioned(
+                lambda current: self.relay.room_command(
+                    self.session["room_id"], self.session["member_token"], "/members/me",
+                    method="DELETE", expected_version=current["room_version"],
+                )
             )
             return "member_left"
         _status("waiting_for_room_finalization", test_id=self.session["test_id"])
@@ -576,25 +697,34 @@ class DistributedLifecycle:
             "room_finalization": room_finalization,
         }
 
-    def abort(self) -> None:
+    def abort(self, *, cleanup_verified: bool) -> dict:
+        if not cleanup_verified:
+            return {"authority_released": False, "session_retained": True}
         try:
-            room = self.relay.room(self.session["room_id"], self.session["member_token"])
             if self.session["owner"]:
-                self.relay.room_command(
-                    self.session["room_id"], self.session["member_token"], "",
-                    method="DELETE", expected_version=room["room_version"],
+                self._versioned(
+                    lambda current: self.relay.room_command(
+                        self.session["room_id"], self.session["member_token"], "",
+                        method="DELETE", expected_version=current["room_version"],
+                    )
                 )
             else:
-                self.relay.room_command(
-                    self.session["room_id"], self.session["member_token"], "/members/me",
-                    method="DELETE", expected_version=room["room_version"],
+                self._versioned(
+                    lambda current: self.relay.room_command(
+                        self.session["room_id"], self.session["member_token"], "/members/me",
+                        method="DELETE", expected_version=current["room_version"],
+                    )
                 )
         except RelayError as error:
-            # An admitted peer may have to wait for the owner to terminalize the shared room.
-            if error.status not in {401, 409, 410}:
-                raise
-            return
+            if error.status != 410:
+                return {"authority_released": False, "session_retained": True}
+        return {"authority_released": True, "session_retained": True}
+
+    def finalize_abort(self, evidence: dict) -> dict:
+        if not isinstance(evidence, dict) or evidence.get("authority_released") is not True:
+            return {"session_removed": False}
         self.session_path.unlink(missing_ok=True)
+        return {"session_removed": not self.session_path.exists()}
 
 
 def _room_session(args: argparse.Namespace, release: str, source_sha: str,
@@ -604,26 +734,43 @@ def _room_session(args: argparse.Namespace, release: str, source_sha: str,
     if args.command == "create":
         test_id = str(uuid.uuid4())
         peer_role = "b_ap_host" if args.role == "a_room_joiner" else "a_room_joiner"
-        note = f"M7|{source_sha}|{args.action}|{test_id}"
         credential = relay.create_trade_room({
             "name": "M7 qualification", "visibility": "private",
             "trainer_display_name": "PC A", "game": "FireRed", "language": "English",
-            "offering": "", "wanted": "", "note": note,
+            "offering": "", "wanted": "", "note": "",
         }, f"m7-pc-a-{test_id}")
+        room, member_token, reconnect_token = _validate_room_credential(credential)
+        try:
+            active = _validate_room_identity(
+                room, room_id=room.get("room_id"), room_code=room.get("room_code"),
+                expected_seat="member_a",
+            )
+            if len(active) != 1 or active[0].get("seat") != "member_a":
+                raise SystemExit("DISTRIBUTED_INVITATION_IDENTITY_MISMATCH")
+        except SystemExit:
+            try:
+                relay.room_command(
+                    room.get("room_id"), member_token, "", method="DELETE",
+                    expected_version=room.get("room_version"),
+                )
+            except (RelayError, TypeError, ValueError):
+                pass
+            raise
         invitation_value = {
             "contract_version": INVITATION_CONTRACT, "test_id": test_id,
             "source_sha": source_sha, "release": release,
-            "room_code": credential["room"]["room_code"], "action": args.action,
+            "room_id": room["room_id"],
+            "room_code": room["room_code"], "action": args.action,
             "owner_role": args.role, "peer_role": peer_role,
         }
         session = {
             "contract_version": SESSION_CONTRACT, "schema": 1, "test_id": test_id,
             "source_sha": source_sha, "release": release, "action": args.action,
             "switch_role": args.role, "owner": True,
-            "room_id": credential["room"]["room_id"],
-            "room_code": credential["room"]["room_code"],
-            "member_token": credential["member_token"],
-            "reconnect_token": credential["reconnect_token"],
+            "room_id": room["room_id"],
+            "room_code": room["room_code"],
+            "member_token": member_token,
+            "reconnect_token": reconnect_token,
         }
         atomic_json(session_path, session, private=True)
         return session, _invitation(invitation_value)
@@ -632,14 +779,19 @@ def _room_session(args: argparse.Namespace, release: str, source_sha: str,
         raise SystemExit("DISTRIBUTED_INVITATION_IDENTITY_MISMATCH")
     credential = relay.join_trade_room(
         invitation["room_code"], "PC B", f"m7-pc-b-{invitation['test_id']}")
-    note = credential["room"].get("note")
-    expected_note = (
-        f"M7|{invitation['source_sha']}|{invitation['action']}|{invitation['test_id']}")
-    if note != expected_note:
+    room, member_token, reconnect_token = _validate_room_credential(credential)
+    try:
+        active = _validate_room_identity(
+            room, room_id=invitation["room_id"],
+            room_code=invitation["room_code"], expected_seat="member_b",
+        )
+        if len(active) != 2 or {item["seat"] for item in active} != {"member_a", "member_b"}:
+            raise SystemExit("DISTRIBUTED_INVITATION_IDENTITY_MISMATCH")
+    except SystemExit:
         try:
             relay.room_command(
-                credential["room"]["room_id"], credential["member_token"], "/members/me",
-                method="DELETE", expected_version=credential["room"]["room_version"],
+                room["room_id"], member_token, "/members/me",
+                method="DELETE", expected_version=room.get("room_version"),
             )
         except RelayError:
             pass
@@ -648,21 +800,70 @@ def _room_session(args: argparse.Namespace, release: str, source_sha: str,
         "contract_version": SESSION_CONTRACT, "schema": 1,
         "test_id": invitation["test_id"], "source_sha": source_sha, "release": release,
         "action": invitation["action"], "switch_role": invitation["peer_role"],
-        "owner": False, "room_id": credential["room"]["room_id"],
-        "room_code": credential["room"]["room_code"],
-        "member_token": credential["member_token"],
-        "reconnect_token": credential["reconnect_token"],
+        "owner": False, "room_id": room["room_id"],
+        "room_code": room["room_code"],
+        "member_token": member_token,
+        "reconnect_token": reconnect_token,
     }
     atomic_json(session_path, session, private=True)
     return session, None
+
+
+def _resume_session_room(
+    relay: RelayClient, session: dict, session_path: Path,
+) -> tuple[dict, dict | None, bool]:
+    try:
+        room = relay.room(session["room_id"], session["member_token"])
+    except RelayError as error:
+        if error.status == 410:
+            return session, None, True
+        if error.status != 401:
+            raise
+        try:
+            credential = relay.reconnect_trade_room(
+                session["room_id"], session["reconnect_token"])
+        except RelayError as reconnect_error:
+            if reconnect_error.status == 410:
+                return session, None, True
+            raise
+        room, member_token, reconnect_token = _validate_room_credential(credential)
+        session = {
+            **session, "member_token": member_token, "reconnect_token": reconnect_token,
+        }
+        atomic_json(session_path, session, private=True)
+    expected_seat = "member_a" if session["owner"] else "member_b"
+    _validate_room_identity(
+        room, room_id=session["room_id"], room_code=session["room_code"],
+        expected_seat=expected_seat,
+    )
+    return session, room, False
 
 
 def _recover_distributed(*, coordinator: ConnectionCoordinator, relay: RelayClient,
                          harness: P0Harness, session: dict, session_path: Path) -> dict:
     """Preserve D ordering while conservatively recovering an interrupted installed endpoint."""
     run = coordinator.snapshot()
+    try:
+        session, room, room_finalized = _resume_session_room(relay, session, session_path)
+    except RelayError as error:
+        recovery = None if run is None else harness.recover(run)
+        return {
+            "status": "failed", "code": error.code,
+            "local_recovery": recovery, "room_finalized": False,
+        }
     if run is None:
-        raise SystemExit("DISTRIBUTED_RECOVERY_NOT_REQUIRED")
+        if not room_finalized:
+            assert room is not None
+            path = "" if session["owner"] else "/members/me"
+            relay.room_command(
+                session["room_id"], session["member_token"], path, method="DELETE",
+                expected_version=room["room_version"],
+            )
+        session_path.unlink(missing_ok=True)
+        return {
+            "status": "recovered", "local_recovery": {"status": "not_required"},
+            "room_finalized": True,
+        }
     if (
         session["release"] != run["identity"]["release"] or
         session["switch_role"] != run["identity"].get("switch_role") or
@@ -676,15 +877,14 @@ def _recover_distributed(*, coordinator: ConnectionCoordinator, relay: RelayClie
         }
     else:
         recovery = None
-    try:
-        room = relay.room(session["room_id"], session["member_token"])
-    except RelayError as error:
+    if room_finalized:
         if recovery is None:
             recovery = harness.recover(run)
-        return {
-            "status": "failed", "code": error.code,
-            "local_recovery": recovery, "room_finalized": False,
-        }
+        if recovery["status"] in {"recovered", "already_recovered"}:
+            session_path.unlink(missing_ok=True)
+            return {"status": "recovered", "local_recovery": recovery, "room_finalized": True}
+        return {"status": "failed", "local_recovery": recovery, "room_finalized": True}
+    assert room is not None
     attempt = room.get("attempt") or {}
     attempt_id = attempt.get("attempt_id")
     if (
@@ -804,6 +1004,16 @@ def main() -> None:
         session, invitation = _room_session(args, release, source_sha, relay, session_path)
         if invitation is not None:
             print("ONE_TIME_INVITATION=" + invitation, flush=True)
+        lifecycle = DistributedLifecycle(
+            coordinator=coordinator, relay=relay, session=session, session_path=session_path,
+            distro=args.distro, packaged_python=packaged_python, timeout=args.timeout,
+        )
+        try:
+            lifecycle.confirm_pairing()
+        except BaseException:
+            evidence = lifecycle.abort(cleanup_verified=True)
+            lifecycle.finalize_abort(evidence)
+            raise
         _status(
             "preflight_started", test_id=session["test_id"], role=session["switch_role"],
             action=session["action"], source_sha=source_sha, release=release,
@@ -816,10 +1026,6 @@ def main() -> None:
             blocking_state_paths=(
                 default_runs_root().parent / "runtime" / "production-diagnostic-recovery.json",
             ),
-        )
-        lifecycle = DistributedLifecycle(
-            coordinator=coordinator, relay=relay, session=session, session_path=session_path,
-            distro=args.distro, packaged_python=packaged_python, timeout=args.timeout,
         )
         harness = P0Harness(
             coordinator, validator, args.state_root / "runs",

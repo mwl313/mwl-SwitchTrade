@@ -14,7 +14,7 @@ from typing import Callable
 from switchtrade.c2_protocol import launch_identity_hash
 from switchtrade.connection.coordinator import ConnectionCoordinator, Phase, RunMode
 from switchtrade.connection.p0 import atomic_json
-from switchtrade.relay_client import RelayClient
+from switchtrade.relay_client import RelayClient, RelayError
 
 
 CONTRACT_VERSION = "d5-control-state.v1"
@@ -452,13 +452,24 @@ class MeasuredD5Control:
     def acknowledge(self, room: dict) -> dict:
         """Submit one idempotent, measured acknowledgement; credentials never enter state."""
         state = self._load_or_prepare(room)
-        response = self.relay.acknowledge_distributed_d(
-            state["room_id"], state["attempt_id"], self.member_token,
-            deepcopy(state["payload"]),
-            expected_version=state["expected_room_version"],
-            command_id=state["command_id"],
-        )
-        return {"room": response, "control": deepcopy(state)}
+        for attempt in range(8):
+            try:
+                response = self.relay.acknowledge_distributed_d(
+                    state["room_id"], state["attempt_id"], self.member_token,
+                    deepcopy(state["payload"]),
+                    expected_version=state["expected_room_version"],
+                    command_id=state["command_id"],
+                )
+            except RelayError as error:
+                if error.code != "room_version_conflict" or attempt == 7:
+                    raise
+                current = self.relay.room(state["room_id"], self.member_token)
+                state = {**state, "expected_room_version": current["room_version"]}
+                atomic_json(self.state_path, state, private=True)
+                time.sleep(0.05)
+                continue
+            return {"room": response, "control": deepcopy(state)}
+        raise AssertionError("unreachable D5 version retry state")
 
 
 __all__ = ["CONTRACT_VERSION", "DControlError", "MeasuredD5Control", "load_d5_state"]

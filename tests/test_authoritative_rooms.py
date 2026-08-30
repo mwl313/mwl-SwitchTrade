@@ -92,6 +92,24 @@ class AuthoritativeRoomTests(unittest.TestCase):
         self.assertFalse(problem["recoverable"])
         self.assertTrue(problem["correlation_id"])
 
+    def test_private_room_identity_is_room_id_and_code_not_public_directory_note(self):
+        created = self.client.post("/v1/trade-rooms", json={
+            "name": "M7 qualification", "visibility": "private",
+            "trainer_display_name": "PC A", "game": "FireRed", "language": "English",
+            "note": "must-not-be-an-identity-field",
+        }, headers={"Idempotency-Key": _command(), "X-SwitchTrade-Client": "m7-a"})
+        self.assertEqual(created.status_code, 200, created.text)
+        owner = created.json()
+        self.assertNotIn("directory", owner["room"])
+        self.assertNotIn("note", owner["room"])
+
+        peer = self._join(owner["room"]["room_code"], client_id="m7-b")
+        self.assertEqual(peer["room"]["room_id"], owner["room"]["room_id"])
+        self.assertEqual(peer["room"]["room_code"], owner["room"]["room_code"])
+        self.assertEqual(peer["room"]["visibility"], "private")
+        self.assertNotIn("directory", peer["room"])
+        self.assertNotIn("note", peer["room"])
+
     def test_public_directory_is_authoritative_sanitized_and_atomically_joinable(self):
         private = self._create()
         public = self._create_public()

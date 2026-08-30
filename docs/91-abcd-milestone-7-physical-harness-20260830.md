@@ -1,8 +1,8 @@
 # ABC+D Milestone 7 physical distributed harness
 
-> Branch: `codex/abcd-orchestration-rework`
-> Canonical source: `82e7dccdda0810af3cf1faa172ebb60438722b09`
-> Application version: `0.2.8-beta.1` (Windows/MSI version `0.2.8`)
+> Branch: `codex/m7-safe-pairing`
+> Canonical release tag: `v0.2.10-beta.1`
+> Application version: `0.2.10-beta.1` (Windows/MSI version `0.2.10`)
 > Status: source complete and automated regression passed; installed two-PC/two-Switch evidence is
 > still required.
 
@@ -24,11 +24,13 @@ passes its live advertisement through `rfu-tunnel.v2`, and attaches the proven f
 
 ## Ordered run
 
-1. PC A creates a private authority room and emits a bounded one-time invitation. The invitation
-   contains the room code and non-secret test binding, never a bearer or reconnect credential.
-2. PC B validates the exact source SHA, installed release, test action, and complementary role before
-   joining.
-3. Each PC independently passes passive P0, acquires its own selected adapter once, and publishes a
+1. PC A creates a private authority room and emits a bounded v2 invitation. The invitation binds the
+   authoritative room UUID/code, source, release, action, and roles; it never contains a credential.
+2. PC B validates source/release before joining, then validates the returned private-room contract,
+   UUID/code, local seat, and unique two-seat membership. Both PCs must emit `coordination_paired`
+   with `usb_attached=false` and wait for operator confirmation.
+3. Only after the pairing confirmation does each PC pass passive P0, acquire its selected adapter once,
+   and publish a
    `p0-attestation.v2` hash.
 4. The relay admits exactly two distinct P0 runs with complementary roles. Each coordinator binds the
    authoritative room, seat, attempt, role-lock version, activation generation, launch nonce, and
@@ -57,7 +59,8 @@ passes its live advertisement through `rfu-tunnel.v2`, and attaches the proven f
   trainer, or Pokémon data.
 - Repeated GET polling is read-only. Launch and readiness mutations use existing authority
   idempotency and exact generation checks.
-- An interrupted run is never restarted as a new attempt. The `recover` command records a failed D1
+- An interrupted run is never restarted as a new attempt. Recovery state is retained until local
+  cleanup and authority release are both proven. The `recover` command records a failed D1
   when possible, invokes the existing exact PID/radio/USB recovery path, waits for authority
   terminalization, and preserves a non-pass result.
 - A failed or unknown D8/D9 observation blocks USB return. A D or room-finalization failure remains
@@ -65,7 +68,7 @@ passes its live advertisement through `rfu-tunnel.v2`, and attaches the proven f
 
 ## Automated evidence
 
-The source suite passes `510 passed, 3 skipped` after the physical harness additions. Focused tests
+The corrected source suite passes `521 passed, 3 skipped`. Focused tests
 cover strict invitation/config/closing contracts, complementary attempt validation, PID-preserving
 normal-mode ticket validation, sustained Direct-stage ownership, exact payload handoff, UDP data
 plane framing, and one P0 lease/one delegated D release.
@@ -81,7 +84,10 @@ limit after about 30 seconds. Recovery also assumed an attempt already existed. 
 the temporary room without an invalid attempt lookup. These fixes do not alter the production desktop
 or relay protocol.
 
-The replacement installer was built from the clean canonical source as release
-`beta-82e7dccdda08`. Static embedded-bundle verification and the disposable Unicode-path WSL
-install/verify/repair/uninstall lifecycle both passed. `SwitchTradeSetup.exe` SHA-256 is
-`99996da551871e301c4b7e9523800780af33dd778f05c88450d2955042dbf063`.
+The rejected `D-PHYS-1-R3` case exposed that private rooms do not persist public-directory `note`
+metadata, while the old client tried to use top-level `room.note` as its campaign binding. Version 2
+uses the authority's room UUID/code instead, adds the pre-USB pairing barrier, retries only explicit
+optimistic version conflicts, and retains recovery state when local cleanup is unverified. Local
+real-authority pairing passed 30/30 cycles with no active credential or nonterminal room, and a hosted
+software-only pairing passed both roles without touching hardware. Installed physical qualification
+remains open until the new release package passes its lifecycle checks on both PCs.

@@ -579,6 +579,40 @@ class P0Harness:
             "radio_absence_proven_by_linux_usb": usb_absence_proved_radio,
         }, endpoint_absent and radio_quiescent
 
+    def _quiesce_netdev(self, netdev: str | None) -> None:
+        if not isinstance(netdev, str) or not netdev:
+            return
+        if os.name == "nt":
+            if not _wsl_netdev_exists(
+                    netdev, distro=self.distro, packaged_python=self.packaged_python,
+                    runner=self.command_runner):
+                return
+            result = self.command_runner([
+                "wsl.exe", "-d", self.distro, "-u", "root", "--",
+                "ip", "link", "set", "dev", netdev, "down",
+            ], 5)
+            if result.returncode != 0:
+                raise P0Error(
+                    "P0_RADIO_QUIESCE_FAILED", "D9_radio_quiescence",
+                    "cleanup could not quiesce the selected netdev",
+                )
+            return
+        try:
+            result = subprocess.run(
+                ["ip", "link", "set", "dev", netdev, "down"],
+                capture_output=True, text=True, timeout=2, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise P0Error(
+                "P0_RADIO_QUIESCE_FAILED", "D9_radio_quiescence",
+                "cleanup could not quiesce the selected netdev",
+            ) from error
+        if result.returncode != 0 and "does not exist" not in (result.stderr or "").lower():
+            raise P0Error(
+                "P0_RADIO_QUIESCE_FAILED", "D9_radio_quiescence",
+                "cleanup could not quiesce the selected netdev",
+            )
+
     def _process_start_ticks(self, pid: int) -> int | None:
         if os.name == "nt":
             return _wsl_process_start_ticks(
@@ -687,37 +721,7 @@ class P0Harness:
                         "interrupted worker did not exit",
                     )
                 evidence["worker_exited"] = True
-            if isinstance(netdev, str) and netdev:
-                if os.name == "nt":
-                    if _wsl_netdev_exists(
-                            netdev, distro=self.distro, packaged_python=self.packaged_python,
-                            runner=self.command_runner):
-                        result = self.command_runner([
-                            "wsl.exe", "-d", self.distro, "-u", "root", "--",
-                            "ip", "link", "set", "dev", netdev, "down",
-                        ], 5)
-                        if result.returncode != 0:
-                            raise P0Error(
-                                "P0_RADIO_QUIESCE_FAILED", "D9_radio_quiescence",
-                                "recovery could not quiesce the selected netdev",
-                            )
-                else:
-                    try:
-                        result = subprocess.run(
-                            ["ip", "link", "set", "dev", netdev, "down"],
-                            capture_output=True, text=True, timeout=2, check=False,
-                        )
-                    except (OSError, subprocess.TimeoutExpired) as error:
-                        raise P0Error(
-                            "P0_RADIO_QUIESCE_FAILED", "D9_radio_quiescence",
-                            "recovery could not quiesce the selected netdev",
-                        ) from error
-                    # A missing netdev is already quiescent; other failures remain uncertain.
-                    if result.returncode != 0 and "does not exist" not in (result.stderr or "").lower():
-                        raise P0Error(
-                            "P0_RADIO_QUIESCE_FAILED", "D9_radio_quiescence",
-                            "recovery could not quiesce the selected netdev",
-                        )
+            self._quiesce_netdev(netdev)
             evidence["radio_quiescent"] = True
             if self.release_probes is not None and run["ownership"]["wrapper_acquired"]:
                 probe_identity = {
@@ -791,7 +795,7 @@ class P0Harness:
 
     def run_distributed(self, lifecycle: object) -> dict:
         """Run one physical side while reusing the canonical P0 and release ownership path."""
-        for method in ("bind", "prepare", "drive", "cleanup", "abort"):
+        for method in ("bind", "prepare", "drive", "cleanup", "abort", "finalize_abort"):
             if not callable(getattr(lifecycle, method, None)):
                 raise ValueError(f"distributed lifecycle is missing {method}")
         return self._run(
@@ -1028,14 +1032,14 @@ class P0Harness:
                 cleanup["distributed"] = distributed_cleanup
                 lease = None
             else:
-                if distributed is not None:
-                    distributed.abort()
                 self.coordinator.begin_cleanup(run_id)
                 snapshot = self.coordinator.snapshot(run_id)
                 if (
                     self.release_probes is not None and
                     snapshot["ownership"]["wrapper_acquired"]
                 ):
+                    if isinstance(self.release_probes, WslDProbes):
+                        self._quiesce_netdev(snapshot["identity"].get("netdev"))
                     release_evidence, release_verified = self._verify_d8_d9({
                         **snapshot["identity"], "run_id": run_id,
                     })
@@ -1058,8 +1062,26 @@ class P0Harness:
                     mode, endpoint_started=endpoint_started,
                     a_stage=a_stage, b_stage=b_stage,
                 )
-                cleanup_verified = (
+                local_cleanup_verified = (
                     worker_verified and release_verified and usb_verified and stage_cleanup_verified
+                )
+                abort_evidence = None
+                if distributed is not None:
+                    abort_evidence = distributed.abort(
+                        cleanup_verified=local_cleanup_verified)
+                    if (
+                        not isinstance(abort_evidence, dict) or
+                        set(abort_evidence) != {"authority_released", "session_retained"} or
+                        any(not isinstance(value, bool) for value in abort_evidence.values())
+                    ):
+                        raise P0Error(
+                            "DISTRIBUTED_ABORT_INVALID", "D11_RELEASE",
+                            "distributed abort returned invalid cleanup evidence",
+                        )
+                    cleanup["distributed_abort"] = abort_evidence
+                cleanup_verified = (
+                    local_cleanup_verified and
+                    (abort_evidence is None or abort_evidence["authority_released"])
                 )
                 self.coordinator.complete_cleanup(
                     run_id, verified=cleanup_verified,
@@ -1087,6 +1109,18 @@ class P0Harness:
                     code=None if cleanup_verified else "P0_CLEANUP_FAILED",
                     message=None if cleanup_verified else "P0 cleanup could not be verified",
                 )
+                if distributed is not None and cleanup_verified:
+                    finalized = distributed.finalize_abort(abort_evidence)
+                    if (
+                        not isinstance(finalized, dict) or
+                        set(finalized) != {"session_removed"} or
+                        finalized["session_removed"] is not True
+                    ):
+                        raise P0Error(
+                            "DISTRIBUTED_RECOVERY_STATE_REMOVE_FAILED", "D11_RELEASE",
+                            "verified distributed abort retained its recovery state",
+                        )
+                    cleanup["distributed_abort"].update(finalized)
         except Exception as error:
             cleanup["failure"] = {
                 "code": getattr(error, "code", "P0_CLEANUP_FAILED"),

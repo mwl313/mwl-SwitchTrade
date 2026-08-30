@@ -1224,8 +1224,16 @@ class P0HarnessTests(unittest.TestCase):
                             "d11_verified": True,
                         }
 
-                    def abort(self):
+                    def abort(self, *, cleanup_verified):
                         self.abort_calls += 1
+                        return {
+                            "authority_released": cleanup_verified,
+                            "session_retained": True,
+                        }
+
+                    @staticmethod
+                    def finalize_abort(_evidence):
+                        return {"session_removed": True}
 
                 lifecycle = Lifecycle()
                 result = P0Harness(

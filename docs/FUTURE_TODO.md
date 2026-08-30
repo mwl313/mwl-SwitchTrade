@@ -7,15 +7,34 @@ path. No open item may be presented as a current production capability.
 
 ## Critical and urgent blockers
 
+0. **CRITICAL — URGENT: Qualify the M7 distributed harness only through the safe pairing barrier.**
+   **Status (2026-08-30): root cause fixed in source; automated, 30-cycle local-authority, and hosted
+   relay software-only pairing checks pass. A new installed two-PC/two-Switch run is still required.**
+   The rejected `D-PHYS-1-R3` runner stored its campaign binding in the `note` supplied while creating
+   a private room, but the relay intentionally stores directory notes only for public rooms. PC B then
+   read a nonexistent top-level `room.note`, so every otherwise-correct private join failed as
+   `DISTRIBUTED_INVITATION_IDENTITY_MISMATCH`. The same run let PC A acquire USB before PC B proved
+   room identity, and its abort path deleted distributed recovery state before local USB cleanup was
+   verified.
+
+   `distributed-invitation.v2` now binds the handoff to the relay's authoritative room UUID and code,
+   validates the private room contract and unique seats, and rejects v1 invitations. Both members must
+   reach `coordination_paired` while `usb_attached=false`; an operator confirmation barrier remains
+   ahead of P0 and the first USB action. Local cleanup must verify before authority is released, and
+   recovery state is removed only after both local cleanup and authority release are proven. Explicit
+   room-version conflicts are retried with the same idempotent command after a fresh snapshot; semantic
+   409s still fail closed. Keep this item open until the new immutable release passes two consecutive
+   close-range full runs, verified residue checks on both PCs, and then the separated-distance run.
+
 1. **CRITICAL — URGENT: Restore the complete WSL LDN prerequisite gate.**
    **Status (2026-08-29): PC A passed the immutable installed cold P0 and verified cleanup. The owner
    accepted that result as sufficient to begin Milestone 3. The direct A0-A9 endpoint/harness is
    complete and PC A passed its one-Switch installed-runtime qualification with verified cleanup.
    Direct B2-B10 is source-complete and final immutable PC A run
    `12e6a535-4770-47ae-9fb3-8d06915af053` physically passed B2-B10 plus verified cleanup. PC B's
-   P0/direct A/direct B evidence has now also been reviewed and accepted. The GUI-independent
-   distributed harness is source-complete for `0.2.8-beta.1`; installed two-PC/two-Switch
-   qualification and production-path cutover remain open.**
+   P0/direct A/direct B evidence has now also been reviewed and accepted. The corrected GUI-independent
+   distributed harness is source-complete for the `0.2.10-beta.1` candidate; installed
+   two-PC/two-Switch qualification and production-path cutover remain open.**
    The installed `0.2.6-beta.2` runtime contains the correct kernel and the `ccm`, `cmac`, and `tun`
    modules, but the production wrapper does not load them and does not verify `/dev/net/tun` before
    entering the LDN path. A real Switch-hosted room was observed and decoded three times, then every

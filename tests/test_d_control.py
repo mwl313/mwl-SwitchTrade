@@ -15,6 +15,7 @@ from switchtrade.connection import (
     RunMode,
     SwitchRole,
 )
+from switchtrade.relay_client import RelayError
 
 
 ADAPTER = r"USB\VID_0BDA&PID_818B\RADIO-A"
@@ -202,6 +203,38 @@ class MeasuredD5ControlTests(unittest.TestCase):
         self.assertEqual(replay["control"], result["control"])
         self.assertEqual(process_calls, [5001])
         self.assertEqual(len(radio_calls), 3)
+
+    def test_room_version_conflict_refreshes_and_reuses_the_measured_acknowledgement(self):
+        run = self.prepare_run()
+        report_path = self.write_endpoint_report(run)
+
+        class ConflictRelay(FakeRelay):
+            def __init__(self):
+                super().__init__()
+                self.conflicted = False
+
+            def acknowledge_distributed_d(self, room_id, attempt_id, token, payload, **options):
+                self.calls.append((room_id, attempt_id, token, payload, options))
+                if not self.conflicted:
+                    self.conflicted = True
+                    raise RelayError(
+                        "room version conflict", status=409, code="room_version_conflict")
+                return {"room_id": room_id, "room_version": 14, "attempt": {"phase": "closing"}}
+
+            @staticmethod
+            def room(_room_id, _token):
+                return {"room_version": 13}
+
+        relay = ConflictRelay()
+        control = self.control(
+            run, relay, report_path, process_probe=lambda _pid: None,
+            radio_probe=lambda _identity: {"status": "quiescent", "owned_interfaces": 0},
+        )
+        result = control.acknowledge(self.authority_room(run))
+        self.assertEqual(len(relay.calls), 2)
+        self.assertEqual(
+            relay.calls[0][4]["command_id"], relay.calls[1][4]["command_id"])
+        self.assertEqual(result["control"]["expected_room_version"], 13)
 
     def test_live_endpoint_and_unknown_radio_are_acknowledged_as_forced_failure(self):
         run = self.prepare_run()
