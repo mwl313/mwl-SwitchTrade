@@ -53,10 +53,11 @@ the WSL registration and runtime directory still existed. That candidate package
 Runtime cleanup now treats the per-user WSL registration as authoritative, verifies the ownership
 marker and exact managed location before unregistering, and verifies registration, name, and managed
 directory absence before clearing recovery state. A bounded false-success check retains the committed
-journal. Repair also reconciles older verified runtimes and unregistered managed directories, while an
-ambiguous marker fails closed and unrelated distributions remain untouched. Contract tests cover the
+journal. Repair also reconciles older verified runtimes and unregistered managed directories strictly
+inside its own runtime root, while an ambiguous marker fails closed and unrelated distributions or
+other isolated SwitchTrade roots remain untouched. Contract tests cover the
 transient-name omission, unregister false success, orphan reconciliation, and ambiguous-ownership
-paths. The replacement package must repeat static bundle, disposable Unicode-path WSL lifecycle, and
+paths, plus cross-root isolation. The replacement package must repeat static bundle, disposable Unicode-path WSL lifecycle, and
 real `0.2.10` same-version Repair qualification after this correction.
 
 Installed physical evidence remains deliberately open. The acceptance sequence is software pairing on

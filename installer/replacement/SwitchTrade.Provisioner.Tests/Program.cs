@@ -27,6 +27,7 @@ try
     await FalseUnregisterSuccessRetainsRecovery();
     await OrphanedOwnedRuntimesAreReconciled();
     await AmbiguousOrphanFailsClosed();
+    await ManagedRootsRemainIsolated();
     Console.WriteLine("SwitchTrade provisioner contract tests passed.");
     return 0;
 }
@@ -403,6 +404,30 @@ async Task AmbiguousOrphanFailsClosed()
     Assert(pending is { Committed: true } && wsl.Names.Contains(ambiguous) &&
         Directory.Exists(location),
         "ambiguous runtime ownership was deleted or its recovery guard was erased");
+}
+
+async Task ManagedRootsRemainIsolated()
+{
+    var test = Path.Combine(root, "managed-root-isolation");
+    var package = CreateLifecyclePackage(test);
+    var manifest = ReleaseManifest.LoadVerified(package);
+    var wsl = new FakeWsl(manifest.ReleaseId, manifest.RuntimeContentId, "none");
+    var pathsA = new ProvisionerPaths(Path.Combine(test, "data-a"), Path.Combine(test, "profile-a"));
+    var pathsB = new ProvisionerPaths(Path.Combine(test, "data-b"), Path.Combine(test, "profile-b"));
+    var engineA = new ProvisioningEngine(pathsA, wsl, new FakeHealth("none"),
+        Guid.NewGuid(), _ => { });
+    var engineB = new ProvisioningEngine(pathsB, wsl, new FakeHealth("none"),
+        Guid.NewGuid(), _ => { });
+    await engineA.RepairAsync(manifest, package, CancellationToken.None);
+    var runtimeA = AtomicFile.Read<ActiveRuntime>(pathsA.ActivePath)!.ActiveName;
+    await engineB.RepairAsync(manifest, package, CancellationToken.None);
+    var runtimeB = AtomicFile.Read<ActiveRuntime>(pathsB.ActivePath)!.ActiveName;
+    Assert(wsl.Names.Contains(runtimeA) && wsl.Names.Contains(runtimeB),
+        "one managed root treated another root's runtime as its orphan");
+    await engineB.UninstallAsync(CancellationToken.None);
+    Assert(wsl.Names.Contains(runtimeA) && !wsl.Names.Contains(runtimeB),
+        "uninstall crossed the current managed runtime root");
+    await engineA.UninstallAsync(CancellationToken.None);
 }
 
 async Task InterruptedOlderReleaseConvergesWithNewPackage()

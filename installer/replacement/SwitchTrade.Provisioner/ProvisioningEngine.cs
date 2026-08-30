@@ -325,10 +325,15 @@ internal sealed partial class ProvisioningEngine(
     private async Task RemoveOrphanedOwnedRuntimesAsync(string activeName,
         CancellationToken cancellationToken)
     {
-        var candidates = (await wsl.NamesAsync(cancellationToken))
-            .Where(name => name.StartsWith("SwitchTrade-beta-", StringComparison.Ordinal) &&
-                !name.Equals(activeName, StringComparison.OrdinalIgnoreCase))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var candidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in await wsl.NamesAsync(cancellationToken))
+        {
+            if (!name.StartsWith("SwitchTrade-beta-", StringComparison.Ordinal) ||
+                name.Equals(activeName, StringComparison.OrdinalIgnoreCase)) continue;
+            var registration = wsl.Registration(name);
+            if (registration is not null && PathIsUnder(registration.BasePath, paths.RuntimeRoot))
+                candidates.Add(name);
+        }
         if (Directory.Exists(paths.RuntimeRoot))
         {
             foreach (var directory in Directory.EnumerateDirectories(paths.RuntimeRoot))
@@ -444,6 +449,11 @@ internal sealed partial class ProvisioningEngine(
     private static bool PathEquals(string left, string? right) => right is not null &&
         Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar).Equals(
             Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase);
+
+    private static bool PathIsUnder(string path, string parent) =>
+        Path.GetFullPath(path).StartsWith(
+            Path.GetFullPath(parent).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
+            StringComparison.OrdinalIgnoreCase);
 
     private static void RestoreBytes(string path, byte[]? bytes)
     {
