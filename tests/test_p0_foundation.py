@@ -17,11 +17,12 @@ from switchtrade.connection.coordinator import (
 from switchtrade.connection.a_stage import GATES as A_GATES
 from switchtrade.connection.b_stage import FIXTURE_SHA256, GATES as B_GATES
 from switchtrade.connection.p0 import (
-    P0Error, PassiveValidator, USB_ID, UsbLease, _decode_native_output, parse_usbipd_state,
+    P0Error, PassiveValidator, USB_ID, UsbLease, _decode_native_output, atomic_json,
+    parse_usbipd_state,
 )
 from switchtrade.connection.p0_harness import (
-    P0Harness, _installed_release, _wsl_linux_usb_probe, _wsl_netdev_exists,
-    _wsl_process_start_ticks,
+    P0Canceled, P0Harness, WorkerEvents, _installed_release, _wsl_linux_usb_probe,
+    _wsl_netdev_exists, _wsl_process_start_ticks,
 )
 from switchtrade.connection.radio_worker import (
     REQUIRED_MODULES, RadioWorkerError, _validate_ticket, build_side_ready,
@@ -31,6 +32,29 @@ from switchtrade.connection.runtime_probe import REQUIRED_MODULES as PASSIVE_REQ
 
 
 INSTANCE = r"USB\VID_0BDA&PID_818B\RADIO-A"
+
+
+class AtomicJsonTests(unittest.TestCase):
+    def test_windows_reader_sharing_violation_is_retried_without_partial_state(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "state.json"
+            real_replace = os.replace
+            calls = []
+
+            def replace(source, destination):
+                calls.append((source, destination))
+                if len(calls) == 1:
+                    raise PermissionError(13, "simulated Windows sharing violation")
+                real_replace(source, destination)
+
+            with mock.patch("switchtrade.connection.p0.os.name", "nt"), mock.patch(
+                "switchtrade.connection.p0.os.replace", side_effect=replace,
+            ), mock.patch("switchtrade.connection.p0.time.sleep") as sleep:
+                atomic_json(path, {"상태": "정상"})
+
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"상태": "정상"})
+            self.assertEqual(len(calls), 2)
+            sleep.assert_called_once()
 
 
 def completed(command, stdout="", returncode=0):
@@ -151,7 +175,8 @@ class PassiveP0Tests(unittest.TestCase):
 
         self.assertEqual(release, "abcd-m2-test")
         self.assertEqual(calls, [([
-            "wsl.exe", "-d", "SwitchTrade-test", "-u", "root", "--",
+            "wsl.exe", "-d", "SwitchTrade-test", "-u", "root",
+            "--cd", "/opt/switchtrade", "--",
             "cat", "/opt/switchtrade/.switchtrade-release.json",
         ], 10)])
 
@@ -182,10 +207,29 @@ class PassiveP0Tests(unittest.TestCase):
             USB_ID, distro="SwitchTrade-test", packaged_python="/runtime/python", runner=runner)
 
         self.assertEqual(value["status"], "absent")
-        self.assertEqual(calls[0][0][:7], [
-            "wsl.exe", "-d", "SwitchTrade-test", "-u", "root", "--", "/runtime/python",
+        self.assertEqual(calls[0][0][:9], [
+            "wsl.exe", "-d", "SwitchTrade-test", "-u", "root",
+            "--cd", "/opt/switchtrade", "--", "/runtime/python",
         ])
         self.assertEqual(calls[0][0][-1], USB_ID)
+
+    def test_windows_usb_probe_preserves_stable_cwd_and_import_failures(self):
+        failures = (
+            ("wsl: chdir(/wrong/windows/path) failed", "P0_WSL_PROBE_CWD_FAILED"),
+            ("ModuleNotFoundError: No module named 'switchtrade'", "P0_WSL_PROBE_IMPORT_FAILED"),
+        )
+        for stderr, expected in failures:
+            def runner(command, timeout, detail=stderr):
+                return subprocess.CompletedProcess(command, 1, "", detail)
+
+            value = _wsl_linux_usb_probe(
+                USB_ID, distro="SwitchTrade-test", packaged_python="/runtime/python",
+                runtime_root="/opt/switchtrade", runner=runner,
+            )
+            self.assertEqual(value["status"], "unknown")
+            self.assertEqual(value["failure_code"], expected)
+            self.assertEqual(value["stderr_sha256"], hashlib.sha256(stderr.encode()).hexdigest())
+            self.assertNotIn("stderr", value)
 
     def test_windows_recovery_probes_process_and_netdev_in_selected_wsl_runtime(self):
         calls = []
@@ -201,8 +245,9 @@ class PassiveP0Tests(unittest.TestCase):
             "wlan0", distro="SwitchTrade-test", packaged_python="/runtime/python", runner=runner,
         ))
         for command, _timeout in calls:
-            self.assertEqual(command[:7], [
-                "wsl.exe", "-d", "SwitchTrade-test", "-u", "root", "--", "/runtime/python",
+            self.assertEqual(command[:9], [
+                "wsl.exe", "-d", "SwitchTrade-test", "-u", "root",
+                "--cd", "/opt/switchtrade", "--", "/runtime/python",
             ])
 
     def test_passive_and_active_module_identities_use_kernel_names(self):
@@ -773,6 +818,19 @@ class FakeWorkerProcess:
         self._exit(-9)
 
 
+class WorkerCancellationTests(unittest.TestCase):
+    def test_endpoint_launch_wait_honors_explicit_cancel_without_stdin(self):
+        process = FakeWorkerProcess({"status": "placeholder"})
+        with tempfile.TemporaryDirectory() as temporary:
+            events = WorkerEvents(process, Path(temporary) / "events.ndjson")
+            try:
+                with self.assertRaises(P0Canceled):
+                    events.wait_for(
+                        {"endpoint_started"}, 1, cancel_probe=lambda: True)
+            finally:
+                process._exit(0)
+
+
 class FakeLease:
     def __init__(self, adapter, recovery, events=None):
         self.adapter = adapter
@@ -781,7 +839,9 @@ class FakeLease:
         self.acquires = 0
         self.releases = 0
 
-    def acquire(self):
+    def acquire(self, checkpoint=None):
+        if checkpoint is not None:
+            checkpoint()
         self.acquires += 1
         return {"active": True, "acquired_by_run": True}
 

@@ -88,3 +88,30 @@ Focused distributed/authority/tunnel/D regression passed 115 tests. The complete
 environment passed 365 tests with one intentional skip. This is source-level evidence only. Because
 the correction changes both the relay and installed endpoint/harness payload, the relay must be
 redeployed and both PCs must install one matching immutable build before another physical run.
+
+## R5-R8 harness launch/control correction
+
+Later no-Switch attempts proved that the remaining failures were in the qualification boundary, not a
+new A/B/C/D result. R5 inherited a Windows AppData cwd in WSL and hid its `chdir` plus Python import
+failure as unknown. R6 used a Python shim that did not forward stdin. R7 bypassed the environment and
+lost `websockets`. R8 was intentionally canceled before pairing/P0/USB and cleaned successfully, but
+printed an unhandled cancellation traceback.
+
+The corrected source has these invariants:
+
+1. Every P0/D WSL subprocess is built by one typed helper with the immutable runtime as `--cd`.
+2. USB probe unknown results retain a stable cwd/import/timeout/contract code, return code when known,
+   and a redacted stderr hash.
+3. Operator stdin is not a control channel. A persisted redacted state machine provides mutation-free
+   `status` plus exact `continue` and `cancel` commands.
+4. Cancellation is observable during pairing, P0, peer readiness, endpoint launch, live work, and
+   checkpoints. Cleanup owns finalization and removes any command that raced a terminal transition.
+5. The canonical PowerShell launcher fixes cwd and interpreter, validates required imports and module
+   origin, rejects dirty source or runtime mismatch, and checks the Windows adapter selection before
+   any room creation/join.
+6. Concurrent Windows status readers cannot permanently defeat state publication; atomic replacement
+   retries bounded sharing violations and otherwise fails closed.
+
+Focused source regression passes, including a non-ASCII arbitrary-cwd launcher status test. This does
+not authorize another physical run until a matching immutable installer/runtime is built and installed
+on both PCs.

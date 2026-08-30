@@ -30,6 +30,7 @@ from switchtrade.connection.d_probes import (
 )
 from switchtrade.connection.p0 import (
     P0Error, PassiveValidator, UsbAdapter, UsbLease, atomic_json, linux_usb_probe, run_command,
+    wsl_root_command,
 )
 from switchtrade.diagnostics import default_runs_root
 from switchtrade.relay_client import RelayClient
@@ -38,7 +39,16 @@ from switchtrade.relay_client import RelayClient
 WorkerFactory = Callable[[list[str], Path, Path], subprocess.Popen]
 LeaseFactory = Callable[[UsbAdapter, Path], UsbLease]
 EndpointCheckpoint = Callable[[dict], None]
+CancelProbe = Callable[[], bool]
 _STABLE_CODE = re.compile(r"^[A-Z][A-Z0-9_.-]{0,95}$")
+
+
+class P0Canceled(P0Error):
+    def __init__(self, gate: str):
+        super().__init__(
+            "DISTRIBUTED_RUN_CANCELED", gate,
+            "distributed qualification was canceled by an explicit command",
+        )
 
 
 def _stable_error_code(error: Exception) -> str:
@@ -46,11 +56,30 @@ def _stable_error_code(error: Exception) -> str:
     return value if _STABLE_CODE.fullmatch(value) else "P0_INTERNAL_ERROR"
 
 
-def _unknown_linux_usb() -> dict:
-    return {
+def _unknown_linux_usb(
+    failure_code: str,
+    *,
+    returncode: int | None = None,
+    stderr: str = "",
+) -> dict:
+    value = {
         "status": "unknown", "matches": None, "interface_present": None,
         "phy_present": None, "interfaces_up": None,
+        "failure_code": failure_code,
+        "stderr_sha256": hashlib.sha256(stderr.encode("utf-8", "replace")).hexdigest(),
     }
+    if returncode is not None:
+        value["returncode"] = returncode
+    return value
+
+
+def _wsl_probe_failure(result: subprocess.CompletedProcess[str]) -> str:
+    detail = (result.stderr or "").casefold()
+    if "chdir(" in detail and "failed" in detail:
+        return "P0_WSL_PROBE_CWD_FAILED"
+    if "modulenotfounderror" in detail or "no module named" in detail:
+        return "P0_WSL_PROBE_IMPORT_FAILED"
+    return "P0_WSL_PROBE_COMMAND_FAILED"
 
 
 def _wsl_linux_usb_probe(
@@ -58,6 +87,7 @@ def _wsl_linux_usb_probe(
     *,
     distro: str,
     packaged_python: str,
+    runtime_root: str = "/opt/switchtrade",
     runner=run_command,
 ) -> dict:
     program = (
@@ -65,17 +95,26 @@ def _wsl_linux_usb_probe(
         "print(json.dumps(linux_usb_probe(sys.argv[1]),sort_keys=True,separators=(',',':')))"
     )
     try:
-        result = runner([
-            "wsl.exe", "-d", distro, "-u", "root", "--",
-            packaged_python, "-c", program, usb_id,
-        ], 5)
-        value = json.loads(result.stdout) if result.returncode == 0 else None
-    except (OSError, subprocess.TimeoutExpired, TypeError, ValueError):
-        return _unknown_linux_usb()
+        result = runner(wsl_root_command(
+            distro, runtime_root, packaged_python, "-c", program, usb_id,
+        ), 5)
+        if result.returncode != 0:
+            return _unknown_linux_usb(
+                _wsl_probe_failure(result), returncode=result.returncode,
+                stderr=result.stderr or "",
+            )
+        value = json.loads(result.stdout)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return _unknown_linux_usb(
+            "P0_WSL_PROBE_TIMEOUT" if isinstance(error, subprocess.TimeoutExpired)
+            else "P0_WSL_PROBE_UNAVAILABLE",
+        )
+    except (TypeError, ValueError):
+        return _unknown_linux_usb("P0_WSL_PROBE_OUTPUT_INVALID")
     if (not isinstance(value, dict) or value.get("status") not in {"present", "absent", "unknown"} or
             not all(name in value for name in (
                 "matches", "interface_present", "phy_present", "interfaces_up"))):
-        return _unknown_linux_usb()
+        return _unknown_linux_usb("P0_WSL_PROBE_CONTRACT_INVALID")
     return value
 
 
@@ -84,6 +123,7 @@ def _wsl_process_start_ticks(
     *,
     distro: str,
     packaged_python: str,
+    runtime_root: str = "/opt/switchtrade",
     runner=run_command,
 ) -> int | None:
     program = (
@@ -91,10 +131,9 @@ def _wsl_process_start_ticks(
         "print('null' if not p.exists() else json.dumps(int(p.read_text(encoding='ascii').rsplit(')',1)[1].split()[19])))"
     )
     try:
-        result = runner([
-            "wsl.exe", "-d", distro, "-u", "root", "--",
-            packaged_python, "-c", program, str(pid),
-        ], 5)
+        result = runner(wsl_root_command(
+            distro, runtime_root, packaged_python, "-c", program, str(pid),
+        ), 5)
         if result.returncode != 0:
             raise ValueError("process probe failed")
         value = json.loads(result.stdout)
@@ -118,6 +157,7 @@ def _wsl_netdev_exists(
     *,
     distro: str,
     packaged_python: str,
+    runtime_root: str = "/opt/switchtrade",
     runner=run_command,
 ) -> bool:
     program = (
@@ -125,10 +165,9 @@ def _wsl_netdev_exists(
         "print(json.dumps((Path('/sys/class/net')/sys.argv[1]).exists()))"
     )
     try:
-        result = runner([
-            "wsl.exe", "-d", distro, "-u", "root", "--",
-            packaged_python, "-c", program, netdev,
-        ], 5)
+        result = runner(wsl_root_command(
+            distro, runtime_root, packaged_python, "-c", program, netdev,
+        ), 5)
         value = json.loads(result.stdout) if result.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired, TypeError, ValueError) as error:
         raise P0Error(
@@ -183,10 +222,8 @@ def _worker_command(
         "--role", required_role, "--target-channel", str(target_channel), "--", *worker,
     ]
     if os.name == "nt":
-        return [
-            "wsl.exe", "-d", distro, "-u", "root", "--cd", runtime_root,
-            "--", "env", "SWITCHTRADE_LOG_FD=2", *radio,
-        ]
+        return wsl_root_command(
+            distro, runtime_root, "env", "SWITCHTRADE_LOG_FD=2", *radio)
     return ["env", "SWITCHTRADE_LOG_FD=2", *radio]
 
 
@@ -245,16 +282,22 @@ class WorkerEvents:
         finally:
             self.events.put(None)
 
-    def wait_for(self, wanted: set[str], timeout: float) -> dict:
+    def wait_for(
+        self,
+        wanted: set[str],
+        timeout: float,
+        cancel_probe: CancelProbe | None = None,
+    ) -> dict:
         deadline = time.monotonic() + timeout
         while True:
+            if cancel_probe is not None and cancel_probe():
+                raise P0Canceled("P0b_worker")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise P0Error("P0_WORKER_TIMEOUT", "P0b_worker", "worker checkpoint deadline expired")
-            value = self.next_event(remaining)
+            value = self.next_event(min(0.25, remaining) if cancel_probe is not None else remaining)
             if value is None:
-                raise P0Error(
-                    "P0_WORKER_TIMEOUT", "P0b_worker", "worker checkpoint deadline expired")
+                continue
             if value["event"] in wanted:
                 return value
 
@@ -340,6 +383,7 @@ class P0Harness:
         target_channel: int = 6,
         release_probes: WslDProbes | None = None,
         after_endpoint_started: EndpointCheckpoint | None = None,
+        cancel_probe: CancelProbe | None = None,
     ):
         self.coordinator = coordinator
         self.validator = validator
@@ -349,11 +393,13 @@ class P0Harness:
         if lease_factory is None:
             self.linux_probe = (
                 (lambda usb_id: _wsl_linux_usb_probe(
-                    usb_id, distro=distro, packaged_python=packaged_python))
+                    usb_id, distro=distro, packaged_python=packaged_python,
+                    runtime_root=runtime_root))
                 if os.name == "nt" else linux_usb_probe
             )
             lease_factory = lambda adapter, recovery: UsbLease(
-                adapter, recovery, distro=distro, probe=self.linux_probe)
+                adapter, recovery, distro=distro, runtime_root=runtime_root,
+                probe=self.linux_probe)
         else:
             self.linux_probe = linux_usb_probe
         self.lease_factory = lease_factory
@@ -363,6 +409,11 @@ class P0Harness:
         self.target_channel = target_channel
         self.release_probes = release_probes
         self.after_endpoint_started = after_endpoint_started
+        self.cancel_probe = cancel_probe
+
+    def _check_canceled(self, gate: str) -> None:
+        if self.cancel_probe is not None and self.cancel_probe():
+            raise P0Canceled(gate)
 
     @staticmethod
     def _validate_ready(report: object, run: dict, adapter: UsbAdapter, report_path: Path) -> dict:
@@ -585,12 +636,12 @@ class P0Harness:
         if os.name == "nt":
             if not _wsl_netdev_exists(
                     netdev, distro=self.distro, packaged_python=self.packaged_python,
-                    runner=self.command_runner):
+                    runtime_root=self.runtime_root, runner=self.command_runner):
                 return
-            result = self.command_runner([
-                "wsl.exe", "-d", self.distro, "-u", "root", "--",
+            result = self.command_runner(wsl_root_command(
+                self.distro, self.runtime_root,
                 "ip", "link", "set", "dev", netdev, "down",
-            ], 5)
+            ), 5)
             if result.returncode != 0:
                 raise P0Error(
                     "P0_RADIO_QUIESCE_FAILED", "D9_radio_quiescence",
@@ -617,7 +668,7 @@ class P0Harness:
         if os.name == "nt":
             return _wsl_process_start_ticks(
                 pid, distro=self.distro, packaged_python=self.packaged_python,
-                runner=self.command_runner,
+                runtime_root=self.runtime_root, runner=self.command_runner,
             )
         path = Path("/proc") / str(pid) / "stat"
         try:
@@ -701,10 +752,10 @@ class P0Harness:
                 actual = self._process_start_ticks(wrapper_pid)
                 if actual == start_ticks:
                     if os.name == "nt":
-                        result = self.command_runner([
-                            "wsl.exe", "-d", self.distro, "-u", "root", "--",
+                        result = self.command_runner(wsl_root_command(
+                            self.distro, self.runtime_root,
                             "kill", "-TERM", str(wrapper_pid),
-                        ], 5)
+                        ), 5)
                         if result.returncode != 0 and self._process_start_ticks(wrapper_pid) == start_ticks:
                             raise P0Error(
                                 "P0_RECOVERY_PROCESS_STILL_ACTIVE", "D8_endpoint_verification",
@@ -756,7 +807,8 @@ class P0Harness:
             recovery_file = self.root / run_id / "p0-usb-recovery.json"
             if recovery_file.exists():
                 lease = UsbLease.from_recovery(
-                    recovery_file, distro=self.distro, probe=self.linux_probe)
+                    recovery_file, distro=self.distro, runtime_root=self.runtime_root,
+                    probe=self.linux_probe)
                 usb = lease.release()
                 evidence["prior_usb_state_restored"] = usb["prior_state_restored"]
             elif run["cleanup"]["evidence"].get("prior_usb_state_restored") is True:
@@ -836,8 +888,10 @@ class P0Harness:
         distributed_result = None
         distributed_prepared = False
         try:
+            self._check_canceled("P0a_release")
             self.coordinator.transition(run_id, Phase.PREFLIGHT, "P0a_release")
             adapter, p0a = self.validator.validate()
+            self._check_canceled("P0a_release")
             if adapter.instance_id.casefold() != requested_instance.casefold():
                 raise P0Error("P0_ADAPTER_IDENTITY_CHANGED", "P0a_adapter", "selected adapter changed during P0a")
             self.coordinator.pass_gate(run_id, "P0a_PASSIVE_READY")
@@ -845,7 +899,9 @@ class P0Harness:
             if distributed is not None:
                 run = distributed.bind(run_id, run)
             lease = self.lease_factory(adapter, run_root / "p0-usb-recovery.json")
-            lease_evidence = lease.acquire()
+            lease_evidence = lease.acquire(
+                checkpoint=lambda: self._check_canceled("P0b_lease"))
+            self._check_canceled("P0b_worker")
             command = _worker_command(
                 run=run, adapter=adapter, report_path=report_path,
                 runtime_root=self.runtime_root, packaged_python=self.packaged_python,
@@ -854,7 +910,8 @@ class P0Harness:
             process = self.worker_factory(
                 command, run_root / "worker-events.ndjson", run_root / "worker.stderr.log")
             events = WorkerEvents(process, run_root / "worker-events.ndjson")
-            ready_event = events.wait_for({"p0_side_ready"}, 45)
+            ready_event = events.wait_for(
+                {"p0_side_ready"}, 45, cancel_probe=self.cancel_probe)
             p0b = self._validate_ready(ready_event.get("report"), run, adapter, report_path)
             self._validate_cross_stage(p0a, p0b)
             self.coordinator.acquire_wrapper(
@@ -900,8 +957,9 @@ class P0Harness:
                     **({"endpoint_config": launch_extra["endpoint_config"]}
                        if distributed is not None else {}),
                 })
-                events.wait_for({"endpoint_exec"}, 5)
-                endpoint_event = events.wait_for({"endpoint_started"}, 5)
+                events.wait_for({"endpoint_exec"}, 5, cancel_probe=self.cancel_probe)
+                endpoint_event = events.wait_for(
+                    {"endpoint_started"}, 5, cancel_probe=self.cancel_probe)
                 if (endpoint_event.get("run_id") != run_id or endpoint_event.get("launch_nonce") != nonce or
                         endpoint_event.get("endpoint_pid") != p0b["wrapper_pid"] or
                         endpoint_event.get("process_start_ticks") != p0b["process_start_ticks"] or
@@ -933,7 +991,8 @@ class P0Harness:
                 elif mode == RunMode.DIRECT_A:
                     while True:
                         checkpoint = events.wait_for(
-                            {"a_gate_passed", "a_stage_ready", "a_stage_failed"}, 45)
+                            {"a_gate_passed", "a_stage_ready", "a_stage_failed"}, 45,
+                            cancel_probe=self.cancel_probe)
                         if (
                             checkpoint.get("run_id") != run_id
                             or checkpoint.get("launch_nonce") != nonce
@@ -963,7 +1022,8 @@ class P0Harness:
                 elif mode == RunMode.DIRECT_B:
                     while True:
                         checkpoint = events.wait_for(
-                            {"b_gate_passed", "b_stage_ready", "b_stage_failed"}, 180)
+                            {"b_gate_passed", "b_stage_ready", "b_stage_failed"}, 180,
+                            cancel_probe=self.cancel_probe)
                         if (
                             checkpoint.get("run_id") != run_id
                             or checkpoint.get("launch_nonce") != nonce
@@ -1001,15 +1061,21 @@ class P0Harness:
                 )
             cleanup["lease"] = lease_evidence
         except Exception as error:
-            primary = {
+            canceled = (
+                isinstance(error, P0Canceled) or
+                getattr(error, "code", None) == "DISTRIBUTED_RUN_CANCELED"
+            )
+            primary = None if canceled else {
                 "code": _stable_error_code(error),
                 "gate": getattr(error, "gate", "P0"),
                 "message": getattr(error, "message", type(error).__name__),
             }
             try:
                 self.coordinator.close_run(
-                    run_id, FunctionalOutcome.FAILED,
-                    code=primary["code"], message=primary["message"])
+                    run_id,
+                    FunctionalOutcome.CANCELED if canceled else FunctionalOutcome.FAILED,
+                    code=None if canceled else primary["code"],
+                    message=None if canceled else primary["message"])
             except ConnectionCoordinatorError:
                 pass
         try:
@@ -1164,10 +1230,9 @@ def _installed_release(root: str, distro: str, runner=run_command) -> str:
     marker_path = PurePosixPath(root) / ".switchtrade-release.json"
     try:
         if os.name == "nt":
-            result = runner([
-                "wsl.exe", "-d", distro, "-u", "root", "--",
-                "cat", marker_path.as_posix(),
-            ], 10)
+            result = runner(wsl_root_command(
+                distro, root, "cat", marker_path.as_posix(),
+            ), 10)
             if result.returncode != 0:
                 raise OSError("release marker probe failed")
             text = result.stdout
@@ -1219,7 +1284,8 @@ def main() -> None:
             target_channel=args.target_channel,
             release_probes=WslDProbes(
                 distro=args.distro,
-                packaged_python="/opt/switchtrade/bridge/.venv/bin/python",
+                runtime_root=args.runtime_root,
+                packaged_python=f"{args.runtime_root.rstrip('/')}/bridge/.venv/bin/python",
             ),
         )
         current = coordinator.snapshot()

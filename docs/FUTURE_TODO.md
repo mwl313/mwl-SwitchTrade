@@ -12,8 +12,10 @@ before retrying; keep the implementation status and acceptance debt in this TODO
 ## Critical and urgent blockers
 
 0. **CRITICAL — URGENT: Qualify the M7 distributed harness only through the safe pairing barrier.**
-   **Status (2026-08-30): root cause fixed in source; automated, 30-cycle local-authority, and hosted
-   relay software-only pairing checks pass. A new installed two-PC/two-Switch run is still required.**
+   **Status (2026-08-31): the invitation/pairing fixes and the later explicit-WSL-cwd,
+   identity-bound control, cancellation, and concurrent-status corrections are implemented in source.
+   Focused source regression passes. A newly packaged immutable build and installed two-PC/two-Switch
+   run are still required.**
    The rejected `D-PHYS-1-R3` runner stored its campaign binding in the `note` supplied while creating
    a private room, but the relay intentionally stores directory notes only for public rooms. PC B then
    read a nonexistent top-level `room.note`, so every otherwise-correct private join failed as
@@ -27,7 +29,12 @@ before retrying; keep the implementation status and acceptance debt in this TODO
    ahead of P0 and the first USB action. Local cleanup must verify before authority is released, and
    recovery state is removed only after both local cleanup and authority release are proven. Explicit
    room-version conflicts are retried with the same idempotent command after a fresh snapshot; semantic
-   409s still fail closed. Keep this item open until the new immutable release passes two consecutive
+   409s still fail closed. Operator stdin is no longer used: `distributed-control-state.v1` exposes
+   read-only status and exact test/run/checkpoint-bound continue/cancel actions, while one runner owns
+   cleanup. All WSL probes set the immutable runtime cwd and retain factual failure identity. Use only
+   the canonical Windows launcher; direct Python commands are no longer a supported qualification
+   path. Keep this item open until that launcher is distributed with an immutable environment and the
+   new release passes two consecutive
    close-range full runs, verified residue checks on both PCs, and then the separated-distance run.
 
 1. **CRITICAL — URGENT: Restore the complete WSL LDN prerequisite gate.**

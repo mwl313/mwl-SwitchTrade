@@ -11,7 +11,7 @@ import time
 from typing import Callable, Iterable
 import uuid
 
-from switchtrade.connection.p0 import run_command
+from switchtrade.connection.p0 import run_command, wsl_root_command
 
 
 class DProbeError(RuntimeError):
@@ -174,6 +174,7 @@ class WslDProbes:
         *,
         distro: str,
         packaged_python: str,
+        runtime_root: str = "/opt/switchtrade",
         private_paths: Iterable[str | Path] = (),
         runner: Callable[[list[str], float], subprocess.CompletedProcess[str]] = run_command,
         timeout: float = 5.0,
@@ -184,6 +185,7 @@ class WslDProbes:
             raise ValueError("D WSL probe timeout is invalid")
         self.distro = distro
         self.packaged_python = packaged_python
+        self.runtime_root = runtime_root
         paths = tuple(Path(item).resolve(strict=False) for item in private_paths)
         if len(paths) > 16:
             raise ValueError("D private path inventory exceeds its bound")
@@ -192,10 +194,10 @@ class WslDProbes:
         self.timeout = timeout
 
     def _json(self, program: str, *arguments: object) -> dict:
-        command = [
-            "wsl.exe", "-d", self.distro, "-u", "root", "--",
-            self.packaged_python, "-c", program, *(str(item) for item in arguments),
-        ]
+        command = wsl_root_command(
+            self.distro, self.runtime_root, self.packaged_python, "-c", program,
+            *(str(item) for item in arguments),
+        )
         try:
             result = self.runner(command, self.timeout)
             value = json.loads(result.stdout) if result.returncode == 0 else None

@@ -1,131 +1,149 @@
 # M7 two-PC/two-Switch distributed qualification
 
-> Current qualification release: `v0.2.10-beta.1`.
-> Invitation contract: `distributed-invitation.v2`.
+> Harness contract: `distributed-invitation.v2` plus `distributed-control-state.v1`.
 > PC A creates the qualification room; PC B joins it.
+> Use only `scripts/windows/Invoke-M7DistributedHarness.ps1`; do not assemble direct Python commands.
 
-This CLI runner is independent of the retiring desktop GUI. The installed app is used only to install
-the immutable WSL runtime and select each PC's own supported adapter.
+This qualification runner is independent of the retiring desktop GUI. Setup/provisioning installs the
+immutable WSL runtime and writes the Windows adapter selection. The old GUI is not a control,
+checkpoint, or execution dependency.
+
+## Release gate
+
+Both PCs must have the same clean source commit and an installed runtime whose release ID is exactly
+`beta-<first 12 characters of that source SHA>`. A source fix is not installed evidence. The launcher
+checks the interpreter, dependencies, imported module path, source cleanliness, runtime identity,
+explicit WSL working directory, and canonical Windows adapter selection before it can create or join
+a relay room.
+
+From any working directory, run on each PC:
+
+```powershell
+$repo = 'C:\path\to\the\clean\switchtrade\checkout'
+$harness = Join-Path $repo 'scripts\windows\Invoke-M7DistributedHarness.ps1'
+& $harness preflight
+```
+
+`status: ready` is necessary but does not attach USB or certify the radio. Do not use
+`-AllowDirtyForDevelopment` for qualification evidence.
 
 ## Non-negotiable safety order
 
-1. Keep both PCs and both Switches together. Do not move or operate either Switch yet.
-2. Check out the exact release tag and install that release on both PCs.
-3. Start PC A, transfer its fresh invitation once, and start PC B.
-4. Both terminals must print `coordination_paired` with `usb_attached:false`.
-5. Do not press Enter on either PC until both pairing lines are visible. Before this Enter, the adapter
-   must still be Windows-owned and no P0 run or WSL radio may exist.
-6. Press Enter on both PCs to begin P0. Follow later role-specific Switch prompts only when displayed.
-7. Accept a case only when both sides verify D11 and return their adapter to its exact prior state.
-8. Run two complete close-range cases with clean residue. Increase physical distance only after both
-   pass.
+1. Keep both PCs and both Switches together. Do not operate either Switch.
+2. Run canonical `preflight` on both PCs and compare exact source, release, and control contract.
+3. Use a new named state root on each PC. Never reuse or delete a prior state root.
+4. Start PC A `create`, transfer its fresh invitation once, then start PC B `join`.
+5. Both runners must publish `coordination_paired` with the same test ID and
+   `usb_attached:false`.
+6. In separate controller terminals, read `status`. Both must be `awaiting_user` at
+   `PAIRING_CONFIRMED`, with `run_id:null`.
+7. Submit identity-bound `continue` on both PCs. There is no Enter/stdin checkpoint.
+8. Follow later role-specific Switch checkpoints only when `status` exposes that exact checkpoint.
+9. Accept a case only after both reports verify D11 and each adapter returns to its exact prior state.
+10. Complete two nearby cases with clean residue before increasing physical distance.
 
-Any v1 invitation, source/release difference, missing pairing checkpoint, early USB attachment,
-duplicate endpoint, failed cleanup, or retained session is a stop condition. Never reuse an invitation
-or delete the state root to bypass recovery.
-
-## Install and source preflight — both PCs
-
-Install `SwitchTradeSetup.exe` from GitHub prerelease `v0.2.10-beta.1`, using the SHA-256 published in
-that release. Open SwitchTrade once, select the local RTL8192EU adapter, and close the GUI. Then run in
-the clean repository clone:
-
-```powershell
-git fetch origin --tags
-git switch --detach v0.2.10-beta.1
-if (git status --short) { throw 'Source tree is dirty' }
-
-$source = (git rev-parse HEAD).Trim().ToLowerInvariant()
-$expectedRelease = "beta-$($source.Substring(0,12))"
-$candidateDistros = @((@(& wsl.exe --list --quiet) -replace ([char]0), '') |
-  Where-Object { $_ -like "SwitchTrade-$expectedRelease-*" })
-$matchingDistros = @(
-  foreach ($candidate in $candidateDistros) {
-    try {
-      $marker = ((& wsl.exe -d $candidate -u root -- cat `
-        /opt/switchtrade/.switchtrade-release.json 2>$null) | Out-String) | ConvertFrom-Json
-      if ($marker.release_id -eq $expectedRelease) { $candidate }
-    } catch {}
-  }
-)
-if ($matchingDistros.Count -ne 1) { throw 'Expected exactly one matching installed runtime' }
-$activeDistro = $matchingDistros[0]
-$selection = "\\wsl.localhost\$activeDistro\root\.local\state\switchtrade\runtime\hardware-selection.json"
-if (-not (Test-Path -LiteralPath $selection)) { throw 'Adapter selection is absent' }
-$selectionValue = Get-Content -Raw -LiteralPath $selection | ConvertFrom-Json
-if ($selectionValue.usb_id -ne '0bda:818b') { throw 'Wrong adapter selection' }
-
-$health = Invoke-RestMethod 'https://relay.pangyostonefist.org/health'
-if ($health.status -ne 'ready' -or $health.room_contract -ne 'room-control.v1' -or
-    $health.rfu_contracts -notcontains 'rfu-tunnel.v2') { throw 'Relay contract unavailable' }
-$python = '.\.audit-venv\Scripts\python.exe'
-```
-
-The source SHA is derived from the release tag rather than copied from prose. The runtime must report
-`beta-` followed by that SHA's first twelve characters. This prevents running one harness checkout
-against a different installed runtime.
+Any v1 invitation, identity mismatch, dirty source, missing pairing state, early USB attachment,
+duplicate endpoint, unknown cleanup, or retained session is a stop condition. Do not reuse an
+invitation, manually edit control files, or delete state to bypass recovery.
 
 ## Case 1 — PC A joins the Switch room, PC B hosts the mirrored AP
 
-PC A starts first:
+Choose a campaign name that has never been used, for example `D-PHYS-1-R9`.
+
+PC A runner terminal:
 
 ```powershell
-$stateRoot = Join-Path $env:LOCALAPPDATA 'SwitchTrade\qualification-m7-distributed\D-PHYS-1-R4'
-& $python -m switchtrade.connection.distributed_harness `
-  --distro $activeDistro --runtime-root /opt/switchtrade `
-  --selection-file $selection --state-root $stateRoot `
-  create --role a_room_joiner --action end
+$stateRoot = Join-Path $env:LOCALAPPDATA 'SwitchTrade\qualification-m7-distributed\D-PHYS-1-R9'
+& $harness create -StateRoot $stateRoot -Role a_room_joiner -Action end
 ```
 
-Transfer only the new `ONE_TIME_INVITATION=...` value. PC B runs with its own state root:
+Transfer only the new `ONE_TIME_INVITATION=...` value. PC B uses its own local path with the same
+campaign name:
 
 ```powershell
-$stateRoot = Join-Path $env:LOCALAPPDATA 'SwitchTrade\qualification-m7-distributed\D-PHYS-1-R4'
-& $python -m switchtrade.connection.distributed_harness `
-  --distro $activeDistro --runtime-root /opt/switchtrade `
-  --selection-file $selection --state-root $stateRoot `
-  join --invitation '<ONE_TIME_INVITATION_FROM_PC_A>'
+$stateRoot = Join-Path $env:LOCALAPPDATA 'SwitchTrade\qualification-m7-distributed\D-PHYS-1-R9'
+& $harness join -StateRoot $stateRoot -Invitation '<ONE_TIME_INVITATION_FROM_PC_A>'
 ```
 
-Stop at the pairing checkpoint. Verify both terminals show the same test ID and
-`coordination_paired`, and that both adapters remain Windows-owned. Then press Enter on both PCs.
+On each PC, open a second PowerShell terminal and read status:
 
-- When instructed, Switch A selects `Become Leader` and keeps its room open.
-- Only after the AP checkpoint, Switch B selects `Join Group`.
-- Complete the trade through `C_TRADE_COMPLETE` and the End prompt.
-- PC A closes the qualification room only after PC B reports `D11_VERIFIED`.
+```powershell
+& $harness status -StateRoot $stateRoot
+```
+
+After both sides show the same `test_id`, `PAIRING_CONFIRMED`, and `run_id:null`, continue each side
+using the exact ID copied from that PC's status:
+
+```powershell
+& $harness continue -StateRoot $stateRoot `
+  -TestId '<EXACT_TEST_ID>' -Checkpoint PAIRING_CONFIRMED
+```
+
+P0 now begins and may take USB ownership. Wait for `attempt_locked` and the later checkpoint. All
+post-P0 control commands must include the exact `run_id` shown by `status`.
+
+When PC A reports `CREATE_SWITCH_ROOM`:
+
+1. On Switch A, open the trade room as Group Leader and leave it open.
+2. Submit:
+
+```powershell
+& $harness continue -StateRoot $stateRoot -TestId '<EXACT_TEST_ID>' `
+  -RunId '<EXACT_RUN_ID>' -Checkpoint CREATE_SWITCH_ROOM
+```
+
+When PC B reports `JOIN_SWITCH_GROUP`:
+
+1. Submit the exact continue command first.
+2. Only then use Switch B to choose Join Group before the bounded association deadline.
+
+```powershell
+& $harness continue -StateRoot $stateRoot -TestId '<EXACT_TEST_ID>' `
+  -RunId '<EXACT_RUN_ID>' -Checkpoint JOIN_SWITCH_GROUP
+```
+
+Later `D_ACTION_CONFIRMED` and owner finalization checkpoints use the same command shape with their
+exact checkpoint. PC A closes the authority room only after PC B reports D11 verified.
 
 ## Case 2 — roles reversed
 
-Use fresh `D-PHYS-2-R4` state roots and a new invitation. PC A starts with:
+Use fresh `D-PHYS-2-R9` roots and a new invitation. PC A starts with:
 
 ```powershell
-create --role b_ap_host --action close
+& $harness create -StateRoot $stateRoot -Role b_ap_host -Action close
 ```
 
 PC B receives the complementary room-joiner role. Switch B becomes Leader; Switch A selects Join
-Group only at its AP checkpoint. Apply the same pairing, D11, and residue gates.
+Group only at its published AP checkpoint. Apply the same pairing, exact ID, D11, and residue gates.
 
-## Recovery
+## Cancellation and recovery
 
-If either command is interrupted or reports failed cleanup, do not create another case. On that PC run
-the same common arguments and exact state root with:
+To stop before P0, omit `RunId`. After P0 starts, provide the exact run ID:
 
 ```powershell
-& $python -m switchtrade.connection.distributed_harness `
-  --distro $activeDistro --runtime-root /opt/switchtrade `
-  --selection-file $selection --state-root $stateRoot recover
+& $harness cancel -StateRoot $stateRoot -TestId '<EXACT_TEST_ID>'
+& $harness cancel -StateRoot $stateRoot -TestId '<EXACT_TEST_ID>' -RunId '<EXACT_RUN_ID>'
 ```
 
-Recovery supports failures before P0, expired member credentials, closed/expired rooms, and active
-distributed runs. It never converts an interrupted case into a pass.
+Cancellation requests work; the runner remains the sole cleanup owner. A cancel command is rejected
+once cleanup/finalization owns the run. Ctrl+C is normalized into the same cancellation request and
+must not be used to kill cleanup.
 
-## Acceptance
+If a runner was interrupted or cleanup is not verified, do not start another case:
 
-For both PCs record source SHA, release ID, role, run ID, attempt ID, functional status, cleanup status,
-last passed gate, D11 result, and a redacted residue result. Do not return invitation, room code,
-credentials, Windows InstanceId, MAC addresses, or packet data.
+```powershell
+& $harness recover -StateRoot $stateRoot
+```
 
-M7 physical qualification closes only after two consecutive nearby full cases and the later separated
-case leave zero endpoints, PHYs, temporary interfaces, active relay credentials, nonterminal rooms,
-locks, recovery records, or unintended USB ownership.
+If recovery waits at `RECOVERY_FINALIZATION_CONFIRMED`, read status and submit the exact identity-bound
+continue command. Recovery never converts an interrupted case into a pass.
+
+## Acceptance evidence
+
+For both PCs record source SHA, installed release ID, role, test ID, run ID, attempt ID, functional
+status, cleanup status, last passed gate, D11 result, and redacted residue result. Never return an
+invitation, room code, credentials, Windows InstanceId, MAC addresses, or packet data.
+
+M7 physical qualification closes only after both nearby full cases and the separated case leave zero
+endpoints, PHYs, temporary interfaces, active relay credentials, nonterminal rooms, locks, recovery
+records, or unintended USB ownership.

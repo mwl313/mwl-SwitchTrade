@@ -91,3 +91,18 @@ optimistic version conflicts, and retains recovery state when local cleanup is u
 real-authority pairing passed 30/30 cycles with no active credential or nonterminal room, and a hosted
 software-only pairing passed both roles without touching hardware. Installed physical qualification
 remains open until the new release package passes its lifecycle checks on both PCs.
+
+## 2026-08-31 control and launch-context correction
+
+The R5-R8 attempts found qualification-infrastructure defects after the original milestone record:
+inherited Windows cwd broke Linux imports, an interpreter shim did not forward operator stdin,
+bypassing that shim removed dependencies, and normal cancellation emitted a traceback. Those attempts
+are rejected and do not change the ABC+D stage results.
+
+The source harness now uses explicit immutable WSL cwd for every subprocess and preserves factual
+probe error classes. Human checkpoints are persisted in `distributed-control-state.v1` and advanced
+only by exact test-ID/run-ID/checkpoint-bound `continue` commands. `status` is read-only; `cancel`
+requests cancellation while the active runner remains the only cleanup owner. The canonical Windows
+entry point validates the composed environment before any relay-room mutation. See
+`HANDOFF-M7-TWO-PC-DISTRIBUTED-20260830.md` for the superseding operator sequence. Installed physical
+qualification remains open.

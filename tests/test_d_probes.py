@@ -44,9 +44,9 @@ class WslDProbesTests(unittest.TestCase):
         self.assertEqual(probes.process_start_ticks(5001), 202)
         self.assertIsNone(probes.process_start_ticks(5001))
         command = runner.commands[0][0]
-        self.assertEqual(command[:7], [
-            "wsl.exe", "-d", "SwitchTrade", "-u", "root", "--",
-            "/opt/switchtrade/python/bin/python3",
+        self.assertEqual(command[:9], [
+            "wsl.exe", "-d", "SwitchTrade", "-u", "root",
+            "--cd", "/opt/switchtrade", "--", "/opt/switchtrade/python/bin/python3",
         ])
         self.assertEqual(command[-3:], ["probe-only", "5001", "5001"])
 

@@ -3,8 +3,11 @@ import json
 import os
 from pathlib import Path
 import queue
+import shutil
+import subprocess
 import tempfile
 import threading
+import time
 import unittest
 import uuid
 from unittest.mock import patch
@@ -16,6 +19,8 @@ from switchtrade.connection.distributed_endpoint import (
     _config,
 )
 from switchtrade.connection.distributed_harness import (
+    CONTROL_STATE_CONTRACT,
+    DistributedControl,
     DistributedLifecycle,
     INVITATION_CONTRACT,
     RELAY_POLL_INTERVAL,
@@ -31,6 +36,29 @@ from switchtrade.relay_client import RelayError
 
 RUN_ID = "00000000-0000-0000-0000-000000000123"
 ROOM_ID = "00000000-0000-0000-0000-000000000789"
+
+
+class FakeControl:
+    def __init__(self):
+        self.calls = []
+        self.state = {"run_id": None, "terminal_status": None}
+
+    def publish(self, phase, **values):
+        self.calls.append(("publish", phase, values))
+        if values.get("run_id") is not None:
+            self.state["run_id"] = values["run_id"]
+
+    def await_continue(self, checkpoint, **values):
+        self.calls.append(("continue", checkpoint, values))
+
+    def raise_if_canceled(self, _gate):
+        return None
+
+    def cancel_requested(self):
+        return False
+
+    def begin_cleanup(self, run_id):
+        self.calls.append(("cleaning", run_id))
 
 
 class DistributedContractTests(unittest.TestCase):
@@ -96,6 +124,65 @@ class DistributedContractTests(unittest.TestCase):
             self.assertEqual(session["room_id"], invitation["room_id"])
             self.assertTrue(path.exists())
             self.assertEqual(relay.commands, [])
+
+    def test_reused_control_root_is_rejected_before_any_relay_mutation(self):
+        class Relay:
+            calls = 0
+
+            def create_trade_room(self, *_args, **_kwargs):
+                self.calls += 1
+                raise AssertionError("relay mutation must not run")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "distributed-control-state.json").write_text("{}", encoding="utf-8")
+            relay = Relay()
+            args = argparse.Namespace(
+                command="create", role="a_room_joiner", action="end")
+            with self.assertRaisesRegex(SystemExit, "DISTRIBUTED_STATE_ROOT_REUSE_FORBIDDEN"):
+                _room_session(
+                    args, "release-a", "a" * 40, relay,
+                    root / "distributed-session.json",
+                )
+            self.assertEqual(relay.calls, 0)
+
+    def test_session_persistence_failure_rolls_back_joined_authority_member(self):
+        invitation = self.invitation()
+
+        class Relay:
+            left = False
+
+            @staticmethod
+            def join_trade_room(room_code, _display_name, _client_id):
+                return {
+                    "room": {
+                        "contract_version": "room-control.v1", "room_id": ROOM_ID,
+                        "room_code": room_code, "visibility": "private", "room_version": 2,
+                        "local_member_id": "member-b",
+                        "members": [
+                            {"member_id": "member-a", "seat": "member_a", "online_state": "online"},
+                            {"member_id": "member-b", "seat": "member_b", "online_state": "online"},
+                        ],
+                    },
+                    "member_token": "m" * 32, "reconnect_token": "r" * 32,
+                }
+
+            def room_command(self, *_args, **_kwargs):
+                self.left = True
+
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "distributed-session.json"
+            relay = Relay()
+            with patch(
+                "switchtrade.connection.distributed_harness.atomic_json",
+                side_effect=OSError("simulated durable-write failure"),
+            ), self.assertRaisesRegex(SystemExit, "DISTRIBUTED_SESSION_PERSIST_FAILED"):
+                _room_session(
+                    argparse.Namespace(command="join", invitation=_invitation(invitation)),
+                    invitation["release"], invitation["source_sha"], relay, path,
+                )
+            self.assertTrue(relay.left)
+            self.assertFalse(path.exists())
 
     def test_private_room_join_rejects_wrong_room_id_and_leaves_without_session(self):
         invitation = self.invitation()
@@ -249,7 +336,7 @@ class DistributedContractTests(unittest.TestCase):
             with patch("builtins.input", side_effect=AssertionError("unexpected prompt")):
                 recovered = _recover_distributed(
                     coordinator=Coordinator(), relay=relay, harness=Harness(),
-                    session=session, session_path=session_path,
+                    session=session, session_path=session_path, control=FakeControl(),
                 )
 
             self.assertEqual(recovered["status"], "recovered")
@@ -298,7 +385,7 @@ class DistributedContractTests(unittest.TestCase):
                     "room_id": ROOM_ID, "room_code": "ABC123", "member_token": "token",
                     "reconnect_token": "reconnect", "owner": True,
                 },
-                session_path=path,
+                session_path=path, control=FakeControl(),
             )
             self.assertEqual(result["status"], "recovered")
             self.assertEqual(result["local_recovery"], {"status": "not_required"})
@@ -346,7 +433,7 @@ class DistributedContractTests(unittest.TestCase):
                 "room_id": ROOM_ID, "room_code": "ABC123", "member_token": "expired",
                 "reconnect_token": "expired-reconnect", "owner": True,
             },
-            session_path=Path("unused.json"),
+            session_path=Path("unused.json"), control=FakeControl(),
         )
         self.assertTrue(harness.called)
         self.assertEqual(result["local_recovery"]["status"], "recovered")
@@ -423,7 +510,8 @@ class DistributedContractTests(unittest.TestCase):
                     "test_id": "test-1", "owner": True, "action": "end",
                 },
                 session_path=run_root / "session.json", distro="SwitchTrade",
-                packaged_python="/opt/switchtrade/python", timeout=60,
+                packaged_python="/opt/switchtrade/python", runtime_root="/opt/switchtrade",
+                control=FakeControl(), timeout=60,
             )
             context = {
                 "run_id": RUN_ID, "run_root": run_root,
@@ -447,35 +535,207 @@ class DistributedContractTests(unittest.TestCase):
             self.assertLess(relay.member_requests, 120)
             self.assertGreaterEqual(relay.heartbeats, 3)
 
-    def test_operator_prompt_keeps_relay_member_alive(self):
+    def test_explicit_file_checkpoint_keeps_member_alive_without_stdin(self):
         heartbeat = threading.Event()
 
-        class Relay:
-            base_url = "https://relay.example"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            control = DistributedControl(
+                root, test_id=str(uuid.uuid4()), source_sha="a" * 40,
+                release="release-a", role="a_room_joiner",
+            )
+            failures = []
 
-            @staticmethod
-            def room(_room_id, _member_token):
-                return {"room_version": 1}
+            def wait():
+                try:
+                    control.await_continue(
+                        "PAIRING_CONFIRMED", run_id=None, timeout=3,
+                        heartbeat=heartbeat.set,
+                    )
+                except BaseException as error:
+                    failures.append(error)
 
-            @staticmethod
-            def room_command(*_args, **_kwargs):
-                heartbeat.set()
-                return {"room_version": 2}
+            with patch(
+                "switchtrade.connection.distributed_harness.RELAY_HEARTBEAT_INTERVAL", 0.01,
+            ), patch("builtins.input", side_effect=AssertionError("stdin must not be used")):
+                worker = threading.Thread(target=wait)
+                worker.start()
+                deadline = time.monotonic() + 1
+                while control.read_state(control.state_path)["phase"] != "awaiting_user":
+                    if failures:
+                        raise failures[0]
+                    if time.monotonic() >= deadline:
+                        self.fail("control checkpoint was not published")
+                    time.sleep(0.01)
+                self.assertTrue(heartbeat.wait(0.5), "relay heartbeat did not run while awaiting")
+                DistributedControl.submit(
+                    root, action="continue", test_id=control.state["test_id"],
+                    run_id=None, checkpoint="PAIRING_CONFIRMED",
+                )
+                worker.join(1)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(failures, [])
+            self.assertTrue(heartbeat.is_set())
+            self.assertEqual(control.read_state(control.state_path)["phase"], "running")
 
-        lifecycle = DistributedLifecycle(
-            coordinator=object(), relay=Relay(),
-            session={
-                "room_id": ROOM_ID, "member_token": "member-token",
-                "switch_role": "a_room_joiner",
-            },
-            session_path=Path("unused.json"), distro="SwitchTrade",
-            packaged_python="/opt/switchtrade/python",
-        )
-        with patch(
-            "switchtrade.connection.distributed_harness.RELAY_HEARTBEAT_INTERVAL", 0.01,
-        ), patch("builtins.input", side_effect=lambda _message: heartbeat.wait(1)):
-            lifecycle._prompt("waiting")
-        self.assertTrue(heartbeat.is_set())
+    def test_control_status_is_read_only_and_stale_commands_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            test_id = str(uuid.uuid4())
+            control = DistributedControl(
+                root, test_id=test_id, source_sha="a" * 40,
+                release="release-a", role="a_room_joiner",
+            )
+            before = control.state_path.read_bytes()
+            state = DistributedControl.read_state(control.state_path)
+            self.assertEqual(state["contract_version"], CONTROL_STATE_CONTRACT)
+            self.assertEqual(control.state_path.read_bytes(), before)
+            with self.assertRaisesRegex(SystemExit, "DISTRIBUTED_CONTROL_IDENTITY_MISMATCH"):
+                DistributedControl.submit(
+                    root, action="cancel", test_id=str(uuid.uuid4()),
+                    run_id=None, checkpoint=None,
+                )
+            self.assertFalse(control.command_path.exists())
+
+    def test_control_cancel_is_identity_bound_and_cleanup_owns_finalization(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            test_id = str(uuid.uuid4())
+            control = DistributedControl(
+                root, test_id=test_id, source_sha="a" * 40,
+                release="release-a", role="b_ap_host",
+            )
+            control.publish("running", run_id=RUN_ID)
+            accepted = DistributedControl.submit(
+                root, action="cancel", test_id=test_id,
+                run_id=RUN_ID, checkpoint=None,
+            )
+            self.assertEqual(accepted["action"], "cancel")
+            self.assertTrue(control.cancel_requested())
+            control.begin_cleanup(RUN_ID)
+            self.assertEqual(control.read_state(control.state_path)["phase"], "cleaning")
+            with self.assertRaisesRegex(SystemExit, "DISTRIBUTED_CLEANUP_IN_PROGRESS"):
+                DistributedControl.submit(
+                    root, action="cancel", test_id=test_id,
+                    run_id=RUN_ID, checkpoint=None,
+                )
+
+    def test_control_command_publication_never_overwrites_a_concurrent_submitter(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            test_id = str(uuid.uuid4())
+            control = DistributedControl(
+                root, test_id=test_id, source_sha="a" * 40,
+                release="release-a", role="a_room_joiner",
+            )
+            control.publish("running", run_id=RUN_ID)
+            barrier = threading.Barrier(3)
+            results = []
+
+            def submit():
+                barrier.wait()
+                try:
+                    DistributedControl.submit(
+                        root, action="cancel", test_id=test_id,
+                        run_id=RUN_ID, checkpoint=None,
+                    )
+                    results.append("accepted")
+                except SystemExit as error:
+                    results.append(str(error))
+
+            workers = [threading.Thread(target=submit) for _ in range(2)]
+            for worker in workers:
+                worker.start()
+            barrier.wait()
+            for worker in workers:
+                worker.join(2)
+            self.assertFalse(any(worker.is_alive() for worker in workers))
+            self.assertCountEqual(
+                results, ["accepted", "DISTRIBUTED_CONTROL_COMMAND_PENDING"])
+            self.assertEqual(
+                DistributedControl._read_command(control.command_path)["action"], "cancel")
+
+    def test_cleanup_removes_a_checkpoint_command_that_raced_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            test_id = str(uuid.uuid4())
+            control = DistributedControl(
+                root, test_id=test_id, source_sha="a" * 40,
+                release="release-a", role="a_room_joiner",
+            )
+            control.publish(
+                "awaiting_user", run_id=RUN_ID,
+                checkpoint="CREATE_SWITCH_ROOM", can_continue=True)
+            DistributedControl.submit(
+                root, action="continue", test_id=test_id, run_id=RUN_ID,
+                checkpoint="CREATE_SWITCH_ROOM",
+            )
+            self.assertTrue(control.command_path.exists())
+            control.begin_cleanup(RUN_ID)
+            self.assertFalse(control.command_path.exists())
+            self.assertEqual(control.read_state(control.state_path)["phase"], "cleaning")
+
+    def test_control_submit_rejects_unknown_action_before_writing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            test_id = str(uuid.uuid4())
+            control = DistributedControl(
+                root, test_id=test_id, source_sha="a" * 40,
+                release="release-a", role="a_room_joiner",
+            )
+            with self.assertRaisesRegex(SystemExit, "DISTRIBUTED_CONTROL_COMMAND_INVALID"):
+                DistributedControl.submit(
+                    root, action="unknown", test_id=test_id,
+                    run_id=None, checkpoint=None,
+                )
+            self.assertFalse(control.command_path.exists())
+
+    def test_control_state_rejects_boolean_schema_and_sequence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            control = DistributedControl(
+                root, test_id=str(uuid.uuid4()), source_sha="a" * 40,
+                release="release-a", role="a_room_joiner",
+            )
+            for field in ("schema", "sequence"):
+                invalid = {**control.state, field: True}
+                control.state_path.write_text(json.dumps(invalid), encoding="utf-8")
+                with self.assertRaisesRegex(SystemExit, "DISTRIBUTED_CONTROL_STATE_INVALID"):
+                    DistributedControl.read_state(control.state_path)
+
+    def test_canonical_launcher_contains_no_stdin_prompt_and_fixes_environment(self):
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "scripts" / "windows" / "Invoke-M7DistributedHarness.ps1").read_text(
+            encoding="utf-8")
+        self.assertNotIn("Read-Host", script)
+        self.assertNotIn("builtins.input", script)
+        for required in (
+            ".audit-venv\\Scripts\\python.exe", "DISTRIBUTED_QUALIFICATION_SOURCE_DIRTY",
+            "--cd", "/opt/switchtrade", "hardware-selection.json",
+            "switchtrade.connection.distributed_harness", "Push-Location",
+        ):
+            self.assertIn(required, script)
+
+    @unittest.skipUnless(os.name == "nt" and shutil.which("pwsh"), "PowerShell 7 is required")
+    def test_canonical_launcher_status_is_read_only_from_an_arbitrary_cwd(self):
+        root = Path(__file__).resolve().parents[1]
+        script = root / "scripts" / "windows" / "Invoke-M7DistributedHarness.ps1"
+        with tempfile.TemporaryDirectory(prefix="스위치트레이드-") as temporary:
+            state_root = Path(temporary) / "상태"
+            state_root.mkdir()
+            control = DistributedControl(
+                state_root, test_id=str(uuid.uuid4()), source_sha="a" * 40,
+                release="release-a", role="a_room_joiner",
+            )
+            before = control.state_path.read_bytes()
+            result = subprocess.run(
+                [shutil.which("pwsh"), "-NoProfile", "-File", str(script),
+                 "status", "-StateRoot", str(state_root)],
+                cwd=Path(temporary), capture_output=True, text=True, timeout=20,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["test_id"], control.state["test_id"])
+            self.assertEqual(control.state_path.read_bytes(), before)
 
     def test_switch_checkpoint_prompts_before_endpoint_continue(self):
         order = []
@@ -491,13 +751,15 @@ class DistributedContractTests(unittest.TestCase):
         }
         lifecycle.run_context = {"run_id": RUN_ID}
         lifecycle.last_gate = "C0_DATA_PLANE_PROVEN"
-        lifecycle._prompt = lambda message: order.append(("prompt", message))
+        lifecycle.control = FakeControl()
+        lifecycle.timeout = 1
         lifecycle._continue_checkpoint(Events(), {
             "event": "user_checkpoint", "checkpoint": "CREATE_SWITCH_ROOM",
             "run_id": RUN_ID,
         })
-        self.assertEqual([item[0] for item in order], ["prompt", "send"])
-        self.assertEqual(order[1][1], {
+        self.assertEqual(lifecycle.control.calls[0][0:2], ("continue", "CREATE_SWITCH_ROOM"))
+        self.assertEqual([item[0] for item in order], ["send"])
+        self.assertEqual(order[0][1], {
             "action": "continue_checkpoint", "checkpoint": "CREATE_SWITCH_ROOM",
             "run_id": RUN_ID,
         })
@@ -534,7 +796,8 @@ class DistributedContractTests(unittest.TestCase):
                 "switch_role": "a_room_joiner",
             },
             session_path=Path("unused.json"), distro="SwitchTrade",
-            packaged_python="/opt/switchtrade/python",
+            packaged_python="/opt/switchtrade/python", runtime_root="/opt/switchtrade",
+            control=FakeControl(),
         )
         self.assertTrue(lifecycle._heartbeat(force=True))
         self.assertEqual(relay.commands, 2)
@@ -570,11 +833,16 @@ class DistributedContractTests(unittest.TestCase):
                 "switch_role": "a_room_joiner", "test_id": "test-1", "owner": True,
             },
             session_path=Path("unused.json"), distro="SwitchTrade",
-            packaged_python="/opt/switchtrade/python", timeout=1,
+            packaged_python="/opt/switchtrade/python", runtime_root="/opt/switchtrade",
+            control=FakeControl(), timeout=1,
         )
-        with patch("builtins.input", return_value=""):
+        with patch("builtins.input", side_effect=AssertionError("stdin must not be used")):
             lifecycle.confirm_pairing()
-        self.assertGreaterEqual(relay.heartbeats, 1)
+        checkpoint = next(call for call in lifecycle.control.calls if call[0] == "continue")
+        self.assertEqual(checkpoint[1], "PAIRING_CONFIRMED")
+        self.assertEqual(checkpoint[2]["run_id"], None)
+        self.assertEqual(checkpoint[2]["timeout"], 1)
+        self.assertTrue(callable(checkpoint[2]["heartbeat"]))
 
     def test_abort_preserves_recovery_until_local_cleanup_and_authority_release(self):
         room = {"room_version": 2}
@@ -602,7 +870,8 @@ class DistributedContractTests(unittest.TestCase):
                     "switch_role": "a_room_joiner", "test_id": "test-1", "owner": True,
                 },
                 session_path=path, distro="SwitchTrade",
-                packaged_python="/opt/switchtrade/python",
+                packaged_python="/opt/switchtrade/python", runtime_root="/opt/switchtrade",
+                control=FakeControl(),
             )
             retained = lifecycle.abort(cleanup_verified=False)
             self.assertEqual(retained, {"authority_released": False, "session_retained": True})

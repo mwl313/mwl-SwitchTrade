@@ -8,7 +8,7 @@ import hashlib
 import json
 import locale
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import time
@@ -23,6 +23,9 @@ QUALIFIED_USBIPD_VERSION = (5, 3, 0)
 MINIMUM_WSL_VERSION = (2, 4, 4)
 _INSTANCE_USB = re.compile(r"VID_([0-9A-F]{4})&PID_([0-9A-F]{4})", re.I)
 _BUS_ID = re.compile(r"^[0-9]+-[0-9]+(?:\.[0-9]+)*$")
+_PROBE_FAILURE = re.compile(r"^P0_[A-Z0-9_]{1,92}$")
+_ATOMIC_REPLACE_TIMEOUT = 1.0
+_ATOMIC_REPLACE_INTERVAL = 0.01
 
 
 class P0Error(RuntimeError):
@@ -56,6 +59,28 @@ class UsbAdapter:
 
 
 Runner = Callable[[list[str], float], subprocess.CompletedProcess[str]]
+
+
+def wsl_root_command(
+    distro: str,
+    runtime_root: str,
+    *command: object,
+) -> list[str]:
+    """Build one argument-safe WSL command with an explicit immutable runtime cwd."""
+    if (
+        not isinstance(distro, str) or not distro or "\x00" in distro or
+        not isinstance(runtime_root, str) or not runtime_root or "\x00" in runtime_root or
+        not PurePosixPath(runtime_root).is_absolute() or
+        not command or any(not isinstance(item, (str, PurePosixPath)) for item in command)
+    ):
+        raise ValueError("WSL command identity is invalid")
+    arguments = [str(item) for item in command]
+    if any(not item or "\x00" in item for item in arguments):
+        raise ValueError("WSL command argument is invalid")
+    return [
+        "wsl.exe", "-d", distro, "-u", "root", "--cd", runtime_root,
+        "--", *arguments,
+    ]
 
 
 def _decode_native_output(value: bytes | str | None) -> str:
@@ -99,7 +124,15 @@ def atomic_json(path: Path, value: dict, *, private: bool = False) -> None:
             os.fsync(stream.fileno())
         if private:
             os.chmod(temporary, 0o600)
-        os.replace(temporary, path)
+        deadline = time.monotonic() + _ATOMIC_REPLACE_TIMEOUT
+        while True:
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError:
+                if os.name != "nt" or time.monotonic() >= deadline:
+                    raise
+                time.sleep(_ATOMIC_REPLACE_INTERVAL)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -230,6 +263,15 @@ def linux_usb_probe(usb_id: str = USB_ID, sys_root: Path = Path("/sys")) -> dict
         }
 
 
+def _linux_probe_error(value: dict, fallback: str) -> tuple[str, str]:
+    code = value.get("failure_code") if isinstance(value, dict) else None
+    if not isinstance(code, str) or _PROBE_FAILURE.fullmatch(code) is None:
+        code = fallback
+    fingerprint = value.get("stderr_sha256") if isinstance(value, dict) else None
+    detail = f"; probe evidence {fingerprint}" if isinstance(fingerprint, str) else ""
+    return code, detail
+
+
 class PassiveValidator:
     """P0a is read-only: it never issues usbipd attach/detach or modprobe."""
 
@@ -286,10 +328,7 @@ class PassiveValidator:
             "--root", self.runtime_root,
         ]
         if os.name == "nt":
-            command = [
-                "wsl.exe", "-d", self.distro, "-u", "root", "--cd", self.runtime_root,
-                "--", *arguments,
-            ]
+            command = wsl_root_command(self.distro, self.runtime_root, *arguments)
         else:
             command = arguments
         try:
@@ -425,6 +464,7 @@ class UsbLease:
         *,
         runner: Runner = run_command,
         distro: str = "SwitchTrade",
+        runtime_root: str = "/opt/switchtrade",
         probe: Callable[[str], dict] = linux_usb_probe,
         deadline: float = 12,
     ):
@@ -432,6 +472,7 @@ class UsbLease:
         self.recovery_file = Path(recovery_file)
         self.runner = runner
         self.distro = distro
+        self.runtime_root = runtime_root
         self.probe = probe
         self.deadline = deadline
         self.acquired_by_run = False
@@ -444,6 +485,7 @@ class UsbLease:
         *,
         runner: Runner = run_command,
         distro: str = "SwitchTrade",
+        runtime_root: str = "/opt/switchtrade",
         probe: Callable[[str], dict] = linux_usb_probe,
         deadline: float = 12,
     ) -> "UsbLease":
@@ -462,6 +504,7 @@ class UsbLease:
                 bus_id=value["bus_id"], shared=True, attached=value["prior_attached"],
             ),
             Path(recovery_file), runner=runner, distro=distro, probe=probe, deadline=deadline,
+            runtime_root=runtime_root,
         )
         # An attach intent written for a previously detached adapter is sufficient recovery
         # authority. The attach command may have succeeded just before the control process died.
@@ -512,7 +555,9 @@ class UsbLease:
             "acquired_by_run": self.acquired_by_run,
         }, private=True)
 
-    def acquire(self) -> dict:
+    def acquire(self, checkpoint: Callable[[], None] | None = None) -> dict:
+        checkpoint = checkpoint or (lambda: None)
+        checkpoint()
         if self.active:
             return self.evidence()
         current = self._current()
@@ -522,16 +567,17 @@ class UsbLease:
         if current.attached:
             linux = self.probe(self.adapter.usb_id)
             if linux.get("status") != "present" or linux.get("matches") != 1:
+                code, detail = _linux_probe_error(
+                    linux, "P0_ADAPTER_OWNED_ELSEWHERE")
                 raise P0Error(
-                    "P0_ADAPTER_OWNED_ELSEWHERE", "P0b_lease",
-                    "pre-attached adapter does not belong to this SwitchTrade runtime",
+                    code, "P0b_lease",
+                    "pre-attached adapter does not belong to this SwitchTrade runtime" + detail,
                 )
         else:
             prerequisite = ["modprobe", "-a", "usbip-core", "vhci-hcd"]
             if os.name == "nt":
-                prerequisite = [
-                    "wsl.exe", "-d", self.distro, "-u", "root", "--", *prerequisite,
-                ]
+                prerequisite = wsl_root_command(
+                    self.distro, self.runtime_root, *prerequisite)
             _run(
                 self.runner, prerequisite, 5,
                 code="P0_USBIP_MODULE_FAILED", gate="P0b_usbip",
@@ -548,6 +594,7 @@ class UsbLease:
             deadline = time.monotonic() + self.deadline
             stable = 0
             while time.monotonic() < deadline:
+                checkpoint()
                 now = self._current()
                 if now.bus_id != self.adapter.bus_id:
                     raise P0Error(
@@ -561,8 +608,16 @@ class UsbLease:
                     break
                 time.sleep(0.1)
             if stable < 2:
-                code = "P0_LINUX_ENUMERATION_UNKNOWN" if linux.get("status") == "unknown" else "P0_LINUX_ENUMERATION_TIMEOUT"
-                raise P0Error(code, "P0b_enumeration", "Linux did not stably enumerate the selected adapter")
+                if linux.get("status") == "unknown":
+                    code, detail = _linux_probe_error(
+                        linux, "P0_LINUX_ENUMERATION_UNKNOWN")
+                else:
+                    code, detail = "P0_LINUX_ENUMERATION_TIMEOUT", ""
+                raise P0Error(
+                    code, "P0b_enumeration",
+                    "Linux did not stably enumerate the selected adapter" + detail,
+                )
+        checkpoint()
         self.active = True
         return self.evidence()
 
@@ -600,13 +655,14 @@ class UsbLease:
                 if (before_detach.get("status") != "present" or
                         before_detach.get("matches") != 1 or
                         before_detach.get("interfaces_up") != 0):
-                    code = (
-                        "P0_CLEANUP_UNKNOWN" if before_detach.get("status") == "unknown"
-                        else "P0_RADIO_NOT_QUIESCENT"
-                    )
+                    if before_detach.get("status") == "unknown":
+                        code, detail = _linux_probe_error(
+                            before_detach, "P0_CLEANUP_UNKNOWN")
+                    else:
+                        code, detail = "P0_RADIO_NOT_QUIESCENT", ""
                     raise P0Error(
                         code, "D9_radio_quiescence",
-                        "radio quiescence was not proven before USB detach",
+                        "radio quiescence was not proven before USB detach" + detail,
                     )
                 _run(
                     self.runner, ["usbipd.exe", "detach", "--busid", current.bus_id], 15,
@@ -629,12 +685,13 @@ class UsbLease:
                     break
                 time.sleep(0.1)
             if stable < 3:
-                code = (
-                    "P0_CLEANUP_UNKNOWN"
-                    if not windows_seen or linux.get("status") == "unknown"
-                    else "P0_CLEANUP_FAILED"
-                )
-                raise P0Error(code, "D10_usb_return", "adapter release could not be verified")
+                if linux.get("status") == "unknown":
+                    code, detail = _linux_probe_error(linux, "P0_CLEANUP_UNKNOWN")
+                else:
+                    code = "P0_CLEANUP_UNKNOWN" if not windows_seen else "P0_CLEANUP_FAILED"
+                    detail = ""
+                raise P0Error(
+                    code, "D10_usb_return", "adapter release could not be verified" + detail)
         else:
             linux = self.probe(self.adapter.usb_id)
             if (not current.attached or linux.get("status") != "present" or
@@ -656,4 +713,5 @@ class UsbLease:
 __all__ = [
     "PASSIVE_CONTRACT", "P0Error", "PassiveValidator", "USB_ID", "UsbAdapter", "UsbLease",
     "atomic_json", "linux_usb_probe", "parse_usbipd_state", "run_command", "selected_adapter",
+    "wsl_root_command",
 ]

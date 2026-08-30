@@ -5,7 +5,7 @@
 > Read this document before changing, testing, packaging, installing, deploying, recovering, or
 > deleting anything in this repository or an installed SwitchTrade environment.
 >
-> **Last updated:** 2026-08-30
+> **Last updated:** 2026-08-31
 > **Current qualification branch:** `codex/m7-safe-pairing`
 > **Current immutable candidate:** `v0.2.11-beta.1` / source `b92ab229870e`
 
@@ -218,6 +218,103 @@ These are distilled from repeated failures below.
   of a clean terminal cancellation report.
 - **Never repeat:** record this case as canceled, never failed or passed. Normalize expected cancel
   paths into a stable result and still verify cleanup.
+
+### MTA-M7-009 — Concurrent status polling could defeat atomic state replacement on Windows
+
+- **Observed:** on 2026-08-31, the first identity-bound control-channel test reached its checkpoint
+  writer while another thread polled `distributed-control-state.json`. Windows returned
+  `PermissionError: [WinError 5]` from `os.replace`, so the checkpoint remained at `created` even
+  though the JSON writer used a same-directory temporary file. No relay, WSL, USB, or Switch was
+  touched.
+- **Definitive cause:** same-directory replacement is atomic when accepted, but the shared JSON
+  writer treated a transient Windows sharing violation from a concurrent reader as permanent.
+- **Disproven alternative:** the checkpoint identity and UUID were valid; the worker failed exactly
+  at replacement, before command submission.
+- **Correction status:** in progress. The common atomic JSON writer needs a short bounded retry for
+  Windows sharing/permission races while preserving the temporary file and failing closed after the
+  deadline.
+- **Never repeat:** any production state file designed for concurrent read-only polling must be
+  tested under concurrent readers on Windows. “Atomic replace” is not equivalent to “replace cannot
+  transiently fail.”
+- **Source correction (2026-08-31):** the common JSON writer now retries only bounded Windows
+  `PermissionError` replacement races and still fails closed at its deadline. The control-channel
+  concurrency regression and the focused harness suite pass; installed two-process evidence remains
+  required.
+
+### MTA-M7-010 — Concurrent control submissions could overwrite one another
+
+- **Observed:** the 2026-08-31 maintainability review found a pre-qualification race; it has not been
+  observed in a physical run. Two controllers could both observe no command file and then both call
+  replace, allowing a later `continue` or `cancel` to overwrite the earlier accepted command.
+- **Definitive cause:** the command path used atomic replacement, which protects readers from partial
+  JSON but does not provide create-if-absent semantics between multiple writers.
+- **Risk:** one caller could be told its cancellation was accepted while the runner consumed a
+  different command. A command could also arrive after cleanup had already checked and removed the
+  path.
+- **Correction status:** in progress. Publish a fully written private temporary file with atomic
+  no-overwrite creation, validate the current state again after publication, and remove only the
+  submitter's own stale command if a terminal transition won the race.
+- **Never repeat:** “atomic file” must state whether it means atomic reader visibility, exclusive
+  writer ownership, or both. Control mutations require both and need a concurrent-submitter test.
+- **Source correction (2026-08-31):** control commands now publish a fully fsynced temporary file by
+  atomic no-overwrite link, re-read the state after publication, and remove only their own command if
+  a state transition won the race. Concurrent submitter, cleanup-race, and invalid-action regressions
+  pass; installed two-process qualification remains open.
+
+### MTA-M7-011 — State-root reuse rejection happened after relay-room mutation
+
+- **Observed:** the 2026-08-31 maintainability review found a pre-qualification ordering defect; no
+  orphan was created during this review. With no active coordinator run but an old control-state file,
+  `create` could open a private relay room and persist its session before `DistributedControl` rejected
+  the reused root.
+- **Definitive cause:** coordinator reuse was checked before `_room_session`, but control/session reuse
+  was checked partly inside or after the authority mutation.
+- **Risk:** a correctly rejected local launch could still leave a remote room/credential requiring
+  recovery, contradicting “reject before mutation.”
+- **Correction status:** in progress. Validate session, control-state, and pending-command paths before
+  calling create/join, with an isolated regression proving the relay receives zero calls.
+- **Never repeat:** every local idempotency/recovery guard must be evaluated before the first remote or
+  hardware mutation. A later constructor check is defense in depth, not the preflight gate.
+- **Source correction (2026-08-31):** `_room_session` now rejects an existing session, pending command,
+  or control state before calling either relay create or join. Its regression proves zero relay
+  mutations on a reused root; installed qualification remains open.
+
+### MTA-M7-012 — Session persistence failure was outside authority rollback
+
+- **Observed:** the 2026-08-31 maintainability review found a failure-injection gap; it has not been
+  observed in a physical run. Create/join rolled authority back after identity validation failures,
+  but an `atomic_json` error while persisting the private recovery session escaped that rollback.
+- **Definitive cause:** the rollback `try` ended before the durable session write.
+- **Risk:** a disk/permission failure could leave a live remote room member without durable local
+  recovery credentials.
+- **Correction status:** in progress. Put validation plus persistence in one rollback boundary, share
+  the owner/member rollback function, and retain a successfully written session only if authority
+  rollback itself cannot be proven.
+- **Never repeat:** once a remote resource returns recovery credentials, every subsequent validation
+  and persistence step remains inside an idempotent rollback boundary until durable recovery state is
+  confirmed.
+- **Source correction (2026-08-31):** create and join now keep identity validation, private session
+  persistence, and invitation construction inside one shared authority-rollback boundary. Persistence
+  failure has its own stable code, and a failure-injection regression proves the joined member is
+  released without leaving a session file.
+
+### 2026-08-31 M7 harness prevention implementation
+
+- Every WSL subprocess in P0 and D now uses one typed `wsl_root_command` builder with explicit
+  `--cd /opt/switchtrade`. Linux USB probe failures retain a stable factual class, return code, and
+  redacted stderr hash instead of collapsing cwd/import failures into generic unknown.
+- Operator `input()` checkpoints are removed. `distributed-control-state.v1` exposes read-only
+  status, and exact test-ID/run-ID/checkpoint-bound `continue` and `cancel` commands drive the single
+  runner. A stale or duplicate command fails closed; cleanup ignores and removes raced commands.
+- Cancellation is checked during pairing, P0 validation/acquisition, peer readiness, endpoint launch,
+  live A/B/C work, and user waits. The worker remains the sole cleanup owner, and expected cancel is a
+  canceled functional result rather than an unhandled `KeyboardInterrupt` failure.
+- `scripts/windows/Invoke-M7DistributedHarness.ps1` is the only source qualification entry point. It
+  fixes the repository cwd, validates its exact interpreter/import closure, rejects dirty source and
+  mismatched WSL runtime identity, and uses the canonical Windows adapter-selection path before any
+  room mutation. Source-level Unicode-path and mutation-free status tests pass.
+- These are source corrections, not installed physical evidence. A new immutable installer/runtime
+  and two-PC close-range qualification are still required before physical movement or release claims.
 
 ## 4. Legacy launcher, diagnostic, and desktop failures
 
@@ -738,6 +835,39 @@ Full trade, save, menu return, and graceful exit remain separate physical eviden
 - **Never repeat:** a developer-machine pass is evidence only for that machine. Qualification records
   exact toolchain and artifact hashes; release builds begin clean and are reproducibility-checked.
 
+### MTA-QA-002 — Harness tests were launched with an unqualified system interpreter
+
+- **Observed:** on 2026-08-31, the first post-refactor unit run used `python -m unittest` from the
+  ambient shell. Fifty-three relevant tests ran, but two pre-existing `StageSession` tests errored
+  while importing `trio` because that system interpreter did not contain the repository's test
+  dependencies. No WSL, USB adapter, relay room, endpoint, or Switch was touched.
+- **Definitive cause:** the command did not first prove the interpreter and dependency closure even
+  though `MTA-M7-007` and `MTA-QA-001` already forbade ambient-interpreter qualification.
+- **Disproven alternative:** the two `ModuleNotFoundError` results are not evidence of a regression
+  in `StageSession`; they occurred before either test exercised its subject.
+- **Correction (2026-08-31):** the repository-qualified `.audit-venv` import probe passed and the full
+  suite passed `537 passed, 3 skipped`. The canonical harness launcher performs the same dependency
+  and module-origin preflight; installed immutable distribution remains open.
+- **Never repeat:** before running repository tests, resolve the tracked/declared test environment
+  and prove required imports. An ambient `python` result may be used only for syntax discovery and
+  must never be reported as qualification evidence.
+
+### MTA-QA-003 — New control-contract tests retained obsolete fixture assumptions
+
+- **Observed:** in the same 2026-08-31 read-only unit run, three distributed-harness tests failed
+  before hardware access: one used the non-UUID fixture `test-1` where the production control
+  contract requires a UUID, one constructed a lifecycle without its `timeout`, and one still
+  expected a heartbeat after a fake checkpoint returned synchronously.
+- **Definitive cause:** production code and only part of the test fixture were migrated from
+  blocking stdin prompts to the identity-bound control state machine.
+- **Recovery/residue:** the tests used temporary files and fakes only; no relay room, WSL process,
+  adapter ownership, PHY/interface, or recovery guard was created.
+- **Correction (2026-08-31):** fixtures now use contract-valid identities, complete lifecycle state,
+  and a real bounded wait before asserting heartbeat behavior. The focused control/P0/D suite passes.
+- **Never repeat:** a contract migration is incomplete until every constructor, fake, boundary
+  value, and negative test uses the new contract. Do not weaken production validation to make an
+  obsolete fixture pass.
+
 ## 10. Agent and operator mistakes that caused avoidable work
 
 ### MTA-OPS-001 — Wrong or ambiguous bundle identity was analyzed
@@ -841,6 +971,87 @@ Full trade, save, menu return, and graceful exit remain separate physical eviden
   boundary and uncertainty. Harness code excluded from production still matters when it is the only
   release-qualification evidence path.
 
+### MTA-OPS-014 — A PowerShell discovery command failed because regex and shell quoting were mixed
+
+- **Observed:** on 2026-08-30, the first read-only harness source search failed at parse time with
+  `Unexpected token ')'`. No subprocess, test, hardware, or repository mutation started.
+- **Definitive cause:** a large regex containing a quote alternative was embedded in a double-quoted
+  PowerShell command string; `\"` was treated as a string boundary rather than a safe regex literal.
+- **Rule:** pass search patterns as single-quoted PowerShell literals or separate `rg -e` arguments;
+  keep shell parsing and regex parsing independent. After a parse failure, verify no command ran
+  before issuing a corrected read-only query.
+
+### MTA-OPS-015 — Repository entry-point discovery assumed a file existed
+
+- **Observed:** on 2026-08-30, a read-only command attempted to open a root `pyproject.toml` that the
+  repository does not contain. The independent searches in that command completed; no test, process,
+  hardware action, or repository mutation resulted from the missing-file read.
+- **Definitive cause:** packaging/entry-point layout was inferred from a conventional filename before
+  the tracked file inventory was checked.
+- **Rule:** use `rg --files`/`git ls-files` to resolve an exact existing path before reading a
+  repository entry point. A conventional project layout is not evidence of this repository's layout.
+
+### MTA-OPS-016 — Python module execution was assumed to imply `__main__.py`
+
+- **Observed:** on 2026-08-30, a read-only packaging inspection attempted to open
+  `switchtrade/__main__.py`, which is not present. Earlier files in the same command were read
+  successfully; no test, build, hardware action, or additional mutation occurred.
+- **Definitive cause:** the existence of `python -m switchtrade.connection.distributed_harness` was
+  incorrectly generalized into a package-root `python -m switchtrade` entry point.
+- **Rule:** distinguish a submodule entry point from a package entry point. Only advertise or inspect
+  a command after the exact module/file and its packaging inclusion are confirmed by tracked-file
+  inventory.
+
+### MTA-OPS-017 — Missing-file discovery mistake recurred after its prevention rule was written
+
+- **Observed:** on 2026-08-30, a later read-only `rg` command named
+  `tests/test_p0_harness.py`, which is not in the tracked inventory, and produced an OS file-not-found
+  warning. The valid search targets still completed; no test, subprocess, hardware action, or other
+  mutation occurred.
+- **Definitive cause:** a conventional test filename was appended from memory instead of limiting the
+  command to the previously enumerated `tests/test_p0_foundation.py` or the existing directory.
+- **Rule:** after a missing-path incident, do not manually type another inferred file path in the same
+  task. Search the existing directory or programmatically filter the tracked inventory. Treat a
+  repeated prevention-rule violation as a process defect, not harmless shell noise.
+
+### MTA-OPS-018 — Documentation patch used an unverified context sentence
+
+- **Observed:** on 2026-08-31, an `apply_patch` intended to add the first harness-test incidents
+  failed verification because its anchor paraphrased `MTA-QA-001` instead of matching the actual
+  text. The patch was atomic, so no partial change occurred.
+- **Definitive cause:** the target section was not read immediately before constructing the patch.
+- **Rule:** inspect the exact nearby lines before patching a long source-of-truth document. A remembered
+  paraphrase is not a valid patch anchor, even when the intended meaning is equivalent.
+
+### MTA-OPS-019 — The same unverified documentation-anchor mistake recurred
+
+- **Observed:** on 2026-08-31, the next incident patch again failed atomically because it used a
+  remembered cancellation-rule sentence instead of the exact text immediately visible in the
+  source-of-truth document. No partial write occurred.
+- **Definitive cause:** the `MTA-M7-008` section was not inspected before constructing the patch,
+  despite the newly written `MTA-OPS-018` rule.
+- **Rule:** after any patch-context failure, stop constructing anchors from memory entirely. Read the
+  exact target range first and anchor only on text copied from that output.
+
+### MTA-OPS-020 — One patch attempted both delete and add for the same document
+
+- **Observed:** on 2026-08-31, the handoff rewrite patch was rejected before mutation because one
+  `apply_patch` payload targeted the same path with both `Delete File` and `Add File` operations.
+- **Definitive cause:** a whole-file rewrite was expressed using an unsupported combined patch form.
+- **Rule:** for an intentional tracked-file replacement, use one verified `Update File` patch or two
+  separately verified delete/add operations. Never assume a patch transport accepts two operations
+  for the same path.
+
+### MTA-OPS-021 — A multi-file patch used an unverified test anchor
+
+- **Observed:** on 2026-08-31, a state-root preflight patch was rejected atomically because its test
+  insertion anchor did not match the exact existing assertions. The production-file edit in the same
+  patch was therefore also not applied.
+- **Definitive cause:** the production target was inspected, but the test insertion point was inferred
+  instead of copied from the just-read test range.
+- **Rule:** every file in a multi-file patch needs its own verified context. If only one target has
+  been inspected, patch that target alone and inspect the next target before editing it.
+
 ## 11. Required preflight checklists
 
 ### Any code or documentation change
@@ -859,8 +1070,8 @@ Full trade, save, menu return, and graceful exit remain separate physical eviden
 - The exact final command proves imports, WebSocket, stdin/control mechanism, WSL cwd, P0 probe, and
   recovery before room creation.
 - Previous sessions are recovered; state roots are retained; Windows owns both adapters initially.
-- Both sides show `coordination_paired`, the same test ID, and `usb_attached=false` before Enter/
-  Continue.
+- Both sides show `coordination_paired`, the same test ID, and `usb_attached=false` before the exact
+  identity-bound Continue command.
 - No Switch is touched before its explicit checkpoint; no device is moved apart before automated
   gates pass.
 - Stop on the first mismatch. Do not “see what happens next.”
@@ -889,15 +1100,14 @@ Full trade, save, menu return, and graceful exit remain separate physical eviden
 
 ## 12. Current open failure-prevention work
 
-The following remain open even though workarounds allowed safe recovery:
+The following remain open even though source corrections or workarounds allowed safe recovery:
 
-1. Remove inherited Windows-cwd dependence from every WSL subprocess and preserve raw probe failure
-   evidence (`MTA-M7-005`).
-2. Replace interactive CLI prompts with explicit run-scoped control commands/API and clean
-   cancellation reporting (`MTA-M7-006`, `MTA-M7-008`).
-3. Provide one packaged qualification entry point that fixes interpreter, dependencies, cwd, source,
-   and control channel as a single immutable environment (`MTA-M7-007`).
-4. Complete the installed two-PC/two-Switch M7 qualification only after the first three are closed.
+1. Qualify the explicit-Windows-cwd probes and identity-bound control/cancellation path from a new
+   installed immutable build on both PCs (`MTA-M7-005`, `MTA-M7-006`, `MTA-M7-008`, `MTA-M7-009`).
+2. Package or otherwise distribute the canonical qualification launcher with one immutable,
+   independently hashable interpreter/dependency/source closure; the tracked source launcher is not
+   by itself an installed package (`MTA-M7-007`).
+3. Complete the installed two-PC/two-Switch M7 qualification only after the first two are closed.
 5. Investigate credentialless `waiting_for_complementary_role` rooms by ordered event history without
    breaking reconnect grace (`MTA-RELAY-006`).
 6. Continue the critical and post-release work in `FUTURE_TODO.md`; this document prevents recurrence
