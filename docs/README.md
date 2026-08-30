@@ -6,6 +6,9 @@ part of the public repository or release package.
 
 ## Maintained documents
 
+- [Mistakes to Avoid](MISTAKES_TO_AVOID.md) — mandatory source of truth for observed failures,
+  disproven assumptions, agent/operator mistakes, and recurrence-prevention gates. Read it before
+  any implementation, test, release, deployment, recovery, or cleanup work.
 - [Technical Guide](TECHNICAL_GUIDE.md) — architecture, repository map, runtime lifecycle, APIs,
   hardware policy, diagnostics, development workflow, and extension boundaries.
 - [FireRed/LeafGreen Communication Protocol](FRLG_PROTOCOL.md) — the detailed, evidence-labelled
@@ -40,11 +43,13 @@ read [relay/DEPLOYMENT.md](../relay/DEPLOYMENT.md), and distribution engineers s
 
 ## Documentation rules
 
-1. Update these documents in the same commit as a behavior, contract, or packaging change.
-2. For the production connection rework, the A/B/C+D architecture and definitive TODO are
+1. Read `MISTAKES_TO_AVOID.md` before beginning work, apply its relevant prevention rules, and update
+   it before retrying after a new failure or avoidable operational mistake.
+2. Update these documents in the same commit as a behavior, contract, or packaging change.
+3. For the production connection rework, the A/B/C+D architecture and definitive TODO are
    normative. Source code and tests show current implementation status; a disagreement is an open
    implementation gap, not permission to weaken a required gate.
-3. Label protocol claims as observed, source-confirmed, implemented, or inferred.
-4. Never commit credentials, tokens, private keys, raw support bundles, packet captures, or player
+4. Label protocol claims as observed, source-confirmed, implemented, or inferred.
+5. Never commit credentials, tokens, private keys, raw support bundles, packet captures, or player
    data.
-5. Put incomplete product work in `FUTURE_TODO.md`; do not describe it as a beta capability.
+6. Put incomplete product work in `FUTURE_TODO.md`; do not describe it as a beta capability.

@@ -1,5 +1,9 @@
 # SwitchTrade
 
+> **Engineering safety:** Before changing, testing, packaging, installing, deploying, or recovering
+> SwitchTrade, read [Mistakes to Avoid](docs/MISTAKES_TO_AVOID.md). It is the source of truth for
+> prior failures and mandatory recurrence-prevention rules.
+
 SwitchTrade brings the FireRed and LeafGreen Direct Connection trade experience online between two
 Nintendo Switch consoles. Each player runs the native Windows app, connects a compatible USB Wi-Fi
 adapter, joins the same two-person Trade Room, and follows the guided Switch connection steps.

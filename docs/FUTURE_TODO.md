@@ -5,6 +5,10 @@ This is the definitive implementation and qualification ledger. Together with
 within each section; historical beta notes remain as evidence, not as authority for the new ABC+D
 path. No open item may be presented as a current production capability.
 
+Before working an item, read [Mistakes to Avoid](MISTAKES_TO_AVOID.md), the source of truth for prior
+failures and mandatory recurrence-prevention gates. Add newly discovered failure evidence there
+before retrying; keep the implementation status and acceptance debt in this TODO.
+
 ## Critical and urgent blockers
 
 0. **CRITICAL — URGENT: Qualify the M7 distributed harness only through the safe pairing barrier.**
@@ -452,6 +456,15 @@ path. No open item may be presented as a current production capability.
 7. Perform a complete accessibility pass: keyboard-only, screen reader, high contrast, 200% scaling,
    localization length, and reduced motion.
 8. Continue owner-led visual polish without changing server authority or protocol contracts.
+9. **Potential issue: reconcile credentialless complementary-role rooms.** On 2026-08-30 the hosted
+   relay reported two rooms in `waiting_for_complementary_role` while
+   `active_member_credentials` was zero. Aggregate metrics cannot prove that these rooms came from
+   D8-D10, and this is not currently a functional or release blocker. Inspect their room events and
+   member-presence history before changing behavior. If a room has no active credentials, no
+   reconnectable member, and no live or admitted RFU attempt, make its terminal/expiry transition
+   explicit and keep `rooms_by_state` truthful; never expire a legitimately reconnecting room. Add a
+   lifecycle regression covering complementary-role wait, credential loss, reconnect grace, global
+   TTL expiry, and metrics projection.
 
 ## 4. Additional Switch-to-Switch features
 
