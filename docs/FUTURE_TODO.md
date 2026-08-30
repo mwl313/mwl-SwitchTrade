@@ -11,9 +11,9 @@ path. No open item may be presented as a current production capability.
    **Status (2026-08-29): PC A passed the immutable installed cold P0 and verified cleanup. The owner
    accepted that result as sufficient to begin Milestone 3. The direct A0-A9 endpoint/harness is
    complete and PC A passed its one-Switch installed-runtime qualification with verified cleanup.
-   Direct B2-B10 is source-complete and its final immutable PC A runtime passed installed no-hardware
-   smoke. A prior PC A run physically passed B2-B10 but exposed post-B10 teardown misclassification;
-   final PC A confirmation, PC B P0/direct A/direct B, and production-path cutover remain open.**
+   Direct B2-B10 is source-complete and final immutable PC A run
+   `12e6a535-4770-47ae-9fb3-8d06915af053` physically passed B2-B10 plus verified cleanup. PC B
+   P0/direct A/direct B and production-path cutover remain open.**
    The installed `0.2.6-beta.2` runtime contains the correct kernel and the `ccm`, `cmac`, and `tun`
    modules, but the production wrapper does not load them and does not verify `/dev/net/tun` before
    entering the LDN path. A real Switch-hosted room was observed and decoded three times, then every
@@ -60,15 +60,15 @@ path. No open item may be presented as a current production capability.
    functional success from factual context cleanup. A subsequent physical run passed B2-B10 and all
    worker/USB cleanup but confirmed that the joined LDN AP context still exceeded its ten-second exit
    deadline. The ldn 0.0.17 STOP_AP wait is now bounded before authoritative interface deletion, with
-   ordered teardown checkpoints retained in the report. Immutable runtime `abcd-m4-9635a1f` passed
-   package and installed-runtime smoke on PC A and is waiting for final physical confirmation; no B1,
-   `B_READY`, relay delivery, or trade is claimed.
+   ordered teardown checkpoints retained in the report. Immutable runtime `abcd-m4-9635a1f` then
+   passed the final real-Switch PC A run through B2-B10, `factory_released`, verified radio/USB
+   cleanup, and zero endpoint/interface/PHY/recovery residue; no B1, `B_READY`, relay delivery, or
+   trade is claimed.
 
-   **Deferred qualification debt (owner-directed, 2026-08-30):** retain one PC A run with a real
-   searching Switch against runtime `abcd-m4-9635a1f`. It must pass B2-B10, exit through
-   `factory_released`, report `ldn_context_released=true`, verify radio/USB cleanup, and leave no
-   endpoint, interface, PHY, lock, or recovery residue. Work may proceed to Milestone 5, but this item
-   remains open and Milestone 4 must not be represented as formally accepted until that run passes.
+   **Completed qualification debt (2026-08-30):** PC A run
+   `12e6a535-4770-47ae-9fb3-8d06915af053` against runtime `abcd-m4-9635a1f` passed B2-B10, exited
+   through `factory_released`, reported `ldn_context_released=true`, verified radio/USB cleanup, and
+   left no endpoint, interface, PHY, lock, or recovery residue. PC B remains open.
 
 2. **CRITICAL — URGENT: Preserve relay frame order and truthful P0/A/B/C/D diagnostic stages.**
    **Status (2026-08-30): the M5 v2 source and deployed validation-relay functional exit gate passed;

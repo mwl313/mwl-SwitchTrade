@@ -2,7 +2,7 @@
 
 > Branch: `codex/abcd-orchestration-rework`
 > Source commit: `9635a1f`
-> Status: source complete; final PC A immutable runtime installed and smoke-tested; final physical rerun pending.
+> Status: source complete; final PC A immutable runtime physically qualified; PC B remains.
 > Scope: local app-hosted room advertisement, one real searching Switch, control port, and bounded hold.
 
 ## 1. Entry decision and boundary
@@ -150,4 +150,11 @@ recorded in documents 32 and 33. Commit `9635a1f` applies a two-second bound onl
 STOP_AP request, then continues through the ordinary interface deletion. It also records each network,
 TAP, monitor, AP, interface, and factory exit checkpoint. A simulation where STOP_AP never responds
 reaches `factory_released`, and the full suite passes. Immutable runtime `abcd-m4-9635a1f` is installed,
-hash-verified, smoke-tested, detached, and waiting for one final real-Switch cleanup confirmation.
+hash-verified, and smoke-tested.
+
+Final PC A run `12e6a535-4770-47ae-9fb3-8d06915af053` used that exact runtime and a real searching
+Switch. It passed B2-B10 in order, recorded participant count 2, returned `B_CONTROL_READY`, and
+completed the bounded hold. Teardown reached `factory_released` with `ldn_context_released=true`,
+`ap_stop_timed_out=false`, radio quiescent, worker exit code 0 without force, and verified Windows and
+Linux USB restoration. Independent post-run probes found no endpoint, recovery file, Linux USB,
+interface, or PHY residue. PC A Direct B is accepted; PC B remains the formal Milestone 4 exit debt.

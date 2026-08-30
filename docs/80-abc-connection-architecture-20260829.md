@@ -470,11 +470,12 @@ Do not rebuild another installer until the source and installed runtime pass in 
    cancellation, restart, and cleanup cases. Zero duplicate launches, stale interfaces, orphan rooms,
    or unresolved ownership is permitted.
 
-Current evidence does not change this order. Direct B remains explicit owner-deferred physical
-qualification debt. Milestone 5 source checkpoint `162f779` and its deployed validation-relay matrix
-passed C0/C1 ordering, identity, nonce, advertisement, reconnect, restart, and zero-orphan gates, so
-those components are admitted for C2 work. This does not claim A_READY/B_READY, RFU activation,
-distributed D, diagnostic/application migration, production cutover, or a trade.
+Current evidence does not change this order. PC A final immutable Direct B run
+`12e6a535-4770-47ae-9fb3-8d06915af053` passed B2-B10 and verified full local cleanup; PC B remains
+physical qualification debt. Milestone 5 source checkpoint `162f779` and its deployed
+validation-relay matrix passed C0/C1 ordering, identity, nonce, advertisement, reconnect, restart,
+and zero-orphan gates. This does not claim A_READY/B_READY, RFU activation, distributed D,
+diagnostic/application migration, production cutover, or a trade.
 
 ## 11. Confirmed critical blockers
 

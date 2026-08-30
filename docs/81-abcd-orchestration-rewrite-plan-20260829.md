@@ -35,11 +35,10 @@ Execution status:
   exit-gate debt. The owner directed the project to proceed to Milestone 4 without representing that
   debt as closed.
 - Milestone 4 is source-complete at `9635a1f`. Immutable PC A runtime `abcd-m4-9635a1f` passed
-  installation, integrity, dependency, kernel, contract, CLI, residue, and detached-USB smoke. A
-  latest physical run proved B2-B10 and preserved functional success but exposed the joined AP-stop
-  cleanup hang; the bounded, checkpointed candidate's final real one-Switch confirmation is pending.
-  On 2026-08-30 the owner directed that confirmation to remain explicit qualification debt and
-  authorized Milestone 5 to begin without treating Milestone 4 as accepted.
+  installation, integrity, dependency, kernel, contract, CLI, residue, and detached-USB smoke. Final
+  PC A physical run `12e6a535-4770-47ae-9fb3-8d06915af053` passed B2-B10, returned
+  `B_CONTROL_READY`, reached `factory_released`, and verified LDN/radio/endpoint/USB cleanup without
+  residue. PC A Direct B qualification debt is closed; PC B remains the formal exit-gate debt.
 - Milestone 5 source checkpoint `162f779` added P0/launch-bound `rfu-tunnel.v2`, strict contiguous
   ordering, reconnect nonce re-proof, exact advertisement-hash delivery, and factual C0/C1 stages.
   Local validation and the deployed HTTPS/WSS role, ordering, reconnect, restart, failure, and

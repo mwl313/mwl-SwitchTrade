@@ -121,11 +121,10 @@ qualification runtime, `abcd-m4-9635a1f`. It owns one selected PHY, creates the 
 resources through run-local canonical `ldn.create_network()` mechanics, requires a real Switch
 association and Nintendo control-port activity, and keeps functional and cleanup results separate.
 Source regression passed 414 tests with three intentional skips; installed integrity and no-hardware
-smoke passed. A prior v2-fixture run made the room visible and recorded B2-B10 against a real Switch,
-and the latest physical run truthfully preserved functional success while exposing an unbounded AP-stop
-cleanup. The bounded run-local cleanup fix is installed and awaiting one confirmation run, so this does
-not yet claim formal Direct B acceptance, B1,
-`B_READY`, relay delivery, or a trade.
+smoke passed. PC A run `12e6a535-4770-47ae-9fb3-8d06915af053` physically passed B2-B10 against a
+real Switch in that final runtime, reached `B_CONTROL_READY`, exited through `factory_released`, and
+verified LDN, radio, endpoint, and USB cleanup with no residue. PC B remains the formal Milestone 4
+exit debt; this local result does not claim B1, `B_READY`, relay delivery, or a trade.
 
 Milestone 5's functional exit gate is accepted at source checkpoint `162f779`. The separate P0- and
 launch-bound `rfu-tunnel.v2` path passed local real-process tests and the deployed validation-relay
