@@ -11,12 +11,13 @@
 > P0 endpoint-hang/control-restart qualification commit: `153365c`
 > Windows-reboot recovery fix: `4e3e932`
 > Diagnostic D7 resource checkpoint: `f739f53`
+> Distributed D fault-matrix checkpoint: `9f30374`
 > Deployed relay artifact checkpoint: `ed382db`
 > Status: M7 authority, endpoint D2-D4, measured local D5/D7-D11, and production diagnostic D7
 > resource slices complete;
 > the installed PC A D8-D11, endpoint/control-interruption, and local Windows-reboot paths are
-> qualified. Milestone 7 remains open for PC B, the distributed restart matrix,
-> and product-action qualification.
+> qualified. The single-PC software D1-D11 restart/fault matrix is complete. Milestone 7 remains
+> open for PC B and product-action qualification.
 > Scope: D1 closing intent, endpoint D2-D4, D5 authority acknowledgement, D6 two-side/forced
 > barrier, relay transport retirement, measured local D5 evidence, and ordered local release.
 
@@ -132,6 +133,27 @@ existing SHA-256 launch identity.
 - Full post-D7 regression passed `491 passed, 3 skipped`. During that run a pre-existing Windows
   sharing race between endpoint-state reads and session cleanup was exposed; read, write, and clear
   now share the control-owned `RLock`, and both the focused concurrency suite and full rerun pass.
+- Commit `9f30374` closes the executable single-PC software restart/fault matrix without adding a
+  second cleanup implementation:
+
+  | Gate | Injected boundary | Required result |
+  | --- | --- | --- |
+  | D1 | lost response followed by authority-store and relay restart | frozen outcome survives; replay does not mutate the terminal attempt |
+  | D2 | native close timeout and exception | bounded failure; D3 and D4 still execute |
+  | D3 | drain, observer, simulation, and bridge-stop exceptions | every independent teardown continues into D4 |
+  | D4 | LDN/thread stop failure | frozen A/B/C primary cause remains primary |
+  | D5 | missing, stale, changed, or corrupt endpoint/control evidence and response loss | no invalid acknowledgement; restart reuses exact persisted measurement and command |
+  | D6 | absent side timeout, relay restart, stale identity, and two-side completion | one terminal outcome; cleanup failure remains secondary |
+  | D7 | peer, room, and credential failures | unaffected resources still clean; only unresolved resources retry |
+  | D8 | live endpoint, malformed result, or probe exception | state becomes unknown/present and USB return is blocked |
+  | D9 | unknown/active sample inside a clean streak | three fresh consecutive clean observations are required |
+  | D10 | exception or partial Windows/Linux ownership evidence | no verified release and cleanup guard remains |
+  | D11 | lost response with valid or corrupt persisted report | valid report finalizes without teardown replay; corrupt report fails closed |
+
+- The focused fault matrix passed `92` tests. Three real-process local HTTP/WSS integration tests
+  passed two-side D, measured D5/local release, and relay transport cleanup. The full suite passed
+  `500 passed, 3 skipped`. Public relay C2-to-D6 smoke then passed in normal and reversed role
+  assignments, with each temporary room closed by the harness.
 - A real local HTTP/WSS relay process passes C2 activation, authoritative D1, endpoint D2-D4,
   measured D5 on each coordinator, two-seat D6, and independent D7-D11 local release.
 - Restart tests prove that a persisted UUIDv7 D5 request can be replayed without remeasurement after
@@ -189,12 +211,9 @@ through the new production coordinator remains the explicit Milestone 8 migratio
 
 1. Repeat the now-qualified real WSL PID/interface/PHY and conditional `UsbLease` path on PC B. PC A
    and its non-ASCII profile boundary are complete.
-2. Extend restart and fault injection across every distributed D gate. The software D2/D3/D10 fault
-   cases, D11 lost-response recovery, installed endpoint-hang cleanup guard, exact control-process
-   interruption, and one real local Windows-reboot D8-D11 recovery now pass on PC A.
-3. Prove Stop, End, Leave, and Close room-action semantics without bypassing D; product routing remains
+2. Prove Stop, End, Leave, and Close room-action semantics without bypassing D; product routing remains
    a Milestone 9 migration boundary.
-4. Extend the deployed check from the completed public two-role smoke and zero-orphan authority
+3. Extend the deployed check from the completed public two-role smoke and zero-orphan authority
    metrics to the complete measured distributed-D harness when a second installed PC is available.
 
 Until those checks pass, normal rooms, production diagnostics, desktop UI, and installers remain on

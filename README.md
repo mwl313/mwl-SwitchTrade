@@ -162,9 +162,11 @@ integration path passes. Commit `f739f53` connects one idempotent production-dia
 D7 Boolean contract and startup recovery, including terminal relay-room confirmation and retired
 owner-credential recovery. A real one-PC public-relay run stopped the synthetic peer, closed the
 private room, deleted its credential file, and repeated cleanup without residue; a second run proved
-restart recovery after the close response but before local guard removal. M7 remains open for PC B,
-the remaining distributed restart/hang/fault matrix, and Stop/Leave/Close action semantics; the
-post-review audit is `491 passed, 3 skipped`. Commit `9e1621d` additionally recovers a lost D11
+restart recovery after the close response but before local guard removal. Commit `9f30374` completes
+the single-PC software D1-D11 restart/fault matrix, including missing, malformed, partial, timed-out,
+response-loss, and relay-restart evidence. Both role assignments passed the public C2-to-D6 smoke;
+the full audit is `500 passed, 3 skipped`. M7 remains open for PC B and Stop/End/Leave/Close action
+semantics. Commit `9e1621d` additionally recovers a lost D11
 response without repeating teardown and bounds injected D2/D3/D10 failures. Commit `153365c` uses
 the installed P0 path to prove that endpoint residue blocks USB return and exact control-process
 interruption recovers through verified D11. Commit `4e3e932` then passed a real Windows-reboot recovery on the

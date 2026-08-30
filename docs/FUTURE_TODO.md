@@ -148,8 +148,11 @@ path. No open item may be presented as a current production capability.
    finalization without repeating teardown. Commit `f739f53` wires the production diagnostic
    peer/private-room/credential owner into the strict D7 callback and startup recovery; real
    single-PC public-relay cleanup and post-close restart recovery passed, as did the full
-   `491 passed, 3 skipped` regression. PC B matching qualification, the remaining distributed restart
-   matrix, and product action migration remain open, so this blocker is
+   `491 passed, 3 skipped` regression. Commit `9f30374` completes the executable single-PC D1-D11
+   restart/fault matrix, including independent D7 resource failures, probe exceptions, partial USB
+   evidence, corrupted response-loss recovery, and relay restart; focused, local real-process, both
+   public role assignments, and the full `500 passed, 3 skipped` suite pass. PC B matching
+   qualification and product action migration remain open, so this blocker is
    not closed. Commit `153365c` and installed PC A runs now prove that run-owned endpoint residue blocks
    USB return, exact PID/start-tick termination permits verified recovery, and an interrupted local
    control process can resume the same durable run through D8-D11. Commit `4e3e932` and real reboot run
