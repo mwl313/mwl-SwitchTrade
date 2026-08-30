@@ -4,13 +4,16 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from switchtrade.connection.distributed_endpoint import _closing_command, _config
 from switchtrade.connection.distributed_harness import (
     DistributedLifecycle,
     INVITATION_CONTRACT,
+    RELAY_POLL_INTERVAL,
     _decode_invitation,
     _invitation,
+    _recover_distributed,
 )
 from switchtrade.connection.stage_session import StageSession
 
@@ -88,6 +91,136 @@ class DistributedContractTests(unittest.TestCase):
                     "action": "closing_intent",
                     "value": {**intent, "activation_generation": 2},
                 }, config)
+
+    def test_recovery_before_attempt_closes_owner_room_without_peer_prompt(self):
+        class Coordinator:
+            def snapshot(self):
+                return {
+                    "run_id": RUN_ID,
+                    "identity": {
+                        "release": "release-a", "switch_role": "a_room_joiner",
+                        "room_id": "room-1", "attempt_id": None,
+                    },
+                    "cleanup": {"verified": False},
+                    "last_passed_gate": "P0_SIDE_READY",
+                }
+
+        class Relay:
+            def __init__(self):
+                self.commands = []
+
+            def room(self, room_id, member_token):
+                return {"room_version": 3, "attempt": None}
+
+            def begin_distributed_d(self, *args, **kwargs):
+                raise AssertionError("D must not begin before an attempt exists")
+
+            def room_command(self, *args, **kwargs):
+                self.commands.append((args, kwargs))
+
+        class Harness:
+            def recover(self, run):
+                return {"status": "recovered"}
+
+        with tempfile.TemporaryDirectory() as temporary:
+            session_path = Path(temporary) / "distributed-session.json"
+            session_path.write_text("{}", encoding="utf-8")
+            relay = Relay()
+            session = {
+                "release": "release-a", "switch_role": "a_room_joiner",
+                "room_id": "room-1", "member_token": "member-token", "owner": True,
+            }
+            with patch("builtins.input", side_effect=AssertionError("unexpected prompt")):
+                recovered = _recover_distributed(
+                    coordinator=Coordinator(), relay=relay, harness=Harness(),
+                    session=session, session_path=session_path,
+                )
+
+            self.assertEqual(recovered["status"], "recovered")
+            self.assertFalse(session_path.exists())
+            self.assertEqual(relay.commands[0][0][2], "")
+            self.assertEqual(relay.commands[0][1]["method"], "DELETE")
+
+    def test_peer_wait_stays_below_relay_member_rate_limit(self):
+        clock = [0.0]
+
+        def room(attempt=False):
+            value = {
+                "room_version": 3,
+                "local_member_id": "member-a",
+                "members": [
+                    {"member_id": "member-a", "seat": "member_a",
+                     "online_state": "online", "switch_room_role": "creator"},
+                    {"member_id": "member-b", "seat": "member_b",
+                     "online_state": "online", "switch_room_role": "finder"},
+                ],
+                "attempt": None,
+            }
+            if attempt:
+                value["attempt"] = {
+                    "attempt_id": "attempt-1", "role_locked": True,
+                    "creator_member_id": "member-a", "role_lock_version": 4,
+                    "activation_generation": 1,
+                }
+            return value
+
+        class Relay:
+            base_url = "https://relay.example"
+
+            def __init__(self):
+                self.member_requests = 0
+
+            def command_id(self):
+                return "command-1"
+
+            def room(self, room_id, member_token):
+                self.member_requests += 1
+                if self.member_requests > 120 and clock[0] < 60:
+                    raise AssertionError("relay member rate limit exceeded")
+                return room(attempt=clock[0] >= 35)
+
+            def v2_ready(self, *args, **kwargs):
+                self.member_requests += 1
+                return room()
+
+        class Coordinator:
+            def lock_attempt(self, run_id, **identity):
+                return identity
+
+        with tempfile.TemporaryDirectory() as temporary:
+            run_root = Path(temporary)
+            (run_root / "p0-side-ready.json").write_text("{}", encoding="utf-8")
+            relay = Relay()
+            lifecycle = DistributedLifecycle(
+                coordinator=Coordinator(), relay=relay,
+                session={
+                    "room_id": "room-1", "member_token": "member-token",
+                    "switch_role": "a_room_joiner", "room_code": "ABC123",
+                    "test_id": "test-1", "owner": True, "action": "end",
+                },
+                session_path=run_root / "session.json", distro="SwitchTrade",
+                packaged_python="/opt/switchtrade/python", timeout=60,
+            )
+            context = {
+                "run_id": RUN_ID, "run_root": run_root,
+                "run": {"identity": {
+                    "release": "release-a", "run_generation": 1, "stage_generation": 1,
+                }},
+                "adapter": argparse.Namespace(instance_sha256="a" * 64),
+                "p0b": {"wrapper_pid": 123}, "launch_nonce": "n" * 64,
+            }
+            with patch(
+                "switchtrade.connection.distributed_harness.time.monotonic",
+                side_effect=lambda: clock[0],
+            ), patch(
+                "switchtrade.connection.distributed_harness.time.sleep",
+                side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+            ):
+                prepared = lifecycle.prepare(context)
+
+            self.assertEqual(prepared["attempt_id"], "attempt-1")
+            self.assertGreaterEqual(RELAY_POLL_INTERVAL, 1.0)
+            self.assertLess(relay.member_requests, 120)
 
     def test_authority_attempt_requires_complementary_roles_and_locked_generation(self):
         lifecycle = object.__new__(DistributedLifecycle)

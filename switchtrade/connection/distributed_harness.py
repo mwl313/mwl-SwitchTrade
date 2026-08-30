@@ -35,6 +35,7 @@ ROLES = {"a_room_joiner", "b_ap_host"}
 ACTIONS = {"end", "stop", "leave", "close"}
 TERMINAL_ATTEMPTS = {"completed", "canceled", "failed"}
 SOURCE_SHA = re.compile(r"[0-9a-f]{40}")
+RELAY_POLL_INTERVAL = 1.0
 
 
 def _status(event: str, **values: object) -> None:
@@ -218,7 +219,7 @@ class DistributedLifecycle:
                     "DISTRIBUTED_PEER_READY_TIMEOUT", "C0_authority",
                     "the second P0-qualified PC did not become ready",
                 )
-            time.sleep(0.25)
+            time.sleep(RELAY_POLL_INTERVAL)
             room = self.relay.room(self.session["room_id"], self.session["member_token"])
         attempt = self._validate_attempt(room)
         self.room = room
@@ -312,7 +313,7 @@ class DistributedLifecycle:
         endpoint_report = None
         try:
             while endpoint_report is None:
-                event = events.next_event(0.25)
+                event = events.next_event(RELAY_POLL_INTERVAL)
                 if event is not None:
                     if event.get("run_id") not in {None, context["run_id"]}:
                         raise P0Error(
@@ -427,7 +428,7 @@ class DistributedLifecycle:
                     "DISTRIBUTED_D6_TIMEOUT", "D6_TWO_SIDE_BARRIER",
                     "the two-side D6 barrier did not become terminal",
                 )
-            time.sleep(0.25)
+            time.sleep(RELAY_POLL_INTERVAL)
             room = self.relay.room(self.session["room_id"], self.session["member_token"])
         return room
 
@@ -469,7 +470,7 @@ class DistributedLifecycle:
                 elif error.status == 410:
                     return "room_closed"
                 raise
-            time.sleep(0.5)
+            time.sleep(RELAY_POLL_INTERVAL)
         raise P0Error(
             "DISTRIBUTED_ROOM_FINALIZE_TIMEOUT", "D11_RELEASE",
             "the owner did not close the one-time qualification room",
@@ -626,20 +627,21 @@ def _recover_distributed(*, coordinator: ConnectionCoordinator, relay: RelayClie
     else:
         recovery = None
     attempt = room.get("attempt") or {}
+    attempt_id = attempt.get("attempt_id")
     if (
-        attempt.get("attempt_id") == run["identity"].get("attempt_id") and
+        attempt_id and attempt_id == run["identity"].get("attempt_id") and
         attempt.get("phase") not in TERMINAL_ATTEMPTS and attempt.get("d") is None
     ):
         intent = {
             "contract_version": "d-closing-intent.v1",
-            "attempt_id": attempt["attempt_id"],
+            "attempt_id": attempt_id,
             "activation_generation": attempt["activation_generation"],
             "outcome": "failed",
             "primary_failure_code": "DISTRIBUTED_CONTROL_INTERRUPTED",
             "last_passed_gate": run.get("last_passed_gate") or "P0_SIDE_READY",
         }
         room = relay.begin_distributed_d(
-            session["room_id"], attempt["attempt_id"], session["member_token"], intent,
+            session["room_id"], attempt_id, session["member_token"], intent,
             expected_version=room["room_version"],
         )
     if recovery is None:
@@ -647,20 +649,22 @@ def _recover_distributed(*, coordinator: ConnectionCoordinator, relay: RelayClie
         if recovery["status"] != "recovered":
             return {"status": "failed", "local_recovery": recovery, "room_finalized": False}
 
-    deadline = time.monotonic() + 45
-    while (room.get("attempt") or {}).get("phase") not in TERMINAL_ATTEMPTS:
-        if time.monotonic() >= deadline:
-            return {
-                "status": "failed", "code": "DISTRIBUTED_D6_TIMEOUT",
-                "local_recovery": recovery, "room_finalized": False,
-            }
-        time.sleep(0.25)
-        room = relay.room(session["room_id"], session["member_token"])
+    if attempt_id:
+        deadline = time.monotonic() + 45
+        while (room.get("attempt") or {}).get("phase") not in TERMINAL_ATTEMPTS:
+            if time.monotonic() >= deadline:
+                return {
+                    "status": "failed", "code": "DISTRIBUTED_D6_TIMEOUT",
+                    "local_recovery": recovery, "room_finalized": False,
+                }
+            time.sleep(RELAY_POLL_INTERVAL)
+            room = relay.room(session["room_id"], session["member_token"])
     if session["owner"]:
-        input(
-            "Confirm the other PC has completed local recovery, then press Enter to close the "
-            "interrupted qualification room: "
-        )
+        if attempt_id:
+            input(
+                "Confirm the other PC has completed local recovery, then press Enter to close the "
+                "interrupted qualification room: "
+            )
         relay.room_command(
             session["room_id"], session["member_token"], "", method="DELETE",
             expected_version=room["room_version"],
