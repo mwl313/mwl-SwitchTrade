@@ -586,6 +586,15 @@ class UsbLease:
             }
         current = self._current()
         if self.acquired_by_run:
+            if current.bus_id != self.adapter.bus_id:
+                if current.attached:
+                    raise P0Error(
+                        "P0_ADAPTER_IDENTITY_CHANGED", "D10_usb_return",
+                        "attached adapter bus identity changed before USB return",
+                    )
+                # Windows can renumber USB buses across a reboot. The stable InstanceId and USB ID
+                # still identify the exact detached device; subsequent reads bind to its new bus.
+                self.adapter = current
             if current.attached:
                 before_detach = self.probe(self.adapter.usb_id)
                 if (before_detach.get("status") != "present" or

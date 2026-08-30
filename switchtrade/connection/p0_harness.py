@@ -528,11 +528,35 @@ class P0Harness:
             self.release_probes.launch, identity)
         radio, radio_quiescent = verify_stable_radio_quiescence(
             self.release_probes.radio, identity)
+        usb_absence_proved_radio = False
+        if endpoint_absent and not radio_quiescent:
+            stable = 0
+            for sample in range(3):
+                try:
+                    linux = self.linux_probe(identity["usb_id"])
+                except Exception:
+                    linux = _unknown_linux_usb()
+                absent = (
+                    linux.get("status") == "absent" and linux.get("matches") == 0 and
+                    linux.get("interface_present") is False and
+                    linux.get("phy_present") is False and linux.get("interfaces_up") == 0
+                )
+                stable = stable + 1 if absent else 0
+                if sample < 2:
+                    time.sleep(0.1)
+            usb_absence_proved_radio = stable == 3
+            if usb_absence_proved_radio:
+                radio = {
+                    "status": "quiescent", "owned_interfaces": 0,
+                    "driver_threads": 0, "phy_active": False,
+                }
+                radio_quiescent = True
         return {
             "launch": launch,
             "radio": radio,
             "endpoint_identity_absent": endpoint_absent,
             "radio_stably_quiescent": radio_quiescent,
+            "radio_absence_proven_by_linux_usb": usb_absence_proved_radio,
         }, endpoint_absent and radio_quiescent
 
     def _process_start_ticks(self, pid: int) -> int | None:
@@ -610,6 +634,7 @@ class P0Harness:
             "prior_usb_state_restored": False,
             "endpoint_identity_absent": None,
             "radio_stably_quiescent": None,
+            "radio_absence_proven_by_linux_usb": None,
         }
         try:
             if wrapper_pid is not None:
@@ -692,6 +717,8 @@ class P0Harness:
                     "endpoint_identity_absent"]
                 evidence["radio_stably_quiescent"] = release_evidence[
                     "radio_stably_quiescent"]
+                evidence["radio_absence_proven_by_linux_usb"] = release_evidence[
+                    "radio_absence_proven_by_linux_usb"]
                 if not release_verified:
                     gate = (
                         "D8_endpoint_verification"
@@ -961,6 +988,10 @@ class P0Harness:
                     "radio_stably_quiescent": (
                         None if release_evidence is None
                         else release_evidence["radio_stably_quiescent"]
+                    ),
+                    "radio_absence_proven_by_linux_usb": (
+                        None if release_evidence is None
+                        else release_evidence["radio_absence_proven_by_linux_usb"]
                     ),
                 },
                 code=None if cleanup_verified else "P0_CLEANUP_FAILED",

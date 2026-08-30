@@ -354,6 +354,43 @@ class UsbLeaseTests(unittest.TestCase):
         self.assertEqual(sum(call[:2] == ["usbipd.exe", "detach"] for call in runner.calls), 1)
         self.assertFalse(recovery.exists())
 
+    def test_recovery_accepts_detached_exact_adapter_after_reboot_bus_renumber(self):
+        runner = StatefulUsbRunner()
+        runner.bus_id = "2-18"
+        recovery = self.root / "recovery.json"
+        recovery.write_text(json.dumps({
+            "schema": 1, "usb_id": USB_ID, "instance_id": INSTANCE, "bus_id": "4-18",
+            "prior_attached": False, "attach_intent": True, "acquired_by_run": True,
+        }), encoding="utf-8")
+        probe = lambda _usb: {
+            "status": "absent", "matches": 0, "interface_present": False,
+            "phy_present": False, "interfaces_up": 0,
+        }
+
+        cleanup = UsbLease.from_recovery(
+            recovery, runner=runner, probe=probe, deadline=1).release()
+
+        self.assertTrue(cleanup["prior_state_restored"])
+        self.assertFalse(any(call[:2] == ["usbipd.exe", "detach"] for call in runner.calls))
+        self.assertFalse(recovery.exists())
+
+    def test_recovery_rejects_attached_adapter_after_bus_change(self):
+        runner = StatefulUsbRunner(attached=True)
+        runner.bus_id = "2-18"
+        recovery = self.root / "recovery.json"
+        recovery.write_text(json.dumps({
+            "schema": 1, "usb_id": USB_ID, "instance_id": INSTANCE, "bus_id": "4-18",
+            "prior_attached": False, "attach_intent": True, "acquired_by_run": True,
+        }), encoding="utf-8")
+        lease = UsbLease.from_recovery(
+            recovery, runner=runner, probe=lambda _usb: {}, deadline=1)
+
+        with self.assertRaises(P0Error) as caught:
+            lease.release()
+
+        self.assertEqual(caught.exception.code, "P0_ADAPTER_IDENTITY_CHANGED")
+        self.assertFalse(any(call[:2] == ["usbipd.exe", "detach"] for call in runner.calls))
+
     def test_radio_must_be_quiescent_before_detach(self):
         runner = StatefulUsbRunner()
         up = False
@@ -744,6 +781,35 @@ class FakeReleaseProbes:
 
 
 class P0HarnessTests(unittest.TestCase):
+    def test_missing_reboot_phy_uses_stable_matching_linux_usb_absence(self):
+        events = []
+        probes = SimpleNamespace(
+            launch=lambda _identity: {
+                "status": "absent", "endpoint_exited": True, "wrapper_exited": True,
+                "children_absent": True, "token_absent": True, "session_absent": True,
+            },
+            radio=lambda _identity: {
+                "status": "unknown", "owned_interfaces": None,
+                "driver_threads": None, "phy_active": None,
+            },
+        )
+        linux_probe = lambda _usb: events.append("linux") or {
+            "status": "absent", "matches": 0, "interface_present": False,
+            "phy_present": False, "interfaces_up": 0,
+        }
+        harness = P0Harness(
+            SimpleNamespace(), SimpleNamespace(), Path("runs"),
+            release_probes=probes, lease_factory=lambda *_args: None,
+        )
+        harness.linux_probe = linux_probe
+
+        evidence, verified = harness._verify_d8_d9({"usb_id": USB_ID})
+
+        self.assertTrue(verified)
+        self.assertTrue(evidence["radio_stably_quiescent"])
+        self.assertTrue(evidence["radio_absence_proven_by_linux_usb"])
+        self.assertEqual(events, ["linux", "linux", "linux"])
+
     def test_direct_stage_cleanup_is_separate_and_fails_closed(self):
         passed = {"cleanup": {"ldn_context_released": True, "radio_quiescent": True}}
         uncertain = {"cleanup": {"ldn_context_released": True, "radio_quiescent": False}}
