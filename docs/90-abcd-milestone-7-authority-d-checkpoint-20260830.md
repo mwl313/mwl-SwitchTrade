@@ -9,10 +9,11 @@
 > Installed D8-D10 qualification commit: `0d7549d`
 > D11 response-loss recovery commit: `9e1621d`
 > P0 endpoint-hang/control-restart qualification commit: `153365c`
+> Windows-reboot recovery fix: `4e3e932`
 > Deployed relay artifact checkpoint: `ed382db`
 > Status: M7 authority, endpoint D2-D4, and measured local D5/D7-D11 happy-path slices complete;
-> the installed PC A D8-D10 and endpoint/control-interruption paths are qualified. Milestone 7
-> remains open for PC B, machine-restart,
+> the installed PC A D8-D11, endpoint/control-interruption, and local Windows-reboot paths are
+> qualified. Milestone 7 remains open for PC B, the distributed restart matrix,
 > diagnostic-resource, and product-action qualification.
 > Scope: D1 closing intent, endpoint D2-D4, D5 authority acknowledgement, D6 two-side/forced
 > barrier, relay transport retirement, measured local D5 evidence, and ordered local release.
@@ -148,8 +149,18 @@ existing SHA-256 launch identity.
   private recovery evidence survived; a fresh control process classified the functional result as
   `CONNECTION_RUN_INTERRUPTED`, completed conservative D8-D10 release, and reached verified D11 with
   the adapter detached. This proves app/control-process restart recovery, not a Windows reboot.
-- The post-qualification full audit is `485 passed, 3 skipped`. A distinct real Windows-reboot run is
-  intentionally staged and must be recovered after boot before the machine-restart gate can close.
+- Real Windows-reboot run `39b09970-447a-405d-9e04-8252a0738a6e` preserved the exact active run,
+  endpoint identity, and private USB recovery authority across restart. Its first recovery attempt
+  failed closed: Windows had normally renumbered the same adapter from bus `4-18` to `2-18`, and the
+  already-absent Linux USB/PHY made the PHY-bound D9 probe return `unknown`. No false cleanup success
+  or detach was recorded.
+- Commit `4e3e932` fixes those shared recovery rules. D9 may use three consecutive exact matching
+  Linux observations of USB, interface, and PHY absence only after D8 proves the launch absent. D10
+  accepts a changed ephemeral bus only for the same InstanceId/USB ID while already detached; a bus
+  change while attached still fails closed and never detaches the device.
+- Retrying that same run reached verified D11 with `CONNECTION_RUN_INTERRUPTED`, no endpoint or child,
+  stable Linux USB/interface/PHY absence, the exact Windows adapter detached at `2-18`, no recovery
+  file, and no active-run pointer. The post-fix full audit is `488 passed, 3 skipped`.
 
 ## 6. Remaining Milestone 7 work
 
@@ -159,9 +170,9 @@ This checkpoint is not the M7 exit gate. The following must be implemented and v
    its strict gate exists but product diagnostics are intentionally not migrated before M8.
 2. Repeat the now-qualified real WSL PID/interface/PHY and conditional `UsbLease` path on PC B. PC A
    and its non-ASCII profile boundary are complete.
-3. Complete PC restart recovery and the remaining fault injection at every D gate. The software
-   D2/D3/D10 fault cases, D11 lost-response recovery, installed endpoint-hang cleanup guard, and exact
-   control-process interruption recovery now pass on PC A. A real machine-restart qualification remains.
+3. Extend restart and fault injection across every distributed D gate. The software D2/D3/D10 fault
+   cases, D11 lost-response recovery, installed endpoint-hang cleanup guard, exact control-process
+   interruption, and one real local Windows-reboot D8-D11 recovery now pass on PC A.
 4. Prove Stop, End, Leave, and Close room-action semantics without bypassing D; product routing remains
    a Milestone 9 migration boundary.
 5. Extend the deployed check from the completed public two-role smoke and zero-orphan authority
