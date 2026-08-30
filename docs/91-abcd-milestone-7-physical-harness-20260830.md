@@ -1,8 +1,8 @@
 # ABC+D Milestone 7 physical distributed harness
 
 > Branch: `codex/abcd-orchestration-rework`
-> Canonical source: `0caafce6803549fa26a50bb7c2d34e16a54c71a3`
-> Application version: `0.2.7-beta.1` (Windows/MSI version `0.2.7`)
+> Canonical source: `82e7dccdda0810af3cf1faa172ebb60438722b09`
+> Application version: `0.2.8-beta.1` (Windows/MSI version `0.2.8`)
 > Status: source complete and automated regression passed; installed two-PC/two-Switch evidence is
 > still required.
 
@@ -65,7 +65,7 @@ passes its live advertisement through `rfu-tunnel.v2`, and attaches the proven f
 
 ## Automated evidence
 
-The source suite passes `508 passed, 3 skipped` after the physical harness additions. Focused tests
+The source suite passes `510 passed, 3 skipped` after the physical harness additions. Focused tests
 cover strict invitation/config/closing contracts, complementary attempt validation, PID-preserving
 normal-mode ticket validation, sustained Direct-stage ownership, exact payload handoff, UDP data
 plane framing, and one P0 lease/one delegated D release.
@@ -74,7 +74,14 @@ Automated evidence cannot prove real A/B RF conditions or a physical trade. The 
 and End, Close, Stop, and Leave actions remain the installed physical exit gate documented in
 `HANDOFF-M7-TWO-PC-DISTRIBUTED-20260830.md`.
 
+The first operator-assisted launch exposed a qualification-runner defect before either physical
+endpoint was paired: 250 ms relay polling exhausted the server's authenticated 120-request/60-second
+limit after about 30 seconds. Recovery also assumed an attempt already existed. Release
+`beta-82e7dccdda08` centralizes relay polling at one second and makes pre-attempt owner recovery close
+the temporary room without an invalid attempt lookup. These fixes do not alter the production desktop
+or relay protocol.
+
 The replacement installer was built from the clean canonical source as release
-`beta-0caafce68035`. Static embedded-bundle verification and the disposable WSL
+`beta-82e7dccdda08`. Static embedded-bundle verification and the disposable Unicode-path WSL
 install/verify/repair/uninstall lifecycle both passed. `SwitchTradeSetup.exe` SHA-256 is
-`a5cec5a92b42a75d7c7df59e15053ac6a849d617986f84fe41c7f0ab2ee7db1e`.
+`99996da551871e301c4b7e9523800780af33dd778f05c88450d2955042dbf063`.

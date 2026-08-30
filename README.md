@@ -177,8 +177,10 @@ The source now also contains a GUI-independent physical distributed harness for 
 Switches. It reuses the single P0 lease, Direct A/B components, admitted C2 tunnel, endpoint D2-D4,
 measured D5, and D7-D11 release rather than adding a parallel connection stack. One-time invitations
 bind source, release, role, action, and room without exposing bearer credentials in reports. The
-automated suite passes `508 passed, 3 skipped`; installed `0.2.7-beta.1` normal/reversed role and
-End/Close/Stop/Leave evidence is still required before Milestone 7 closes.
+automated suite passes `510 passed, 3 skipped`; installed `0.2.8-beta.1` normal/reversed role and
+End/Close/Stop/Leave evidence is still required before Milestone 7 closes. The release also keeps the
+operator-assisted harness below relay rate limits and safely recovers a run interrupted before an
+authority attempt exists.
 
 The [definitive TODO](docs/FUTURE_TODO.md) records implementation and qualification status. A passing
 test for the previous behavior does not close an ABC+D gate unless it proves the gate's current

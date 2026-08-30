@@ -3,9 +3,9 @@
 > PC A: the computer hosting the main repository/Codex task.
 > PC B: the other computer and its separate Codex task.
 > Branch: `codex/abcd-orchestration-rework`.
-> Canonical source: `0caafce6803549fa26a50bb7c2d34e16a54c71a3`.
-> Installer: GitHub prerelease `v0.2.7-beta.1`.
-> Installed release ID: `beta-0caafce68035`.
+> Canonical source: `82e7dccdda0810af3cf1faa172ebb60438722b09`.
+> Installer: GitHub prerelease `v0.2.8-beta.1`.
+> Installed release ID: `beta-82e7dccdda08`.
 > Supported qualification radio: RTL8192EU `0bda:818b`.
 
 This is the source of truth for the first physical M7 qualification. The runner is a CLI and has no
@@ -29,37 +29,41 @@ trainer/Pokémon data.
 
 ## Install and source preflight — both PCs
 
-Install `SwitchTradeSetup.exe` from prerelease `v0.2.7-beta.1`. Close the SwitchTrade GUI after setup.
-From a normal, non-elevated PowerShell in a clean clone run:
+Install `SwitchTradeSetup.exe` from prerelease `v0.2.8-beta.1`. Open SwitchTrade once, select and
+authorize the local RTL8192EU adapter, then close the GUI. From a normal, non-elevated PowerShell in
+a clean clone run:
 
 ```powershell
 git fetch origin codex/abcd-orchestration-rework
-git switch --detach 0caafce6803549fa26a50bb7c2d34e16a54c71a3
+git switch --detach 82e7dccdda0810af3cf1faa172ebb60438722b09
 git status --short
 
-$bridgeDistro = @((@(& wsl.exe --list --quiet) -replace ([char]0), '') |
-  Where-Object { $_ -like 'SwitchTrade-*' })[0]
-if (-not $bridgeDistro) { throw 'No installed SwitchTrade runtime' }
-$localAppDataWsl = (& wsl.exe -d $bridgeDistro -u root -- wslpath -u `
-  $env:LOCALAPPDATA.Replace('\','/')).Trim()
-$active = ((& wsl.exe -d $bridgeDistro -u root -- cat `
-  "$localAppDataWsl/SwitchTrade/state/active-runtime.json") | Out-String) | ConvertFrom-Json
-$manifest = ((& wsl.exe -d $bridgeDistro -u root -- cat `
-  "$localAppDataWsl/Programs/SwitchTrade/release-manifest.json") | Out-String) | ConvertFrom-Json
-$activeDistro = $active.active_runtime
-$selectionWsl = "$localAppDataWsl/SwitchTrade/runtime/hardware-selection.json"
-$selection = "\\wsl.localhost\$activeDistro$($selectionWsl.Replace('/','\'))"
+$expectedRelease = 'beta-82e7dccdda08'
+$candidateDistros = @((@(& wsl.exe --list --quiet) -replace ([char]0), '') |
+  Where-Object { $_ -like "SwitchTrade-$expectedRelease-*" })
+$matchingDistros = @(
+  foreach ($candidate in $candidateDistros) {
+    try {
+      $candidateMarker = ((& wsl.exe -d $candidate -u root -- cat `
+        /opt/switchtrade/.switchtrade-release.json 2>$null) | Out-String) | ConvertFrom-Json
+      if ($candidateMarker.release_id -eq $expectedRelease) { $candidate }
+    } catch {}
+  }
+)
+if ($matchingDistros.Count -ne 1) { throw 'Expected exactly one matching installed runtime' }
+$activeDistro = $matchingDistros[0]
+$runtimeMarker = ((& wsl.exe -d $activeDistro -u root -- cat `
+  /opt/switchtrade/.switchtrade-release.json) | Out-String) | ConvertFrom-Json
+$selection = "\\wsl.localhost\$activeDistro\root\.local\state\switchtrade\runtime\hardware-selection.json"
+if (-not (Test-Path -LiteralPath $selection)) {
+  throw 'Adapter selection is absent; open SwitchTrade and select the adapter once'
+}
 $selectionValue = Get-Content -Raw -LiteralPath $selection | ConvertFrom-Json
 
-if ((git rev-parse HEAD) -ne '0caafce6803549fa26a50bb7c2d34e16a54c71a3') { throw 'Wrong source' }
+if ((git rev-parse HEAD) -ne '82e7dccdda0810af3cf1faa172ebb60438722b09') { throw 'Wrong source' }
 if (git status --short) { throw 'Source tree is dirty' }
-if ($manifest.release_id -ne 'beta-0caafce68035') { throw 'Wrong installed release' }
-if ($active.release_id -ne 'beta-0caafce68035') { throw 'Wrong active runtime' }
 if ($selectionValue.usb_id -ne '0bda:818b') { throw 'Wrong or absent adapter selection' }
-if (((& wsl.exe -d $activeDistro -u root -- cat /opt/switchtrade/.switchtrade-release.json |
-    Out-String) | ConvertFrom-Json).release_id -ne 'beta-0caafce68035') {
-  throw 'Runtime marker mismatch'
-}
+if ($runtimeMarker.release_id -ne $expectedRelease) { throw 'Runtime marker mismatch' }
 
 $health = Invoke-RestMethod 'https://relay.pangyostonefist.org/health'
 if ($health.status -ne 'ready' -or $health.room_contract -ne 'room-control.v1' -or
@@ -69,8 +73,13 @@ if ($health.status -ne 'ready' -or $health.room_contract -ne 'room-control.v1' -
 The setup UI may be used only to install the immutable runtime and authorize/select the local
 adapter. It does not control the test. A missing `hardware-selection.json` is normal only before that
 one-time local adapter selection; the physical runner intentionally refuses to guess a device.
-Codex Desktop may virtualize direct `%LOCALAPPDATA%` access. The commands above deliberately read the
-real host installation through WSL and pass that same non-virtualized selection file to the runner.
+Codex Desktop may virtualize direct `%LOCALAPPDATA%` access. The commands above therefore select the
+runtime by its immutable Linux marker and read the adapter selection from that runtime's actual Linux
+state path. They do not use a virtualized Windows-side copy.
+
+This release also fixes two qualification-runner defects found before the physical case began. Relay
+polling is bounded at one request per second so an operator wait remains below the relay's authenticated
+rate limit, and recovery is valid even when interruption occurred before an authority attempt existed.
 
 Define the common command inputs on each PC:
 
@@ -83,7 +92,7 @@ $python = '.\.audit-venv\Scripts\python.exe'
 PC A starts first:
 
 ```powershell
-$stateRoot = Join-Path $env:LOCALAPPDATA 'SwitchTrade\qualification-m7-distributed\D-PHYS-1'
+$stateRoot = Join-Path $env:LOCALAPPDATA 'SwitchTrade\qualification-m7-distributed\D-PHYS-1-R2'
 & $python -m switchtrade.connection.distributed_harness `
   --distro $activeDistro --runtime-root /opt/switchtrade `
   --selection-file $selection --state-root $stateRoot `
@@ -93,7 +102,7 @@ $stateRoot = Join-Path $env:LOCALAPPDATA 'SwitchTrade\qualification-m7-distribut
 PC A securely transfers only the printed `ONE_TIME_INVITATION=...` value to PC B. PC B runs:
 
 ```powershell
-$stateRoot = Join-Path $env:LOCALAPPDATA 'SwitchTrade\qualification-m7-distributed\D-PHYS-1'
+$stateRoot = Join-Path $env:LOCALAPPDATA 'SwitchTrade\qualification-m7-distributed\D-PHYS-1-R2'
 & $python -m switchtrade.connection.distributed_harness `
   --distro $activeDistro --runtime-root /opt/switchtrade `
   --selection-file $selection --state-root $stateRoot `
@@ -111,7 +120,7 @@ $stateRoot = Join-Path $env:LOCALAPPDATA 'SwitchTrade\qualification-m7-distribut
 Use a fresh state root. PC A starts:
 
 ```powershell
-$stateRoot = Join-Path $env:LOCALAPPDATA 'SwitchTrade\qualification-m7-distributed\D-PHYS-2'
+$stateRoot = Join-Path $env:LOCALAPPDATA 'SwitchTrade\qualification-m7-distributed\D-PHYS-2-R2'
 & $python -m switchtrade.connection.distributed_harness `
   --distro $activeDistro --runtime-root /opt/switchtrade `
   --selection-file $selection --state-root $stateRoot `
@@ -163,8 +172,8 @@ For each case return the terminal `distributed-harness-report.v1` path and this 
 test_id:
 campaign_case:
 pc:
-source_sha: 0caafce6803549fa26a50bb7c2d34e16a54c71a3
-release_id: beta-0caafce68035
+source_sha: 82e7dccdda0810af3cf1faa172ebb60438722b09
+release_id: beta-82e7dccdda08
 local_role:
 run_id:
 attempt_id:
