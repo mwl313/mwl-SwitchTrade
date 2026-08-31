@@ -7,7 +7,8 @@
 >
 > **Last updated:** 2026-08-31
 > **Current qualification branch:** `codex/m7-safe-pairing`
-> **Current immutable candidate:** `v0.2.11-beta.1` / source `b92ab229870e`
+> **Next immutable candidate:** `v0.2.12-beta.1`; its exact source is the release tag target and its
+> release ID must be `beta-<first 12 characters of that source SHA>`.
 
 This document records what went wrong, not just what the current code intends to do. The normative
 target remains the [ABC+D architecture](80-abc-connection-architecture-20260829.md), and open work
@@ -1104,9 +1105,9 @@ The following remain open even though source corrections or workarounds allowed 
 
 1. Qualify the explicit-Windows-cwd probes and identity-bound control/cancellation path from a new
    installed immutable build on both PCs (`MTA-M7-005`, `MTA-M7-006`, `MTA-M7-008`, `MTA-M7-009`).
-2. Package or otherwise distribute the canonical qualification launcher with one immutable,
-   independently hashable interpreter/dependency/source closure; the tracked source launcher is not
-   by itself an installed package (`MTA-M7-007`).
+2. Build and validate the new release's separate M7 qualification kit. Packaging support now emits
+   one independently hashable launcher/interpreter/dependency/source closure; this item closes only
+   after that exact kit passes `verify` on both PCs (`MTA-M7-007`).
 3. Complete the installed two-PC/two-Switch M7 qualification only after the first two are closed.
 5. Investigate credentialless `waiting_for_complementary_role` rooms by ordered event history without
    breaking reconnect grace (`MTA-RELAY-006`).

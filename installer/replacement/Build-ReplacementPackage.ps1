@@ -217,6 +217,12 @@ if ($CertificateThumbprint) {
     Invoke-Checked $signTool @('sign', '/sha1', $CertificateThumbprint, '/fd', 'SHA256',
         '/tr', 'http://timestamp.digicert.com', '/td', 'SHA256', $setup)
 }
+$sourceSha = ((& git -C $repo rev-parse HEAD) | Out-String).Trim().ToLowerInvariant()
+if ($LASTEXITCODE -ne 0 -or $ReleaseId -ne "beta-$($sourceSha.Substring(0, 12))") {
+    throw 'Release ID must identify the exact source commit before qualification packaging.'
+}
+$qualificationResult = & (Join-Path $PSScriptRoot 'Build-M7QualificationKit.ps1') `
+    -OutputDirectory (Join-Path $output 'qualification') -ReleaseId $ReleaseId -SourceSha $sourceSha
 $result = [ordered]@{
     schema = 1
     release_id = $ReleaseId
@@ -227,6 +233,15 @@ $result = [ordered]@{
     size = (Get-Item -LiteralPath $setup).Length
     sha256 = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant()
     signed = [bool]$CertificateThumbprint
+    qualification = [ordered]@{
+        contract_version = [string]$qualificationResult.contract_version
+        source_sha = [string]$qualificationResult.source_sha
+        release_id = [string]$qualificationResult.release_id
+        archive = [IO.Path]::GetRelativePath($output, [string]$qualificationResult.archive).Replace('\', '/')
+        size = [long]$qualificationResult.size
+        sha256 = [string]$qualificationResult.sha256
+        manifest_sha256 = [string]$qualificationResult.manifest_sha256
+    }
 }
 $result | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'build-result.json') -Encoding utf8
 $result | ConvertTo-Json

@@ -22,9 +22,14 @@ def test_checked_in_version_is_the_runtime_and_installer_source():
                "SwitchTrade.Desktop.csproj").read_text(encoding="utf-8")
     builder = (ROOT / "installer" / "replacement" /
                "Build-ReplacementPackage.ps1").read_text(encoding="utf-8")
+    qualification_builder = (ROOT / "installer" / "replacement" /
+                             "Build-M7QualificationKit.ps1").read_text(encoding="utf-8")
     assert "switchtrade\\VERSION" in project
     assert "switchtrade\\VERSION" in builder
     assert "[string]$ProductVersion" not in builder
+    assert "m7-qualification-kit.v1" in qualification_builder
+    assert "qualification-manifest.json" in qualification_builder
+    assert "3.12.14" in qualification_builder
 
 
 def test_checked_in_installer_version_never_decreases_in_git_history():

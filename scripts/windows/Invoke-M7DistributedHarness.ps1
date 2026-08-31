@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory, Position = 0)]
-    [ValidateSet('preflight', 'create', 'join', 'status', 'continue', 'cancel', 'recover')]
+    [ValidateSet('verify', 'preflight', 'create', 'join', 'status', 'continue', 'cancel', 'recover')]
     [string]$Command,
     [string]$StateRoot = '',
     [ValidateSet('a_room_joiner', 'b_ap_host')]
@@ -27,9 +27,11 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
-$python = Join-Path $repo '.audit-venv\Scripts\python.exe'
-$module = Join-Path $repo 'switchtrade\connection\distributed_harness.py'
+$sourceModeRepo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+$kitManifestPath = Join-Path $PSScriptRoot 'qualification-manifest.json'
+$kitManifest = $null
+$kitManifestSha256 = $null
+$packagedMode = Test-Path -LiteralPath $kitManifestPath -PathType Leaf
 
 function Fail([string]$Code) {
     throw $Code
@@ -69,6 +71,83 @@ function Get-StringSha256([string]$Value) {
     }
 }
 
+function Get-StrictRelativePath([string]$Root, [string]$Relative) {
+    if ([string]::IsNullOrWhiteSpace($Relative) -or [IO.Path]::IsPathRooted($Relative)) {
+        Fail 'DISTRIBUTED_QUALIFICATION_MANIFEST_INVALID'
+    }
+    $rootPrefix = [IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+    $full = [IO.Path]::GetFullPath((Join-Path $Root $Relative))
+    if (-not $full.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        Fail 'DISTRIBUTED_QUALIFICATION_MANIFEST_INVALID'
+    }
+    return $full
+}
+
+if ($packagedMode) {
+    try {
+        $kitManifest = Get-Content -Raw -LiteralPath $kitManifestPath -Encoding utf8 | ConvertFrom-Json
+    } catch {
+        Fail 'DISTRIBUTED_QUALIFICATION_MANIFEST_INVALID'
+    }
+    $required = @(
+        'contract_version', 'schema', 'source_sha', 'release_id', 'version',
+        'source_root', 'interpreter', 'requirements_sha256', 'artifacts'
+    )
+    foreach ($name in $required) {
+        if ($kitManifest.PSObject.Properties.Name -notcontains $name) {
+            Fail 'DISTRIBUTED_QUALIFICATION_MANIFEST_INVALID'
+        }
+    }
+    $source = ([string]$kitManifest.source_sha).ToLowerInvariant()
+    if ([string]$kitManifest.contract_version -ne 'm7-qualification-kit.v1' -or
+        [int]$kitManifest.schema -ne 1 -or $source -notmatch '^[0-9a-f]{40}$' -or
+        [string]$kitManifest.release_id -ne "beta-$($source.Substring(0, 12))" -or
+        @($kitManifest.artifacts).Count -eq 0) {
+        Fail 'DISTRIBUTED_QUALIFICATION_MANIFEST_INVALID'
+    }
+    $kitRoot = [IO.Path]::GetFullPath($PSScriptRoot)
+    $repo = Get-StrictRelativePath $kitRoot ([string]$kitManifest.source_root)
+    $python = Get-StrictRelativePath $kitRoot ([string]$kitManifest.interpreter)
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($artifact in @($kitManifest.artifacts)) {
+        if ($artifact.PSObject.Properties.Name -notcontains 'path' -or
+            $artifact.PSObject.Properties.Name -notcontains 'size' -or
+            $artifact.PSObject.Properties.Name -notcontains 'sha256') {
+            Fail 'DISTRIBUTED_QUALIFICATION_MANIFEST_INVALID'
+        }
+        $relative = ([string]$artifact.path).Replace('/', '\')
+        $file = Get-StrictRelativePath $kitRoot $relative
+        if (-not $seen.Add($relative) -or -not (Test-Path -LiteralPath $file -PathType Leaf) -or
+            [long]$artifact.size -ne (Get-Item -LiteralPath $file).Length -or
+            [string]$artifact.sha256 -ne
+                (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()) {
+            Fail 'DISTRIBUTED_QUALIFICATION_INTEGRITY_FAILED'
+        }
+    }
+    $actualFiles = @(
+        Get-ChildItem -LiteralPath $kitRoot -Recurse -File -Force |
+            Where-Object { $_.FullName -ne $kitManifestPath }
+    )
+    if ($actualFiles.Count -ne $seen.Count) {
+        Fail 'DISTRIBUTED_QUALIFICATION_INTEGRITY_FAILED'
+    }
+    foreach ($file in $actualFiles) {
+        $relative = $file.FullName.Substring($kitRoot.TrimEnd('\').Length + 1)
+        if (-not $seen.Contains($relative)) {
+            Fail 'DISTRIBUTED_QUALIFICATION_INTEGRITY_FAILED'
+        }
+    }
+    $kitManifestSha256 = (Get-FileHash -LiteralPath $kitManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+} else {
+    $repo = $sourceModeRepo
+    $python = Join-Path $repo '.audit-venv\Scripts\python.exe'
+    $source = (Invoke-Captured 'git.exe' @('-C', $repo, 'rev-parse', 'HEAD')).ToLowerInvariant()
+    if ($source -notmatch '^[0-9a-f]{40}$') {
+        Fail 'DISTRIBUTED_SOURCE_IDENTITY_INVALID'
+    }
+}
+$module = Join-Path $repo 'switchtrade\connection\distributed_harness.py'
+
 if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
     Fail 'DISTRIBUTED_QUALIFICATION_INTERPRETER_MISSING'
 }
@@ -76,11 +155,11 @@ if (-not (Test-Path -LiteralPath $module -PathType Leaf)) {
     Fail 'DISTRIBUTED_QUALIFICATION_SOURCE_MISSING'
 }
 
-$source = (Invoke-Captured 'git.exe' @('-C', $repo, 'rev-parse', 'HEAD')).ToLowerInvariant()
-if ($source -notmatch '^[0-9a-f]{40}$') {
-    Fail 'DISTRIBUTED_SOURCE_IDENTITY_INVALID'
+$expectedRelease = if ($packagedMode) {
+    [string]$kitManifest.release_id
+} else {
+    "beta-$($source.Substring(0, 12))"
 }
-$expectedRelease = "beta-$($source.Substring(0, 12))"
 
 $environmentProbe = @'
 import hashlib,importlib.metadata,importlib.util,json,pathlib,sys
@@ -124,15 +203,32 @@ if ($probe.PSObject.Properties.Name -notcontains 'missing' -or
     Fail 'DISTRIBUTED_QUALIFICATION_ENVIRONMENT_INVALID'
 }
 
-if ($AllowDirtyForDevelopment -and $Command -ne 'preflight') {
+if ($packagedMode -and $AllowDirtyForDevelopment) {
+    Fail 'DISTRIBUTED_DIRTY_OVERRIDE_SOURCE_ONLY'
+}
+if ($AllowDirtyForDevelopment -and $Command -notin @('verify', 'preflight')) {
     Fail 'DISTRIBUTED_DIRTY_OVERRIDE_PREFLIGHT_ONLY'
 }
-if ($Command -ne 'status' -and -not $AllowDirtyForDevelopment) {
+if (-not $packagedMode -and $Command -ne 'status' -and -not $AllowDirtyForDevelopment) {
     $dirty = @(& git.exe -C $repo status --porcelain --untracked-files=all 2>&1)
     if ($LASTEXITCODE -ne 0) { Fail 'DISTRIBUTED_SOURCE_IDENTITY_INVALID' }
     if (($dirty -join "`n").Trim()) {
         Fail 'DISTRIBUTED_QUALIFICATION_SOURCE_DIRTY'
     }
+}
+
+if ($Command -eq 'verify') {
+    [ordered]@{
+        status = 'verified'
+        source_sha = $source
+        release = $expectedRelease
+        interpreter = (Get-FileHash -LiteralPath $python -Algorithm SHA256).Hash.ToLowerInvariant()
+        requirements = [string]$probe.requirements_sha256
+        qualification_manifest = $kitManifestSha256
+        mode = if ($packagedMode) { 'packaged' } else { 'source' }
+        control = 'distributed-control-state.v1'
+    } | ConvertTo-Json
+    exit 0
 }
 
 if ($Command -ne 'preflight') {
@@ -212,6 +308,7 @@ if ($Command -eq 'preflight') {
         distro = $Distro
         interpreter = (Get-FileHash -LiteralPath $python -Algorithm SHA256).Hash.ToLowerInvariant()
         requirements = [string]$probe.requirements_sha256
+        qualification_manifest = $kitManifestSha256
         selection_identity = Get-StringSha256 (
             ([string]$selection.instance_id).ToLowerInvariant())
         control = 'distributed-control-state.v1'
@@ -254,9 +351,18 @@ switch ($Command) {
 
 Push-Location -LiteralPath $repo
 try {
+    $priorManifest = $env:SWITCHTRADE_QUALIFICATION_MANIFEST
+    if ($packagedMode) {
+        $env:SWITCHTRADE_QUALIFICATION_MANIFEST = $kitManifestPath
+    }
     & $python @arguments
     $exitCode = $LASTEXITCODE
 } finally {
+    if ($null -eq $priorManifest) {
+        Remove-Item Env:SWITCHTRADE_QUALIFICATION_MANIFEST -ErrorAction SilentlyContinue
+    } else {
+        $env:SWITCHTRADE_QUALIFICATION_MANIFEST = $priorManifest
+    }
     Pop-Location
 }
 exit $exitCode

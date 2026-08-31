@@ -374,6 +374,34 @@ def _status(event: str, **values: object) -> None:
 
 
 def _source_sha(root: Path) -> str:
+    packaged_manifest = os.environ.get("SWITCHTRADE_QUALIFICATION_MANIFEST")
+    if packaged_manifest:
+        try:
+            manifest_path = Path(packaged_manifest).resolve(strict=True)
+            value = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+            source_sha = str(value["source_sha"]).lower()
+            source_root = (manifest_path.parent / value["source_root"]).resolve(strict=True)
+            relative_module = Path("source/switchtrade/connection/distributed_harness.py")
+            module_path = manifest_path.parent / relative_module
+            artifacts = {
+                item["path"]: item for item in value["artifacts"]
+                if isinstance(item, dict) and isinstance(item.get("path"), str)
+            }
+            module_evidence = artifacts[relative_module.as_posix()]
+            module_sha = hashlib.sha256(module_path.read_bytes()).hexdigest()
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise SystemExit("DISTRIBUTED_QUALIFICATION_MANIFEST_INVALID") from error
+        if (
+            value.get("contract_version") != "m7-qualification-kit.v1"
+            or value.get("schema") != 1
+            or SOURCE_SHA.fullmatch(source_sha) is None
+            or value.get("release_id") != f"beta-{source_sha[:12]}"
+            or source_root != root.resolve()
+            or module_evidence.get("sha256") != module_sha
+            or module_evidence.get("size") != module_path.stat().st_size
+        ):
+            raise SystemExit("DISTRIBUTED_QUALIFICATION_MANIFEST_INVALID")
+        return source_sha
     try:
         result = subprocess.run(
             ["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True,

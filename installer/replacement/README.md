@@ -30,6 +30,13 @@ three-part MSI/Burn version and GitHub release tag from it, rejects a version lo
 history, and the package validator checks the MSI, Burn bundle, manifest, Python runtime, and WPF
 assembly against that value.
 
+Every release also produces `SwitchTrade-M7-Qualification-<version>.zip`. This is deliberately
+separate from the production MSI: it contains the canonical PowerShell launcher, an exact portable
+CPython runtime, the locked dependency files, and the tracked qualification source. Its manifest
+hashes every file, binds the kit to the release source SHA, and is checked by the launcher before
+any command. Operators must use this released kit for installed two-PC qualification; a repository
+checkout and `.audit-venv` remain development-only inputs.
+
 Release builds require a clean tracked worktree. Internal-only builds may explicitly pass
 `-AllowDirtyForDevelopment`. The builder verifies pinned WSL and usbipd MSI hashes, exact firmware
 and wheel hashes, the immutable appliance metadata, every release payload, all native self-tests,
@@ -40,6 +47,12 @@ Validate a built directory without changing the host installation:
 ```powershell
 pwsh -NoProfile -File installer/replacement/Test-ReplacementPackage.ps1 `
   -PackageDirectory artifacts/replacement/release-beta-<commit>
+```
+
+After extracting the qualification ZIP, verify it without touching WSL, the relay, or hardware:
+
+```powershell
+pwsh -NoProfile -File .\Invoke-M7DistributedHarness.ps1 verify
 ```
 
 On a development machine with current Store WSL, add `-RunDisposableWslLifecycle` to install,

@@ -25,6 +25,23 @@ if ([long]$result.size -ne (Get-Item -LiteralPath $setup).Length -or
     [string]$result.sha256 -ne (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant()) {
     throw 'Setup EXE does not match build-result.json.'
 }
+if ($result.PSObject.Properties.Name -notcontains 'qualification' -or
+    [string]$result.qualification.contract_version -ne 'm7-qualification-kit-build.v1' -or
+    [string]$result.qualification.release_id -ne [string]$result.release_id -or
+    [string]$result.qualification.source_sha -notmatch '^[0-9a-f]{40}$' -or
+    [string]$result.qualification.release_id -ne
+        "beta-$(([string]$result.qualification.source_sha).Substring(0, 12))") {
+    throw 'Qualification build identity is missing or invalid.'
+}
+$qualificationArchive = [IO.Path]::GetFullPath((Join-Path $root ([string]$result.qualification.archive)))
+if (-not $qualificationArchive.StartsWith($root.TrimEnd('\') + '\',
+        [StringComparison]::OrdinalIgnoreCase) -or
+    -not (Test-Path -LiteralPath $qualificationArchive -PathType Leaf) -or
+    [long]$result.qualification.size -ne (Get-Item -LiteralPath $qualificationArchive).Length -or
+    [string]$result.qualification.sha256 -ne
+        (Get-FileHash -LiteralPath $qualificationArchive -Algorithm SHA256).Hash.ToLowerInvariant()) {
+    throw 'Qualification archive does not match build-result.json.'
+}
 $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
 if ([string]$result.version -ne $applicationVersion -or
     [string]$result.product_version -ne $productVersion -or
@@ -123,6 +140,29 @@ if (-not $validationRoot.StartsWith($tempPrefix, [StringComparison]::OrdinalIgno
 }
 New-Item -ItemType Directory -Force -Path $validationRoot | Out-Null
 try {
+    $qualificationRoot = Join-Path $validationRoot 'qualification'
+    [IO.Compression.ZipFile]::ExtractToDirectory($qualificationArchive, $qualificationRoot)
+    $qualificationManifest = Join-Path $qualificationRoot 'qualification-manifest.json'
+    if (-not (Test-Path -LiteralPath $qualificationManifest -PathType Leaf) -or
+        [string]$result.qualification.manifest_sha256 -ne
+            (Get-FileHash -LiteralPath $qualificationManifest -Algorithm SHA256).Hash.ToLowerInvariant()) {
+        throw 'Extracted qualification manifest does not match build-result.json.'
+    }
+    $launcher = Join-Path $qualificationRoot 'Invoke-M7DistributedHarness.ps1'
+    $verificationText = @(& pwsh -NoProfile -File $launcher verify 2>&1) -join "`n"
+    if ($LASTEXITCODE -ne 0) { throw "Qualification launcher verification failed: $verificationText" }
+    try { $verification = $verificationText | ConvertFrom-Json } catch {
+        throw 'Qualification launcher returned invalid verification output.'
+    }
+    if ([string]$verification.status -ne 'verified' -or
+        [string]$verification.mode -ne 'packaged' -or
+        [string]$verification.source_sha -ne [string]$result.qualification.source_sha -or
+        [string]$verification.release -ne [string]$result.release_id -or
+        [string]$verification.qualification_manifest -ne
+            [string]$result.qualification.manifest_sha256) {
+        throw 'Qualification launcher identity does not match the release.'
+    }
+
     $layout = Join-Path $validationRoot 'layout'
     New-Item -ItemType Directory -Force -Path $layout | Out-Null
     $start = [Diagnostics.ProcessStartInfo]::new()

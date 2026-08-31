@@ -2,7 +2,9 @@
 
 > Harness contract: `distributed-invitation.v2` plus `distributed-control-state.v1`.
 > PC A creates the qualification room; PC B joins it.
-> Use only `scripts/windows/Invoke-M7DistributedHarness.ps1`; do not assemble direct Python commands.
+> For an installed release, use only `Invoke-M7DistributedHarness.ps1` from the matching released
+> M7 qualification kit. The repository path `scripts/windows/Invoke-M7DistributedHarness.ps1` is for
+> source development only. Do not assemble direct Python commands.
 
 This qualification runner is independent of the retiring desktop GUI. Setup/provisioning installs the
 immutable WSL runtime and writes the Windows adapter selection. The old GUI is not a control,
@@ -10,22 +12,24 @@ checkpoint, or execution dependency.
 
 ## Release gate
 
-Both PCs must have the same clean source commit and an installed runtime whose release ID is exactly
-`beta-<first 12 characters of that source SHA>`. A source fix is not installed evidence. The launcher
-checks the interpreter, dependencies, imported module path, source cleanliness, runtime identity,
-explicit WSL working directory, and canonical Windows adapter selection before it can create or join
-a relay room.
+Both PCs must have the same released qualification-kit hash and an installed runtime whose release ID
+is exactly `beta-<first 12 characters of the kit source SHA>`. A source fix is not installed evidence.
+The released launcher checks every kit file, the interpreter, dependencies, imported module path,
+runtime identity, explicit WSL working directory, and canonical Windows adapter selection before it
+can create or join a relay room.
 
 From any working directory, run on each PC:
 
 ```powershell
-$repo = 'C:\path\to\the\clean\switchtrade\checkout'
-$harness = Join-Path $repo 'scripts\windows\Invoke-M7DistributedHarness.ps1'
+$kitRoot = 'C:\path\to\the\extracted\SwitchTrade-M7-Qualification-kit'
+$harness = Join-Path $kitRoot 'Invoke-M7DistributedHarness.ps1'
+& $harness verify
 & $harness preflight
 ```
 
-`status: ready` is necessary but does not attach USB or certify the radio. Do not use
-`-AllowDirtyForDevelopment` for qualification evidence.
+`status: verified` proves only the extracted kit. `status: ready` additionally proves the installed
+runtime and selected-adapter preflight, but does not attach USB or certify the radio. Do not use a
+repository checkout or `-AllowDirtyForDevelopment` for installed qualification evidence.
 
 ## Non-negotiable safety order
 

@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -28,6 +29,7 @@ from switchtrade.connection.distributed_harness import (
     _invitation,
     _room_session,
     _recover_distributed,
+    _source_sha,
 )
 from switchtrade.connection.p0_harness import _stable_error_code
 from switchtrade.connection.stage_session import StageSession, StageSessionError
@@ -713,8 +715,39 @@ class DistributedContractTests(unittest.TestCase):
             ".audit-venv\\Scripts\\python.exe", "DISTRIBUTED_QUALIFICATION_SOURCE_DIRTY",
             "--cd", "/opt/switchtrade", "hardware-selection.json",
             "switchtrade.connection.distributed_harness", "Push-Location",
+            "m7-qualification-kit.v1", "DISTRIBUTED_QUALIFICATION_INTEGRITY_FAILED",
+            "qualification-manifest.json", "verify",
         ):
             self.assertIn(required, script)
+
+    def test_packaged_source_identity_requires_matching_manifest_and_module(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            kit = Path(temporary)
+            root = kit / "source"
+            module = root / "switchtrade" / "connection" / "distributed_harness.py"
+            module.parent.mkdir(parents=True)
+            module.write_bytes(b"packaged source\n")
+            digest = hashlib.sha256(module.read_bytes()).hexdigest()
+            manifest = kit / "qualification-manifest.json"
+            manifest.write_text(json.dumps({
+                "contract_version": "m7-qualification-kit.v1",
+                "schema": 1,
+                "source_sha": "a" * 40,
+                "release_id": "beta-aaaaaaaaaaaa",
+                "source_root": "source",
+                "artifacts": [{
+                    "path": "source/switchtrade/connection/distributed_harness.py",
+                    "size": module.stat().st_size,
+                    "sha256": digest,
+                }],
+            }), encoding="utf-8")
+            with patch.dict(os.environ, {
+                    "SWITCHTRADE_QUALIFICATION_MANIFEST": str(manifest)}):
+                self.assertEqual(_source_sha(root), "a" * 40)
+                module.write_bytes(b"altered\n")
+                with self.assertRaisesRegex(
+                        SystemExit, "DISTRIBUTED_QUALIFICATION_MANIFEST_INVALID"):
+                    _source_sha(root)
 
     @unittest.skipUnless(os.name == "nt" and shutil.which("pwsh"), "PowerShell 7 is required")
     def test_canonical_launcher_status_is_read_only_from_an_arbitrary_cwd(self):
