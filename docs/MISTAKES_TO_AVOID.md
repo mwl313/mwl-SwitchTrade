@@ -299,6 +299,29 @@ These are distilled from repeated failures below.
   failure has its own stable code, and a failure-injection regression proves the joined member is
   released without leaving a session file.
 
+### MTA-M7-013 — Qualification kit copied dependencies into a nested false site-packages root
+
+- **Observed:** the first `0.2.12-beta.1` package candidate from source `c5f7897a02a0` built its WSL
+  appliance, MSI, and Burn bundle, but the mandatory package validator stopped at
+  `DISTRIBUTED_QUALIFICATION_ENVIRONMENT_INVALID`. The candidate was not installed or published;
+  WSL, USB, and the installed `0.2.11` release were untouched.
+- **Definitive cause:** the kit builder selected `site.getsitepackages()[0]`. In this uv-created venv,
+  that first entry is the venv root, not `Lib/site-packages`; dependency files were consequently copied
+  under `python/Lib/site-packages/Lib/site-packages`, and the packaged interpreter could not resolve
+  even `trio` metadata. Direct inspection of the rejected kit reproduced `PackageNotFoundError: trio`
+  and showed the exact nested directory.
+- **Disproven alternatives:** the portable CPython executable launched correctly from the non-ASCII
+  path, the pinned requirements hash matched, and source files plus manifest identity were present.
+- **Recovery/residue:** package validation used and removed only its dedicated temporary extraction
+  root. The rejected build remains evidence under its source-specific artifact directory; there was no
+  host installation or radio state to recover.
+- **Never repeat:** never infer a venv's import directory by list position. Resolve `purelib` through
+  `sysconfig`, and make the kit builder itself launch the copied interpreter from the copied source and
+  verify locked imports/metadata before writing a releasable manifest.
+- **Source correction (2026-08-31):** the builder now uses `sysconfig.get_path("purelib")` and performs
+  the packaged import/version probe before manifest/archive creation. A fresh source identity and full
+  package validation are still required; the rejected `c5f7897a02a0` artifact is not releasable.
+
 ### 2026-08-31 M7 harness prevention implementation
 
 - Every WSL subprocess in P0 and D now uses one typed `wsl_root_command` builder with explicit

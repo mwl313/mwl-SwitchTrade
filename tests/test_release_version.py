@@ -30,6 +30,8 @@ def test_checked_in_version_is_the_runtime_and_installer_source():
     assert "m7-qualification-kit.v1" in qualification_builder
     assert "qualification-manifest.json" in qualification_builder
     assert "3.12.14" in qualification_builder
+    assert 'sysconfig.get_path("purelib")' in qualification_builder
+    assert "The packaged qualification environment cannot import its source." in qualification_builder
 
 
 def test_checked_in_installer_version_never_decreases_in_git_history():

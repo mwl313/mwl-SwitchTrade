@@ -42,9 +42,9 @@ if (-not (Test-Path -LiteralPath $auditPython -PathType Leaf)) {
     throw 'The pinned qualification build environment is missing.'
 }
 $pythonIdentity = @(& $auditPython -c (
-    'import json,sys; print(json.dumps({' +
+    'import json,sys,sysconfig; print(json.dumps({' +
     '"version":".".join(map(str,sys.version_info[:3])),"base_prefix":sys.base_prefix,' +
-    '"site":__import__("site").getsitepackages()[0]}))'
+    '"site":sysconfig.get_path("purelib")}))'
 )) -join "`n"
 if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the qualification Python environment.' }
 $pythonIdentity = $pythonIdentity | ConvertFrom-Json
@@ -130,6 +130,33 @@ foreach ($relative in $tracked) {
 }
 Copy-Item -LiteralPath (Join-Path $repo 'scripts\windows\Invoke-M7DistributedHarness.ps1') `
     -Destination (Join-Path $kit 'Invoke-M7DistributedHarness.ps1') -Force
+
+$kitProbe = @'
+import importlib.metadata as metadata
+import importlib.util
+import json
+
+names = ("trio", "websockets", "switchtrade.connection.distributed_harness")
+missing = [name for name in names if importlib.util.find_spec(name) is None]
+print(json.dumps({
+    "missing": missing,
+    "trio": metadata.version("trio") if "trio" not in missing else None,
+    "websockets": metadata.version("websockets") if "websockets" not in missing else None,
+}, sort_keys=True, separators=(",", ":")))
+'@
+Push-Location -LiteralPath $kitSource
+try {
+    $kitProbeJson = @(& (Join-Path $kitPython 'python.exe') -c $kitProbe) -join "`n"
+} finally {
+    Pop-Location
+}
+if ($LASTEXITCODE -ne 0) { throw 'The packaged qualification environment cannot import its source.' }
+$kitProbeResult = $kitProbeJson | ConvertFrom-Json
+if (@($kitProbeResult.missing).Count -ne 0 -or
+    [string]$kitProbeResult.trio -ne '0.33.0' -or
+    [string]$kitProbeResult.websockets -ne '17.0.1') {
+    throw 'The packaged qualification environment does not match the locked runtime.'
+}
 
 $artifactRows = @()
 foreach ($file in Get-ChildItem -LiteralPath $kit -Recurse -File -Force | Sort-Object FullName) {
