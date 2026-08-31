@@ -240,6 +240,12 @@ try {
         $runtimePackage.InstallArguments -match '--package-root') {
         throw 'The Setup EXE contains stale or unsafe runtime package arguments.'
     }
+    $msiPackages = @($burnManifest.SelectNodes('//burn:MsiPackage', $namespace))
+    if ($msiPackages.Count -ne 3 -or @($msiPackages | Where-Object {
+            $_.HasAttribute('LogPathVariable') -or $_.HasAttribute('RollbackLogPathVariable')
+        }).Count -ne 0) {
+        throw 'The Setup EXE can pass a locale-sensitive automatic log path to a chained MSI.'
+    }
 
     if ($RunDisposableWslLifecycle) {
         $provisioner = $embeddedProvisioner

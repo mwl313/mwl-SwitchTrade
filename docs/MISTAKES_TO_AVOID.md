@@ -816,6 +816,36 @@ These are distilled from repeated failures below.
 - **Never repeat:** UI exposes only actions valid for the inspected state. Users never choose a
   transaction algorithm by guesswork.
 
+### MTA-INSTALL-022 — Burn passed a non-ASCII child-MSI log path and Windows Installer returned 1622
+
+- **Observed:** the first real PC A upgrade attempt for source `0f163a22e6b8` stopped before installing
+  the desktop MSI or runtime. Burn reported `0x80070656` / exit `1622`; rollback restored the existing
+  `0.2.11` bundle and runtime. WSL remained stopped, the adapter remained Windows-owned, and no new
+  SwitchTrade distro was registered.
+- **Definitive cause:** the invoked bundle log was below the Korean user profile, so Burn derived the
+  child MSI log there. Windows Installer opened a client stub log but returned 1622 before executing
+  MSI actions. An administrative-install A/B probe of the exact same MSI and source path failed with
+  the Unicode-profile log and completed with status 0 when only the log moved to an ASCII path. The
+  portable source path, package bytes, MSI actions, reboot state, and directory ACL were thereby
+  excluded.
+- **Recovery/residue:** Burn completed its rollback and `0.2.11` remains the only installed product and
+  WSL runtime. The failed logs and source-specific build remain evidence. The administrative probe
+  installed no product; its disposable extraction directory is non-product residue pending explicit
+  filesystem cleanup because this session's command policy rejected recursive deletion.
+- **Never repeat:** never pass a user-profile-derived log path into Windows Installer on a non-ASCII
+  profile. Burn and the provisioner retain their Unicode-safe logs; chained MSIs must omit automatic
+  log-path variables unless an ASCII-safe launcher owns the path. Installed Unicode-path qualification
+  must launch Setup without a custom `/log` override and inspect the bundle result plus Windows events.
+- **Rejected correction:** authoring an absolute `Log/@Prefix` is invalid for this purpose; WiX split
+  `C:\Windows\Temp\...` into `Prefix="C"` and a malformed extension in the compiled manifest. That
+  candidate was never installed.
+- **Source correction (2026-08-31):** all three chained MSIs now set empty `LogPathVariable` and
+  `RollbackLogPathVariable`, the documented WiX mechanism for omitting those paths. Burn's main log
+  and the provisioner's structured log remain enabled, and package validation inspects the compiled
+  Burn manifest to prove no MSI receives an automatic locale-sensitive log path. A newly committed
+  source identity, rebuilt bundle, default-command installation, and rollback/residue verification
+  are still required.
+
 ## 8. Protocol and reverse-engineering failure lessons
 
 These historical failures were valuable evidence, but none may be reintroduced as an “alternate”

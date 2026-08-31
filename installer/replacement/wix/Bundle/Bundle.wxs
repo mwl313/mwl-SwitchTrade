@@ -21,10 +21,13 @@
         <ExitCode Value="3010" Behavior="forceReboot" />
       </ExePackage>
       <MsiPackage Id="MicrosoftWsl" SourceFile="$(var.WslMsi)"
+                  LogPathVariable="" RollbackLogPathVariable=""
                   Compressed="yes" Permanent="yes" Vital="yes" />
       <MsiPackage Id="UsbipdWin" SourceFile="$(var.UsbipdMsi)"
+                  LogPathVariable="" RollbackLogPathVariable=""
                   Compressed="yes" Permanent="yes" Vital="yes" />
       <MsiPackage Id="SwitchTradeDesktop" SourceFile="$(var.DesktopMsi)"
+                  LogPathVariable="" RollbackLogPathVariable=""
                   Compressed="yes" Vital="yes" />
       <ExePackage Id="SwitchTradeRuntime" SourceFile="$(var.ProvisionerExe)"
                   Name="SwitchTradeProvisioner.exe" PerMachine="no" Vital="yes"

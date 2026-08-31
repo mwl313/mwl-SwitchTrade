@@ -24,6 +24,8 @@ def test_checked_in_version_is_the_runtime_and_installer_source():
                "Build-ReplacementPackage.ps1").read_text(encoding="utf-8")
     qualification_builder = (ROOT / "installer" / "replacement" /
                              "Build-M7QualificationKit.ps1").read_text(encoding="utf-8")
+    bundle = (ROOT / "installer" / "replacement" / "wix" / "Bundle" /
+              "Bundle.wxs").read_text(encoding="utf-8")
     assert "switchtrade\\VERSION" in project
     assert "switchtrade\\VERSION" in builder
     assert "[string]$ProductVersion" not in builder
@@ -32,6 +34,7 @@ def test_checked_in_version_is_the_runtime_and_installer_source():
     assert "3.12.14" in qualification_builder
     assert 'sysconfig.get_path("purelib")' in qualification_builder
     assert "The packaged qualification environment cannot import its source." in qualification_builder
+    assert bundle.count('LogPathVariable="" RollbackLogPathVariable=""') == 3
 
 
 def test_checked_in_installer_version_never_decreases_in_git_history():
