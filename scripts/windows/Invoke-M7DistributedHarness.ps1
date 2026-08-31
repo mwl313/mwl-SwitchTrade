@@ -182,7 +182,7 @@ print(json.dumps({'missing':missing,'mismatches':mismatches,'origin':origin,
 '@
 Push-Location -LiteralPath $repo
 try {
-    $probeText = Invoke-Captured $python @('-c', $environmentProbe, $repo)
+    $probeText = Invoke-Captured $python @('-B', '-c', $environmentProbe, $repo)
 } finally {
     Pop-Location
 }
@@ -317,7 +317,7 @@ if ($Command -eq 'preflight') {
 }
 
 $arguments = @(
-    '-m', 'switchtrade.connection.distributed_harness',
+    '-B', '-m', 'switchtrade.connection.distributed_harness',
     '--state-root', $StateRoot,
     '--runtime-root', $RuntimeRoot,
     '--timeout', [string]$TimeoutSeconds

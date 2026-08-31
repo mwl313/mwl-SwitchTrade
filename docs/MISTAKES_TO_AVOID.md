@@ -7,7 +7,7 @@
 >
 > **Last updated:** 2026-08-31
 > **Current qualification branch:** `codex/m7-safe-pairing`
-> **Next immutable candidate:** `v0.2.12-beta.1`; its exact source is the release tag target and its
+> **Next immutable candidate:** `v0.2.13-beta.1`; its exact source is the release tag target and its
 > release ID must be `beta-<first 12 characters of that source SHA>`.
 
 This document records what went wrong, not just what the current code intends to do. The normative
@@ -321,6 +321,36 @@ These are distilled from repeated failures below.
 - **Source correction (2026-08-31):** the builder now uses `sysconfig.get_path("purelib")` and performs
   the packaged import/version probe before manifest/archive creation. A fresh source identity and full
   package validation are still required; the rejected `c5f7897a02a0` artifact is not releasable.
+
+### MTA-M7-014 — Qualification verification mutated its own immutable kit
+
+- **Observed:** PC A successfully upgraded the unreleased `0.2.12-beta.1` candidate from source
+  `1096263ba19a`; installed software health, release/runtime identity, kernel, hardware selection, and
+  Windows USB ownership all passed. The extracted qualification kit then passed its first `verify`
+  command but the immediately following `preflight` stopped at
+  `DISTRIBUTED_QUALIFICATION_INTEGRITY_FAILED`. No distributed room was created, USB was not attached,
+  and no Switch was touched.
+- **Definitive cause:** the packaged launcher invoked CPython without `-B`. Its environment probe
+  imported standard-library, dependency, and SwitchTrade modules and wrote unmanifested
+  `__pycache__/*.pyc` files inside the supposedly immutable kit. The next launcher invocation correctly
+  rejected those extra files. The package validator had executed `verify` only once in a disposable
+  extraction, so it never tested repeated use of the same kit.
+- **Disproven alternatives:** every manifest hash was valid before the first invocation; packaged
+  source, interpreter, dependency versions, installed release ID, WSL marker, and adapter selection
+  matched. Installed runtime verification passed independently. This was not an ABC+D engine, relay,
+  radio, Unicode-path, or Switch failure.
+- **Recovery/residue:** the rejected kit created only bytecode beneath its own qualification directory.
+  There is no runner state, relay room, endpoint, PHY/interface, USB lease, or recovery guard to clean.
+  The healthy but unreleased `0.2.12` installation remains a predecessor for the corrected installer
+  upgrade; it must not be published or sent to PC B.
+- **Never repeat:** an immutable qualification executable must be operationally read-only, not merely
+  hash-valid at extraction. Run packaged Python with bytecode writes disabled, exclude all cache files
+  at build time, and run package verification repeatedly in the same extracted directory before any
+  installation or release.
+- **Source correction (2026-08-31):** the launcher now passes `-B` to every Python process, the kit
+  builder removes and rejects Python cache artifacts, and package validation executes two consecutive
+  `verify` calls and proves no cache appeared. The corrected candidate advances to `0.2.13-beta.1` so
+  Windows performs an unambiguous versioned upgrade from the rejected local `0.2.12` installation.
 
 ### 2026-08-31 M7 harness prevention implementation
 
@@ -1105,6 +1135,18 @@ Full trade, save, menu return, and graceful exit remain separate physical eviden
   instead of copied from the just-read test range.
 - **Rule:** every file in a multi-file patch needs its own verified context. If only one target has
   been inspected, patch that target alone and inspect the next target before editing it.
+
+### MTA-OPS-022 — The verified-anchor rule was violated again during the qualification correction
+
+- **Observed:** on 2026-08-31, the first attempted correction for `MTA-M7-014` combined code, tests,
+  version, and documentation in one patch and named an exact `0.2.12-beta.1` line that was not present
+  in the handoff document. `apply_patch` rejected the complete patch atomically; no code or document
+  received a partial edit.
+- **Definitive cause:** a repository-wide search result was treated as if every listed target contained
+  the same version literal, despite the prior `MTA-OPS-021` rule requiring per-file verified context.
+- **Rule:** after any repeated context failure, do not use a multi-file patch for that correction.
+  Patch only the exact file and range just displayed, verify it immediately, then inspect the next
+  target. An atomic rejection prevents corruption but does not excuse the process failure.
 
 ## 11. Required preflight checklists
 

@@ -64,10 +64,27 @@ $kitPython = Join-Path $kit 'python'
 $kitSource = Join-Path $kit 'source'
 New-Item -ItemType Directory -Path $kitPython,$kitSource | Out-Null
 Get-ChildItem -LiteralPath $pythonBase -Force | Copy-Item -Destination $kitPython -Recurse -Force
+$kitPrefix = [IO.Path]::GetFullPath($kit).TrimEnd('\') + '\'
+foreach ($file in @(Get-ChildItem -LiteralPath $kitPython -Recurse -Force -File -Filter '*.pyc')) {
+    $resolved = [IO.Path]::GetFullPath($file.FullName)
+    if (-not $resolved.StartsWith($kitPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Qualification bytecode cleanup escaped the kit root.'
+    }
+    Remove-Item -LiteralPath $resolved -Force
+}
+foreach ($directory in @(Get-ChildItem -LiteralPath $kitPython -Recurse -Force -Directory -Filter '__pycache__' |
+        Sort-Object { $_.FullName.Length } -Descending)) {
+    $resolved = [IO.Path]::GetFullPath($directory.FullName)
+    if (-not $resolved.StartsWith($kitPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Qualification bytecode cleanup escaped the kit root.'
+    }
+    if (Test-Path -LiteralPath $resolved) {
+        Remove-Item -LiteralPath $resolved -Recurse -Force
+    }
+}
 $kitSite = Join-Path $kitPython 'Lib\site-packages'
 if (Test-Path -LiteralPath $kitSite) {
     $resolvedSite = [IO.Path]::GetFullPath($kitSite)
-    $kitPrefix = [IO.Path]::GetFullPath($kit).TrimEnd('\') + '\'
     if (-not $resolvedSite.StartsWith($kitPrefix, [StringComparison]::OrdinalIgnoreCase)) {
         throw 'Qualification Python cleanup escaped the kit root.'
     }
@@ -146,7 +163,7 @@ print(json.dumps({
 '@
 Push-Location -LiteralPath $kitSource
 try {
-    $kitProbeJson = @(& (Join-Path $kitPython 'python.exe') -c $kitProbe) -join "`n"
+    $kitProbeJson = @(& (Join-Path $kitPython 'python.exe') -B -c $kitProbe) -join "`n"
 } finally {
     Pop-Location
 }
@@ -156,6 +173,12 @@ if (@($kitProbeResult.missing).Count -ne 0 -or
     [string]$kitProbeResult.trio -ne '0.33.0' -or
     [string]$kitProbeResult.websockets -ne '17.0.1') {
     throw 'The packaged qualification environment does not match the locked runtime.'
+}
+$generatedBytecode = @(Get-ChildItem -LiteralPath $kit -Recurse -Force | Where-Object {
+    $_.Name -eq '__pycache__' -or (-not $_.PSIsContainer -and $_.Extension -eq '.pyc')
+})
+if ($generatedBytecode.Count -ne 0) {
+    throw 'The qualification build generated mutable Python bytecode.'
 }
 
 $artifactRows = @()

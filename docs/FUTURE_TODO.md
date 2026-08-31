@@ -14,7 +14,7 @@ before retrying; keep the implementation status and acceptance debt in this TODO
 0. **CRITICAL — URGENT: Qualify the M7 distributed harness only through the safe pairing barrier.**
    **Status (2026-08-31): the invitation/pairing fixes and the later explicit-WSL-cwd,
    identity-bound control, cancellation, and concurrent-status corrections are implemented in source.
-   Focused source regression passes. The `0.2.12-beta.1` source now packages the canonical launcher
+   Focused source regression passes. The `0.2.13-beta.1` source now packages the canonical launcher
    as a separately hashable qualification kit, but a newly built immutable installer/kit and installed
    two-PC/two-Switch run are still required.**
    The rejected `D-PHYS-1-R3` runner stored its campaign binding in the `note` supplied while creating

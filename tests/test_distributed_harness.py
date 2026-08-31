@@ -716,7 +716,7 @@ class DistributedContractTests(unittest.TestCase):
             "--cd", "/opt/switchtrade", "hardware-selection.json",
             "switchtrade.connection.distributed_harness", "Push-Location",
             "m7-qualification-kit.v1", "DISTRIBUTED_QUALIFICATION_INTEGRITY_FAILED",
-            "qualification-manifest.json", "verify",
+            "qualification-manifest.json", "verify", "'-B', '-c'", "'-B', '-m'",
         ):
             self.assertIn(required, script)
 

@@ -149,11 +149,23 @@ try {
         throw 'Extracted qualification manifest does not match build-result.json.'
     }
     $launcher = Join-Path $qualificationRoot 'Invoke-M7DistributedHarness.ps1'
-    $verificationText = @(& pwsh -NoProfile -File $launcher verify 2>&1) -join "`n"
-    if ($LASTEXITCODE -ne 0) { throw "Qualification launcher verification failed: $verificationText" }
-    try { $verification = $verificationText | ConvertFrom-Json } catch {
-        throw 'Qualification launcher returned invalid verification output.'
+    $generatedBytecode = @(Get-ChildItem -LiteralPath $qualificationRoot -Recurse -Force | Where-Object {
+        $_.Name -eq '__pycache__' -or (-not $_.PSIsContainer -and $_.Extension -eq '.pyc')
+    })
+    if ($generatedBytecode.Count -ne 0) {
+        throw 'Qualification archive contains mutable Python bytecode.'
     }
+    $verifications = @()
+    foreach ($iteration in 1..2) {
+        $verificationText = @(& pwsh -NoProfile -File $launcher verify 2>&1) -join "`n"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Qualification launcher verification $iteration failed: $verificationText"
+        }
+        try { $verifications += ,($verificationText | ConvertFrom-Json) } catch {
+            throw "Qualification launcher returned invalid verification output on iteration $iteration."
+        }
+    }
+    $verification = $verifications[1]
     if ([string]$verification.status -ne 'verified' -or
         [string]$verification.mode -ne 'packaged' -or
         [string]$verification.source_sha -ne [string]$result.qualification.source_sha -or
@@ -161,6 +173,12 @@ try {
         [string]$verification.qualification_manifest -ne
             [string]$result.qualification.manifest_sha256) {
         throw 'Qualification launcher identity does not match the release.'
+    }
+    $generatedBytecode = @(Get-ChildItem -LiteralPath $qualificationRoot -Recurse -Force | Where-Object {
+        $_.Name -eq '__pycache__' -or (-not $_.PSIsContainer -and $_.Extension -eq '.pyc')
+    })
+    if ($generatedBytecode.Count -ne 0) {
+        throw 'Qualification verification mutated its immutable kit.'
     }
 
     $layout = Join-Path $validationRoot 'layout'
