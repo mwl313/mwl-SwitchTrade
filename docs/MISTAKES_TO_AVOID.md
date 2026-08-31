@@ -7,7 +7,7 @@
 >
 > **Last updated:** 2026-08-31
 > **Current qualification branch:** `codex/m7-safe-pairing`
-> **Next immutable candidate:** `v0.2.14-beta.1`; its exact source is the release tag target and its
+> **Current immutable release:** `v0.2.14-beta.1`; its exact source is the release tag target and its
 > release ID must be `beta-<first 12 characters of that source SHA>`.
 
 This document records what went wrong, not just what the current code intends to do. The normative
@@ -1176,6 +1176,21 @@ Full trade, save, menu return, and graceful exit remain separate physical eviden
 - **Rule:** after any repeated context failure, do not use a multi-file patch for that correction.
   Patch only the exact file and range just displayed, verify it immediately, then inspect the next
   target. An atomic rejection prevents corruption but does not excuse the process failure.
+
+### MTA-OPS-023 — Read-only shell expressions were not made PowerShell-safe
+
+- **Observed:** on 2026-08-31, one diagnostic `Select-String` call used an invalid hand-escaped regular
+  expression, and a later annotated-tag verification passed Git's `^{}` peel syntax through
+  PowerShell without quoting it. Both commands failed before returning their intended read-only
+  result. The searches were repeated with `rg`, and the tag target was independently confirmed with
+  `git rev-list -n 1 refs/tags/v0.2.14-beta.1` as
+  `f57038e7e38ffdd0f79c24e0c06cc213890a9303`.
+- **Definitive cause:** shell-specific parsing rules were ignored while constructing ad hoc read-only
+  commands, despite simpler literal-safe commands being available.
+- **Rule:** use `rg -F` for literal text whenever regex is unnecessary. In PowerShell, verify an
+  annotated tag with the full `refs/tags/<tag>` form and `git rev-list -n 1`; do not pass unquoted Git
+  peel expressions. A read-only failure cannot corrupt state, but it still consumes time and must not
+  be normalized as harmless noise.
 
 ## 11. Required preflight checklists
 

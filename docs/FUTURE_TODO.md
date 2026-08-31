@@ -14,9 +14,11 @@ before retrying; keep the implementation status and acceptance debt in this TODO
 0. **CRITICAL — URGENT: Qualify the M7 distributed harness only through the safe pairing barrier.**
    **Status (2026-08-31): the invitation/pairing fixes and the later explicit-WSL-cwd,
    identity-bound control, cancellation, and concurrent-status corrections are implemented in source.
-   Focused source regression passes. The `0.2.14-beta.1` source now packages the canonical launcher
-   as a separately hashable qualification kit, but a newly built immutable installer/kit and installed
-   two-PC/two-Switch run are still required.**
+   `v0.2.14-beta.1` at `f57038e` packages the canonical launcher as a separately hashable qualification
+   kit. PC A passed full source regression, repeated mutation-free kit verification, disposable WSL
+   lifecycle plus packaged auto-discovery preflight, versioned upgrade, installed software health,
+   runtime/kernel identity, adapter-selection preservation, and Windows USB ownership. PC B installation
+   and the close-range then separated two-PC/two-Switch run are still required.**
    The rejected `D-PHYS-1-R3` runner stored its campaign binding in the `note` supplied while creating
    a private room, but the relay intentionally stores directory notes only for public rooms. PC B then
    read a nonexistent top-level `room.note`, so every otherwise-correct private join failed as
