@@ -711,12 +711,14 @@ class DistributedContractTests(unittest.TestCase):
             encoding="utf-8")
         self.assertNotIn("Read-Host", script)
         self.assertNotIn("builtins.input", script)
+        self.assertNotIn("@(& wsl.exe", script)
         for required in (
             ".audit-venv\\Scripts\\python.exe", "DISTRIBUTED_QUALIFICATION_SOURCE_DIRTY",
             "--cd", "/opt/switchtrade", "hardware-selection.json",
             "switchtrade.connection.distributed_harness", "Push-Location",
             "m7-qualification-kit.v1", "DISTRIBUTED_QUALIFICATION_INTEGRITY_FAILED",
             "qualification-manifest.json", "verify", "'-B', '-c'", "'-B', '-m'",
+            "Invoke-Captured 'wsl.exe' @('--list', '--quiet')",
         ):
             self.assertIn(required, script)
 

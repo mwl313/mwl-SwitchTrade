@@ -298,6 +298,37 @@ try {
         try {
             Invoke-Provisioner 'repair'
             Invoke-Provisioner 'verify-software'
+            $validationSelection = Join-Path $validationRoot 'lifecycle\hardware-selection.json'
+            [ordered]@{
+                schema = 1
+                usb_id = '0bda:818b'
+                instance_id = 'USB\VID_0BDA&PID_818B\QUALIFICATION'
+                bus_id = 'validation'
+            } | ConvertTo-Json -Compress | Set-Content -LiteralPath $validationSelection -Encoding utf8
+            $preflightText = @(& pwsh -NoProfile -File $launcher preflight `
+                -SelectionFile $validationSelection 2>&1) -join "`n"
+            if ($LASTEXITCODE -ne 0) {
+                throw "Qualification launcher preflight failed: $preflightText"
+            }
+            try { $preflight = $preflightText | ConvertFrom-Json } catch {
+                throw 'Qualification launcher returned invalid preflight output.'
+            }
+            if ([string]$preflight.status -ne 'ready' -or
+                [string]$preflight.source_sha -ne [string]$result.qualification.source_sha -or
+                [string]$preflight.release -ne [string]$result.release_id -or
+                [string]::IsNullOrWhiteSpace([string]$preflight.distro) -or
+                [string]$preflight.qualification_manifest -ne
+                    [string]$result.qualification.manifest_sha256) {
+                throw 'Qualification launcher preflight identity does not match the release.'
+            }
+            $generatedBytecode = @(Get-ChildItem -LiteralPath $qualificationRoot -Recurse -Force |
+                Where-Object {
+                    $_.Name -eq '__pycache__' -or
+                    (-not $_.PSIsContainer -and $_.Extension -eq '.pyc')
+                })
+            if ($generatedBytecode.Count -ne 0) {
+                throw 'Qualification preflight mutated its immutable kit.'
+            }
             Invoke-Provisioner 'repair'
         } finally {
             Invoke-Provisioner 'uninstall'

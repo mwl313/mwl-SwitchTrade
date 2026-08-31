@@ -7,7 +7,7 @@
 >
 > **Last updated:** 2026-08-31
 > **Current qualification branch:** `codex/m7-safe-pairing`
-> **Next immutable candidate:** `v0.2.13-beta.1`; its exact source is the release tag target and its
+> **Next immutable candidate:** `v0.2.14-beta.1`; its exact source is the release tag target and its
 > release ID must be `beta-<first 12 characters of that source SHA>`.
 
 This document records what went wrong, not just what the current code intends to do. The normative
@@ -351,6 +351,35 @@ These are distilled from repeated failures below.
   builder removes and rejects Python cache artifacts, and package validation executes two consecutive
   `verify` calls and proves no cache appeared. The corrected candidate advances to `0.2.13-beta.1` so
   Windows performs an unambiguous versioned upgrade from the rejected local `0.2.12` installation.
+
+### MTA-M7-015 — A line break split the WSL command from its Linux marker probe
+
+- **Observed:** the unreleased PC A `0.2.13-beta.1` installation passed software health and two
+  consecutive immutable-kit `verify` calls. Its first read-only `preflight` then emitted a PowerShell
+  `Get-Content` error for `C:\opt\switchtrade\.switchtrade-release.json` before returning a stable
+  harness code. No room, runner state, endpoint, USB attachment, radio resource, or Switch action had
+  started.
+- **Definitive cause:** runtime auto-discovery invoked `wsl.exe ... --` at the end of one PowerShell
+  line and placed `cat ...` on the following line. PowerShell ended the native command at the newline
+  and resolved `cat` as its own `Get-Content` alias, so the Linux path was reinterpreted as a Windows
+  path. The subsequent explicit-distro probe already used a correctly typed argument array, proving
+  the split inline invocation was the only failing path.
+- **Disproven alternatives:** source, release, manifest, interpreter, dependency, installed runtime,
+  kernel, adapter selection, and USB ownership identities all matched. WSL was installed and its
+  release marker existed; the probe never asked WSL to read it. This was not an ABC+D runtime or radio
+  failure.
+- **Recovery/residue:** the failed operation was read-only and stopped during runtime discovery. The
+  `0.2.13` local installation remains healthy but rejected for release; it must not be published or
+  copied to PC B.
+- **Never repeat:** never express a native subprocess protocol as parser-dependent inline tokens.
+  Inventory and every per-distro command must go through one captured executable-plus-argument-array
+  boundary, and raw `@(& wsl.exe ...)` forms are forbidden in the canonical launcher.
+- **Source correction (2026-08-31):** WSL inventory and marker reads now use `Invoke-Captured` with
+  explicit arrays, failures map to stable inventory/identity codes, and regression rejects raw WSL
+  invocations. Disposable package validation now imports the candidate runtime and runs the packaged
+  launcher's auto-discovery `preflight` before uninstalling it. The successor advances to
+  `0.2.14-beta.1`; installed acceptance still requires repeated `verify` followed by `preflight`
+  before publication.
 
 ### 2026-08-31 M7 harness prevention implementation
 

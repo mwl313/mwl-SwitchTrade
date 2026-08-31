@@ -246,17 +246,23 @@ if ($Command -in @('continue', 'cancel')) {
 $needsRuntime = $Command -in @('preflight', 'create', 'join', 'recover')
 if ($needsRuntime) {
     if (-not $Distro) {
-        $names = @((@(& wsl.exe --list --quiet) -replace ([char]0), '') |
+        try {
+            $inventoryText = Invoke-Captured 'wsl.exe' @('--list', '--quiet')
+        } catch {
+            Fail 'DISTRIBUTED_WSL_INVENTORY_UNAVAILABLE'
+        }
+        $names = @((($inventoryText -replace ([char]0), '') -split "`r?`n") |
             ForEach-Object { $_.Trim() } |
             Where-Object { $_ -like "SwitchTrade-$expectedRelease-*" })
-        if ($LASTEXITCODE -ne 0) { Fail 'DISTRIBUTED_WSL_INVENTORY_UNAVAILABLE' }
         $matches = @()
         foreach ($name in $names) {
-            $markerText = @(& wsl.exe -d $name -u root --cd $RuntimeRoot --
-                cat "$RuntimeRoot/.switchtrade-release.json" 2>$null)
-            if ($LASTEXITCODE -ne 0) { continue }
             try {
-                $marker = (($markerText -join "`n") -replace ([char]0), '') | ConvertFrom-Json
+                $markerText = Invoke-Captured 'wsl.exe' @(
+                    '-d', $name, '-u', 'root', '--cd', $RuntimeRoot, '--',
+                    'cat', "$RuntimeRoot/.switchtrade-release.json")
+            } catch { continue }
+            try {
+                $marker = ($markerText -replace ([char]0), '') | ConvertFrom-Json
                 if ([string]$marker.release_id -eq $expectedRelease) { $matches += $name }
             } catch {}
         }

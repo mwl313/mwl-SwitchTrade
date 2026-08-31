@@ -24,6 +24,8 @@ def test_checked_in_version_is_the_runtime_and_installer_source():
                "Build-ReplacementPackage.ps1").read_text(encoding="utf-8")
     qualification_builder = (ROOT / "installer" / "replacement" /
                              "Build-M7QualificationKit.ps1").read_text(encoding="utf-8")
+    package_validator = (ROOT / "installer" / "replacement" /
+                         "Test-ReplacementPackage.ps1").read_text(encoding="utf-8")
     bundle = (ROOT / "installer" / "replacement" / "wix" / "Bundle" /
               "Bundle.wxs").read_text(encoding="utf-8")
     assert "switchtrade\\VERSION" in project
@@ -34,6 +36,9 @@ def test_checked_in_version_is_the_runtime_and_installer_source():
     assert "3.12.14" in qualification_builder
     assert 'sysconfig.get_path("purelib")' in qualification_builder
     assert "The packaged qualification environment cannot import its source." in qualification_builder
+    assert "foreach ($iteration in 1..2)" in package_validator
+    assert "Qualification launcher preflight failed" in package_validator
+    assert "Qualification preflight mutated its immutable kit" in package_validator
     assert bundle.count('LogPathVariable="" RollbackLogPathVariable=""') == 3
 
 
