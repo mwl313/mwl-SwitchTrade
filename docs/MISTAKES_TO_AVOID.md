@@ -2429,6 +2429,22 @@ code and tests are the current implementation evidence.
 - **Never repeat:** a release gate is green only when every ordered stage completes on the exact
   candidate SHA. A skipped stage is unknown, not passed.
 
+### MTA-QA-018 — Runtime shell entry points must retain executable mode in Git
+
+- **Observed (2026-09-01, third hardware-matrix CI):** functional tests, shell syntax, and ShellCheck
+  passed, but the radio lifecycle simulation exited 126 when it invoked
+  `wsl-radio-prepare.sh`. Git tracked that script and its delegated `radio-health-gate.sh` as 0644.
+- **Impact:** CI stopped before dependency audit and no release was published. Because the immutable
+  appliance copies these files from `git archive`, the same mode would also make the production
+  endpoint fail when executing either gate directly.
+- **Definitive cause:** executable permission was assumed from the shebang and local Windows
+  behavior, while Git's tracked mode—the mode preserved by the Linux release archive—was never
+  included in the runtime contract.
+- **Correction:** track both direct runtime gate entry points as 0755. Keep the lifecycle simulation
+  invoking them exactly as production does, and verify archive/runtime modes during packaging.
+- **Never repeat:** every packaged script executed by path must be 100755 in `git ls-files --stage`.
+  A shebang without an executable Git mode is not a runnable entry point.
+
 ### MTA-DEV-019 — Selecting a leaf kernel driver does not enable hidden Kconfig parents
 
 - **Observed (2026-09-01, first multi-driver kernel run):** `olddefconfig` retained `rtl8xxxu` but
