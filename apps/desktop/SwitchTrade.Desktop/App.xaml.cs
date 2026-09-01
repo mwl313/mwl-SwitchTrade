@@ -280,7 +280,7 @@ public partial class App : Application
             noSelectionHome.LoadAdaptersAsync().GetAwaiter().GetResult();
             var missingAuthoritativeSelectionBlocksRuns =
                 noSelectionHome.SelectedDevice is null &&
-                noSelectionHome.AdapterStatus == "Select an adapter" &&
+                noSelectionHome.AdapterStatus == "Select your Wi-Fi adapter to start" &&
                 !noSelectionHome.CreateCommand.CanExecute(null) &&
                 !noSelectionHome.JoinCommand.CanExecute(null);
             var unsharedSelectionGateway = new SelfTestGateway

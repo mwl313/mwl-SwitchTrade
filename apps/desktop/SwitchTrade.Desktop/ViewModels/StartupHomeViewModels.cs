@@ -153,7 +153,7 @@ public sealed class HomeScreenViewModel : ScreenViewModel
             foreach (var device in devices) Devices.Add(device);
             SelectedDevice = Devices.FirstOrDefault(device => device.IsSelected);
             AdapterStatus = SelectedDevice is null
-                ? Devices.Count == 0 ? "No compatible adapter found" : "Select an adapter"
+                ? Devices.Count == 0 ? "No compatible adapter found" : "Select your Wi-Fi adapter to start"
                 : SelectedDevice.IsShared && SelectedDevice.IsSelectable
                     ? "Ready"
                     : SelectedDevice.Disclaimer;

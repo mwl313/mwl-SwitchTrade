@@ -3,14 +3,14 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:automation="clr-namespace:System.Windows.Automation;assembly=PresentationCore">
   <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-    <StackPanel MaxWidth="620" HorizontalAlignment="Left" Margin="0,56,0,28">
+    <StackPanel Width="620" MaxWidth="620" HorizontalAlignment="Left" Margin="0,56,0,28">
       <Border Style="{StaticResource WarningNotice}"
               Visibility="{Binding ShowAttention, Converter={StaticResource BooleanToVisibility}}">
         <TextBlock Text="{Binding AttentionText}" />
       </Border>
 
       <Button Content="Create Room" Command="{Binding CreateCommand}"
-              Style="{StaticResource PrimaryButton}" Height="62" FontSize="17" Margin="0,0,0,10"
+              Style="{StaticResource SecondaryButton}" Height="56" FontSize="16" Margin="0,0,0,10"
               automation:AutomationProperties.Name="Create Room" />
       <Button Content="Join Private Room" Command="{Binding JoinCommand}"
               Style="{StaticResource SecondaryButton}" Height="56" FontSize="16" Margin="0,0,0,10"

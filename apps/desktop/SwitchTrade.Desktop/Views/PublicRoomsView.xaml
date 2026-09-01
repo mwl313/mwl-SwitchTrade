@@ -52,8 +52,6 @@
       <TextBlock Text="LIVE DIRECTORY" Style="{StaticResource KickerText}" Margin="0,0,0,8" />
       <TextBlock Text="Browse Public Rooms" Style="{StaticResource ScreenTitle}"
                  automation:AutomationProperties.HeadingLevel="Level1" />
-      <TextBlock Text="Listings come directly from the SwitchTrade room service. Joining claims the open seat atomically."
-                 Foreground="{DynamicResource SecondaryTextBrush}" />
     </StackPanel>
 
     <StackPanel Grid.Row="1" Margin="0,0,0,14">

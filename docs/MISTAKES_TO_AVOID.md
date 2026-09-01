@@ -1883,6 +1883,50 @@ Full trade, save, menu return, and graceful exit remain separate physical eviden
   hardware authority state from list order, a previous local value, or a visual default. Installed QA
   must cover no selection, selected/unshared, selected/shared, cancellation, and first-item selection.
 
+### MTA-APP-029 — Dynamic adapter text changed the apparent size of main actions
+
+- **Observed (2026-09-01, installed `0.2.17-beta.1`):** with no authoritative adapter selection,
+  Home's action group contracted to its shortest child content; after a long adapter label appeared,
+  the same group expanded. Create also used a taller primary style than the other two actions, so the
+  selected and unselected states appeared to change both action size and color even though command
+  availability was the only intended state change. No connection run, relay room, WSL, USB, endpoint,
+  or Switch state was touched.
+- **Definitive cause:** the left-aligned Home stack had only `MaxWidth`, so WPF derived its desired
+  width from dynamic and localized child text. The three peer actions also did not share one visual
+  style and height.
+- **Correction:** give the supported Home action column one fixed 620-pixel layout width and use the
+  same secondary style, height, and font size for all three actions. Retain the standard muted disabled
+  treatment so unavailable commands are not falsely presented as clickable.
+- **Never repeat:** action geometry must not depend on empty, long, localized, or device-specific
+  labels. Visual QA must compare no-selection and longest-label states at the minimum supported window
+  size, while preserving a truthful disabled-state cue.
+
+### MTA-OPS-035 — A theme resource filename was inferred instead of enumerated
+
+- **Observed (2026-09-01):** a read-only inspection successfully opened the verified button-theme
+  file and then attempted to read an assumed `Themes/Colors.xaml` path that does not exist. PowerShell
+  returned file-not-found; no build, app, WSL, relay, USB, endpoint, Switch, or source mutation resulted.
+- **Definitive cause:** a conventional theme filename was appended without first enumerating the
+  tracked theme directory, repeating the inferred-path class already prohibited by `MTA-OPS-017`.
+- **Correction:** the missing color file was unnecessary; the verified button template already showed
+  the enabled and disabled resource behavior needed for the decision.
+- **Never repeat:** use `rg --files <existing-directory>` before naming any adjacent resource. Never
+  extend one verified path into a guessed sibling path, even for a read-only command.
+
+### MTA-QA-015 — The full regression suite was started with an unqualified ambient Python
+
+- **Observed (2026-09-01):** after the Home layout correction, `python -m pytest -q` used the ambient
+  Windows interpreter and stopped during collection because `trio` was not installed. The Desktop
+  build and both Desktop self-tests had already passed; no test body, application, WSL, relay, USB,
+  endpoint, or Switch action started from the failed Python command.
+- **Definitive cause:** the command reused the shell's generic `python` instead of first resolving and
+  proving the repository's dependency-complete validation interpreter.
+- **Correction:** enumerate existing virtual-environment markers, select the repository-owned
+  interpreter that imports the locked test dependencies, and rerun the unchanged suite there.
+- **Never repeat:** a green suite count from an earlier turn does not qualify the current shell's
+  interpreter. Before every full Python run, resolve the exact executable and prove its required test
+  imports; never use an ambient `python` by convenience.
+
 ## 11. Required preflight checklists
 
 ### Any code or documentation change
