@@ -366,6 +366,13 @@ No additional repetition campaign begins before the production wrapper exists.
    Desktop/session self-tests pass. Installed immutable entry-point, interruption/recovery, and
    backend-dead export acceptance remain open;
    the source dry-run is not an installed or physical result.**
+
+   **MVP public-directory update (2026-09-01):** the existing relay
+   `public-directory.v1`, typed Desktop list/detail/join client, and production public-join request are
+   now connected through a lifespan-owned immutable capability snapshot. Production list/detail GETs
+   perform only relay reads and never launch, recover, heartbeat a room, or mutate USB/run state;
+   public create/join fail closed unless the background relay snapshot advertises the contract.
+   Installed-package validation remains part of the current candidate gate.
    Extract one neutral connection-run service from the generic lifecycle already exercised by the
    distributed harness. The product and qualification adapters must call that service rather than
    cloning orchestration or launching a harness as the product runtime. Production owns one selected

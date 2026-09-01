@@ -58,6 +58,18 @@ public partial class App : Application
             var capabilityGateWorks = new ControlStatus(
                 "idle", "0.2.0", "self-test", false, false, false, null, null,
                 Capabilities: ["public-directory.v1"]).HasCapability("public-directory.v1");
+            var publicDirectoryGateway = new SelfTestGateway
+            {
+                Status = ReadyStatus() with { Capabilities = ["public-directory.v1"] },
+            };
+            using var publicDirectoryShell = new MainViewModel(
+                publicDirectoryGateway, new BackendLauncher(), new WindowsDialogService(),
+                new WindowsClipboardService());
+            publicDirectoryShell.InitializeAsync().GetAwaiter().GetResult();
+            var publicCapabilityEnablesBrowse =
+                publicDirectoryShell.IsPublicDirectoryAvailable &&
+                publicDirectoryShell.CurrentScreen is HomeScreenViewModel publicHome &&
+                publicHome.PublicCommand.CanExecute(null);
             var unexpectedReleaseGateRequests = 0;
             bool ReleaseGateAccepts(string runtimeRelease, string installedRelease)
             {
@@ -412,6 +424,7 @@ public partial class App : Application
                 [nameof(applicationSessionWorks)] = applicationSessionWorks,
                 [nameof(highContrastResourcesLoad)] = highContrastResourcesLoad,
                 [nameof(capabilityGateWorks)] = capabilityGateWorks,
+                [nameof(publicCapabilityEnablesBrowse)] = publicCapabilityEnablesBrowse,
                 [nameof(exactReleaseGateWorks)] = exactReleaseGateWorks,
                 [nameof(coordinatorWorks)] = coordinatorWorks,
                 [nameof(memberReleaseWorks)] = memberReleaseWorks,

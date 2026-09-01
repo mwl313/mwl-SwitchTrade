@@ -163,6 +163,10 @@ beta claim:
 - The retired Debug menu and legacy room/session mutation routes are unreachable from the packaged
   production app. Qualification factories remain available only to preserve historical regression
   comparisons until the cutover is accepted.
+- Public-room browse is part of the minimal MVP. The relay's existing `public-directory.v1` contract
+  is projected from the background readiness monitor without network work in readiness GETs. The
+  production-owned list/detail routes are read-only, while public create/join use the same serialized
+  `ConnectionRunService` as private rooms and fail closed when the capability is absent.
 - Existing relay `app-readiness.v2` and coordinator `connection-run.v1` contracts were not
   overwritten. The local Desktop projections are deliberately named `local-app-readiness.v2` and
   `production-connection-run.v1` to prevent two incompatible payloads sharing one versioned name.

@@ -58,6 +58,7 @@ class RelayReadinessMonitor:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._ready: bool | None = None
+        self._capabilities: frozenset[str] = frozenset()
         self._thread = threading.Thread(
             target=self._run, name="switchtrade-relay-readiness", daemon=True)
         self._thread.start()
@@ -65,6 +66,10 @@ class RelayReadinessMonitor:
     def snapshot(self) -> bool | None:
         with self._lock:
             return self._ready
+
+    def state_snapshot(self) -> tuple[bool | None, frozenset[str]]:
+        with self._lock:
+            return self._ready, self._capabilities
 
     def close(self) -> None:
         self._stop.set()
@@ -76,11 +81,17 @@ class RelayReadinessMonitor:
                 health = self._probe()
                 ready = (
                     health.get("status") == "ready" and
+                    health.get("room_contract") == ROOM_CONTRACT and
                     "rfu-tunnel.v2" in health.get("rfu_contracts", []))
-            except (RelayError, OSError, ValueError, TypeError):
+                capabilities = frozenset(
+                    value for value in health.get("capabilities", [])
+                    if isinstance(value, str)) if ready else frozenset()
+            except (AttributeError, RelayError, OSError, ValueError, TypeError):
                 ready = False
+                capabilities = frozenset()
             with self._lock:
                 self._ready = ready
+                self._capabilities = capabilities
             self._stop.wait(
                 self._success_interval if ready else self._failure_interval)
 ROOM_CONTRACT = "room-control.v1"
@@ -3487,6 +3498,7 @@ def _install_production_routes(app: FastAPI) -> None:
         "/api/v1/trade-room", "/api/v1/trade-room/join",
         "/api/v1/trade-room/connect", "/api/v1/trade-room/events",
         "/api/v1/trade-room/members/me", "/api/v1/trade-room/local-authority",
+        "/api/v1/public-trade-rooms", "/api/v1/public-trade-rooms/{listing_id}",
         "/api/v1/public-trade-rooms/{listing_id}/join",
         "/api/v1/session/start", "/api/v1/session/stop", "/api/v1/app/retry",
         "/api/groups", "/api/groups/join", "/api/groups/{passcode}",
@@ -3516,6 +3528,14 @@ def _install_production_routes(app: FastAPI) -> None:
                 503, "connection_service_unavailable", "the connection service is unavailable",
                 stage="control", recoverable=True, primary_action="restart_app")
         return value
+
+    def require_public_directory(request: Request) -> None:
+        ready, capabilities = request.app.state.relay_readiness_monitor.state_snapshot()
+        if ready is not True or PUBLIC_DIRECTORY_CONTRACT not in capabilities:
+            raise ControlApiError(
+                503, "public_directory_unavailable",
+                "the online public room directory is unavailable",
+                stage="relay", recoverable=True, primary_action="retry")
 
     def command_identity(request: Request, *, run_bound: bool) -> tuple[str, int, str | None]:
         command_id = request.headers.get("x-switchtrade-command-id", "")
@@ -3570,7 +3590,8 @@ def _install_production_routes(app: FastAPI) -> None:
     def production_readiness(request: Request) -> dict:
         runtime = state(request)
         current = service(request).snapshot()
-        relay_ready = request.app.state.relay_readiness_monitor.snapshot()
+        relay_ready, relay_capabilities = (
+            request.app.state.relay_readiness_monitor.state_snapshot())
         cleanup_required = bool(current and current["cleanup"]["verified"] is False and
                                 current["phase"] in {"cleaning", "terminal"})
         failure = None if current is None else current["functional"].get("failure")
@@ -3580,7 +3601,12 @@ def _install_production_routes(app: FastAPI) -> None:
             "product_version": __version__, "release_id": runtime_release_id(),
             "compatible": True,
             "supported_contracts": [PRODUCTION_READINESS_CONTRACT, "production-connection-run.v1"],
-            "capabilities": ["production-wrapper.v1", "support-checkpoint.v1"],
+            "capabilities": [
+                "production-wrapper.v1", "support-checkpoint.v1",
+                *([PUBLIC_DIRECTORY_CONTRACT]
+                  if relay_ready is True and PUBLIC_DIRECTORY_CONTRACT in relay_capabilities
+                  else []),
+            ],
             "run_id": None if current is None else current["run_id"],
             "revision": 0 if current is None else current["revision"],
             "endpoint_process_running": bool(current and current["phase"] in {
@@ -3622,6 +3648,8 @@ def _install_production_routes(app: FastAPI) -> None:
 
     @app.post("/api/v1/trade-room")
     def production_create(payload: CreateGroup, request: Request) -> dict:
+        if payload.visibility == "public":
+            require_public_directory(request)
         return start_run(request, {
             "kind": "create", "switch_role": None,
             "name": payload.name.strip(), "visibility": payload.visibility,
@@ -3641,10 +3669,43 @@ def _install_production_routes(app: FastAPI) -> None:
     @app.post("/api/v1/public-trade-rooms/{listing_id}/join")
     def production_public_join(
             listing_id: str, payload: JoinPublicRoom, request: Request) -> dict:
+        require_public_directory(request)
         return start_run(request, {
             "kind": "public_join", "switch_role": None, "listing_id": listing_id,
             "trainer_display_name": payload.trainer_display_name.strip(),
         })
+
+    @app.get("/api/v1/public-trade-rooms")
+    def production_public_rooms(
+            request: Request, query: str = "", game: str = "", language: str = "",
+            availability: str = "open", sort: str = "recent", cursor: int = 0,
+            limit: int = 25) -> dict:
+        require_public_directory(request)
+        if availability not in {"open", "all"} or sort not in {"recent", "oldest", "name"}:
+            raise ControlApiError(400, "public_directory_filter_invalid",
+                                  "public room filter is invalid")
+        if game not in {"", "FireRed", "LeafGreen"}:
+            raise ControlApiError(400, "public_directory_game_invalid",
+                                  "public room game filter is invalid")
+        if language not in {
+                "", "English", "Japanese", "French", "German", "Italian", "Spanish"}:
+            raise ControlApiError(400, "public_directory_language_invalid",
+                                  "public room language filter is invalid")
+        try:
+            return state(request).relay.public_trade_rooms(
+                query=query[:80], game=game, language=language,
+                availability=availability, sort=sort, cursor=max(0, cursor),
+                limit=max(1, min(limit, 50)))
+        except RelayError as error:
+            raise relay_api_error(error) from error
+
+    @app.get("/api/v1/public-trade-rooms/{listing_id}")
+    def production_public_room(listing_id: str, request: Request) -> dict:
+        require_public_directory(request)
+        try:
+            return state(request).relay.public_trade_room(listing_id)
+        except RelayError as error:
+            raise relay_api_error(error) from error
 
     @app.get("/api/v1/trade-room")
     def production_room(request: Request) -> dict:
