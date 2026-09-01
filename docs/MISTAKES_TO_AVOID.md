@@ -2522,6 +2522,24 @@ code and tests are the current implementation evidence.
   exact-case post-`olddefconfig` assertions. Dependency-chain review includes the configuration
   tool's name-normalization behavior, not just Kconfig expressions.
 
+### MTA-DEV-020 — An immutable builder must not inherit its TLS roots from the host distro
+
+- **Observed (2026-09-01, replacement appliance build):** after all pinned inputs passed, the
+  disposable Ubuntu Base builder stopped at `cp: cannot stat
+  '/etc/ssl/certs/ca-certificates.crt'`. Ubuntu Base intentionally has APT and the Ubuntu archive
+  keyring but no generated CA bundle; prior builds had masked the assumption by using an older
+  pre-provisioned runtime as the builder rootfs.
+- **Impact:** no appliance, installer, installed runtime, USB, relay, or public release changed.
+- **Definitive cause:** the appliance script copied a security input from the ambient builder even
+  though the builder contract allowed the pinned minimal base rootfs.
+- **Correction:** bootstrap only the signed `ca-certificates` package with TLS peer verification
+  disabled, relying on APT's pinned Ubuntu archive signing key and signed package hashes for
+  authenticity. Confirm the generated bundle, then repeat `apt-get update` and install every runtime
+  package with normal TLS verification. No host certificate enters the artifact.
+- **Never repeat:** an immutable build consumes only declared pinned inputs. Minimal-rootfs support
+  must be exercised directly; ambient host certificates, tools, and provisioned runtime state are
+  not valid hidden inputs.
+
 ## 14. Maintained evidence index
 
 Use these sources to audit or extend an entry without relying on conversation memory:

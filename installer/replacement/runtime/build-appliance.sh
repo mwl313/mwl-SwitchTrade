@@ -45,8 +45,6 @@ mknod -m 0666 "$stage/dev/zero" c 1 5
 mknod -m 0666 "$stage/dev/random" c 1 8
 mknod -m 0666 "$stage/dev/urandom" c 1 9
 cp -L /etc/resolv.conf "$stage/etc/resolv.conf"
-install -d -m 0755 "$stage/etc/ssl/certs"
-cp -L /etc/ssl/certs/ca-certificates.crt "$stage/etc/ssl/certs/ca-certificates.crt"
 archive_keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg
 [[ -f $stage$archive_keyring ]] || die 'Ubuntu archive signing key is missing from the pinned base image'
 rm -f -- "$stage/etc/apt/sources.list.d/"*
@@ -65,10 +63,15 @@ apt_options=(
   -o Acquire::http::Timeout=60
   -o Acquire::https::Timeout=60
 )
+bootstrap_options=("${apt_options[@]}" -o Acquire::https::Verify-Peer=false)
+chroot "$stage" apt-get "${bootstrap_options[@]}" update
+chroot "$stage" env DEBIAN_FRONTEND=noninteractive apt-get \
+  "${bootstrap_options[@]}" install -y --no-install-recommends ca-certificates
+[[ -s $stage/etc/ssl/certs/ca-certificates.crt ]] || die 'certificate bootstrap failed'
 chroot "$stage" apt-get "${apt_options[@]}" update
 chroot "$stage" env DEBIAN_FRONTEND=noninteractive apt-get \
   "${apt_options[@]}" install -y --no-install-recommends \
-  ca-certificates ethtool hostapd iproute2 iw kmod python3 python3-venv \
+  ethtool hostapd iproute2 iw kmod python3 python3-venv \
   rfkill tcpdump usbutils wireless-regdb
 rm -f -- "$stage/usr/sbin/policy-rc.d"
 

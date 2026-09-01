@@ -121,3 +121,16 @@ def test_appliance_manifests_are_safe_across_the_windows_wsl_boundary():
     assert "*.sha256 text eol=lf" in attributes
     assert 'sed \'s/\\r$//\' "$wheelhouse_manifest"' in builder
     assert 'sed \'s/\\r$//\' "$firmware_manifest"' in builder
+
+
+def test_appliance_bootstraps_tls_without_ambient_builder_certificates():
+    builder = (
+        ROOT / "installer" / "replacement" / "runtime" / "build-appliance.sh"
+    ).read_text(encoding="utf-8")
+
+    assert 'cp -L /etc/ssl/certs/ca-certificates.crt' not in builder
+    bootstrap = 'Acquire::https::Verify-Peer=false'
+    certificate_gate = "certificate bootstrap failed"
+    assert builder.count(bootstrap) == 1
+    assert builder.index(bootstrap) < builder.index(certificate_gate)
+    assert builder.index(certificate_gate) < builder.rindex('apt-get "${apt_options[@]}" update')
