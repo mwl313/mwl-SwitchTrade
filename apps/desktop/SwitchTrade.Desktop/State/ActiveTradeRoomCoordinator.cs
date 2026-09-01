@@ -40,6 +40,12 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
     public string PartnerTrainerDisplayName { get; private set; } = "";
     public bool BothReady { get; private set; }
     public bool RoleLocked { get; private set; }
+    public string? CheckpointId { get; private set; }
+    public string? CheckpointInstructions { get; private set; }
+    public bool HasUserCheckpoint => !string.IsNullOrWhiteSpace(CheckpointId);
+    public bool CleanupVerified { get; private set; }
+    public bool CanRetry => ConnectionState == LegacyConnectionState.NeedsRecovery && CleanupVerified;
+    public bool ConnectionIsActive => ConnectionState == LegacyConnectionState.Active;
     public bool HasRoom => Context is not null;
     public bool HasConnectionOrUncertainTeardown =>
         ConnectionState is not LegacyConnectionState.Idle;
@@ -68,6 +74,9 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
             : room.PartnerTrainerDisplayName;
         BothReady = false;
         RoleLocked = false;
+        CheckpointId = null;
+        CheckpointInstructions = null;
+        CleanupVerified = false;
         RaiseChanged();
     }
 
@@ -131,13 +140,17 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
     public async Task<bool> StopConnectionAsync(CancellationToken cancellationToken = default)
     {
         if (Context is null || ConnectionState == LegacyConnectionState.Idle) return true;
+        var wasActive = ConnectionIsActive;
         ConnectionState = LegacyConnectionState.Ending;
         StatusText = "Ending the connection…";
         ClearRecovery();
         RaiseChanged();
         try
         {
-            await _gateway.StopConnectionAsync(cancellationToken);
+            if (wasActive)
+                await _gateway.EndConnectionAsync(cancellationToken);
+            else
+                await _gateway.StopConnectionAsync(cancellationToken);
             ConnectionState = LegacyConnectionState.Idle;
             StatusText = "Connection ended. This Trade Room is still open.";
             RaiseChanged();
@@ -157,10 +170,37 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
         }
     }
 
+    public async Task<bool> ContinueConnectionAsync(CancellationToken cancellationToken = default)
+    {
+        if (Context is null || string.IsNullOrWhiteSpace(CheckpointId)) return false;
+        var checkpoint = CheckpointId;
+        try
+        {
+            await _gateway.ContinueConnectionAsync(checkpoint, cancellationToken);
+            CheckpointId = null;
+            CheckpointInstructions = null;
+            StatusText = "Continuing the connection…";
+            RaiseChanged();
+            return true;
+        }
+        catch (UserFacingException error)
+        {
+            ConnectionState = LegacyConnectionState.NeedsRecovery;
+            RecoveryMessage = error.UserMessage;
+            RecoveryCode = error.TechnicalCode;
+            RecoveryStage = error.Stage;
+            RecoveryRecoverable = error.Recoverable;
+            RecoveryAction = error.PrimaryAction;
+            RaiseChanged();
+            return false;
+        }
+    }
+
     public async Task<bool> ReleaseRoomAsync(CancellationToken cancellationToken = default)
     {
         if (Context is null) return true;
-        if (ConnectionState != LegacyConnectionState.Idle &&
+        var activeRelease = ConnectionIsActive;
+        if (!activeRelease && ConnectionState != LegacyConnectionState.Idle && !CleanupVerified &&
             !await StopConnectionAsync(cancellationToken)) return false;
 
         var context = Context;
@@ -284,6 +324,9 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
             PartnerTrainerDisplayName = room.PartnerTrainerDisplayName;
         BothReady = room.BothReady;
         RoleLocked = room.RoleLocked;
+        CheckpointId = room.CheckpointId;
+        CheckpointInstructions = room.CheckpointInstructions;
+        CleanupVerified = room.CleanupVerified;
         if (room.AttemptPhase == "failed")
         {
             ConnectionState = LegacyConnectionState.NeedsRecovery;
@@ -310,11 +353,35 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
             ConnectionState = LegacyConnectionState.Idle;
             ClearRecovery();
         }
-        else if (ConnectionState == LegacyConnectionState.Idle && room.RoleLocked)
+        else if (room.State == "cleaning")
         {
-            ConnectionState = room.State == "trading"
-                ? LegacyConnectionState.Active
-                : LegacyConnectionState.Starting;
+            ConnectionState = LegacyConnectionState.Ending;
+            StatusText = "Cleaning up the connection…";
+        }
+        else if (room.State == "awaiting_user")
+        {
+            ConnectionState = LegacyConnectionState.Starting;
+            StatusText = room.CheckpointInstructions ?? "Complete the Switch step, then continue.";
+        }
+        else if (room.State == "terminal" && room.CleanupVerified)
+        {
+            ConnectionState = LegacyConnectionState.Idle;
+            StatusText = "Connection ended. This Trade Room is still open.";
+        }
+        else if (room.State == "running" && room.LastPassedGate is
+                 "C_RFU_ACTIVE" or "C_TRADE_COMPLETE")
+        {
+            ConnectionState = LegacyConnectionState.Active;
+            StatusText = room.LastPassedGate == "C_TRADE_COMPLETE"
+                ? "The trade completed. End the connection when both Switches are ready."
+                : "Both Switches are connected";
+        }
+        else if (room.State == "running" && room.RoleLocked)
+        {
+            ConnectionState = LegacyConnectionState.Starting;
+            StatusText = string.IsNullOrWhiteSpace(room.CurrentGate)
+                ? "Preparing both Switch connections"
+                : $"Preparing connection · {room.CurrentGate}";
         }
         if (ConnectionState == LegacyConnectionState.Idle)
         {
@@ -346,6 +413,9 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
         PartnerTrainerDisplayName = "";
         BothReady = false;
         RoleLocked = false;
+        CheckpointId = null;
+        CheckpointInstructions = null;
+        CleanupVerified = false;
         RaiseChanged();
     }
 

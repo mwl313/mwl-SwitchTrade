@@ -50,7 +50,7 @@
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
           <StackPanel Margin="18,22,12,32">
             <TextBlock Text="Support" Style="{StaticResource SectionTitle}" />
-            <TextBlock Text="Create a redacted support file on your Desktop. SwitchTrade also sends it to the online relay when available." Margin="0,0,0,18" TextWrapping="Wrap" />
+            <TextBlock Text="Create a redacted support file on your Desktop. The file stays on this PC until you choose to share it." Margin="0,0,0,18" TextWrapping="Wrap" />
             <Button Content="Create support file" Command="{Binding SupportCommand}" Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left" />
             <Border Style="{StaticResource SuccessNotice}" Margin="0,18,0,0"
                     Visibility="{Binding HasSupportFile, Converter={StaticResource BooleanToVisibility}}">
@@ -68,7 +68,7 @@
             </TextBlock>
             <Border Height="1" Background="{DynamicResource BorderBrush}" Margin="0,28" />
             <TextBlock Text="About SwitchTrade" Style="{StaticResource SectionTitle}" />
-            <TextBlock Text="SwitchTrade 0.2.2 beta.1" />
+            <TextBlock Text="{Binding ProductVersion}" />
             <TextBlock Text="Room control v1 · Public directory v1 · Party commit v1" Style="{StaticResource SecondaryText}" Margin="0,4,0,0" />
           </StackPanel>
         </ScrollViewer>
@@ -78,11 +78,8 @@
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
           <StackPanel Margin="18,22,12,32">
             <TextBlock Text="Advanced" Style="{StaticResource SectionTitle}" />
-            <TextBlock Text="Production diagnostics" FontWeight="SemiBold" Margin="0,4,0,8" />
-            <TextBlock Text="Run repeatable checks on this PC before separating two computers and two Switches. Diagnostics use the installed wrapper, selected USB adapter, hosted relay, and production radio path." TextWrapping="Wrap" />
-            <TextBlock Text="The selected adapter is temporarily controlled during a run. No public Trade Room is created, and a passed result does not certify a complete physical trade." Style="{StaticResource SecondaryText}" TextWrapping="Wrap" Margin="0,8,0,0" />
-            <Button Content="Open debug menu" Command="{Binding OpenDiagnosticsCommand}"
-                    Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left" Margin="0,16,0,0" />
+            <TextBlock Text="Support evidence" FontWeight="SemiBold" Margin="0,4,0,8" />
+            <TextBlock Text="SwitchTrade records bounded, redacted evidence for this application session. Use the Support tab to export it even when the local service is unavailable." TextWrapping="Wrap" />
           </StackPanel>
         </ScrollViewer>
       </TabItem>

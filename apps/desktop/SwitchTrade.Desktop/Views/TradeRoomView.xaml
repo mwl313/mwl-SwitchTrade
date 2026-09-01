@@ -47,6 +47,16 @@
             </StackPanel>
           </Border>
 
+          <Border Style="{StaticResource SurfaceCard}" Margin="0,0,0,14"
+                  Visibility="{Binding HasUserCheckpoint, Converter={StaticResource BooleanToVisibility}}">
+            <StackPanel>
+              <TextBlock Text="Switch action required" FontWeight="SemiBold" Margin="0,0,0,4" />
+              <TextBlock Text="{Binding CheckpointInstructions}" TextWrapping="Wrap" />
+              <Button Content="Continue" Command="{Binding ContinueCommand}"
+                      Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" Margin="0,12,0,0" />
+            </StackPanel>
+          </Border>
+
           <Border Style="{StaticResource SuccessNotice}"
                   Visibility="{Binding HasTradeCommit, Converter={StaticResource BooleanToVisibility}}">
             <StackPanel>
@@ -169,7 +179,7 @@
             <StackPanel Orientation="Horizontal">
               <ProgressBar IsIndeterminate="True" Width="16" Height="16" Margin="0,0,10,0"
                            Visibility="{Binding IsConnectionPending, Converter={StaticResource BooleanToVisibility}}" />
-              <TextBlock Text="End connection" />
+              <TextBlock Text="{Binding ConnectionActionText}" />
             </StackPanel>
           </Button>
         </Grid>

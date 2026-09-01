@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://switchtrade.local/contracts/production-connection-run.v1.schema.json",
+  "title": "SwitchTrade production connection projection v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version", "schema", "run_id", "revision", "phase",
+    "current_gate", "last_passed_gate", "local_role", "peer_state",
+    "user_checkpoint", "functional", "cleanup", "created_utc", "updated_utc",
+    "room", "allowed_actions"
+  ],
+  "properties": {
+    "contract_version": { "const": "production-connection-run.v1" },
+    "schema": { "const": 1 },
+    "run_id": { "type": "string", "format": "uuid" },
+    "revision": { "type": "integer", "minimum": 1 },
+    "phase": { "enum": ["created", "preflight", "running", "awaiting_user", "cleaning", "terminal"] },
+    "current_gate": { "type": ["string", "null"] },
+    "last_passed_gate": { "type": ["string", "null"] },
+    "local_role": { "enum": ["a_room_joiner", "b_ap_host", null] },
+    "peer_state": { "type": "string" },
+    "user_checkpoint": { "type": ["object", "null"] },
+    "functional": {
+      "type": "object",
+      "required": ["status", "failure"],
+      "properties": {
+        "status": { "enum": ["pending", "passed", "failed", "canceled", "interrupted"] },
+        "failure": { "type": ["object", "null"] }
+      }
+    },
+    "cleanup": {
+      "type": "object",
+      "required": ["status", "verified", "failures"],
+      "properties": {
+        "status": { "type": "string" },
+        "verified": { "type": "boolean" },
+        "failures": { "type": "array" }
+      }
+    },
+    "created_utc": { "type": "string", "format": "date-time" },
+    "updated_utc": { "type": "string", "format": "date-time" },
+    "room": { "type": ["object", "null"] },
+    "allowed_actions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "enum": ["connect", "continue", "stop", "end", "leave", "close", "retry"] }
+    }
+  }
+}

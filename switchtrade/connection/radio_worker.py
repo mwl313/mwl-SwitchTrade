@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import json
 import os
 from pathlib import Path
 import platform
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -37,6 +39,24 @@ class RadioWorkerError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+def enable_parent_death_termination() -> None:
+    """Ask Linux to SIGTERM this exact worker if its WSL command parent disappears."""
+    if os.name != "posix":
+        return
+    parent = os.getppid()
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.prctl(1, signal.SIGTERM, 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), "prctl(PR_SET_PDEATHSIG) failed")
+    except (AttributeError, OSError) as error:
+        raise RadioWorkerError(
+            "P0_PARENT_DEATH_GUARD_FAILED",
+            "worker parent-death termination could not be enabled") from error
+    if os.getppid() != parent:
+        raise RadioWorkerError(
+            "P0_PARENT_EXITED", "worker parent exited while supervision was enabled")
 
 
 def _bounded(value: object, name: str, maximum: int) -> str:
@@ -270,6 +290,7 @@ def _validate_ticket(ticket: object, report: dict) -> dict:
 
 def serve(args: argparse.Namespace) -> int:
     try:
+        enable_parent_death_termination()
         report = build_side_ready(args)
         _atomic_json(args.report, report)
         _emit("p0_side_ready", report=report)

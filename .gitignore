@@ -15,6 +15,7 @@
 !/docs/81-abcd-orchestration-rewrite-plan-20260829.md
 !/docs/82-abcd-milestone-0-baseline-20260829.md
 !/docs/83-abcd-milestone-1-coordinator-20260829.md
+!/docs/94-production-wrapper-beta-cutover-20260831.md
 !/docs/installer/
 !/docs/installer/**
 /handoff/
@@ -31,6 +32,7 @@
 
 __pycache__/
 /.pytest_cache/
+/.qualification/
 /apps/web/dist-desktop/
 /artifacts/
 **/bin/

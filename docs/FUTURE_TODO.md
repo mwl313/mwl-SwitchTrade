@@ -9,7 +9,35 @@ Before working an item, read [Mistakes to Avoid](MISTAKES_TO_AVOID.md), the sour
 failures and mandatory recurrence-prevention gates. Add newly discovered failure evidence there
 before retrying; keep the implementation status and acceptance debt in this TODO.
 
+## Current product phase — 2026-09-01
+
+Standalone P0/A/B evidence, hosted C/D evidence, and the focused one-PC/two-adapter 10/10 C+D
+campaign are sufficient to stop qualification-only development. Production owns one selected radio
+per PC; dual-adapter concurrency remains a source qualification tool only. The shipped runtime has no
+AI/agent dependency.
+
+The production Debug menu requirement is canceled. The deterministic headless ABC+D connection-run
+service, minimal typed GUI cutover, and **Export support logs** implementation now exist in source.
+They archive bounded redacted evidence accumulated since application startup to the Windows Desktop.
+Production-entry-point integration, installed-runtime, and physical acceptance remain open. The updated
+M8-M10 sequence and beta definition are normative in
+[`94-production-wrapper-beta-cutover-20260831.md`](94-production-wrapper-beta-cutover-20260831.md).
+No additional repetition campaign begins before the production wrapper exists.
+
 ## Critical and urgent blockers
+
+0A. **CRITICAL — URGENT: Eliminate false installed-runtime corruption and qualify desktop launch.**
+    **Status (2026-08-31): root cause confirmed and corrected in source; focused provisioner contract
+    tests pass. New immutable package and installed qualification are pending.** PC A's installed
+    `0.2.14-beta.1` desktop reported `SOFTWARE_NOT_READY` / `corrupt` before creating a control log even
+    though the release/runtime/kernel identities and a direct installed `verify-software` were healthy.
+    Read-only status had ignored the successful WSL CLI inventory and trusted one transient Lxss
+    registry lookup. It now accepts either independent positive view, repeats a simultaneous negative
+    observation once within a bound, and fails closed only on durable absence from both. Keep this item
+    open until the exact installed desktop passes cold launch, normal close, relaunch, control shutdown,
+    non-ASCII-profile execution, upgrade on both PCs, and zero USB/endpoint/interface residue. Add that
+    desktop entry-point sequence to the release workflow so provisioner-only verification cannot publish
+    another package with an untested application startup boundary.
 
 0. **CRITICAL — URGENT: Qualify the M7 distributed harness only through the safe pairing barrier.**
    **Status (2026-08-31): the invitation/pairing fixes and the later explicit-WSL-cwd,
@@ -107,9 +135,10 @@ before retrying; keep the implementation status and acceptance debt in this TODO
    Direct B reports were subsequently reviewed and accepted with the same immutable runtime
    integrity and verified cleanup.
 
-2. **CRITICAL — URGENT: Preserve relay frame order and truthful P0/A/B/C/D diagnostic stages.**
+2. **CRITICAL — URGENT: Preserve relay frame order and truthful P0/A/B/C/D product stages.**
    **Status (2026-08-30): the M5 v2 source and deployed validation-relay functional exit gate passed;
-   M8/M9 diagnostic/application migration and reproducible production deployment remain open.**
+   M8 headless product wrapping, M9 factual UI/log projection, and reproducible production deployment
+   remain open. The retired Debug menu is not an acceptance gate.**
    In the guided AP diagnostic, the synthetic host sends `PEER_READY` at sequence 0 and the retained
    advertisement at sequence 1. When the endpoint connects later, the relay replays the advertisement
    before the ready frame. `SequenceGate` accepts sequence 1 and rejects sequence 0 as stale, leaving a
@@ -138,8 +167,8 @@ before retrying; keep the implementation status and acceptance debt in this TODO
    source hashes match `bbc549f`, not the reference Docker image. Before M9 production cutover, either
    deploy that reference image or commit and verify a complete native release manifest including the
    clean source tree, dependencies, Python runtime, launchd configuration, environment, and rollback
-   hashes. Keep this critical item open until M8/M9 migrate the production diagnostic/UI projections
-   and normal application to the factual v2 C gates.
+   hashes. Keep this critical item open until M8/M9 migrate the normal application and its factual
+   UI/support-log projections to the v2 C gates.
 
 3. **CRITICAL — URGENT: Add the attempt-scoped A_READY/B_READY activation barrier.**
    **Status (2026-08-30): M6 software/deployed exit accepted at `d2130fe`; source-identical public
@@ -320,43 +349,34 @@ before retrying; keep the implementation status and acceptance debt in this TODO
    the expected stable `radio.switch_room_not_found` result after three scans, and released the exact
    adapter. Retain PC B and repeated physical qualification before closing the wider release gate.
 
-7. **URGENT: Add a production-path, single-machine diagnostic before resuming separated testing.**
-   **Status (2026-08-28): the existing adapter-check workflow is fixed in source and now uses the
-   production attach, Linux-enumeration, radio-preparation, driver, RX, and exact-device cleanup gates.
-   The `production-diagnostic.v1` debug menu, synthetic peer, and guided checks are implemented in source.
-   Installed qualification (including repeated one-PC runs) and physical qualification remain pending.**
-   Implement the approved design in
-   [`79-production-debug-menu-design-20260828.md`](79-production-debug-menu-design-20260828.md).
-   Extend the existing hardware diagnostics instead of creating mock wrappers. The automated tier must
-   run the real wrapper, radio preparation, selected-adapter gate, endpoint initialization, hosted-relay
-   connection, and a bidirectional nonce exchange against an isolated synthetic peer. It must exercise
-   the Group Leader and Joining policies sequentially, prove exactly one PID per attempt, and verify full
-   cleanup. The guided tier must then use the same production transports to (a) detect and join a room
-   created by a nearby Switch and (b), after teardown, create the mirrored AP and wait for a Switch to
-   associate. A captured advertisement may drive an optional software-only AP check, but that result must
-   not be called physical radio qualification.
+7. **CRITICAL — NEXT: Wrap admitted ABC+D as the only deterministic production connection path.**
+   **Status (2026-09-01): source implementation and the Switchless source dry-run are accepted for
+   minimal-GUI rework. The dry-run passed production API/service command semantics, full source
+   regressions, hosted-relay C+D normal and worker-death paths, and verified residue cleanup without
+   an AI runtime. It also found and corrected checkpoint Stop handling at both the endpoint parser and
+   production-adapter outcome boundary before hardware mutation.
+   The neutral executor/service, single mutation queue, identity-bound command/revision API,
+   heartbeat supervision, recovery guard, typed WPF projection, application-session evidence, and
+   backend-independent Desktop export are implemented. All 588 Python regressions, Desktop/Provisioner
+   Release builds, Provisioner contract tests, and Desktop/session self-tests pass. Installed immutable
+   entry-point, live WPF flow, interruption/recovery, and backend-dead export acceptance remain open;
+   the source dry-run is not an installed or physical result.**
+   Extract one neutral connection-run service from the generic lifecycle already exercised by the
+   distributed harness. The product and qualification adapters must call that service rather than
+   cloning orchestration or launching a harness as the product runtime. Production owns one selected
+   adapter per PC and no AI, console prompt, dual-adapter mode, selectable engine, or fallback path.
 
-   The debug room must be private, short-lived, and absent from public search. The UI must use explicit
-   Start, Continue, Retry, Cancel, and Finish actions with no polling-triggered launches, show each stage
-   and stable failure code, and save a redacted diagnostic report in the normal support bundle. Result
-   levels must distinguish automated wrapper/relay/adapter pass, physical room detected, physical AP
-   association, and the final two-PC/two-Switch end-to-end pass. Thirty consecutive runs of both roles on
-   each PC, including cancellation and expected failure cases, must produce no duplicate launch, orphan
-   process, stale lock, or altered adapter state.
+   M8 must route Connect, Stop, End, Leave, Close, Retry, shutdown, and startup recovery through one
+   persisted coordinator with one identity-bound WSL wrapper/endpoint launch, immutable status reads,
+   first-cause preservation, bounded retries, and verified D cleanup. M9 then attaches the minimal GUI,
+   makes the legacy path and Debug menu unreachable, and adds one **Export support logs** action.
 
-   Integrate the current Connection diagnostic into this same production hardware lifecycle. On
-   2026-08-28, `hardware-diagnostic.v1` reported `USB_NOT_FOUND` for an RTL8192EU that Windows had
-   detected and authorized because the diagnostic inspected WSL without first attaching the selected
-   physical device. After the production attach path ran, `usbipd` published `ClientIPAddress` before
-   Linux had enumerated `0bda:818b`; the immediate radio check then failed generically. A bounded retry
-   after Linux enumeration loaded `rtl8xxxu`, passed actual RX, and left `wlan0` in monitor mode on
-   channel 6. Treat Windows shared, USB/IP attached, Linux enumerated, driver bound, interface ready,
-   and actual RX as separate ordered gates. Reuse the exact selected-device attach helper, wait for the
-   matching VID:PID sysfs device and expected driver/interface rather than trusting `ClientIPAddress`
-   alone, and retain bounded redacted attach/radio-gate stderr with the stable failure code. If the test
-   attaches or reconfigures the adapter, label it an active production diagnostic rather than read-only
-   and restore its prior state during cleanup. A freshly installed, shared-but-unattached adapter must
-   reach a factual terminal result in one run without a false `USB_NOT_FOUND` or manual retry.
+   The launcher creates an application-session identity before local-service startup. Bounded redacted
+   launcher, release/runtime, wrapper, endpoint, P0/A/B/C/D, relay-result, shutdown, and recovery logs
+   must survive early startup failure and export atomically to one ZIP on the Windows Desktop. Never
+   include credentials, keys, room passcodes, packets, MAC addresses, exact adapter InstanceIds, or
+   trainer/Pokémon data. See
+   [`94-production-wrapper-beta-cutover-20260831.md`](94-production-wrapper-beta-cutover-20260831.md).
 
 ## 1. Post-installer application stabilization
 
@@ -396,14 +416,18 @@ before retrying; keep the implementation status and acceptance debt in this TODO
    only an adapter attached by that run, restore its prior interface state, and leave the distro stopped;
    never detach hardware that was already attached before SwitchTrade started.
 4. **Keep enough endpoint evidence in support bundles to diagnose every attempt in one app run.**
-   **Status (2026-08-28): the confirmed evidence-retention and null-redaction defects are fixed in source
-   with bounded/redacted launcher evidence regressions. Broader schema validation remains future work.**
+   **Status (2026-09-01): implemented in source. The Desktop creates the session before backend
+   startup; launcher/service/wrapper/endpoint streams, WSL snapshots, failure summary, retention,
+   allowlist export, redaction, hashes, partial-file handling, and non-ASCII path round-trip have
+   automated coverage. Installed backend-dead export and privacy inspection remain M9 acceptance.**
    Include a bounded set of recent endpoint runs plus pre-endpoint launcher/gate failures, so a middle
    attempt is not lost when a later attempt overwrites `endpoint-state.json`. Preserve JSON value types
    during redaction: the 2026-08-28 bundle changed an inactive `session_id: null` into the string
    `"<redacted>"`, which falsely suggests that a value existed and weakens automated evidence checks.
    Redact only present sensitive values, keep `null` as `null`, and add schema validation for every
-   generated summary and diagnostic report.
+   generated summary and report. Create the session before local-service launch, retain launcher and
+   installer/runtime identity even if startup fails, rotate bounded files, and export one atomic
+   redacted ZIP to the Windows Desktop without requiring the backend to be healthy.
 5. **Remove stale authority-sync noise and contradictory readiness output.**
    **Status (2026-08-28): implemented in source with stable repeated-poll, open-room Stop, authority-loss,
    and desktop projection regressions; installed requalification remains.**
@@ -421,9 +445,10 @@ before retrying; keep the implementation status and acceptance debt in this TODO
 6. Validate the replacement installer on clean Windows 10 22H2 and Windows 11 systems.
 7. Deploy and verify a relay supporting `rfu-tunnel.v1` and `manual-switch-role.v1`.
 8. Create one shared API contract source for Python and C#.
-   **Status (2026-08-29):** `connection-run.v1` now has a canonical JSON schema and Python projection
-   tests in Milestone 1. C# validation and the remaining v2 contracts are still open for their cutover
-   milestones.
+   **Status (2026-09-01):** canonical schemas exist for the internal `connection-run.v1`, relay
+   `app-readiness.v2`, Desktop `production-connection-run.v1`, and Desktop
+   `local-app-readiness.v2` projections. Python routes and C# DTO/self-tests use the non-colliding
+   Desktop names. Generation from one language-neutral model remains developer-experience debt.
 9. Build a real WPF ↔ local control ↔ relay integration harness.
 10. Split the oversized backend orchestration module along existing responsibility boundaries.
     **Status (2026-08-29):** the new serialized connection coordinator exists as an isolated package;
@@ -452,6 +477,26 @@ before retrying; keep the implementation status and acceptance debt in this TODO
    remains intentionally unsigned.
 8. Complete physical Windows 10 22H2 qualification: clean install, reboot resume, custom-kernel boot,
    USB/IP attach, RTL8192EU health gate, full two-console trade, update, rollback, and uninstall.
+9. Implement the GUI-independent
+   [single-PC dual-adapter, Switchless C+D suite](93-single-pc-dual-adapter-switchless-cd-suite-20260831.md).
+   **Status (2026-08-31): campaign closed after Q0-Q5 and the user-approved Q6 10/10; production
+   packaging is intentionally not required.** PC A detects and authorizes two distinct supported RTL8192EU adapters;
+   Q0-Q2 made no USB/WSL radio or Switch mutation. The versioned state/report contract,
+   immutable fixture identity, random challenge evidence, stable failure model, and optional exact
+   Linux sysfs lease identity are implemented. Two same-VID/PID fake devices prove independent
+   attach/probe/recovery and reverse cleanup while the default production single-adapter evidence and
+   recovery shapes remain unchanged. The latest full qualified Python suite passed `567 passed, 3
+   skipped`. Two canonical isolated workers then passed hosted C0/C1,
+   mutation-free status, a deliberately delayed C2 barrier, bidirectional synthetic RFU, and D cleanup
+   in `q2-normal-20260831-04`; the worker-death case preserved its first failure and verified cleanup.
+   Q3 passed exact attach-delta mapping, distinct per-PHY/netdev actual RX, and B-to-A cleanup in
+   `q3-radio-20260831-03`. Q4 passed a real hosted integrated C+D run while both exact leases remained
+   held. Q5 passed 125 focused faults plus a real-relay worker-death expected failure. Q6 then passed
+   10/10 valid integrated runs (the user reduced the target from 30), with zero forced workers, open
+   rooms/credentials, recovery files, attached Linux USB devices, or non-restored Windows ownership.
+   This source qualification tool is not a concurrent-radio product feature. Further repetition and
+   dedicated Q3/Q4 packaging stop here; M8 now wraps the admitted one-radio production path.
+   Switchless evidence never replaces the final two-PC/two-Switch run.
 
 ## 3. Reliability and product operations
 
@@ -490,6 +535,10 @@ All product features remain Switch-to-Switch. PC-to-Switch trading is a developm
 future product mode.
 
 ## 5. Hardware and driver expansion
+
+This section is post-beta optional work. It does not restore the retired Debug menu or make an
+Adapter Test button a current production-beta requirement; the current beta exposes support-log
+export only.
 
 1. Add an **Adapter Test** button beside **Use selected adapter**. It must work with any detected USB
    Wi-Fi adapter and report staged compatibility results for Windows authorization, WSL attachment,

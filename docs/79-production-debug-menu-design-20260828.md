@@ -1,13 +1,13 @@
 # Production debug menu design — 2026-08-28
 
-> Status: implemented in source; installed-runtime and physical qualification remain required.
-> UI location: **Settings → Advanced → Production diagnostics**.
-> Contract: `production-diagnostic.v1`.
-> Architecture authority: this menu must project the P0/A/B/C/D gates in
-> `80-abc-connection-architecture-20260829.md`; that document controls wherever this earlier design
-> uses broader or older readiness wording.
-> Prerequisite: fix the critical false-start and repeated-launch defects documented in
-> `FUTURE_TODO.md` before using this design as qualification evidence.
+> Status: historical and superseded on 2026-08-31. A production Debug menu is no longer a product
+> requirement. Do not extend, package, or expose this workflow. The current decision is the
+> [ABC+D production wrapper and beta cutover](94-production-wrapper-beta-cutover-20260831.md): one
+> deterministic product connection service plus one Desktop **Export support logs** action.
+> Historical UI location: **Settings → Advanced → Production diagnostics**.
+> Historical contract: `production-diagnostic.v1`.
+> Historical interpretation remains bounded by `80-abc-connection-architecture-20260829.md`; no
+> result from this retired workflow replaces current product-wrapper or physical evidence.
 
 ## 1. Decision summary
 

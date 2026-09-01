@@ -100,17 +100,34 @@ Implementation proceeds in this order:
 3. Admit A and B components independently only after their direct harnesses pass their defined gates.
 4. Implement C authority ordering, advertisement delivery, and the A_READY/B_READY activation barrier.
 5. Implement two-sided, outcome-preserving D cleanup and recovery.
-6. Route normal rooms and production diagnostics through the same coordinator, then remove the old
-   orchestration and other unreachable legacy paths.
-7. Qualify source and installed runtime in P0 → A → B → C → D order before packaging another release.
+6. Wrap the admitted ABC+D lifecycle in one deterministic headless production service with one
+   selected adapter per PC and no AI/agent runtime dependency.
+7. Attach a minimal GUI and one Desktop support-log export, then remove the old orchestration and
+   retired Debug menu paths.
+8. Package and qualify the normal application with two PCs and two Switches before calling it a
+   production beta.
+
+Current status (2026-09-01): M0-M7 core implementation is substantially complete; standalone A/B
+physical evidence is accepted on both PCs, hosted C/D qualification passes, and the focused
+one-PC/two-adapter C+D campaign closed at the user-approved 10/10 result. Dual-adapter operation is
+test-only. M8 headless production wrapping and application-session export are implemented in source.
+The Switchless source dry-run passed production command/recovery regressions and hosted-relay C+D
+normal/worker-death cases with verified cleanup, so minimal GUI rework is next. The immutable packaged
+entry point, live GUI, and installed acceptance gates remain open; M10 packaging and final physical
+acceptance begin only after those gates close. See the
+[production wrapper and beta cutover decision](docs/94-production-wrapper-beta-cutover-20260831.md).
+
+The detailed paragraphs below preserve historical checkpoint evidence. Where an older pending-status
+sentence conflicts with the current decision above or `docs/FUTURE_TODO.md`, the newer source of truth
+controls.
 
 Milestones 0 and 1 are complete in source. Milestone 2 now has an isolated CLI-first P0
 implementation: strict passive runtime/relay validation, exact Windows USB lease ownership, the full
 ordered Linux module/TUN/RX gate, a long-lived WSL radio worker, identity-bound single launch, and
 restart-safe cleanup. It is intentionally not connected to the legacy normal-room, diagnostics, or
 desktop paths. PC A passed the installed cold P0 and verified cleanup using immutable qualification
-runtime `abcd-m2-975e68b`. By explicit project decision, that PC A result is sufficient to begin
-Milestone 3; it does not claim a PC B P0 pass or close the remaining cross-PC qualification debt.
+runtime `abcd-m2-975e68b`. That result originally authorized Milestone 3; the later returned PC B P0
+evidence was reviewed and accepted with verified cleanup.
 
 Milestone 3 now has a source-complete and PC A physically proven direct A harness. It runs the exact A0-A9 station sequence
 through one PID-preserving installed-runtime endpoint, selects only one exact FRLG room, records
@@ -118,7 +135,7 @@ association/CCMP/control-port/participant/data-plane checkpoints, holds locally 
 and hands the validated advertisement to the harness in memory while persisting only its hash. It
 does not reuse `LiveTransport` lifecycle orchestration and does not claim A10, C1, `A_READY`, B, C,
 or a completed trade. PC A run `88f8e357-2e8c-4981-ad87-4cfaa1f93c31` passed A0-A9 and verified
-cleanup; PC B direct A remains the formal Milestone 3 exit debt.
+cleanup; the later returned PC B Direct A evidence was also reviewed and accepted.
 
 Milestone 4 now has a source-complete Direct B2-B10 harness and an installed immutable PC A
 qualification runtime, `abcd-m4-9635a1f`. It owns one selected PHY, creates the AP/monitor/TAP
@@ -127,8 +144,9 @@ association and Nintendo control-port activity, and keeps functional and cleanup
 Source regression passed 414 tests with three intentional skips; installed integrity and no-hardware
 smoke passed. PC A run `12e6a535-4770-47ae-9fb3-8d06915af053` physically passed B2-B10 against a
 real Switch in that final runtime, reached `B_CONTROL_READY`, exited through `factory_released`, and
-verified LDN, radio, endpoint, and USB cleanup with no residue. PC B remains the formal Milestone 4
-exit debt; this local result does not claim B1, `B_READY`, relay delivery, or a trade.
+verified LDN, radio, endpoint, and USB cleanup with no residue. The later returned PC B Direct B
+evidence was reviewed and accepted with matching runtime integrity and cleanup. These local results
+do not claim B1, `B_READY`, relay delivery, or a trade.
 
 Milestone 5's functional exit gate is accepted at source checkpoint `162f779`. The separate P0- and
 launch-bound `rfu-tunnel.v2` path passed local real-process tests and the deployed validation-relay
@@ -205,6 +223,8 @@ contract.
 - [ABC+D Milestone 6 C2 Source Checkpoint](docs/89-abcd-milestone-6-c2-20260830.md)
 - [ABC+D Milestone 7 Distributed D Checkpoint](docs/90-abcd-milestone-7-authority-d-checkpoint-20260830.md)
 - [ABC+D Milestone 7 Physical Harness](docs/91-abcd-milestone-7-physical-harness-20260830.md)
+- [Single-PC Dual-Adapter Switchless C+D Qualification](docs/93-single-pc-dual-adapter-switchless-cd-suite-20260831.md)
+- [ABC+D Production Wrapper and Beta Cutover](docs/94-production-wrapper-beta-cutover-20260831.md)
 - [Definitive TODO](docs/FUTURE_TODO.md)
 - [Known Issues](docs/KNOWN_ISSUES.md)
 - [Relay deployment](relay/DEPLOYMENT.md)

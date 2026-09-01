@@ -1,3 +1,4 @@
+using System.IO;
 using SwitchTrade.Desktop.Models;
 using SwitchTrade.Desktop.Services;
 using SwitchTrade.Desktop.State;
@@ -11,6 +12,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private readonly IDialogService _dialogs;
     private readonly IClipboardService _clipboard;
     private readonly IHardwareAuthorizationService _hardwareAuthorization;
+    private readonly ApplicationSession? _applicationSession;
     private CancellationTokenSource? _startupCancellation;
     private bool _starting;
     private bool _refreshing;
@@ -39,13 +41,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         BackendLauncher launcher,
         IDialogService dialogs,
         IClipboardService clipboard,
-        IHardwareAuthorizationService? hardwareAuthorization = null)
+        IHardwareAuthorizationService? hardwareAuthorization = null,
+        ApplicationSession? applicationSession = null)
     {
         Gateway = gateway;
         _launcher = launcher;
         _dialogs = dialogs;
         _clipboard = clipboard;
         _hardwareAuthorization = hardwareAuthorization ?? new WindowsHardwareAuthorizationService();
+        _applicationSession = applicationSession;
         RoomCoordinator = new ActiveTradeRoomCoordinator(gateway);
         _currentScreen = new StartupScreenViewModel(this);
         BackCommand = new AsyncCommand(GoBackAsync, () => CanGoBack);
@@ -298,7 +302,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             ? "The desktop app and installed SwitchTrade runtime are not compatible."
             : status.Error ?? "The installed runtime needs attention.";
         RecoveryTechnicalDetails = !status.Compatible
-            ? $"app.version_mismatch · UI expects {ControlApiClient.ReadinessContract} / 0.2.x and the installed release; runtime reported {status.ContractVersion} / {status.Version} / {status.ReleaseId ?? "missing release"}."
+            ? $"app.version_mismatch · UI expects {ControlApiClient.ReadinessContract} and the exact installed release; runtime reported {status.ContractVersion} / {status.Version} / {status.ReleaseId ?? "missing release"}."
             : $"{status.FailureStage ?? "control"}.failed · run {status.RunId} · action {status.RecoveryAction ?? "retry"}";
         RecoveryStage = !status.Compatible ? "version" : status.FailureStage ?? "control";
         RecoveryInstructions = RecoveryStage switch
@@ -385,12 +389,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public async Task OpenSettingsAsync()
     {
         if (CurrentScreen is SettingsScreenViewModel) return;
-        if (CurrentScreen is ProductionDiagnosticsScreenViewModel diagnostics &&
-            !await diagnostics.CancelAndCleanupAsync()) return;
         Navigate(new SettingsScreenViewModel(this));
     }
 
-    public void OpenProductionDiagnostics() => Navigate(new ProductionDiagnosticsScreenViewModel(this));
+    public async Task<string> ExportSupportLogsAsync(CancellationToken cancellationToken = default)
+    {
+        if (_applicationSession is null)
+            return await Gateway.CreateSupportBundleAsync(cancellationToken);
+        try
+        {
+            return await _applicationSession.ExportAsync(cancellationToken: cancellationToken);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            throw new UserFacingException(
+                "SwitchTrade could not save the support file to your Desktop.",
+                "support_export_failed", "support", true, "retry", innerException: error);
+        }
+    }
 
     public void OpenTradeRoom(
         TradeRoomInfo room,
@@ -413,8 +429,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public async Task GoBackAsync()
     {
         if (!CanGoBack) return;
-        if (CurrentScreen is ProductionDiagnosticsScreenViewModel diagnostics &&
-            !await diagnostics.CancelAndCleanupAsync()) return;
         if (CurrentScreen is TradeRoomScreenViewModel)
         {
             if (!await ConfirmAndReleaseRoomAsync()) return;
@@ -429,8 +443,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public async Task<bool> CanCloseAsync()
     {
-        if (CurrentScreen is ProductionDiagnosticsScreenViewModel diagnostics &&
-            !await diagnostics.CancelAndCleanupAsync()) return false;
         if (!RoomCoordinator.HasRoom) return true;
         if (_dialogs.Show(ReleaseDialog()) != DialogChoice.Primary) return false;
         if (await RoomCoordinator.ReleaseRoomAsync()) return true;

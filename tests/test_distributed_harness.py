@@ -14,10 +14,12 @@ import uuid
 from unittest.mock import patch
 
 from switchtrade.connection.distributed_endpoint import (
+    _ClosingRequested,
     _Commands,
     _checkpoint_command,
     _closing_command,
     _config,
+    run as run_distributed_endpoint,
 )
 from switchtrade.connection.distributed_harness import (
     CONTROL_STATE_CONTRACT,
@@ -287,6 +289,88 @@ class DistributedContractTests(unittest.TestCase):
         commands.values = queue.Queue()
         commands.values.put(command)
         self.assertIsNone(commands.wait_checkpoint(config, "CREATE_SWITCH_ROOM", 1))
+
+        intent = {
+            "contract_version": "d-closing-intent.v1",
+            "attempt_id": "attempt-1",
+            "activation_generation": 1,
+            "outcome": "canceled",
+            "primary_failure_code": None,
+            "last_passed_gate": "C0_DATA_PLANE_PROVEN",
+        }
+        for checkpoint in ("CREATE_SWITCH_ROOM", "JOIN_SWITCH_GROUP"):
+            commands.values.put({"action": "closing_intent", "value": intent})
+            with self.assertRaises(_ClosingRequested) as closing:
+                commands.wait_checkpoint({
+                    **config, "attempt_id": "attempt-1", "activation_generation": 1,
+                }, checkpoint, 1)
+            self.assertEqual(closing.exception.intent, intent)
+
+    def test_stop_at_create_switch_room_runs_d_without_a_false_functional_failure(self):
+        intent = {
+            "contract_version": "d-closing-intent.v1",
+            "attempt_id": "attempt-1",
+            "activation_generation": 1,
+            "outcome": "canceled",
+            "primary_failure_code": None,
+            "last_passed_gate": "C0_DATA_PLANE_PROVEN",
+        }
+        config = {
+            "relay_url": "https://relay.example.invalid", "room_code": "ABC123",
+            "member_token": "m" * 43,
+            "source_seat": "member_a", "switch_role": "a_room_joiner",
+            "attempt_id": "attempt-1", "stage_generation": 1,
+            "activation_generation": 1, "run_id": RUN_ID,
+        }
+        events = []
+        testcase = self
+
+        class Commands:
+            @staticmethod
+            def wait_checkpoint(_config, checkpoint, _timeout):
+                self.assertEqual(checkpoint, "CREATE_SWITCH_ROOM")
+                raise _ClosingRequested(intent)
+
+        class Client:
+            pass
+
+        class CStage:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            @staticmethod
+            def connect(_timeout):
+                return None
+
+        class DStage:
+            def __init__(self, **values):
+                testcase.assertEqual(values["closing_intent"], intent)
+
+            @staticmethod
+            def run():
+                return {"status": "passed"}
+
+        with tempfile.TemporaryDirectory() as temporary, patch.multiple(
+                "switchtrade.connection.distributed_endpoint",
+                process_start_ticks=lambda: 123,
+                _config=lambda *_args: config,
+                _Commands=Commands,
+                TunnelClientV2=lambda *_args, **_kwargs: Client(),
+                CStage=CStage,
+                EndpointDStage=DStage,
+                _emit=lambda event, **values: events.append({"event": event, **values})):
+            args = argparse.Namespace(
+                process_start_ticks=123, config=Path(temporary) / "config.json",
+                run_id=RUN_ID, release="release-a", launch_nonce="n" * 64,
+                relay_timeout=1, room_timeout=1,
+                report=Path(temporary) / "d-endpoint-stage.json",
+                close_tail_timeout=0,
+            )
+            self.assertEqual(run_distributed_endpoint(args), 0)
+
+        self.assertIn("user_checkpoint", {item["event"] for item in events})
+        self.assertIn("d_endpoint_completed", {item["event"] for item in events})
+        self.assertNotIn("functional_failed", {item["event"] for item in events})
 
     def test_recovery_before_attempt_closes_owner_room_without_peer_prompt(self):
         class Coordinator:

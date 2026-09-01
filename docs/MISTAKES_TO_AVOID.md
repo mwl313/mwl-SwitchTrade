@@ -618,6 +618,35 @@ These are distilled from repeated failures below.
 - **Never repeat:** a helper's local lock is insufficient if sibling workflows bypass it. All radio
   mutations route through the same owner and exact process identity.
 
+### MTA-RADIO-013 — Exact sysfs validation rejected the canonical USB device path
+
+- **Observed (Q3 run `q3-radio-20260831-01`):** Windows attached only the selected second
+  RTL8192EU and the attach delta bound `/sys/devices/platform/vhci_hcd.0/usb1/1-1`, but the new
+  exact probe reported `absent`. The run failed `P0_LINUX_ENUMERATION_TIMEOUT`; cleanup then
+  correctly refused detach with `P0_RADIO_NOT_QUIESCENT` because the same false probe could not
+  prove device ownership. No worker, C stage, or Switch operation started.
+- **Definitive cause:** `/sys/bus/usb/devices/1-1` is a symlink. `Path.resolve()` correctly returns
+  the canonical `/sys/devices/...` target, while the first Q3 implementation incorrectly required
+  that canonical path to remain textually under `/sys/bus/usb/devices`.
+- **Recurrence (Q3 run `q3-radio-20260831-02`):** the Python probe had been corrected, but the
+  shell selector still imposed the obsolete raw `/sys/bus/usb/devices/*` prefix before comparing
+  canonical identities. Both exact leases passed, then the first worker exited with
+  `invalid exact USB device path`. Radio cleanup still completed B then A with both prior states
+  verified. The worker-cleanup projection also falsely said cleanup failed because closing an
+  already-dead worker's stdin raised `BrokenPipeError`.
+- **Disproven alternatives:** usbipd attach succeeded for the exact Windows InstanceId; WSL listed
+  exactly one matching identity; there was no second attach, driver worker, relay, or hardware
+  failure. The defect was solely the new Q3 canonical-path membership test.
+- **Recovery:** the private exact identity was preserved. After membership was changed to compare
+  against the canonicalized USB inventory, the exact probe returned `present/matches=1/up=0`; the
+  one selected adapter was detached through `UsbLease.from_recovery`, Windows and Linux absence were
+  both verified, and both cards ended Windows-owned with no recovery file.
+- **Never repeat:** validate a canonical sysfs identity by membership in the canonicalized inventory,
+  not by its textual parent prefix. A symlink-to-`/sys/devices` fixture is a mandatory regression
+  before any real attach. Audit every consumer (Python probe, shell selector, worker attestation,
+  and recovery), and treat an already-closed control pipe as idempotent cleanup. Unknown exact
+  evidence must continue to block broad or guessed detach.
+
 ## 6. Relay, authority, and transport failures
 
 ### MTA-RELAY-001 — All HTTP 409 responses were mapped to “room full/in use”
@@ -905,6 +934,32 @@ These are distilled from repeated failures below.
   source identity, rebuilt bundle, default-command installation, and rollback/residue verification
   are still required.
 
+### MTA-INSTALL-023 — One transient Lxss lookup falsely declared a healthy runtime corrupt
+
+- **Observed:** on 2026-08-31, PC A's installed `0.2.14-beta.1` desktop stopped before launching the
+  local control service and displayed `SOFTWARE_NOT_READY · Installed runtime state is corrupt.` No
+  new control startup log was created and no USB, endpoint, PHY, or temporary interface was acquired.
+- **Definitive cause:** `ProvisioningEngine.InspectAsync` successfully enumerated WSL names but ignored
+  that result for an active runtime. It classified the runtime solely through one direct Lxss registry
+  lookup. That lookup returned no registration in the failing snapshot, which is the only code path
+  capable of producing the observed `corrupt` state. The desktop then presented Repair as if durable
+  damage had been proved.
+- **Disproven alternatives:** the installed release manifest, active-runtime pointer, release ID,
+  control contract, kernel file and hash, WSL distro identity, Python/control payload, and relay URL
+  all agreed. Repeated read-only `status`, installed `verify-software`, real WSL boot, and the
+  `app-readiness.v1` endpoint passed without Repair. The adapter remained shared but Windows-owned.
+- **Correction:** read-only status now reconciles the exact active name across the WSL CLI inventory
+  and Lxss registry projection. Either positive view prevents a false corruption result; if both are
+  absent, one bounded second observation is required before `corrupt` is returned. Executable health
+  remains a separate real control-process readiness check. Contract tests cover a transient omission
+  from either view, a simultaneous one-snapshot omission, and durable absence from both.
+- **Never repeat:** a single transient discovery snapshot never authorizes Repair guidance or a
+  corruption label. Distinguish discovery disagreement, durable absence, and executable health, and
+  run the installed desktop entry point—not only provisioner `verify`—before publishing a release.
+- **Status:** source correction and focused provisioner regression pass; a new immutable package,
+  installed desktop cold-launch/relaunch test, non-ASCII-profile check, and two-PC upgrade remain the
+  release acceptance gate.
+
 ## 8. Protocol and reverse-engineering failure lessons
 
 These historical failures were valuable evidence, but none may be reintroduced as an “alternate”
@@ -980,6 +1035,81 @@ Full trade, save, menu return, and graceful exit remain separate physical eviden
 - **Never repeat:** a contract migration is incomplete until every constructor, fake, boundary
   value, and negative test uses the new contract. Do not weaken production validation to make an
   obsolete fixture pass.
+
+### MTA-QA-004 — A manually typed Base64 fixture had the wrong decoded length
+
+- **Observed:** the first Q2 focused test stopped before relay, WSL, USB, worker subprocess, or Switch
+  activity because the new worker-config fixture failed its required 32-byte payload check.
+- **Definitive cause:** the literal Base64 string decoded to 29 bytes. The expected assertion said 32
+  bytes, but the fixture had been typed manually instead of being generated from the asserted source
+  bytes.
+- **Correction:** construct encoded fixtures with `base64.b64encode(b"x" * 32)` so the source and
+  expected length have one authority. Keep the production length validation unchanged.
+- **Never repeat:** do not hand-author encoded binary test vectors unless their encoded form is the
+  contract under test. Generate them from explicit source bytes and separately retain malformed and
+  wrong-length negative fixtures.
+
+### MTA-QA-005 — A module worker relaunched `__main__` instead of its canonical module
+
+- **Observed:** Q2 run `q2-normal-20260831-01` created and admitted a private relay attempt, then both
+  workers exited before writing status. Their bounded logs contained `Error while finding module
+  specification for '__main__'`; the parent reported `CD_WORKER_EXITED` at `Q2_WORKER`.
+- **Definitive cause:** the coordinator was itself invoked with `python -m`, so its runtime
+  `__name__` was `__main__`. It reused that dynamic value in the child `-m` argument instead of the
+  canonical `switchtrade.connection.dual_adapter_cd_harness` module name.
+- **Recovery/residue:** the coordinator closed the private room, removed credential/config recovery
+  files, and both Python workers were absent. Both RTL8192EU devices remained Windows-owned and
+  unattached. No Switch was touched. The pre-existing SwitchTrade WSL distro was running, but Q2
+  launched no WSL command and made no radio mutation.
+- **Additional report defect:** although resource cleanup was proved, the failed-run report left
+  `cleanup_status=pending`; every terminal functional outcome must receive a separate terminal cleanup
+  result.
+- **Correction gate:** child launch uses one constant canonical module identity; an automated launch-
+  argv test rejects `-m __main__`; terminal report finalization independently sets cleanup to verified
+  or failed. Repeat Q2 only after the focused suite passes.
+- **Never repeat:** never derive a subprocess entry point from runtime `__name__`. Package and validate
+  one canonical module/executable identity, and test the exact parent-as-`-m` composition before a
+  hosted run.
+
+### MTA-QA-006 — Q2 generated a second run ID after relay admission
+
+- **Observed:** Q2 run `q2-normal-20260831-02` launched both canonical worker modules, but both failed
+  `C_AUTHENTICATION_FAILED` at `C0_AUTHENTICATED` with the same bounded detail hash. Neither worker
+  passed a C gate.
+- **Definitive cause:** the coordinator generated one UUID per P0 attestation and then `_side_config`
+  generated a different UUID for each WebSocket launch. The relay correctly requires the launch
+  header's run ID to equal the member's admitted P0 run ID and rejected both connections with 4403.
+- **Disproven alternatives:** hosted HTTPS and WebSocket health were ready, `rfu-tunnel.v2` was
+  advertised, the attempt was admitted, the canonical child module launched, and both failures were
+  symmetric before peer readiness.
+- **Recovery/residue:** cleanup was verified: the private room closed, credential/config recovery was
+  removed, both worker PIDs were absent, no USB or WSL command ran, both radios remained Windows-owned
+  and unattached, and no Switch was touched.
+- **Correction gate:** create each immutable side identity once, derive its P0 attestation and worker
+  config from that same record, and add a unit assertion that P0 run/stage identity equals the exact
+  child launch identity before another hosted run.
+- **Never repeat:** identities are values, not labels to regenerate in each layer. Construct one side
+  identity record and project every attestation, config, launch, status, C2, and D payload from it.
+
+### MTA-QA-007 — Synthetic qualification incorrectly requested a completed trade outcome
+
+- **Observed:** Q2 run `q2-normal-20260831-03` passed ordered C0/C1, mutation-free status reads,
+  one-sided activation blocking, the current-generation C2 barrier, and bidirectional synthetic RFU.
+  D1 then returned `state_conflict`; the parent retained `C_SYNTHETIC_RFU_PROVEN` as the last gate.
+- **Definitive cause:** the harness requested D outcome `completed`. The normative relay contract
+  permits `completed` only when `last_passed_gate` is the physical `C_TRADE_COMPLETE`. Existing relay
+  smoke correctly uses `canceled` for a successful synthetic diagnostic, but the new harness did not
+  reuse that established rule.
+- **Disproven alternatives:** both workers had already proved the real hosted tunnel and byte-exact
+  synthetic payloads; the rejection occurred synchronously in `begin_d_closing` before worker close.
+- **Recovery/residue:** cleanup was verified, the room and credentials were retired, both worker PIDs
+  were absent, and no WSL, USB, radio, or Switch action occurred.
+- **Correction gate:** a successful Switchless diagnostic freezes functional success locally but
+  requests authoritative D outcome `canceled` with `C_SYNTHETIC_RFU_PROVEN`; tests assert that the
+  relay attempt terminalizes canceled while the diagnostic report passes only after verified cleanup.
+- **Never repeat:** authority outcomes retain their normative meaning. Synthetic evidence never
+  impersonates `C_TRADE_COMPLETE`, and an application-level diagnostic pass is distinct from the
+  authority's no-trade canceled outcome.
 
 ## 10. Agent and operator mistakes that caused avoidable work
 
@@ -1121,6 +1251,10 @@ Full trade, save, menu return, and graceful exit remain separate physical eviden
   `tests/test_p0_harness.py`, which is not in the tracked inventory, and produced an OS file-not-found
   warning. The valid search targets still completed; no test, subprocess, hardware action, or other
   mutation occurred.
+- **Recurrence (2026-08-31, Q2 discovery):** a source search named an assumed root
+  `rfu_tunnel_v2` directory even though the preceding tracked inventory did not contain that path.
+  `rg` reported only the missing path while valid `switchtrade/connection` and `relay` searches
+  completed. No worker, relay mutation, WSL process, USB action, or Switch interaction started.
 - **Definitive cause:** a conventional test filename was appended from memory instead of limiting the
   command to the previously enumerated `tests/test_p0_foundation.py` or the existing directory.
 - **Rule:** after a missing-path incident, do not manually type another inferred file path in the same
@@ -1192,6 +1326,397 @@ Full trade, save, menu return, and graceful exit remain separate physical eviden
   peel expressions. A read-only failure cannot corrupt state, but it still consumes time and must not
   be normalized as harmless noise.
 
+### MTA-OPS-024 — A combined desktop stop/relaunch command was rejected before execution
+
+- **Observed:** during the 2026-08-31 `SOFTWARE_NOT_READY` investigation, one compound PowerShell
+  command combined graceful window close, a forced-process fallback, application relaunch, readiness
+  polling, log reads, and USB inspection. The execution boundary rejected it before any mutation.
+- **Definitive cause:** too many lifecycle actions and a forced fallback were bundled into one opaque
+  command when the normal application close path was both safer and independently verifiable.
+- **Rule:** application lifecycle qualification uses one observable transition per step: normal UI
+  close, process/listener absence proof, launch, then readiness proof. Never combine a forced kill
+  fallback with launch and validation in one command.
+
+### MTA-OPS-025 — An accessibility close click was attempted without usable geometry
+
+- **Observed:** the first normal-close attempt selected the correct SwitchTrade accessibility element,
+  but the input helper returned `coordinate input geometry is unavailable`; the window remained open.
+  A fresh screenshot-backed observation followed by `Alt+F4` closed it normally, and process, listener,
+  WSL, and USB cleanup were then verified.
+- **Definitive cause:** the accessibility tree exposed a close-button index without actionable input
+  geometry. The selection was valid, but that observation type could not support the requested click.
+- **Rule:** after any UI input failure, assume the outcome is unknown, re-observe, and do not reuse the
+  index. For a standard window close, prefer a freshly targeted `Alt+F4` when accessibility geometry is
+  unavailable; never escalate directly to forced termination.
+
+### MTA-OPS-026 — The one-transition lifecycle rule was violated again during adapter discovery
+
+- **Observed:** on 2026-08-31, a second-adapter discovery attempt again combined application launch,
+  readiness polling, and hardware inventory in one PowerShell command. The execution boundary rejected
+  the command before SwitchTrade, WSL, USB/IP, or the repository changed state.
+- **Definitive cause:** the already-recorded `MTA-OPS-024` rule was read too late and a convenient
+  compound command was treated as harmless because the intended final operation was read-only.
+- **Correction:** the installed application was launched as one explicit transition; readiness and
+  inventory were then queried separately. Both adapters remained Windows-owned and unattached.
+- **Never repeat:** read this document before constructing any lifecycle command. Launch, readiness,
+  and inventory are separate operations even when the final objective is discovery. A policy rejection
+  is evidence that no mutation occurred, not permission to repeat the same command shape.
+
+### MTA-OPS-027 — Windows wildcard paths were passed directly to `rg`
+
+- **Observed:** during the same read-only source inspection, path arguments containing wildcard
+  filenames were passed to `rg` under PowerShell and produced invalid-filename errors. No test,
+  subprocess, hardware action, or repository mutation started from that command.
+- **Recurrence (2026-08-31, Q0/Q1):** while checking whether JSON Schema validation was already a
+  dependency, `requirements*.txt` was again supplied as an `rg` path. The command failed read-only
+  before returning search results; the qualified test suite, USB ownership, WSL, and source files were
+  unchanged. This recurrence proves that merely documenting the shell rule is insufficient unless
+  every search command is constructed from an existing directory plus explicit `--glob` filters.
+- **Recurrence (2026-09-01, M8/M9 audit):** the same `requirements*` wildcard was again placed in an
+  `rg` path list while auditing schema dependencies. PowerShell returned an invalid-filename error;
+  the remaining explicit paths were still searched and no source, process, WSL, USB, relay, or test
+  state changed. The recurrence happened despite this document having been read, so the command-shape
+  prevention must be applied mechanically rather than recalled after construction.
+- **Definitive cause:** shell wildcard expansion was assumed instead of using ripgrep's own file
+  filtering contract, repeating the shell-safety class documented by `MTA-OPS-023`.
+- **Correction:** searches now name an existing directory and use `rg --glob` for file selection.
+- **Never repeat:** on Windows, never pass an inferred or wildcard filename as an `rg` path. Resolve
+  paths from `rg --files`, or search an existing directory with one or more explicit `--glob` filters.
+
+### MTA-OPS-028 — A read-only control API route and projection were guessed
+
+- **Observed:** a final adapter-inventory recheck queried an assumed `/api/v1/hardware` route and
+  received 404. The corrected route was then projected through an assumed `adapters` property even
+  though its contract uses `devices`, yielding null display fields. Neither request launches work or
+  changes hardware selection, sharing, attachment, or repository state.
+- **Definitive cause:** an earlier successful response was recalled semantically instead of resolving
+  the exact route and response model from source before use.
+- **Correction:** source inspection identified `GET /api/v1/hardware/devices`; its unmodified JSON
+  response then proved two distinct supported adapters, both Windows-owned and unattached.
+- **Never repeat:** discover the exact registered route and DTO before calling a local API. Inspect the
+  raw response once before projecting fields, and never interpret a projection error as product or
+  device failure.
+
+### MTA-OPS-029 — Failure evidence inventory was read and then ignored
+
+- **Observed:** after Q2 worker launch failed, one combined read-only command first enumerated the run
+  directory and proved it contained only the parent report and two worker logs, but then attempted to
+  read two nonexistent `status.json` paths. PowerShell returned file-not-found errors; no cleanup,
+  process, relay, WSL, USB, or source mutation resulted.
+- **Definitive cause:** expected artifacts from the design were appended to the command before the
+  actual enumerated inventory was evaluated, repeating the path-assumption class in `MTA-OPS-017`.
+- **Never repeat:** evidence inspection is two commands: enumerate exact existing paths, evaluate that
+  result, then read only returned paths. Never combine discovery with reads of expected outputs after a
+  failure precisely because missing outputs are part of the evidence.
+
+### MTA-OPS-030 — Test module filenames were inferred instead of enumerated
+
+- **Observed:** during the Q3 source audit, read-only `Get-Content` calls targeted
+  `tests/test_radio_worker.py` and `tests/test_wsl_radio_prepare.py`; neither file exists because
+  those tests live in `test_p0_foundation.py` and `test_product_foundation.py`. No test, hardware,
+  process, or source mutation resulted from the failed reads.
+- **Definitive cause:** component names were converted into plausible test filenames without first
+  using `rg --files`, repeating the path-assumption class in `MTA-OPS-017` and `MTA-OPS-029`.
+- **Correction:** the test inventory was enumerated and the exact existing files were read.
+- **Never repeat:** resolve every unfamiliar test/document path with `rg --files` before reading it;
+  semantic component names are not filesystem evidence.
+
+### MTA-OPS-031 — A long campaign loop was interrupted after its next child had already started
+
+- **Observed (Q6 campaign `q6-30-cycle-20260831-01`):** the user reduced the requested repetition
+  count from 30 to 10 after six cycles. The parent PowerShell loop was sent Ctrl+C immediately after
+  cycle 6 reported, but cycle 7 had already attached both radios. The console process ended before
+  the child harness could publish terminal cleanup, leaving both exact radios WSL-owned. Cycles 1-6
+  remained valid; cycle 7 was rejected and never counted.
+- **Definitive cause:** repetition policy lived in an external shell loop with no between-cycle stop
+  checkpoint. Printed completion was incorrectly treated as proof that the parent had not already
+  launched the next child.
+- **Recovery:** both private exact recovery records were preserved. No radio worker remained; exact
+  `wlan1` and `wlan0` were quiesced, then side 2 and side 1 were restored in reverse order through
+  `UsbLease.from_recovery`. Windows and Linux state were verified and both recovery files cleared.
+- **Never repeat:** do not interrupt a parent repetition loop based on console output. A campaign
+  runner must own `max_cycles`, check cancellation only between terminal-clean cycles, and publish a
+  campaign checkpoint before launching the next child. If policy changes mid-campaign, let the
+  current bounded child clean up and request stop through that checkpoint.
+
+### MTA-OPS-032 — A PowerShell statement was used where a parenthesized expression was expected
+
+- **Observed:** the replacement Q6 loop attempted `Join-Path $campaign (if (...) {...})`.
+  PowerShell treated `if` as a command in that position, leaving `--state-root` without a value; the
+  Python parser exited before the harness, WSL, USB, relay, or repository state changed.
+- **Definitive cause:** statement syntax was assumed to be an inline expression without first
+  validating the small loop command.
+- **Correction:** resolve the conditional name in its own `$runName = if (...)` statement, then pass
+  the resulting string to `Join-Path`.
+- **Never repeat:** compute and validate conditional PowerShell values in a separate statement before
+  placing them in lifecycle command arguments. An argument-parser exit is not a test attempt.
+
+### MTA-APP-011 — A WPF self-test synchronously waited on an async export bound to the UI context
+
+- **Observed (2026-09-01, M9):** the first Desktop application-session self-test opened no window and
+  produced no final exit because `ExportAsync(...).GetAwaiter().GetResult()` blocked the WPF startup
+  thread while the async continuation tried to resume on that same synchronization context. No
+  backend, WSL, USB, relay, endpoint, or installed state was touched; only disposable self-test
+  directories were created.
+- **Definitive cause:** a library-style async method was invoked synchronously from WPF startup without
+  moving the entire async operation off the UI synchronization context.
+- **Correction:** the self-test runs the export through `Task.Run` and then waits for that independent
+  task. Both `--session-self-test` and the complete `--self-test` now exit 0, including a Korean path.
+- **Never repeat:** any native startup/self-test path that must remain synchronous may wait only on an
+  operation proven not to capture the UI context, or must execute the complete async call on a worker
+  task. Every release build runs the executable self-test with a bounded process timeout; a successful
+  compile is not evidence against a synchronization deadlock.
+
+### MTA-APP-012 — New Desktop projections initially reused occupied versioned contract names
+
+- **Observed (2026-09-01, M8/M9):** the wrapper plan called the Desktop readiness and product-run
+  projections `app-readiness.v2` and `connection-run.v1`, but those exact names already identify the
+  relay P0 readiness payload and the internal coordinator record. Reusing either name would let two
+  incompatible shapes claim the same immutable contract identity.
+- **Definitive cause:** the prose plan named contracts semantically without first checking the
+  repository-wide schema registry and current producers/consumers.
+- **Correction:** existing schemas remain unchanged. The Desktop-facing contracts are explicitly
+  `local-app-readiness.v2` and `production-connection-run.v1`; Python routes, C# DTOs, launcher,
+  provisioner, installer manifests, schemas, and tests agree on those names.
+- **Never repeat:** before naming or versioning a contract, search schemas, producers, consumers,
+  package manifests, and documentation. A versioned name is immutable; a new incompatible projection
+  receives a new unambiguous name and a cross-language contract regression.
+
+### MTA-QA-008 — A pure-GET test observed legitimate background progress and blamed polling
+
+- **Observed (2026-09-01, M8):** the first `ConnectionRunService` pure-polling regression captured its
+  `before` snapshot during `preflight` and its `after` snapshot after the worker had independently
+  reached `running`, producing one failed assertion. The GET calls launched nothing; one runner was
+  active and no hardware, WSL, relay, or endpoint was involved in the fake-runner test.
+- **Definitive cause:** the test did not establish a stable asynchronous checkpoint before comparing
+  immutable projections.
+- **Correction:** the fake runner publishes `running`, signals a barrier, and then waits. The test
+  compares repeated GET results only inside that stable interval and separately asserts one launch.
+- **Related recurrence:** a stale-revision test later sampled the initial `created` projection while
+  the service-owned `preflight` publication was already queued, then attempted Stop with that old
+  revision. The same test-shape error briefly recurred in the new shutdown-identity case. Both tests
+  now wait for the explicit preflight barrier before taking the actionable snapshot; these were
+  legitimate asynchronous progress, not command or GET mutation.
+- **2026-09-01 dry-run recurrence:** the heartbeat revision test signaled immediately after the fake
+  runner queued `running`, not after the service-owned event queue published it. It therefore compared
+  a factual `preflight` snapshot with the later factual `running` snapshot and again mislabeled normal
+  progress as heartbeat mutation. The regression now waits for the authoritative projection itself to
+  reach `running` before freezing the no-writer interval.
+- **Never repeat:** a read-purity test must control all legitimate background writers. Establish an
+  explicit barrier, record launch/mutation counters, poll within the quiescent interval, and assert
+  both identical projection and unchanged counters.
+
+### MTA-QA-009 — New production API tests exposed guessed helper fields and incomplete imports
+
+- **Observed (2026-09-01, M9):** the first production-control route test failed before exercising a
+  run because the readiness helper referenced a nonexistent nested `readiness_axis`; a subsequent
+  request-identity path lacked the `uuid` import. These were source-only failures in a temporary
+  `TestClient`; no local service, WSL, USB, relay, endpoint, or installed application changed state.
+- **Definitive cause:** new route code reused the semantic idea of legacy readiness and command
+  identity without resolving the exact local helper scope and import closure.
+- **Correction:** readiness uses the route-local `axis` constructor and `uuid` is an explicit module
+  import. Production API tests now cover readiness, missing identity, one start, pure GET, typed run
+  projection, support checkpoint, legacy/debug 404s, Stop, and verified terminal cleanup.
+- **Never repeat:** exercise the packaged route table through its actual application factory before
+  calling an API cutover complete. Tests must import a fresh module, enter lifespan, call every new
+  helper path, and prove retired routes are absent; static inspection cannot prove closure.
+
+### MTA-QA-010 — Cleanup uncertainty was initially hidden by a successful context-manager expectation
+
+- **Observed (2026-09-01, M8):** restart-recovery tests intentionally created an unresolved cleanup
+  guard, but their initial context-manager structure implicitly expected `close()` to succeed. The
+  corrected service properly raised `SERVICE_CLEANUP_TIMEOUT`, so the test shape—not cleanup—was
+  wrong. The tests use temporary state and fake runners; no real process, WSL, USB, relay, or endpoint
+  was touched.
+- **Definitive cause:** convenience teardown semantics conflicted with the fail-closed service
+  contract that shutdown cannot report success while cleanup remains unproven.
+- **Correction:** uncertainty tests own the service explicitly and assert the stable shutdown error.
+  Verified-cleanup tests continue to use the normal context-manager path.
+- **Never repeat:** tests for cleanup uncertainty must assert the expected teardown failure and retain
+  recovery state. Never weaken production `close()` merely to make generic test cleanup silent.
+
+### MTA-APP-013 — Application shutdown bypassed caller command identity
+
+- **Observed (2026-09-01, M8/M9 audit):** Stop, End, Leave, Close, Retry, and checkpoint continuation
+  required UUID command identity plus exact run revision, but `/api/v1/app/shutdown` directly called
+  service cleanup without validating the caller's run/revision. It still used the correct cleanup
+  owner, so no duplicate process or USB owner was observed; the defect was found by source audit
+  before installed or hardware execution.
+- **Definitive cause:** shutdown was treated as process-lifetime plumbing rather than a state mutation
+  in the same command contract.
+- **Correction:** `ConnectionRunService.shutdown` is serialized and identity-bound. The Desktop reads
+  the current readiness run/revision and sends command, revision, and optional run headers before the
+  backend performs bounded service-owned cleanup. Stale shutdown identity has an automated rejection
+  test; a verified shutdown closes the runner once.
+- **Never repeat:** every path that can cancel work, advance a gate, release authority, stop a process,
+  or change hardware ownership is a mutation. It must enter the one command queue with idempotency and
+  revision identity, including app/window/OS shutdown.
+
+### MTA-APP-014 — Endpoint heartbeat churned public revision without changing state
+
+- **Observed (2026-09-01, M8 audit):** each two-second endpoint heartbeat updated the watchdog clock
+  correctly but was also queued as a generic public event. The generic handler incremented and
+  persisted the run revision even though no projected field changed. No physical run was performed;
+  source inspection and fake-runner tests found the issue.
+- **Risk:** an otherwise valid UI command could become stale between its status read and submission,
+  and the state file would receive unnecessary writes for the lifetime of every connection.
+- **Definitive cause:** liveness evidence and authoritative state transition publication shared one
+  callback even though they have different revision semantics.
+- **Correction:** heartbeat now updates only the identity-bound monotonic watchdog timestamp. Endpoint
+  event evidence remains in the bounded worker stream. A regression sends ten heartbeats inside a
+  stable run and proves the complete public snapshot and revision remain unchanged.
+- **Never repeat:** revisions represent user-visible authoritative state transitions, not telemetry.
+  Heartbeats, counters, and packet-free diagnostic events use bounded evidence sinks and monotonic
+  supervision without invalidating commands.
+
+### MTA-APP-015 — Production state did not receive passed A/B/C/D gates
+
+- **Observed (2026-09-01, M8 audit):** the shared endpoint and distributed lifecycle advanced their
+  gates correctly, but only qualification console status received those events. The production
+  projection could therefore remain at an older preflight/checkpoint gate, weakening UI progress and
+  the service-level failure summary even when the executor report was accurate.
+- **Definitive cause:** the neutral lifecycle adapter implemented commands and checkpoints but omitted
+  the one-way passed-gate event sink needed by the product projection.
+- **Correction:** the shared lifecycle emits only already-passed P0/A/B/C/D gates through an optional
+  `gate_passed` sink. The production adapter maps them to `current_gate` and `last_passed_gate`; legacy
+  qualification controls ignore the optional sink. No gate order or low-level A/B/C/D implementation
+  changed. Focused shared-lifecycle regressions and a production projection test pass.
+- **Never repeat:** a new adapter must have an explicit matrix for commands, checkpoints, passed gates,
+  failures, heartbeats, and cleanup—not just start/stop. Product UI and summaries consume factual
+  state transitions, never parse qualification console text.
+
+### MTA-APP-016 — Support export omitted bounded endpoint and D-stage evidence files
+
+- **Observed (2026-09-01, M9 audit):** the Desktop export included JSONL component logs, stderr, final
+  reports, and WSL snapshots, but its strict allowlist omitted the bounded endpoint control stream
+  `worker-events.ndjson` plus `*-stage.json` and local D release/control reports. Export still
+  succeeded, which could have hidden the evidence gap until a field failure.
+- **Definitive cause:** the allowlist was designed from desired categories rather than checked against
+  the exact filenames produced by the admitted executor and D owners.
+- **Correction:** the allowlist now explicitly includes the bounded/sanitized worker event stream,
+  stage reports, D5 control report, and D local-release report. Private endpoint config, credentials,
+  recovery secrets, raw captures, and non-allowlisted files remain excluded. The non-ASCII Desktop
+  self-test creates nested representative files, confirms their ZIP presence, and proves nested
+  credentials are redacted.
+- **Never repeat:** derive an export allowlist from an enumerated producer-to-file ledger and test one
+  representative from every P0/A/B/C/D and startup category. “ZIP created” is not evidence that the
+  diagnostic set is complete.
+
+### MTA-APP-017 — The GUI labeled every cancellation as End and disabled Stop during preparation
+
+- **Observed (2026-09-01, M9 audit):** the Trade Room button always displayed “End connection” and
+  always called `/session/stop`. Because `Starting` was also classified as a pending UI mutation, the
+  button was disabled precisely while the user needed to cancel preparation. The backend already had
+  separate Stop and End commands; no physical run was used to find this projection defect.
+- **Definitive cause:** legacy GUI state names were reused without an explicit action matrix for the
+  new production phases. The first correction also changed state to `Ending` before remembering
+  whether it had been active; the Desktop self-test caught that active End still selected Stop.
+- **Correction:** passed `C_RFU_ACTIVE` or `C_TRADE_COMPLETE` makes the GUI factually active. Preparing,
+  checkpoint, and recoverable-failure states expose Stop; active state exposes End. The coordinator
+  captures the pre-transition state before displaying `Ending`. Active Leave/Close goes directly
+  through service-owned D and authority finalization; preparation first Stops, then releases retained
+  room authority. Verified `room_closed`/`member_left` evidence clears the service projection only
+  after distributed cleanup.
+- **Never repeat:** define and test the complete UI-action matrix from authoritative phase and gate:
+  created/preflight/awaiting-user -> Stop, RFU-active -> End, active owner/member -> Close/Leave,
+  cleaning -> no mutation, terminal verified -> Retry plus retained-authority action. Button text,
+  enablement, route, and cleanup wait must be asserted together.
+
+### MTA-APP-018 — Readiness GET performed a blocking relay probe
+
+- **Observed (2026-09-01, M9 audit):** the first local readiness request synchronously called a relay
+  client with a five-second timeout, while Desktop startup allowed one second for the entire local
+  response. A slow relay could therefore make a healthy installed service appear not to have started;
+  repeated GETs also initiated external work.
+- **Definitive cause:** relay reachability caching was placed inside the HTTP handler rather than owned
+  by application lifespan.
+- **Correction:** one lifespan-owned `RelayReadinessMonitor` probes with a bounded client and keeps an
+  in-memory `unknown/ready/failed` snapshot. GET only reads that snapshot, returning `checking` until
+  the first result. A regression reads the snapshot twenty times and proves no additional probe.
+- **Never repeat:** local startup readiness must be fast and factual even when every external service
+  is slow or down. External probes run under a separately supervised lifecycle; GET handlers never
+  create rooms, launch processes, acquire USB, retry, recover, heartbeat, or initiate health work.
+
+### MTA-APP-019 — Desktop compatibility and About text retained `0.2.x` assumptions
+
+- **Observed (2026-09-01, M9 audit):** `ControlApiClient` still rejected any product version outside
+  the hard-coded `0.2.` prefix, the recovery detail said `0.2.x`, and Settings displayed the stale
+  literal `0.2.2 beta.1`. This would break the planned `0.3.0-beta.1` cutover despite exact release ID
+  and contract identity matching.
+- **Definitive cause:** historical UI compatibility scaffolding survived the release-identity rewrite.
+- **Correction:** compatibility now requires the exact installed release ID, exact local contract,
+  backend compatible flag, and a nonempty product version—no product-series prefix. About reads the
+  assembly version and mismatch text describes exact release identity.
+- **Never repeat:** never use display or semver prefix strings as installed runtime authority. Package
+  manifest, active runtime, backend, and Desktop must compare immutable release/contract identities;
+  version text is derived from build metadata.
+
+### MTA-QA-011 — WPF's required instance binding triggered the warning-as-error analyzer
+
+- **Observed (2026-09-01, M9):** after replacing the stale About literal with an assembly-derived
+  view-model property, Release build failed only with CA1822 because the property did not otherwise
+  access instance data. Python tests had already passed; no app, WSL, USB, relay, or installer state
+  changed.
+- **Definitive cause:** the binding requirement and the repository's warning-as-error analyzer policy
+  were not handled together in the first edit.
+- **Correction:** the property remains an instance member for WPF binding and carries a narrow
+  justification-specific suppression. Release build then passed with zero warnings and errors, and
+  both Desktop self-tests exited 0.
+- **Never repeat:** when a framework requires an instance member that a performance analyzer wants
+  static, add the smallest documented suppression at the member and verify the actual Release build;
+  do not weaken analyzer policy globally.
+
+### MTA-QA-012 — The checkpoint-Stop endpoint regression used an incomplete config fixture
+
+- **Observed (2026-09-01, M8 dry-run):** the first new endpoint-level Stop regression failed before
+  reaching its checkpoint because its mocked configuration omitted `relay_url`, `room_code`, and
+  `member_token`. No hosted relay request, WSL process, USB action, endpoint process, or Switch action
+  occurred.
+- **Definitive cause:** the test replaced config-file validation but supplied only the fields directly
+  relevant to D, while the unmodified endpoint constructor correctly consumed the complete validated
+  configuration.
+- **Correction:** the fixture now supplies the full endpoint construction boundary while mocking only
+  external transport and stage behavior. Production validation was not weakened.
+- **Never repeat:** a test that bypasses one contract parser must still use a complete value already
+  accepted by that parser. Build fixtures from the contract-required field set, then vary only the
+  field under test.
+
+### MTA-APP-020 — Stop at a physical checkpoint was parsed only as Continue
+
+- **Observed (2026-09-01, M8 dry-run preflight):** source inspection before any relay room, USB
+  attachment, endpoint launch, or Switch action found that `CREATE_SWITCH_ROOM` and
+  `JOIN_SWITCH_GROUP` waits accepted only `continue_checkpoint`. The service correctly sends an
+  identity-bound `closing_intent` when Stop is requested, but the endpoint would reject that valid D
+  command as a stale Continue command, enter its generic failure path, and then wait for a second
+  closing intent that the single-send parent correctly never emits.
+- **Definitive cause:** the endpoint had two command parsers—one for physical checkpoints and one for
+  the active bridge—and the checkpoint parser did not share the normal D transition.
+- **Correction:** a checkpoint now validates `closing_intent` through the existing D command validator
+  and carries it directly to the one endpoint `finally` owner. It emits no synthetic functional
+  failure and proceeds through the same `EndpointDStage` used after an active connection. Continue
+  remains exactly run/checkpoint-bound.
+- **Never repeat:** every blocking user checkpoint must accept both its exact Continue transition and
+  the one identity-bound terminal transition. Test Stop at each checkpoint and require one D intent,
+  one endpoint report, preserved functional outcome, and verified cleanup before installed dry-run or
+  physical qualification.
+
+### MTA-APP-021 — Production adapter classified checkpoint Stop as a functional failure
+
+- **Observed (2026-09-01, M8 dry-run audit):** after correcting the endpoint command boundary, the
+  composed service trace showed that `RunControl.await_user` raises the stable
+  `CONNECTION_CANCELED` result for Stop, but `ProductionControlAdapter` forwarded that service error
+  into `DistributedLifecycle.drive`. Its generic error branch would begin D with outcome `failed`
+  instead of the requested `canceled`. No relay room, WSL process, USB action, endpoint, or Switch was
+  started while finding this source defect.
+- **Definitive cause:** role-wait cancellation already translated the service error into
+  `DistributedCanceled`, but the later physical-checkpoint adapter omitted the same semantic mapping.
+- **Correction:** the production checkpoint adapter translates only the exact
+  `CONNECTION_CANCELED` code into `DistributedCanceled`; timeout, stale identity, and other failures
+  remain failures. The endpoint then receives one canceled D intent through the corrected path.
+- **Never repeat:** every adapter between state machines needs an explicit outcome matrix, not merely
+  matching method names. Test success, user cancellation, timeout, stale identity, and cleanup
+  separately at each blocking boundary.
+
 ## 11. Required preflight checklists
 
 ### Any code or documentation change
@@ -1242,12 +1767,15 @@ Full trade, save, menu return, and graceful exit remain separate physical eviden
 
 The following remain open even though source corrections or workarounds allowed safe recovery:
 
-1. Qualify the explicit-Windows-cwd probes and identity-bound control/cancellation path from a new
-   installed immutable build on both PCs (`MTA-M7-005`, `MTA-M7-006`, `MTA-M7-008`, `MTA-M7-009`).
-2. Build and validate the new release's separate M7 qualification kit. Packaging support now emits
-   one independently hashable launcher/interpreter/dependency/source closure; this item closes only
-   after that exact kit passes `verify` on both PCs (`MTA-M7-007`).
-3. Complete the installed two-PC/two-Switch M7 qualification only after the first two are closed.
+1. Qualify the now-implemented deterministic M8 production wrapper through its packaged entry point:
+   explicit WSL cwd, identity-bound control, cancellation, one launch, interruption, startup recovery,
+   and verified cleanup must all pass without invoking the qualification harness as product runtime
+   (`MTA-M7-005` through `MTA-M7-015`).
+2. Qualify the now-implemented M9 application-session logging and Desktop exporter in an installed
+   backend-dead/startup-failure scenario. The exporter remains read-only and cannot launch, retry,
+   recover, or clean a connection.
+3. Complete the installed two-PC/two-Switch M10 qualification through the normal packaged GUI and
+   production wrapper, not a repository CLI or retired Debug menu.
 5. Investigate credentialless `waiting_for_complementary_role` rooms by ordered event history without
    breaking reconnect grace (`MTA-RELAY-006`).
 6. Continue the critical and post-release work in `FUTURE_TODO.md`; this document prevents recurrence
@@ -1280,8 +1808,8 @@ Use these sources to audit or extend an entry without relying on conversation me
 - [Known Issues](KNOWN_ISSUES.md): field-observed STB defects and physical acceptance boundaries.
 - [Full-stack Audit](AUDIT_REPORT.md) and [Audit Validation](AUDIT_VALIDATION.md): P0/P1 registers,
   cross-layer corrections, regression evidence, and unproven external gates.
-- [Production Debug Menu Design](79-production-debug-menu-design-20260828.md): diagnostic intent and
-  limitations.
+- [Production Debug Menu Design](79-production-debug-menu-design-20260828.md): superseded historical
+  diagnostic intent and limitations; it is not a current product requirement.
 - [ABC+D Architecture](80-abc-connection-architecture-20260829.md): normative ordered components and
   readiness/cleanup gates.
 - [Rewrite Plan](81-abcd-orchestration-rewrite-plan-20260829.md) and milestone records
@@ -1296,6 +1824,11 @@ Use these sources to audit or extend an entry without relying on conversation me
 - [M7 Physical Harness](91-abcd-milestone-7-physical-harness-20260830.md) and
   [M7 Safe Pairing/Recovery Correction](92-m7-safe-pairing-and-recovery-fix-20260830.md): distributed
   test contract, rejected runs, definitive causes, and current physical boundary.
+- [Single-PC Dual-Adapter Switchless C+D Suite](93-single-pc-dual-adapter-switchless-cd-suite-20260831.md):
+  focused remaining C+D qualification scope, exact dual-radio ownership, exclusions, fault matrix,
+  and claim boundary.
+- [Production Wrapper and Beta Cutover](94-production-wrapper-beta-cutover-20260831.md): current
+  one-radio, no-AI runtime decision; M8-M10 mini plan; support-log export and beta acceptance boundary.
 - [Future TODO](FUTURE_TODO.md): current implementation and qualification debt.
 - Installer [issue register](installer/ISSUE_REGISTER-20260827-installer-engine.md),
   [error catalog](installer/ERROR_CATALOG-20260827.md), and

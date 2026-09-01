@@ -12,7 +12,7 @@
     "architecture": { "const": "x64" },
     "minimum_windows_build": { "type": "integer", "minimum": 19045 },
     "minimum_wsl_version": { "type": "string" },
-    "control_contract": { "const": "app-readiness.v1" },
+    "control_contract": { "const": "local-app-readiness.v2" },
     "relay_url": { "type": "string", "pattern": "^https://" },
     "runtime_content_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "kernel": {

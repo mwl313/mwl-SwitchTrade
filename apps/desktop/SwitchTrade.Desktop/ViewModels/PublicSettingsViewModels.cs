@@ -21,17 +21,21 @@ public sealed class SettingsScreenViewModel : ScreenViewModel
     public SettingsScreenViewModel(MainViewModel shell) : base(shell)
     {
         RecheckCommand = new AsyncCommand(LoadAsync);
-        SupportCommand = new AsyncCommand(CreateSupportAsync, () => IsServiceReady);
+        SupportCommand = new AsyncCommand(CreateSupportAsync);
         DiagnosticCommand = new AsyncCommand(
             RunDiagnosticsAsync, () => IsServiceReady && SelectedAdapter is not null);
         SelectDeviceCommand = new AsyncCommand(
             SelectDeviceAsync, () => IsServiceReady && SelectedDevice?.IsSelectable == true);
         CopySupportPathCommand = new RelayCommand(
             () => Shell.Copy(SupportFilePath, "Support file location copied"), () => HasSupportFile);
-        OpenDiagnosticsCommand = new RelayCommand(Shell.OpenProductionDiagnostics, () => IsServiceReady);
     }
 
     public override string Title => "Settings";
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Performance", "CA1822:Mark members as static",
+        Justification = "WPF binds this display value through the Settings view-model instance.")]
+    public string ProductVersion =>
+        $"SwitchTrade {typeof(SettingsScreenViewModel).Assembly.GetName().Version?.ToString() ?? "unknown"}";
     public IReadOnlyList<SelectionOption<SettingsSection>> Sections { get; } =
     [
         new(SettingsSection.Connection, "Connection"),
@@ -96,7 +100,6 @@ public sealed class SettingsScreenViewModel : ScreenViewModel
     public AsyncCommand DiagnosticCommand { get; }
     public AsyncCommand SelectDeviceCommand { get; }
     public RelayCommand CopySupportPathCommand { get; }
-    public RelayCommand OpenDiagnosticsCommand { get; }
 
     public override Task OnNavigatedToAsync() => LoadAsync();
 
@@ -173,7 +176,7 @@ public sealed class SettingsScreenViewModel : ScreenViewModel
     {
         try
         {
-            SupportFilePath = await Shell.Gateway.CreateSupportBundleAsync();
+            SupportFilePath = await Shell.ExportSupportLogsAsync();
             StatusMessage = "Support file saved to your Desktop.";
             Shell.Announce(StatusMessage);
         }
@@ -186,6 +189,5 @@ public sealed class SettingsScreenViewModel : ScreenViewModel
         SupportCommand.RaiseCanExecuteChanged();
         DiagnosticCommand.RaiseCanExecuteChanged();
         SelectDeviceCommand.RaiseCanExecuteChanged();
-        OpenDiagnosticsCommand.RaiseCanExecuteChanged();
     }
 }

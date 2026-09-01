@@ -30,15 +30,16 @@ Execution status:
   [`82-abcd-milestone-0-baseline-20260829.md`](82-abcd-milestone-0-baseline-20260829.md).
 - Milestone 1 passed in `b7c5c9a`; see
   [`83-abcd-milestone-1-coordinator-20260829.md`](83-abcd-milestone-1-coordinator-20260829.md).
-- Milestone 2 passed its PC A cold installed-runtime gate; PC B remains qualification debt.
-- Milestone 3 passed A0-A9 on PC A in immutable runtime `abcd-m3-80c4e13`; PC B remains the formal
-  exit-gate debt. The owner directed the project to proceed to Milestone 4 without representing that
-  debt as closed.
+- Milestone 2 passed cold installed-runtime qualification on PC A; the later returned PC B P0
+  evidence was reviewed and accepted with verified cleanup.
+- Milestone 3 passed A0-A9 on PC A in immutable runtime `abcd-m3-80c4e13`; the later returned PC B
+  Direct A evidence was also reviewed and accepted.
 - Milestone 4 is source-complete at `9635a1f`. Immutable PC A runtime `abcd-m4-9635a1f` passed
   installation, integrity, dependency, kernel, contract, CLI, residue, and detached-USB smoke. Final
   PC A physical run `12e6a535-4770-47ae-9fb3-8d06915af053` passed B2-B10, returned
   `B_CONTROL_READY`, reached `factory_released`, and verified LDN/radio/endpoint/USB cleanup without
-  residue. PC A Direct B qualification debt is closed; PC B remains the formal exit-gate debt.
+  residue. The later returned PC B Direct B evidence was reviewed and accepted with matching runtime
+  integrity and verified cleanup, closing the standalone local-B debt.
 - Milestone 5 source checkpoint `162f779` added P0/launch-bound `rfu-tunnel.v2`, strict contiguous
   ordering, reconnect nonce re-proof, exact advertisement-hash delivery, and factual C0/C1 stages.
   Local validation and the deployed HTTPS/WSS role, ordering, reconnect, restart, failure, and
@@ -54,6 +55,15 @@ Execution status:
   reversed-role, delayed-side, single-worker, and private zero-orphan checks, so the M6
   software/deployed exit gate was accepted on 2026-08-30. See
   [`89-abcd-milestone-6-c2-20260830.md`](89-abcd-milestone-6-c2-20260830.md).
+- Milestone 7's distributed authority, endpoint shutdown, measured local release, restart recovery,
+  and GUI-independent physical runner are source-complete. Software, real-process, hosted-relay, and
+  fault-injection paths pass; final simultaneous two-PC/two-Switch evidence remains open.
+- The focused one-PC/two-adapter C+D campaign passed Q0-Q5 and the user-approved 10/10 Q6 run with
+  no residual radio, process, room, credential, or recovery ownership. That campaign is closed and is
+  not a production dual-radio requirement.
+- On 2026-08-31 the owner ended qualification-only development and directed the project to the
+  deterministic production wrapper, minimal GUI, and support-log export plan in
+  [`94-production-wrapper-beta-cutover-20260831.md`](94-production-wrapper-beta-cutover-20260831.md).
 
 ## 2. Architecture and interface decisions
 
@@ -68,10 +78,13 @@ Execution status:
 - Serialize start, continue, cancel, endpoint events, timeouts, recovery, and shutdown through the
   coordinator. GET requests read immutable snapshots and never launch, retry, recover, or mutate.
 - Preserve current HTTP route paths. Introduce `connection-run.v1`, `room-control.v2`,
-  `rfu-tunnel.v2`, `app-readiness.v2`, and `production-diagnostic.v2`. Store their canonical shapes
-  in versioned JSON schemas and validate Python models and C# DTOs against them.
+  `rfu-tunnel.v2`, and `app-readiness.v2`. Store their canonical shapes in versioned JSON schemas
+  and validate Python models and C# DTOs against them. A production diagnostic/debug-menu contract is
+  no longer required.
 - Restrict the production ABC+D path to the qualified RTL8192EU `0bda:818b`. Experimental adapters
   remain available only to standalone hardware diagnostics.
+- Production owns one selected adapter per PC. Concurrent two-adapter ownership remains an isolated
+  qualification tool and is not exposed through the application.
 - Reserve `0.3.0-beta.1`, with MSI/bundle version `0.3.0`, for the first packaged ABC+D release.
   Preserve existing MSI and bundle UpgradeCodes.
 - Treat Unicode paths, non-English Windows locales, and mixed native output encodings as release
@@ -138,8 +151,8 @@ restores prior ownership.
 
 > Status (2026-08-29): implemented and regression-tested. PC A immutable installed-runtime run
 > `88f8e357-2e8c-4981-ad87-4cfaa1f93c31` passed A0-A9 with verified cleanup. The owner explicitly
-> accepted PC A's verified cold P0 as sufficient to begin this milestone. PC B P0 and direct A remain
-> qualification debt and are not represented as passed.
+> accepted PC A's verified cold P0 as sufficient to begin this milestone. The later returned PC B P0
+> and Direct A evidence was reviewed and accepted with verified cleanup on 2026-08-30.
 
 - Build a new A stage owner around admitted LDN station mechanics rather than reusing the current
   `LiveTransport` lifecycle wholesale.
@@ -211,67 +224,92 @@ Exit gate: success, Stop, room close, peer loss, endpoint hang, app/control/rela
 injection at every D gate preserve outcome and ownership. The complete C software harness passes C0-C2
 and distributed D.
 
-### Milestone 8 — Production diagnostics migration
+### Milestone 8 — Deterministic headless production wrapper
 
-- Keep the automated, guided A, guided B, and recommended actions and the existing start/read/continue/
-  cancel route operations, but make them request stages from the production coordinator.
-- One suite owns one adapter lease; every sub-attempt receives fresh room, credentials, attempt,
-  nonce, generation, endpoint, and verified sub-cleanup while the radio remains attached.
-- Preserve explicit Start, Continue, Retry, Cancel, and Finish commands. Reports record last passed
-  gate, first failure, functional and cleanup results, bounded timing/logs, hashes, and source-redacted
-  evidence.
-- Automated diagnostics prove no physical A/B; guided A reports its last A gate; guided B reports at
-  most B8 unless B9/B10 pass; a one-PC suite never claims bridge, RFU, trade, or two-PC D qualification.
+> Source status (2026-09-01): implementation and the Switchless source dry-run are accepted to begin
+> the minimal-GUI rework. Production API/service cancellation and recovery regressions, 588 complete
+> source regressions, and hosted-relay C+D normal/worker-death runs pass with verified cleanup and no
+> AI runtime. This is not formal installed M8 closure: the exact immutable packaged normal entry point
+> and startup-interruption recovery still require qualification.
 
-Exit gate: all actions run once on each PC, reports validate against `production-diagnostic.v2`, UI
-states are factual, and no private room, credential, endpoint, lock, or radio residue remains.
+- Extract the generic, already-qualified connection lifecycle from the distributed harness into one
+  neutral connection-run service. The qualification CLI becomes a thin adapter; the product never
+  launches a harness as its runtime and never gains a second ABC+D implementation.
+- Bind the service to the serialized coordinator, one selected-adapter P0 owner, distributed endpoint,
+  relay client, and D recovery owners. Production does not expose concurrent dual-adapter operation.
+- Route Connect, Stop, End, Leave, Close, Retry, shutdown, and startup recovery through the service.
+  Every transition is deterministic and persisted; no LLM, console prompt, or operator-authored
+  recovery command exists in the shipped runtime.
+- Supervise one identity-bound WSL wrapper/endpoint launch, backend-owned bounded output, heartbeats,
+  monotonic deadlines, first-cause preservation, and fail-closed cleanup. GET/status stays immutable.
+- Keep HTTP paths stable and use typed local DTOs. The existing relay `app-readiness.v2` and internal
+  coordinator `connection-run.v1` names are already occupied, so the Desktop contracts are
+  `local-app-readiness.v2` and `production-connection-run.v1`; compare exact release/payload
+  contracts instead of hard-coded `0.2.*` assumptions.
 
-### Milestone 9 — Normal application and production relay cutover
+Exit gate: the headless product entry point—not the repository harness—passes one normal side against
+a bounded test-controlled complementary peer, plus expected failure, cancellation, control
+interruption, and restart recovery with one launch, pure polling, and verified cleanup. Additional
+repetition testing is deferred until this gate.
 
-- Route normal Connect, Stop, End, Leave, Close, Retry, recovery, and shutdown through the coordinator.
-  Keep HTTP paths stable and update typed desktop DTOs to v2.
-- Remove hard-coded `0.2.*` compatibility assumptions and compare exact release and payload hashes.
-- Prove no desktop, diagnostic, API, retry, recovery, import, or shutdown path reaches legacy
-  orchestration before deleting it. Do not ship a fallback flag.
-- Deploy the exact validation-relay artifact/hash to production for a coordinated v2 cutover and
-  retain matching relay/application rollback artifacts. The shipped UI has no relay selector.
-- Rerun production capability, persistence, restart, late-peer, C0/D, and guided checks against the
-  production hostname.
+### Milestone 9 — Minimal GUI, support export, and atomic cutover
 
-Exit gate: normal and diagnostic traffic use the same coordinator and production path; polling is
-pure; launch count is one; errors remain factual; no legacy path is reachable.
+> Source status (2026-09-01): application-session logging, bounded/redacted backend-independent
+> Desktop export, typed WPF projection, physical checkpoints, and production-route cutover are
+> implemented and pass local builds/self-tests. The current screen is only a replaceable adapter;
+> minimal GUI flow rework is now the next implementation stage. Live WPF-to-control and installed
+> failure-export qualification remain open, so M9 is not yet closed.
 
-### Milestone 10 — Qualification and release
+- Connect a small desktop UI to the typed connection-run service for create/join, factual progress,
+  Stop/End/Leave/Close/Retry, recovery guidance, Settings, and **Export support logs**.
+- Keep USB, relay, timeout, retry, cleanup, and diagnostic decisions out of the GUI. It presents the
+  service state and normal physical Switch instructions only.
+- Create an application-session identity before local-service launch and retain bounded structured
+  launcher, runtime, wrapper, endpoint, A/B/C/D, relay-result, shutdown, and recovery evidence.
+- Export one atomic redacted ZIP to the Windows Desktop. Export must work when the local service or WSL
+  endpoint never became ready and must exclude credentials, keys, passcodes, packets, MAC addresses,
+  exact adapter identities, and trainer/Pokémon data.
+- Make the legacy endpoint/orchestration and retired Debug menu unreachable, then delete them only
+  after import, API, launch, shutdown, recovery, and support-export tests prove exclusive cutover.
+- Deploy the exact accepted relay artifact/manifest for the coordinated v2 production path; ship no
+  relay selector or legacy fallback.
 
-Run P0 cold boot, direct A, direct B, production-relay C harness, one-PC guided diagnostics, the
-two-PC/two-Switch test, and only then repetition and packaging.
+Exit gate: one user action creates one product run, polling is pure, terminal evidence is exportable
+from the UI even after early startup failure, errors remain factual, and no legacy/debug-only path is
+reachable.
 
-- Run 30 consecutive automated suites on each PC.
-- Run three consecutive guided A and three guided B tests on each PC.
-- Cover cancellation during attach, scan, join, AP wait, bridge wait, and cleanup plus app/control/
-  relay restart and recovery.
-- Complete two physical trades with PC roles reversed, including room entry, RFU, trade, bilateral
-  save, stable return, native close, and distributed D, plus one cancel-and-retry cycle.
-- Require zero duplicate launches, orphan PIDs, stale interfaces/PHYs, unintended USB ownership,
-  unresolved rooms/recovery records/locks, or false diagnostic qualification.
-- Repeat the installed lifecycle and P0/A/B/D checks with non-ASCII user/profile paths and supported
-  English/Korean Windows locales; verify native UTF-8/UTF-16LE output and support files round-trip.
-- Build `0.3.0-beta.1` only after those gates. Verify source/package hashes, clean install, upgrade from
-  `0.2.6-beta.2`, Repair, uninstall, reinstall, and coordinated rollback on clean Windows 10 22H2 and
-  Windows 11. Repair must not reinstall healthy WSL or usbipd components.
+### Milestone 10 — Immutable package and production-beta acceptance
+
+- Build `0.3.0-beta.1` from the accepted M8/M9 source. Verify application, MSI/bundle, runtime, relay,
+  kernel/module/firmware, dependency, schema, and payload identities plus preserved UpgradeCodes.
+- Verify install, upgrade, Repair, reboot continuation, cold launch, normal close/relaunch, support
+  export, uninstall, reinstall, and rollback on the two beta PCs, including non-ASCII user paths and
+  supported English/Korean Windows output boundaries.
+- Run one packaged Direct A and Direct B smoke to catch packaging/runtime drift, then two nearby
+  two-PC/two-Switch trades with roles reversed through the normal application. Finish with the
+  separated-distance case and one cancel/recover path.
+- Require real `C_TRADE_COMPLETE`, bilateral save/stable return/native close, D11 on both PCs, and zero
+  duplicate launches, orphan PIDs, stale interfaces/PHYs, unintended USB ownership, rooms,
+  credentials, recovery records, or locks.
+
+Exit gate: the exact installed GUI and production wrapper—not a Debug menu or repository CLI—pass the
+physical sequence and export a valid redacted support archive. M8+M9 is a code-complete beta candidate;
+only this M10 gate makes it a production beta.
 
 ## 4. Critical TODO closure mapping
 
 | Critical blocker | Implemented in | Closed only after |
 | --- | --- | --- |
 | Missing WSL LDN prerequisites | M2 | Cold A and B pass on both PCs |
-| Relay ordering and false diagnostics | M5, M8, M9 | Production late-peer and truthful-report tests |
+| Relay ordering and truthful product state | M5, M8, M9 | Production late-peer and factual UI/log projection tests |
 | Missing A_READY/B_READY barrier | M6 | Physical two-PC activation agreement |
 | Missing distributed D | M7 | Two-sided physical cleanup and recovery tests |
 | Launch storm/false startup | M1, M9 | Packaged proof on both PCs |
 | Hot driver-probe race | M2 | Cold installed proof on both PCs |
-| Production diagnostics qualification | M8 | Final 30-run and guided qualification |
+| Deterministic production wrapping | M8 | Headless normal-product lifecycle, interruption, and recovery |
+| Support evidence without Debug menu | M9 | Startup-failure-capable redacted Desktop export |
 
 After each milestone, update the architecture document, definitive TODO, and README only with evidence
-actually obtained. Do not begin a later milestone or build an installer until the current exit gate is
-reviewed and accepted.
+actually obtained. The final simultaneous physical test intentionally occurs after M8/M9 so it
+qualifies the product path users will run. Do not build the beta installer until the M8/M9 exit gates
+are reviewed and accepted.

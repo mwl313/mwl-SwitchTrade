@@ -11,6 +11,6 @@
     "active_runtime": { "type": "string", "pattern": "^SwitchTrade-beta-[A-Za-z0-9._-]+$" },
     "previous_runtime": { "type": ["string", "null"] },
     "kernel_release": { "type": "string", "minLength": 1 },
-    "control_contract": { "type": "string", "const": "app-readiness.v1" }
+    "control_contract": { "type": "string", "const": "local-app-readiness.v2" }
   }
 }

@@ -88,6 +88,22 @@ that redirected Windows-native output is UTF-8. In particular:
 An encoding, locale, or path-conversion failure is its own factual gate failure. It must not be
 reported as a radio, relay, room, or cleanup failure.
 
+### 1.3 Production wrapper and observability decision
+
+The 2026-08-31 product decision is recorded in
+[`94-production-wrapper-beta-cutover-20260831.md`](94-production-wrapper-beta-cutover-20260831.md):
+
+- production owns one selected radio per PC; simultaneous dual-radio ownership is qualification-only;
+- the runtime has no AI/agent dependency and encodes all lifecycle decisions in one deterministic,
+  persisted connection-run service;
+- the previous production Debug menu is retired as a requirement;
+- qualification CLIs remain thin adapters over shared production components and cannot become a
+  second product stack;
+- the only product diagnosis feature required for beta is a bounded, redacted Desktop support archive
+  containing evidence accumulated from application startup, including pre-service failures.
+
+This changes the post-core delivery milestones, not the P0/A/B/C/D gates or evidence definitions.
+
 ## 2. Readiness rule
 
 Every stage has three different concepts:
@@ -107,8 +123,8 @@ No lower result may be promoted to a higher one. In particular:
 
 ## 3. P0 — Common preflight and ownership
 
-P0 must be one shared production path used by normal rooms and diagnostics. It must not be duplicated
-inside the debug menu.
+P0 is one shared production path used by normal rooms. Qualification tools may call that same path,
+but neither a Debug menu nor a test harness may duplicate it.
 
 ### 3.1 P0a — passive validation before radio ownership
 
@@ -398,7 +414,7 @@ Each responsibility must have exactly one owner:
 | `TunnelClient` | C authority-bound, identity-bound, ordered and bounded envelope transport only. |
 | `TunnelSim` | Terminate local Pia/Reliable and forward exact Reliable application payloads; no game/trade state machine. |
 | `PassivePartyObserver` | Read-only progress/commit evidence. It never controls or mutates the trade. |
-| Production diagnostics | Request a normal stage and observe its checkpoints. It must not implement a second radio or relay stack. |
+| Support-log exporter | Collect bounded redacted files already emitted by product owners and atomically copy one archive to the Windows Desktop. It never launches, retries, diagnoses, mutates, or cleans a connection. |
 
 Retries are explicit new stage attempts after verified cleanup. GET polling never launches work. A
 timeout does not change ownership or invent a different failure classification.
@@ -433,22 +449,27 @@ These are required in every P0/A/B/C/D implementation rather than being a separa
    dependencies, kernel/modules/firmware, scripts, and version contracts. A source-only pass does not
    qualify an installer.
 
-### 9.1 Diagnostic truth table
+### 9.1 Qualification evidence truth table
 
-| Diagnostic | What it can prove | What it cannot prove |
+These tools remain engineering evidence. They are not product screens or beta requirements.
+
+| Qualification | What it can prove | What it cannot prove |
 | --- | --- | --- |
 | Automated local suite | P0 on one PC, wrapper launch identity, each role policy sequentially, real relay authentication/ordering, synthetic bidirectional nonce, and D cleanup. | A or B physical Switch behavior; simultaneous A/B; a trade. |
 | Guided room detection | The room-side PC can execute A through the last explicitly observed A gate against one Group Leader Switch. | B, simultaneous sustain, or an end-to-end trade. |
 | Guided AP association | The AP-side PC can execute B through `B_SWITCH_ASSOCIATED` (B8); only additional B9/B10 evidence may promote it to B_READY. | A, simultaneous sustain, or an end-to-end trade. |
 | Recommended one-PC suite | The three checks above sequentially with one attached radio and verified cleanup. | `C_BRIDGE_READY`, `C_RFU_ACTIVE`, or `C_TRADE_COMPLETE`. |
+| Single-PC dual-adapter C+D suite | Exact two-resource ownership plus hosted C0/C1/C2 and distributed D with synthetic A/B boundaries. | A/B physical behavior, independent PCs, or a trade. |
 | Two-PC/two-Switch test | Simultaneous A_READY/B_READY, C2, physical trade, and distributed D. | Nothing beyond the tested release, hardware profile, game/version/language matrix, and network conditions. |
 
-The debug menu is therefore a real Switch-to-computer connection checker for A and B. It is a
-prequalification tool, not a substitute for the final two-PC/two-Switch C/D test.
+The previous Debug menu proposal is historical and superseded. The product exposes normal connection
+controls plus support-log export; it does not expose these qualification modes.
 
-## 10. Requalification order
+## 10. Product completion order
 
-Do not rebuild another installer until the source and installed runtime pass in this order:
+The standalone P0, Direct A, Direct B, relay C, distributed D, and focused 10/10 Switchless C+D
+evidence are sufficient to stop qualification-only development and begin wrapping. Continue in this
+order:
 
 1. **P0 cold boot:** all required modules initially unloaded; one gate loads and verifies them, then
    releases the adapter cleanly.
@@ -458,47 +479,45 @@ Do not rebuild another installer until the source and installed runtime pass in 
 3. **Direct B harness:** one Switch searches; the installed WSL runtime passes B2–B10 from a
    release-owned known advertisement without desktop orchestration. Record this as local B evidence,
    not live A-to-B advertisement delivery.
-4. **C software harness:** two authenticated endpoints exchange ordered peer readiness, retained
-   advertisement, unpredictable nonces, A_READY/B_READY barriers, bounded pre-barrier traffic,
-   reconnect generations, terminal intent, two-sided quiescence, and cleanup through the real relay
-   without radios.
-5. **One-PC guided diagnostics:** run A and B sequentially through the production endpoint and debug
-   menu. A single radio cannot prove they remain alive simultaneously.
-6. **Two-PC/two-Switch test:** bind A_READY and B_READY through C, pass real bidirectional RFU traffic,
+4. **C+D software qualification:** two authenticated endpoints exchange ordered peer readiness,
+   retained advertisement, unpredictable nonces, A_READY/B_READY barriers, bounded pre-barrier
+   traffic, reconnect generations, terminal intent, two-sided quiescence, and cleanup through the
+   real relay. The focused campaign is closed at the user-approved 10/10 result.
+5. **Production wrapper and GUI:** make the one-radio deterministic connection-run service the only
+   normal application path, attach the minimal UI, and prove support-log export from application
+   startup. Do not package the dual-adapter harness as a product feature.
+6. **Immutable package smoke:** verify the exact installed normal application, then run one packaged
+   Direct A and Direct B smoke to catch runtime drift.
+7. **Two-PC/two-Switch test:** bind A_READY and B_READY through C, pass real bidirectional RFU traffic,
    complete the trade/save/stable-return/close lifecycle, and verify distributed D on both PCs.
-7. **Qualification:** 30 consecutive automated runs on each PC, plus repeated guided A/B,
-   cancellation, restart, and cleanup cases. Zero duplicate launches, stale interfaces, orphan rooms,
-   or unresolved ownership is permitted.
+8. **Production-beta acceptance:** run both nearby role assignments, the separated-distance case,
+   cancellation/recovery, installer lifecycle, and log export. Zero duplicate launches, stale
+   interfaces, orphan rooms, or unresolved ownership is permitted.
 
-Current evidence does not change this order. PC A final immutable Direct B run
-`12e6a535-4770-47ae-9fb3-8d06915af053` passed B2-B10 and verified full local cleanup; PC B remains
-physical qualification debt. Milestone 5 source checkpoint `162f779` and its deployed
-validation-relay matrix passed C0/C1 ordering, identity, nonce, advertisement, reconnect, restart,
-and zero-orphan gates. This does not claim A_READY/B_READY, RFU activation, distributed D,
-diagnostic/application migration, production cutover, or a trade.
+PC A final immutable Direct B run `12e6a535-4770-47ae-9fb3-8d06915af053` passed B2-B10 and verified
+full local cleanup. The later returned PC B P0, Direct A, and Direct B evidence was reviewed and
+accepted with verified cleanup. Milestone 5/6 and distributed-D software evidence plus the focused
+10/10 Switchless C+D campaign qualify the remaining non-physical core boundaries. None of this claims
+simultaneous physical `A_READY`/`B_READY`, real RFU activation, `C_TRADE_COMPLETE`, product cutover,
+or a trade; those remain the M8-M10 wrapper and final physical acceptance boundary.
 
 ## 11. Confirmed critical blockers
 
-1. **Missing WSL LDN prerequisite load:** the production wrapper does not load `ccm`, `cmac`, or
-   `tun`, and does not verify `/dev/net/tun`, although the proven standalone WSL path did. This causes
-   A6 `NL80211_CMD_NEW_KEY` `ENOENT` and would block the later TAP boundary.
-2. **Out-of-order retained relay frames:** fixed and admitted in the isolated `rfu-tunnel.v2` C0/C1
-   path after deployed late-peer, reconnect, restart, and failure-matrix validation. The legacy normal
-   application and production diagnostics still use rejected orchestration until M8/M9 migration, so
-   this blocker remains open at the product level and no v1 fallback may enter the new path.
-3. **A_READY/B_READY barrier not yet cut into the product:** source checkpoint `d2130fe` implements
-   the isolated C2 authority, current-epoch side-ready controls, bounded pre-barrier bridge, exact RFU,
-   loss invalidation, and reconnect re-proof. Its local real-process matrix passed. The legacy normal
-   application and production diagnostics still do not use it, and public-relay plus physical
-   two-PC/two-Switch validation remain open; AP-open therefore still must not be presented as product
-   `B_READY` or a completed bridge.
-4. **Missing distributed D barrier:** a local Stop terminates its endpoint/radio before publishing
-   authority cancellation, and the relay treats a WebSocket loss during non-terminal `closing` as
-   `relay.peer_lost`. There are no two-side `D_SIDE_QUIESCENT` acknowledgements, so shared terminal
-   success and remote/local cleanup cannot be proved atomically.
-5. **False diagnostic classification:** the same support bundle labeled an A6 join failure as a
-   generic radio gate failure and a connected C0 ordering failure as relay unreachable. Reports must
-   retain the last completed P0/A/B/C/D gate and identify the factual failing gate.
+1. **Normal application still uses legacy orchestration:** the admitted P0/A/B/C/D implementation and
+   distributed endpoint exist, but normal GUI actions have not yet been atomically routed through one
+   neutral production connection-run service. No legacy fallback may survive M9.
+2. **The source-only production-wrapper corrections are not one accepted immutable package:** the
+   installed application, WSL runtime, relay artifact, contracts, and wrapper must share exact release
+   identity before product or physical evidence is accepted.
+3. **Simultaneous physical composition remains unproved:** standalone A/B and non-physical C/D pass,
+   but real `A_READY`/`B_READY`, bidirectional RFU, trade/save/return/close, and distributed D must pass
+   through the packaged normal application on two PCs and two Switches.
+4. **Application-start evidence is incomplete:** the beta must retain bounded launcher, local-service,
+   wrapper, endpoint, stage, and recovery evidence from application startup and export it redacted to
+   the Windows Desktop even when startup fails before the service is ready.
+5. **Installed desktop startup still requires release qualification:** the transient Lxss false-
+   corruption correction is source-tested but needs cold launch, close/relaunch, non-ASCII-profile,
+   upgrade, and recovery proof in the new package.
 
 These blockers are also tracked in `FUTURE_TODO.md` and must be closed before another release
 candidate is treated as physical-connection qualified.

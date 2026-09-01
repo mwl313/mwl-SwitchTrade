@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://switchtrade.local/contracts/local-app-readiness.v2.schema.json",
+  "title": "SwitchTrade local application readiness v2",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "contract_version", "product_version", "release_id", "compatible",
+    "run_id", "revision", "recovery_required", "support_export_available",
+    "states", "connection_run"
+  ],
+  "properties": {
+    "contract_version": { "const": "local-app-readiness.v2" },
+    "product_version": { "type": "string", "minLength": 1 },
+    "release_id": { "type": "string", "minLength": 1 },
+    "compatible": { "type": "boolean" },
+    "run_id": { "type": ["string", "null"] },
+    "revision": { "type": "integer", "minimum": 0 },
+    "recovery_required": { "type": "boolean" },
+    "support_export_available": { "type": "boolean" },
+    "states": { "type": "object" },
+    "connection_run": {
+      "anyOf": [
+        { "$ref": "production-connection-run.v1.schema.json" },
+        { "type": "null" }
+      ]
+    }
+  }
+}

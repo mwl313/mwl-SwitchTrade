@@ -99,11 +99,29 @@ public sealed class BackendLauncher
 {
     private static readonly ConcurrentDictionary<int, Process> RunningProcesses = new();
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    private readonly ApplicationSession? _applicationSession;
+
+    public BackendLauncher(ApplicationSession? applicationSession = null) =>
+        _applicationSession = applicationSession;
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Performance", "CA1822:Mark members as static",
         Justification = "The launcher remains an injected service boundary for deterministic UI tests.")]
     public async Task<BackendLaunchResult> StartAsync(CancellationToken cancellationToken)
+    {
+        _applicationSession?.AppendEvent(
+            "launcher", "backend_start_requested", "BACKEND_START_REQUESTED",
+            "Starting the installed local service.");
+        var result = await StartCoreAsync(cancellationToken);
+        if (result.Succeeded)
+            _applicationSession?.AppendEvent(
+                "launcher", "backend_ready", "BACKEND_READY", "Installed local service is ready.");
+        else
+            _applicationSession?.RecordStartupFailure(result);
+        return result;
+    }
+
+    private async Task<BackendLaunchResult> StartCoreAsync(CancellationToken cancellationToken)
     {
         var provisioner = Path.Combine(AppContext.BaseDirectory, "SwitchTradeProvisioner.exe");
         if (!File.Exists(provisioner))
@@ -147,7 +165,7 @@ public sealed class BackendLauncher
                 return Failed("RELEASE_STATE_INVALID", "desktop_startup",
                     "The installed release configuration is missing or incompatible.", "Run Setup Repair");
 
-            var logRoot = Path.Combine(Environment.GetFolderPath(
+            var logRoot = _applicationSession?.DirectoryPath ?? Path.Combine(Environment.GetFolderPath(
                 Environment.SpecialFolder.LocalApplicationData), "SwitchTrade", "logs", "startup");
             Directory.CreateDirectory(logRoot);
             var stamp = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfff",
@@ -157,18 +175,35 @@ public sealed class BackendLauncher
                 FileName = "wsl.exe", UseShellExecute = false, CreateNoWindow = true,
                 RedirectStandardOutput = true, RedirectStandardError = true,
             };
-            foreach (var argument in new[]
+            var environment = new List<string>
             {
-                "-d", status.ActiveRuntime, "-u", "root", "--cd", "/opt/switchtrade", "--",
-                "env", $"SWITCHTRADE_RELAY_URL={relayUrl}",
-                "SWITCHTRADE_ALLOW_PROCESS_SHUTDOWN=1", $"SWITCHTRADE_WSL_DISTRO={status.ActiveRuntime}",
-                "/opt/switchtrade/bridge/.venv/bin/python", "-m", "switchtrade.control",
-            })
-                start.ArgumentList.Add(argument);
+                $"SWITCHTRADE_RELAY_URL={relayUrl}",
+                "SWITCHTRADE_ALLOW_PROCESS_SHUTDOWN=1",
+                $"SWITCHTRADE_WSL_DISTRO={status.ActiveRuntime}",
+            };
+            if (_applicationSession is not null)
+            {
+                environment.Add($"SWITCHTRADE_APP_SESSION_ID={_applicationSession.Id}");
+                environment.Add($"SWITCHTRADE_SESSION_WINDOWS_PATH={_applicationSession.DirectoryPath}");
+                environment.Add($"SWITCHTRADE_SESSION_WSL_PATH={_applicationSession.WslDirectoryPath}");
+            }
+            start.ArgumentList.Add("-d");
+            start.ArgumentList.Add(status.ActiveRuntime);
+            start.ArgumentList.Add("-u");
+            start.ArgumentList.Add("root");
+            start.ArgumentList.Add("--cd");
+            start.ArgumentList.Add("/opt/switchtrade");
+            start.ArgumentList.Add("--");
+            start.ArgumentList.Add("env");
+            foreach (var variable in environment) start.ArgumentList.Add(variable);
+            start.ArgumentList.Add("/opt/switchtrade/bridge/.venv/bin/python");
+            start.ArgumentList.Add("-m");
+            start.ArgumentList.Add("switchtrade.control");
             var process = Process.Start(start) ?? throw new InvalidOperationException(
                 "The local SwitchTrade service process did not start.");
-            Track(process, Path.Combine(logRoot, $"{stamp}-control.out.log"),
-                Path.Combine(logRoot, $"{stamp}-control.err.log"));
+            Track(process, _applicationSession,
+                _applicationSession is null ? Path.Combine(logRoot, $"{stamp}-control.out.log") : "control.stdout.log",
+                _applicationSession is null ? Path.Combine(logRoot, $"{stamp}-control.err.log") : "control.stderr.log");
 
             for (var attempt = 0; attempt < 40; attempt++)
             {
@@ -190,16 +225,32 @@ public sealed class BackendLauncher
         finally { if (ownsMutex) launchMutex.ReleaseMutex(); }
     }
 
-    public static async Task StopAsync(CancellationToken cancellationToken = default)
+    public static async Task StopAsync(
+        ApplicationSession? applicationSession = null,
+        CancellationToken cancellationToken = default)
     {
+        applicationSession?.AppendEvent(
+            "launcher", "backend_shutdown_requested", "BACKEND_SHUTDOWN_REQUESTED",
+            "Stopping the installed local service through its identity-bound command.");
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(TimeSpan.FromSeconds(20));
+        var graceful = false;
+        var forced = false;
         try
         {
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(18) };
+            var readiness = await ReadinessAsync(deadline.Token);
             using var content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
-            using var response = await client.PostAsync(
-                "http://127.0.0.1:8787/api/v1/app/shutdown", content, deadline.Token);
+            using var request = new HttpRequestMessage(
+                HttpMethod.Post, "http://127.0.0.1:8787/api/v1/app/shutdown") { Content = content };
+            request.Headers.Add("X-SwitchTrade-Command-ID", Guid.NewGuid().ToString("D"));
+            request.Headers.Add(
+                "X-SwitchTrade-Expected-Revision", (readiness?.Revision ?? 0).ToString(
+                    System.Globalization.CultureInfo.InvariantCulture));
+            if (!string.IsNullOrWhiteSpace(readiness?.RunId))
+                request.Headers.Add("X-SwitchTrade-Run-ID", readiness.RunId);
+            using var response = await client.SendAsync(request, deadline.Token);
+            graceful = response.IsSuccessStatusCode;
         }
         catch (HttpRequestException) { }
         catch (TaskCanceledException) { }
@@ -215,12 +266,27 @@ public sealed class BackendLauncher
             {
                 try
                 {
-                    if (!process.HasExited) process.Kill(entireProcessTree: true);
+                    if (!process.HasExited)
+                    {
+                        process.Kill(entireProcessTree: true);
+                        forced = true;
+                    }
                 }
                 catch (InvalidOperationException) { }
             }
             catch (InvalidOperationException) { }
         }
+        applicationSession?.AppendEvent(
+            "launcher",
+            forced ? "backend_shutdown_forced" :
+                graceful ? "backend_shutdown_completed" : "backend_shutdown_unconfirmed",
+            forced ? "BACKEND_SHUTDOWN_FORCED" :
+                graceful ? "BACKEND_SHUTDOWN_COMPLETED" : "BACKEND_SHUTDOWN_UNCONFIRMED",
+            forced
+                ? "The local service did not exit inside the cleanup deadline; startup recovery remains required."
+                : graceful
+                    ? "The local service stopped without a forced process termination."
+                    : "The local service shutdown response was unavailable; no tracked process required force.");
     }
 
     private static async Task<ProcessResult> RunAsync(
@@ -293,25 +359,42 @@ public sealed class BackendLauncher
         string action, string? correlationId = null) =>
         new(false, message, code, stage, action, correlationId);
 
-    private static void Track(Process process, string outputPath, string errorPath)
+    private static void Track(
+        Process process, ApplicationSession? applicationSession, string outputPath, string errorPath)
     {
         RunningProcesses[process.Id] = process;
-        var output = File.Create(outputPath);
-        var error = File.Create(errorPath);
         _ = Task.Run(async () =>
         {
             try
             {
-                await Task.WhenAll(process.StandardOutput.BaseStream.CopyToAsync(output),
-                    process.StandardError.BaseStream.CopyToAsync(error), process.WaitForExitAsync());
+                if (applicationSession is not null)
+                {
+                    await Task.WhenAll(
+                        DrainAsync(process.StandardOutput, applicationSession, outputPath),
+                        DrainAsync(process.StandardError, applicationSession, errorPath),
+                        process.WaitForExitAsync());
+                }
+                else
+                {
+                    await using var output = File.Create(outputPath);
+                    await using var error = File.Create(errorPath);
+                    await Task.WhenAll(process.StandardOutput.BaseStream.CopyToAsync(output),
+                        process.StandardError.BaseStream.CopyToAsync(error), process.WaitForExitAsync());
+                }
             }
             finally
             {
-                output.Dispose(); error.Dispose();
                 RunningProcesses.TryRemove(process.Id, out _);
                 process.Dispose();
             }
         });
+    }
+
+    private static async Task DrainAsync(
+        StreamReader source, ApplicationSession applicationSession, string fileName)
+    {
+        while (await source.ReadLineAsync() is { } line)
+            applicationSession.AppendStreamLine(fileName, line);
     }
 
     private sealed record ProcessResult(int ExitCode, string Output, string Error);
@@ -331,7 +414,9 @@ public sealed class BackendLauncher
     private sealed record Readiness(
         [property: JsonPropertyName("contract_version")] string? ContractVersion,
         [property: JsonPropertyName("release_id")] string? ReleaseId,
-        [property: JsonPropertyName("compatible")] bool Compatible);
+        [property: JsonPropertyName("compatible")] bool Compatible,
+        [property: JsonPropertyName("run_id")] string? RunId,
+        [property: JsonPropertyName("revision")] long Revision);
 }
 
 public enum DialogChoice { Primary, Secondary, Cancel }

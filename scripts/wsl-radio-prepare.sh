@@ -11,6 +11,7 @@ LOCK_ROOT="${SWITCHTRADE_LOCK_ROOT:-/run/lock}"
 PROFILE_FILE="${SWITCHTRADE_RADIO_PROFILES:-$SCRIPT_DIR/../config/wsl-radio-hardware.tsv}"
 HEALTH_GATE="$SCRIPT_DIR/radio-health-gate.sh"
 USB_ID="${RADIO_USB_ID:-}"
+USB_DEVICE="${RADIO_USB_DEVICE:-}"
 MODULE_DIR="${SWITCHTRADE_MODULE_DIR:-}"
 HEALTH_CHANNELS="${RADIO_HEALTH_CHANNELS:-1,6,11}"
 TARGET_CHANNEL="${RADIO_TARGET_CHANNEL:-6}"
@@ -32,6 +33,7 @@ Usage:
 
 Options:
   --usb-id VID:PID       Select a card when more than one supported radio is attached
+  --device-path PATH     Select the exact attached sysfs USB device (dual-radio diagnostics)
   --profile-file PATH    Hardware profile table override
   --module-dir PATH      Directory containing profile module + optional .sha256
   --health-channels CSV  Actual-RX channels (default: 1,6,11)
@@ -261,11 +263,20 @@ load_prerequisite_module() {
 }
 
 select_device() {
-    local id dev profile auto_select candidates=()
+    local id dev dev_real requested_real profile auto_select candidates=()
+    if [[ -n $USB_DEVICE ]]; then
+        requested_real="$(readlink -f "$USB_DEVICE" 2>/dev/null || true)"
+        [[ -n $requested_real && -d $requested_real ]] || \
+            die "exact USB device path is unavailable"
+    fi
     while IFS=$'\t' read -r id dev; do
         profile="$(profile_for "$id" 2>/dev/null)" || continue
         if [[ -n $USB_ID && $id != "$USB_ID" ]]; then
             continue
+        fi
+        if [[ -n $USB_DEVICE ]]; then
+            dev_real="$(readlink -f "$dev" 2>/dev/null || true)"
+            [[ $dev_real == "$requested_real" ]] || continue
         fi
         IFS=$'\t' read -r _ _ _ _ _ _ auto_select _ <<< "$profile"
         if [[ -z $USB_ID && $auto_select != yes ]]; then
@@ -273,7 +284,7 @@ select_device() {
         fi
         candidates+=("$id"$'\t'"$dev")
     done < <(attached_usb_devices)
-    ((${#candidates[@]} > 0)) || die "no auto-selectable attached USB radio${USB_ID:+ matching $USB_ID}"
+    ((${#candidates[@]} > 0)) || die "no auto-selectable attached USB radio${USB_ID:+ matching $USB_ID}${USB_DEVICE:+ at the exact device path}"
     ((${#candidates[@]} == 1)) || die "multiple eligible radios attached; attach one radio per WSL endpoint (VID:PID cannot distinguish identical adapters)"
     printf '%s\n' "${candidates[0]}"
 }
@@ -292,6 +303,7 @@ status_report() {
 while (($#)); do
     case $1 in
         --usb-id) [[ $# -ge 2 ]] || die "--usb-id needs a value"; USB_ID="$(normalize_usb_id "$2")"; shift 2 ;;
+        --device-path) [[ $# -ge 2 ]] || die "--device-path needs a value"; USB_DEVICE=$2; shift 2 ;;
         --profile-file) [[ $# -ge 2 ]] || die "--profile-file needs a value"; PROFILE_FILE=$2; shift 2 ;;
         --module-dir) [[ $# -ge 2 ]] || die "--module-dir needs a value"; MODULE_DIR=$2; shift 2 ;;
         --health-channels) [[ $# -ge 2 ]] || die "--health-channels needs a value"; HEALTH_CHANNELS=$2; shift 2 ;;
@@ -327,6 +339,10 @@ IFS=$'\t' read -r USB_ID DEVICE <<< "$selection"
 command -v flock >/dev/null 2>&1 || die "flock is required for exclusive radio ownership"
 mkdir -p "$LOCK_ROOT"
 LOCK_PATH="$LOCK_ROOT/switchtrade-radio-${USB_ID//:/-}.lock"
+if [[ -n $USB_DEVICE ]]; then
+    device_lock_id="$(printf '%s' "$(readlink -f "$DEVICE")" | sha256sum | awk '{print $1}')"
+    LOCK_PATH="$LOCK_ROOT/switchtrade-radio-$device_lock_id.lock"
+fi
 exec 9>"$LOCK_PATH"
 flock -n 9 || die "RADIO_BUSY: another SwitchTrade endpoint, diagnostic, or repair owns $USB_ID"
 profile="$(profile_for "$USB_ID")"
@@ -422,6 +438,7 @@ if [[ $module_file != - ]]; then
     fi
 fi
 msg "[driver] PASS usb=$USB_ID strategy=$strategy driver=$driver iface=$iface roles=$roles status=$status auto_select=$auto_select engine=$host_engine${REQUIRED_ROLE:+ required_role=$REQUIRED_ROLE}"
+export SWITCHTRADE_USB_DEVICE="$(readlink -f "$DEVICE")"
 
 load_prerequisite_module ccm
 load_prerequisite_module cmac

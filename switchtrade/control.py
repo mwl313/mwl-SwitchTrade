@@ -16,6 +16,7 @@ import time
 import signal
 import secrets
 import sys
+import uuid
 from typing import Callable
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
@@ -34,10 +35,54 @@ from switchtrade.production_diagnostics import (
     ProductionDiagnostics, SyntheticDiagnosticPeer, TIMEOUTS, diagnostic_member_pair,
     fixture_metadata,
 )
+from switchtrade.connection.production_run import ProductionRunner
+from switchtrade.connection.service import (
+    ConnectionRunService, ConnectionRunServiceError,
+)
 from switchtrade.relay_client import RelayClient, RelayError
+from switchtrade.session_evidence import ApplicationEvidence
 
 
 READINESS_CONTRACT = "app-readiness.v1"
+PRODUCTION_READINESS_CONTRACT = "local-app-readiness.v2"
+
+
+class RelayReadinessMonitor:
+    """Lifespan-owned relay capability probe; HTTP GET handlers only read its snapshot."""
+
+    def __init__(self, probe, *, success_interval: float = 30.0,
+                 failure_interval: float = 5.0):
+        self._probe = probe
+        self._success_interval = success_interval
+        self._failure_interval = failure_interval
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._ready: bool | None = None
+        self._thread = threading.Thread(
+            target=self._run, name="switchtrade-relay-readiness", daemon=True)
+        self._thread.start()
+
+    def snapshot(self) -> bool | None:
+        with self._lock:
+            return self._ready
+
+    def close(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=6)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                health = self._probe()
+                ready = (
+                    health.get("status") == "ready" and
+                    "rfu-tunnel.v2" in health.get("rfu_contracts", []))
+            except (RelayError, OSError, ValueError, TypeError):
+                ready = False
+            with self._lock:
+                self._ready = ready
+            self._stop.wait(
+                self._success_interval if ready else self._failure_interval)
 ROOM_CONTRACT = "room-control.v1"
 PARTY_CONTRACT = "party-commit.v1"
 PUBLIC_DIRECTORY_CONTRACT = "public-directory.v1"
@@ -209,7 +254,7 @@ class ProductionDiagnosticRequest(BaseModel):
     usb_id: str = Field(pattern="^[0-9A-Fa-f]{4}:[0-9A-Fa-f]{4}$")
 
 
-class ProductionDiagnosticContinueRequest(BaseModel):
+class ContinueRunRequest(BaseModel):
     checkpoint_id: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9_.-]+$")
 
 
@@ -234,7 +279,8 @@ class Group:
 
 
 class Runtime:
-    def __init__(self, profile_path: Path, runs_root: Path | None, relay_url: str):
+    def __init__(self, profile_path: Path, runs_root: Path | None, relay_url: str,
+                 *, enable_legacy_diagnostics: bool = True):
         self.profiles = load_profiles(profile_path)
         self.groups: dict[str, Group] = {}
         self.lock = threading.RLock()
@@ -259,7 +305,7 @@ class Runtime:
             self.log.run_dir / "production-diagnostics",
             recovery_file=runtime_root / "production-diagnostic-recovery.json",
             report_root=self.log.root,
-        )
+        ) if enable_legacy_diagnostics else None
         self.endpoint_state = runtime_root / "endpoint-state.json"
         self.party_state = runtime_root / "party-state.json"
         self.authority_state = runtime_root / "room-authority.json"
@@ -826,16 +872,18 @@ def hardware_diagnostic_command(usb_id: str, mode: str, role: str,
 
 
 def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str | Path | None = None,
-               relay_url: str | None = None) -> FastAPI:
+               relay_url: str | None = None, *, production_contract: bool = False,
+               connection_runner=None) -> FastAPI:
     profile_path = Path(profile_path)
     run_path = Path(runs_root) if runs_root else None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         runtime = Runtime(profile_path, run_path, relay_url or os.environ.get(
-            "SWITCHTRADE_RELAY_URL", "http://127.0.0.1:8788"))
+            "SWITCHTRADE_RELAY_URL", "http://127.0.0.1:8788"),
+            enable_legacy_diagnostics=not production_contract)
         runtime.release_hardware = lambda: release_owned_hardware(runtime)
-        if runtime.diagnostics.cleanup_incomplete:
+        if runtime.diagnostics is not None and runtime.diagnostics.cleanup_incomplete:
             recover_incomplete_diagnostic(runtime)
         elif runtime.owned_hardware is not None and not runtime.endpoint_running():
             try:
@@ -845,23 +893,50 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                     "hardware_startup_cleanup_failed", level="error", code=error.code,
                 )
         app.state.runtime = runtime
-        yield
-        runtime.diagnostics.cancel_active()
-        runtime.cancel_launch()
-        cleanup_idle = runtime.diagnostics.wait_for_idle(TIMEOUTS["cleanup"])
-        if not cleanup_idle:
-            runtime.log.event(
-                "diagnostic_shutdown_cleanup_timeout", level="error",
-                code="DIAG_CLEANUP_FAILED",
+        app.state.connection_service = None
+        app.state.relay_readiness_monitor = None
+        if production_contract:
+            runtime_root = runtime.hardware_selection_file.parent
+            runner = connection_runner or ProductionRunner(
+                root=runtime_root / "production-connection",
+                release=runtime_release_id(), relay=runtime.relay,
+                selection_file=runtime.hardware_selection_file,
+                distro=os.environ.get("SWITCHTRADE_WSL_DISTRO", "SwitchTrade"),
+                runtime_root=os.environ.get("SWITCHTRADE_WSL_ROOT", "/opt/switchtrade"),
+                evidence_root=os.environ.get("SWITCHTRADE_SESSION_WSL_PATH") or None,
             )
-        if cleanup_idle:
-            runtime.stop_endpoint()
+            app.state.connection_service = ConnectionRunService(
+                runtime_root / "connection-service", runner,
+                recovery=getattr(runner, "recover", None),
+            )
+            relay_probe = RelayClient(runtime.relay.base_url, timeout=2.0)
+            app.state.relay_readiness_monitor = RelayReadinessMonitor(relay_probe.health)
+        yield
+        if app.state.connection_service is not None:
             try:
-                runtime.release_hardware()
-            except ControlApiError as error:
+                app.state.connection_service.close()
+            except ConnectionRunServiceError as error:
                 runtime.log.event(
-                    "hardware_shutdown_cleanup_failed", level="error", code=error.code,
+                    "connection_service_shutdown_failed", level="error", code=error.code)
+        if app.state.relay_readiness_monitor is not None:
+            app.state.relay_readiness_monitor.close()
+        if not production_contract:
+            runtime.diagnostics.cancel_active()
+            runtime.cancel_launch()
+            cleanup_idle = runtime.diagnostics.wait_for_idle(TIMEOUTS["cleanup"])
+            if not cleanup_idle:
+                runtime.log.event(
+                    "diagnostic_shutdown_cleanup_timeout", level="error",
+                    code="DIAG_CLEANUP_FAILED",
                 )
+            if cleanup_idle:
+                runtime.stop_endpoint()
+                try:
+                    runtime.release_hardware()
+                except ControlApiError as error:
+                    runtime.log.event(
+                        "hardware_shutdown_cleanup_failed", level="error", code=error.code,
+                    )
         runtime.log.close("api_stopped")
 
     app = FastAPI(title="SwitchTrade Control API", version=__version__, lifespan=lifespan)
@@ -2139,11 +2214,21 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         state.clear_authority()
 
     def require_no_diagnostic(state: Runtime) -> None:
-        if state.diagnostics.running():
+        if state.diagnostics is not None and state.diagnostics.running():
             raise ControlApiError(
                 409, "diagnostic_active", "Finish or cancel the active production diagnostic first.",
                 stage="diagnostics", recoverable=True, primary_action="return_to_diagnostics",
             )
+
+    def require_no_production_connection(request: Request) -> None:
+        connection = getattr(request.app.state, "connection_service", None)
+        current = None if connection is None else connection.snapshot()
+        if current is not None and (
+                current["phase"] != "terminal" or current["cleanup"]["verified"] is not True):
+            raise ControlApiError(
+                409, "connection_run_active",
+                "End the current connection before using adapter maintenance.",
+                stage="hardware", recoverable=True, primary_action="end_session")
 
     @app.post("/api/v1/trade-room")
     def create_trade_room(payload: CreateGroup, request: Request) -> dict:
@@ -2375,6 +2460,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     def select_hardware(payload: HardwareSelectionRequest, request: Request) -> dict:
         state = runtime(request)
         require_no_diagnostic(state)
+        require_no_production_connection(request)
         if state.endpoint_running():
             raise ControlApiError(
                 409, "session_active", "End the current connection before changing adapters",
@@ -2403,6 +2489,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     def hardware_diagnostics(payload: HardwareDiagnosticRequest, request: Request) -> dict:
         state = runtime(request)
         require_no_diagnostic(state)
+        require_no_production_connection(request)
         if state.endpoint_running():
             raise ControlApiError(
                 409, "session_active", "End the current connection before checking the adapter",
@@ -3061,7 +3148,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
 
     @app.post("/api/v1/production-diagnostics/{run_id}/continue")
     def continue_production_diagnostic(
-            run_id: str, payload: ProductionDiagnosticContinueRequest, request: Request) -> dict:
+            run_id: str, payload: ContinueRunRequest, request: Request) -> dict:
         state = runtime(request)
         if not state.diagnostics.continue_run(run_id, payload.checkpoint_id):
             raise ControlApiError(
@@ -3250,6 +3337,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
     def repair_app(payload: RepairRequest, request: Request) -> dict:
         state = runtime(request)
         require_no_diagnostic(state)
+        require_no_production_connection(request)
         if state.endpoint_running():
             raise ControlApiError(
                 409, "session_active", "End the current connection before checking the adapter",
@@ -3387,10 +3475,278 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         return {"status": "stopping", "cleanup_code": cleanup_code,
                 "run_id": state.log.run_id}
 
+    if production_contract:
+        _install_production_routes(app)
     return app
 
 
-app = create_app()
+def _install_production_routes(app: FastAPI) -> None:
+    """Replace legacy room/session mutations in the packaged production entry point."""
+    replaced = {
+        "/api/status", "/api/v1/app/readiness", "/api/v1/trade-room/parties",
+        "/api/v1/trade-room", "/api/v1/trade-room/join",
+        "/api/v1/trade-room/connect", "/api/v1/trade-room/events",
+        "/api/v1/trade-room/members/me", "/api/v1/trade-room/local-authority",
+        "/api/v1/public-trade-rooms/{listing_id}/join",
+        "/api/v1/session/start", "/api/v1/session/stop", "/api/v1/app/retry",
+        "/api/groups", "/api/groups/join", "/api/groups/{passcode}",
+        "/api/groups/{passcode}/members/me", "/api/groups/public",
+        "/api/session/start", "/api/session/stop", "/api/hardware/diagnostics",
+        "/api/v1/support-bundle", "/api/support-bundle", "/api/v1/app/shutdown",
+        "/api/v1/production-diagnostics",
+        "/api/v1/production-diagnostics/{run_id}",
+        "/api/v1/production-diagnostics/{run_id}/continue",
+    }
+    app.router.routes[:] = [
+        route for route in app.router.routes if getattr(route, "path", None) not in replaced]
+    def axis(status: str, message: str, code: str, action: str | None = None) -> dict:
+        return {
+            "status": status, "user_message": message, "technical_code": code,
+            "primary_action": action,
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+
+    def state(request: Request) -> Runtime:
+        return request.app.state.runtime
+
+    def service(request: Request) -> ConnectionRunService:
+        value = request.app.state.connection_service
+        if value is None:
+            raise ControlApiError(
+                503, "connection_service_unavailable", "the connection service is unavailable",
+                stage="control", recoverable=True, primary_action="restart_app")
+        return value
+
+    def command_identity(request: Request, *, run_bound: bool) -> tuple[str, int, str | None]:
+        command_id = request.headers.get("x-switchtrade-command-id", "")
+        revision_text = request.headers.get("x-switchtrade-expected-revision", "")
+        run_id = request.headers.get("x-switchtrade-run-id") if run_bound else None
+        try:
+            uuid.UUID(command_id)
+            revision = int(revision_text)
+            if revision < 0:
+                raise ValueError
+            if run_bound:
+                uuid.UUID(run_id or "")
+        except (TypeError, ValueError) as error:
+            raise ControlApiError(
+                422, "command_identity_invalid",
+                "command ID, run ID, or expected revision is invalid",
+                stage="control", recoverable=False, primary_action="refresh") from error
+        return command_id, revision, run_id
+
+    def invoke(call):
+        try:
+            return call()
+        except ConnectionRunServiceError as error:
+            status = 404 if error.code == "RUN_NOT_FOUND" else 422 if error.code in {
+                "COMMAND_ID_INVALID", "REQUEST_INVALID", "ROLE_INVALID",
+            } else 409
+            raise ControlApiError(
+                status, error.code.lower(), error.message, stage="connection",
+                recoverable=error.code not in {"SERVICE_STATE_INVALID"},
+                primary_action="refresh") from error
+
+    def start_run(request: Request, payload: dict) -> dict:
+        command_id, revision, _ = command_identity(request, run_bound=False)
+        runtime = state(request)
+        value = {
+            **payload, "authority_command_id": command_id,
+            "client_id": runtime.client_id, "release": runtime_release_id(),
+        }
+        started = invoke(lambda: service(request).start(
+            command_id=command_id, expected_revision=revision, request=value))
+        return invoke(lambda: service(request).wait_for_authority(started["run_id"], 45))
+
+    def run_command(request: Request, action: str, *, checkpoint: str | None = None,
+                    switch_role: str | None = None) -> dict:
+        command_id, revision, run_id = command_identity(request, run_bound=True)
+        return invoke(lambda: service(request).command(
+            command_id=command_id, run_id=run_id or "", expected_revision=revision,
+            action=action, checkpoint=checkpoint, switch_role=switch_role))
+
+    @app.get("/api/status")
+    @app.get("/api/v1/app/readiness")
+    def production_readiness(request: Request) -> dict:
+        runtime = state(request)
+        current = service(request).snapshot()
+        relay_ready = request.app.state.relay_readiness_monitor.snapshot()
+        cleanup_required = bool(current and current["cleanup"]["verified"] is False and
+                                current["phase"] in {"cleaning", "terminal"})
+        failure = None if current is None else current["functional"].get("failure")
+        phase = "idle" if current is None else current["phase"]
+        return {
+            "contract_version": PRODUCTION_READINESS_CONTRACT,
+            "product_version": __version__, "release_id": runtime_release_id(),
+            "compatible": True,
+            "supported_contracts": [PRODUCTION_READINESS_CONTRACT, "production-connection-run.v1"],
+            "capabilities": ["production-wrapper.v1", "support-checkpoint.v1"],
+            "run_id": None if current is None else current["run_id"],
+            "revision": 0 if current is None else current["revision"],
+            "endpoint_process_running": bool(current and current["phase"] in {
+                "running", "awaiting_user", "cleaning"}),
+            "session_id": os.environ.get("SWITCHTRADE_APP_SESSION_ID"),
+            "recovery_required": cleanup_required,
+            "support_export_available": bool(os.environ.get("SWITCHTRADE_SESSION_WINDOWS_PATH")),
+            "connection_run": current,
+            "states": {
+                "control": axis(
+                    "ready", "The local SwitchTrade service is ready.", "control.ready"),
+                "relay": axis(
+                    "checking" if relay_ready is None else "ready" if relay_ready else "failed",
+                    "Checking the online relay." if relay_ready is None else
+                    "The online relay is reachable." if relay_ready else
+                    "The online relay is currently unavailable.",
+                    "relay.checking" if relay_ready is None else
+                    "relay.ready" if relay_ready else "relay.unavailable",
+                    None if relay_ready is not False else "retry"),
+                "radio": axis(
+                    "unknown" if current is None else
+                    "ready" if current.get("last_passed_gate") == "P0_SIDE_READY" else "checking",
+                    "The adapter is checked only by an explicit connection run.",
+                    "radio.not_checked" if current is None else "radio.connection_run"),
+                "session": axis(
+                    "unavailable" if current is None else
+                    "failed" if failure else "ready" if phase == "terminal" else "checking",
+                    "No Switch connection is active." if current is None else
+                    "The connection run failed." if failure else
+                    "The connection run is complete." if phase == "terminal" else
+                    "The connection run is in progress.",
+                    f"session.{phase}"),
+                "decoder": axis(
+                    "unavailable", "Party display is not part of the production wrapper cutover.",
+                    "decoder.unavailable"),
+            },
+            "failure": failure,
+        }
+
+    @app.post("/api/v1/trade-room")
+    def production_create(payload: CreateGroup, request: Request) -> dict:
+        return start_run(request, {
+            "kind": "create", "switch_role": None,
+            "name": payload.name.strip(), "visibility": payload.visibility,
+            "trainer_display_name": payload.trainer_display_name.strip(),
+            "game": payload.game, "language": payload.language,
+            "offering": payload.offering.strip(), "wanted": payload.wanted.strip(),
+            "note": payload.note.strip(),
+        })
+
+    @app.post("/api/v1/trade-room/join")
+    def production_join(payload: JoinGroup, request: Request) -> dict:
+        return start_run(request, {
+            "kind": "join", "switch_role": None, "room_code": payload.passcode.upper(),
+            "trainer_display_name": payload.trainer_display_name.strip(),
+        })
+
+    @app.post("/api/v1/public-trade-rooms/{listing_id}/join")
+    def production_public_join(
+            listing_id: str, payload: JoinPublicRoom, request: Request) -> dict:
+        return start_run(request, {
+            "kind": "public_join", "switch_role": None, "listing_id": listing_id,
+            "trainer_display_name": payload.trainer_display_name.strip(),
+        })
+
+    @app.get("/api/v1/trade-room")
+    def production_room(request: Request) -> dict:
+        current = service(request).snapshot()
+        if current is None or current.get("room") is None:
+            raise ControlApiError(
+                404, "room_not_active", "no active Trade Room",
+                stage="room", recoverable=False, primary_action="return_home")
+        return current
+
+    @app.get("/api/v1/connection-runs/{run_id}")
+    def production_run(run_id: str, request: Request) -> dict:
+        current = service(request).snapshot(run_id)
+        if current is None:
+            raise ControlApiError(404, "run_not_found", "connection run was not found")
+        return current
+
+    @app.get("/api/v1/trade-room/parties")
+    def production_parties(request: Request) -> dict:
+        current = service(request).snapshot()
+        return {
+            "contract_version": PARTY_CONTRACT,
+            "attempt_id": None if current is None else current["run_id"],
+            "observer_status": "unavailable", "trading_room_confirmed": False,
+            "parties": {seat: {"status": "unavailable", "reason": "not_projected",
+                                "snapshot": None} for seat in ("member_a", "member_b")},
+            "stats": {},
+        }
+
+    @app.post("/api/v1/trade-room/connect")
+    def production_connect(payload: ConnectTradeRoom, request: Request) -> dict:
+        role = "a_room_joiner" if payload.switch_room_role == "creator" else "b_ap_host"
+        return run_command(request, "connect", switch_role=role)
+
+    @app.post("/api/v1/connection-runs/{run_id}/continue")
+    def production_continue(run_id: str, payload: ContinueRunRequest,
+                            request: Request) -> dict:
+        if request.headers.get("x-switchtrade-run-id") != run_id:
+            raise ControlApiError(409, "run_identity_mismatch", "run identity changed")
+        return run_command(request, "continue", checkpoint=payload.checkpoint_id)
+
+    @app.post("/api/v1/session/stop")
+    def production_stop(request: Request) -> dict:
+        return run_command(request, "stop")
+
+    @app.post("/api/v1/session/end")
+    def production_end(request: Request) -> dict:
+        return run_command(request, "end")
+
+    @app.delete("/api/v1/trade-room/members/me")
+    def production_leave(request: Request) -> dict:
+        return run_command(request, "leave")
+
+    @app.delete("/api/v1/trade-room")
+    def production_close(request: Request) -> dict:
+        return run_command(request, "close")
+
+    @app.post("/api/v1/app/retry")
+    def production_retry(request: Request) -> dict:
+        command_id, revision, run_id = command_identity(request, run_bound=True)
+        retried = invoke(lambda: service(request).retry(
+            command_id=command_id, run_id=run_id or "", expected_revision=revision))
+        return invoke(lambda: service(request).wait_for_authority(retried["run_id"], 45))
+
+    @app.post("/api/v1/support-checkpoint")
+    @app.post("/api/v1/support-bundle")
+    def production_support_checkpoint(request: Request) -> dict:
+        evidence = ApplicationEvidence.from_environment("control")
+        current = service(request).snapshot()
+        if evidence is not None:
+            evidence.event(
+                "support_checkpoint", run_id=None if current is None else current["run_id"],
+                gate=None if current is None else current.get("current_gate"))
+        return {
+            "contract_version": "support-checkpoint.v1", "status": "flushed",
+            "app_session_id": os.environ.get("SWITCHTRADE_APP_SESSION_ID"),
+            "run_id": None if current is None else current["run_id"],
+        }
+
+    @app.post("/api/v1/app/shutdown")
+    def production_shutdown(request: Request, background_tasks: BackgroundTasks) -> dict:
+        connection = service(request)
+        current = connection.snapshot()
+        command_id, revision, run_id = command_identity(
+            request, run_bound=current is not None)
+        cleanup_code = None
+        try:
+            invoke(lambda: connection.shutdown(
+                command_id=command_id, run_id=run_id, expected_revision=revision))
+            connection.close()
+        except ConnectionRunServiceError as error:
+            cleanup_code = error.code
+        runtime = state(request)
+        with runtime.lock:
+            runtime.shutdown_requested = True
+        if os.environ.get("SWITCHTRADE_ALLOW_PROCESS_SHUTDOWN") == "1":
+            background_tasks.add_task(lambda: (time.sleep(0.1), os.kill(os.getpid(), 15)))
+        return {"status": "stopping", "cleanup_code": cleanup_code,
+                "run_id": None if connection.snapshot() is None else connection.snapshot()["run_id"]}
+
+
+app = create_app(production_contract=True)
 
 
 def main() -> None:

@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.IO;
 using System.Net.Http;
 using System.Windows;
 using System.Windows.Controls;
@@ -19,6 +20,7 @@ public partial class App : Application
 {
     private ResourceDictionary? _highContrastResources;
     private Mutex? _singleInstance;
+    private ApplicationSession? _applicationSession;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -30,6 +32,11 @@ public partial class App : Application
             true);
         SystemParameters.StaticPropertyChanged += SystemSettingChanged;
         UpdateHighContrastResources();
+        if (e.Args.Contains("--session-self-test"))
+        {
+            Shutdown(ApplicationSession.SelfTest() ? 0 : 1);
+            return;
+        }
         if (e.Args.Contains("--self-test"))
         {
             var apiIsLocal = new Uri(ControlApiClient.ApiBase).IsLoopback;
@@ -47,6 +54,7 @@ public partial class App : Application
             };
             var highContrastResourcesLoad = highContrast.Contains("PrimaryTextBrush") &&
                                             highContrast.Contains("FocusBrush");
+            var applicationSessionWorks = ApplicationSession.SelfTest();
             var capabilityGateWorks = new ControlStatus(
                 "idle", "0.2.0", "self-test", false, false, false, null, null,
                 Capabilities: ["public-directory.v1"]).HasCapability("public-directory.v1");
@@ -58,7 +66,7 @@ public partial class App : Application
                     if (request.RequestUri?.AbsolutePath != "/api/v1/app/readiness")
                         unexpectedReleaseGateRequests++;
                     return Task.FromResult(JsonResponse(
-                        "{\"contract_version\":\"app-readiness.v1\",\"product_version\":\"0.2.0\"," +
+                        "{\"contract_version\":\"local-app-readiness.v2\",\"product_version\":\"0.2.0\"," +
                         $"\"release_id\":\"{runtimeRelease}\",\"compatible\":true," +
                         "\"states\":{\"control\":{\"status\":\"ready\",\"user_message\":\"Ready\"," +
                         "\"technical_code\":\"control.ready\"}}}"));
@@ -87,39 +95,24 @@ public partial class App : Application
             var hardwareContractWorks = hardware.InstanceId.EndsWith("RADIO-A", StringComparison.Ordinal) &&
                                         !hardware.IsShared &&
                                         selectionBody.Contains("instance_id", StringComparison.Ordinal);
-            using var diagnosticContractClient = new ControlApiClient(new SelfTestHttpHandler(_ =>
-                Task.FromResult(JsonResponse("""
-                    {"contract_version":"production-diagnostic.v1","run_id":"diag-1",
-                    "test":"automated","status":"cleaning","current_stage":"cleanup",
-                    "result_level":"hardware_gate_passed","stages":[],"limitations":[],
-                    "cleanup":{"status":"pending","evidence":{}}}
-                    """))));
-            var diagnosticProjection = diagnosticContractClient.GetProductionDiagnosticAsync(
-                "diag-1").GetAwaiter().GetResult();
-            var diagnosticCleanupContractWorks = diagnosticProjection.Status == "cleaning" &&
-                                                 !diagnosticProjection.IsTerminal &&
-                                                 !diagnosticProjection.CleanupPassed;
             using var roomContractClient = new ControlApiClient(new SelfTestHttpHandler(_ =>
                 Task.FromResult(JsonResponse("""
-                    {"room_id":"room-1","room_version":8,"name":"Resumed Room",
-                    "visibility":"private","room_code":"ABC123",
-                    "profile":{"owner_display_name":"Leaf","game":"LeafGreen","language":"English"},
-                    "owner_member_id":"owner","local_member_id":"member",
-                    "state":"ready_check","members":[
-                    {"member_id":"owner","seat":"member_a","is_local":false,"online_state":"online",
-                    "display_name":"Leaf","ready_state":"not_ready","switch_room_role":null},
-                    {"member_id":"member","seat":"member_b","is_local":true,"online_state":"online",
-                    "display_name":"Red","ready_state":"not_ready","switch_room_role":null}],
-                    "attempt":{"local_switch_role":null,"phase":"failed","role_locked":true,
-                    "failure":{"code":"relay.restart","stage":"relay","recoverable":true,
-                    "primary_action":"retry"}}}
+                    {"contract_version":"production-connection-run.v1","run_id":"run-1","revision":8,
+                    "phase":"terminal","local_role":"b_ap_host","peer_state":"paired",
+                    "functional":{"status":"failed","failure":{"component":"relay",
+                    "stage":"relay","gate":"C2_BRIDGE","code":"relay.restart",
+                    "message":"relay restarted"}},
+                    "cleanup":{"status":"verified","verified":true,"failures":[]},
+                    "room":{"room_id":"room-1","room_version":8,"name":"Resumed Room",
+                    "visibility":"private","room_code":"ABC123","participants":2,
+                    "membership_role":"member"},"allowed_actions":["retry","leave"]}
                     """))));
             var failedProjection = roomContractClient.TryGetTradeRoomAsync().GetAwaiter().GetResult();
             var attemptFailureContractWorks = failedProjection is
             {
                 FailureCode: "relay.restart", FailureStage: "relay",
-                FailureRecoverable: true, FailureAction: "retry", Room.RoomCode: "ABC123",
-                LocalTrainerDisplayName: "Red", PartnerTrainerDisplayName: "Leaf",
+                FailureRecoverable: true, FailureAction: "export_support_logs", Room.RoomCode: "ABC123",
+                LocalTrainerDisplayName: "Trainer", PartnerTrainerDisplayName: "",
             };
             UserFacingException? deadlineFailure = null;
             using (var deadlineClient = new ControlApiClient(new SelfTestHttpHandler(_ =>
@@ -168,6 +161,7 @@ public partial class App : Application
                                        SwitchRoomRole.Creator).GetAwaiter().GetResult() &&
                                    fakeGateway.LastSwitchRole == SwitchRoomRole.Creator &&
                                    coordinator.StopConnectionAsync().GetAwaiter().GetResult() &&
+                                   fakeGateway.StopCount == 1 && fakeGateway.EndCount == 0 &&
                                    coordinator.ReleaseRoomAsync().GetAwaiter().GetResult() &&
                                    fakeGateway.LastMembershipRole == RoomMembershipRole.Owner &&
                                    !coordinator.HasRoom;
@@ -178,6 +172,18 @@ public partial class App : Application
                 RoomMembershipRole.Member, SwitchRoomRole.Finder);
             var memberReleaseWorks = memberCoordinator.ReleaseRoomAsync().GetAwaiter().GetResult() &&
                                      memberGateway.LastMembershipRole == RoomMembershipRole.Member;
+            var activeGateway = new SelfTestGateway();
+            var activeCoordinator = new ActiveTradeRoomCoordinator(activeGateway);
+            activeCoordinator.Open(
+                new TradeRoomInfo("Room", "ABC123", "private", 2, "self_test"),
+                RoomMembershipRole.Owner, SwitchRoomRole.Creator);
+            activeCoordinator.ApplyRoom(new AuthoritativeRoomProjection(
+                6, 2, "running", RoomMembershipRole.Owner,
+                SwitchRoomRole.Creator, true, true, "running", true,
+                CurrentGate: "C_RFU_ACTIVE", LastPassedGate: "C_RFU_ACTIVE"));
+            var activeEndWorks = activeCoordinator.ConnectionIsActive &&
+                                 activeCoordinator.StopConnectionAsync().GetAwaiter().GetResult() &&
+                                 activeGateway.EndCount == 1 && activeGateway.StopCount == 0;
             memberCoordinator.Open(
                 new TradeRoomInfo("Room", "ABC123", "private", 2, "self_test"),
                 RoomMembershipRole.Member, SwitchRoomRole.Unassigned);
@@ -193,9 +199,9 @@ public partial class App : Application
                 memberCoordinator.RecoveryCode == "relay.restart" &&
                 memberCoordinator.RecoveryStage == "relay" &&
                 memberCoordinator.RecoveryRecoverable &&
-                memberCoordinator.RecoveryAction == "retry" &&
-                memberCoordinator.LocalTrainerDisplayName == "Red" &&
-                memberCoordinator.PartnerTrainerDisplayName == "Leaf";
+                memberCoordinator.RecoveryAction == "export_support_logs" &&
+                memberCoordinator.LocalTrainerDisplayName == "Trainer" &&
+                memberCoordinator.PartnerTrainerDisplayName == "";
             memberCoordinator.ApplyRoom(new AuthoritativeRoomProjection(
                 5, 2, "ready_check", RoomMembershipRole.Member,
                 SwitchRoomRole.Finder, true, false, "failed", true,
@@ -338,20 +344,43 @@ public partial class App : Application
                                                     cancelAbandon.LastRequest?.IsDestructive == true &&
                                                     canceledShell.CurrentScreen is RecoveryScreenViewModel &&
                                                     canceledShell.CanAbandonLocalAuthority;
-            Shutdown(apiIsLocal && codeNormalizes && requiredRoomFieldsWork &&
-                      highContrastResourcesLoad && capabilityGateWorks && exactReleaseGateWorks &&
-                      coordinatorWorks && memberReleaseWorks && authoritativeProjectionWorks &&
-                      attemptFailureContractWorks && attemptFailureMapsToRecovery &&
-                      missingSwitchRoomMapsToRecovery &&
-                      peerLossDoesNotMaskLocalFailure && endedAttemptStaysIdle &&
-                      remoteCloseClearsRoom && startupResumeWorks && deadlineEnvelopeSurvives &&
-                      deadlineRecoveryVisible && deadlineReturnHomeWorks &&
-                      unmatchedEnvelopeSurvives &&
-                      unmatchedRecoveryVisible && confirmedAbandonWorks &&
-                       canceledAbandonPreservesAuthority && hardwareContractWorks &&
-                       diagnosticCleanupContractWorks &&
-                       malformedInventoryContained && timedOutInventoryContained &&
-                      lastGoodInventorySurvives && adapterAuthorizationRecoveryWorks ? 0 : 1);
+            var checks = new Dictionary<string, bool>
+            {
+                [nameof(apiIsLocal)] = apiIsLocal,
+                [nameof(codeNormalizes)] = codeNormalizes,
+                [nameof(requiredRoomFieldsWork)] = requiredRoomFieldsWork,
+                [nameof(applicationSessionWorks)] = applicationSessionWorks,
+                [nameof(highContrastResourcesLoad)] = highContrastResourcesLoad,
+                [nameof(capabilityGateWorks)] = capabilityGateWorks,
+                [nameof(exactReleaseGateWorks)] = exactReleaseGateWorks,
+                [nameof(coordinatorWorks)] = coordinatorWorks,
+                [nameof(memberReleaseWorks)] = memberReleaseWorks,
+                [nameof(activeEndWorks)] = activeEndWorks,
+                [nameof(authoritativeProjectionWorks)] = authoritativeProjectionWorks,
+                [nameof(attemptFailureContractWorks)] = attemptFailureContractWorks,
+                [nameof(attemptFailureMapsToRecovery)] = attemptFailureMapsToRecovery,
+                [nameof(missingSwitchRoomMapsToRecovery)] = missingSwitchRoomMapsToRecovery,
+                [nameof(peerLossDoesNotMaskLocalFailure)] = peerLossDoesNotMaskLocalFailure,
+                [nameof(endedAttemptStaysIdle)] = endedAttemptStaysIdle,
+                [nameof(remoteCloseClearsRoom)] = remoteCloseClearsRoom,
+                [nameof(startupResumeWorks)] = startupResumeWorks,
+                [nameof(deadlineEnvelopeSurvives)] = deadlineEnvelopeSurvives,
+                [nameof(deadlineRecoveryVisible)] = deadlineRecoveryVisible,
+                [nameof(deadlineReturnHomeWorks)] = deadlineReturnHomeWorks,
+                [nameof(unmatchedEnvelopeSurvives)] = unmatchedEnvelopeSurvives,
+                [nameof(unmatchedRecoveryVisible)] = unmatchedRecoveryVisible,
+                [nameof(confirmedAbandonWorks)] = confirmedAbandonWorks,
+                [nameof(canceledAbandonPreservesAuthority)] = canceledAbandonPreservesAuthority,
+                [nameof(hardwareContractWorks)] = hardwareContractWorks,
+                [nameof(malformedInventoryContained)] = malformedInventoryContained,
+                [nameof(timedOutInventoryContained)] = timedOutInventoryContained,
+                [nameof(lastGoodInventorySurvives)] = lastGoodInventorySurvives,
+                [nameof(adapterAuthorizationRecoveryWorks)] = adapterAuthorizationRecoveryWorks,
+            };
+            var failedChecks = checks.Where(item => !item.Value).Select(item => item.Key).ToArray();
+            File.WriteAllLines(Path.Combine(Path.GetTempPath(), "SwitchTrade-desktop-self-test.failures.txt"),
+                failedChecks);
+            Shutdown(failedChecks.Length == 0 ? 0 : 1);
             return;
         }
         _singleInstance = new Mutex(true, "Local\\SwitchTrade.Desktop", out var createdNew);
@@ -360,7 +389,18 @@ public partial class App : Application
             Shutdown(0);
             return;
         }
-        new MainWindow().Show();
+        try
+        {
+            _applicationSession = ApplicationSession.Create();
+            new MainWindow(_applicationSession).Show();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(
+                "SwitchTrade could not create its local support session. Run Setup Repair and try again.",
+                "SwitchTrade needs attention", MessageBoxButton.OK, MessageBoxImage.Error);
+            Shutdown(1);
+        }
     }
 
     private static void ComboBoxPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -402,6 +442,8 @@ public partial class App : Application
         public int RoomProbeCount { get; private set; }
         public int AbandonCount { get; private set; }
         public int RepairAdapterCount { get; private set; }
+        public int StopCount { get; private set; }
+        public int EndCount { get; private set; }
         public SwitchRoomRole? LastSwitchRole { get; private set; }
         public RoomMembershipRole? LastMembershipRole { get; private set; }
         public Task<ControlStatus?> TryGetStatusAsync(CancellationToken cancellationToken = default) =>
@@ -429,7 +471,18 @@ public partial class App : Application
             LastSwitchRole = role;
             return Task.CompletedTask;
         }
-        public Task StopConnectionAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task ContinueConnectionAsync(
+            string checkpointId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task StopConnectionAsync(CancellationToken cancellationToken = default)
+        {
+            StopCount++;
+            return Task.CompletedTask;
+        }
+        public Task EndConnectionAsync(CancellationToken cancellationToken = default)
+        {
+            EndCount++;
+            return Task.CompletedTask;
+        }
         public Task ReleaseTradeRoomAsync(string roomCode, RoomMembershipRole role, CancellationToken cancellationToken = default)
         {
             LastMembershipRole = role;
@@ -452,18 +505,6 @@ public partial class App : Application
         public Task<HardwareDiagnosticViewData> RunHardwareDiagnosticsAsync(
             string usbId, CancellationToken cancellationToken = default) =>
             Task.FromResult(new HardwareDiagnosticViewData("self-test", "partial", "Self-test", ""));
-        public Task<ProductionDiagnosticViewData> StartProductionDiagnosticAsync(
-            ProductionDiagnosticTest test, string usbId, CancellationToken cancellationToken = default) =>
-            Task.FromResult(Diagnostic(test));
-        public Task<ProductionDiagnosticViewData> GetProductionDiagnosticAsync(
-            string runId, CancellationToken cancellationToken = default) =>
-            Task.FromResult(Diagnostic(ProductionDiagnosticTest.Automated));
-        public Task<ProductionDiagnosticViewData> ContinueProductionDiagnosticAsync(
-            string runId, string checkpointId, CancellationToken cancellationToken = default) =>
-            Task.FromResult(Diagnostic(ProductionDiagnosticTest.Automated));
-        public Task<ProductionDiagnosticViewData> CancelProductionDiagnosticAsync(
-            string runId, CancellationToken cancellationToken = default) =>
-            Task.FromResult(Diagnostic(ProductionDiagnosticTest.Automated));
         public Task<LivePartyProjection?> TryGetPartiesAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<LivePartyProjection?>(null);
         public Task RepairAdapterAsync(CancellationToken cancellationToken = default)
@@ -475,9 +516,6 @@ public partial class App : Application
             Task.FromResult("");
         public void Dispose() { }
 
-        private static ProductionDiagnosticViewData Diagnostic(ProductionDiagnosticTest test) => new(
-            "self-test", test, "passed", "completed", "relay_exchange_passed", null, null,
-            null, [], [], "passed");
     }
 
     private sealed class SelfTestHttpHandler(
@@ -539,6 +577,8 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         SystemParameters.StaticPropertyChanged -= SystemSettingChanged;
+        try { _applicationSession?.Complete(); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
         if (_singleInstance is not null)
         {
             try { _singleInstance.ReleaseMutex(); }

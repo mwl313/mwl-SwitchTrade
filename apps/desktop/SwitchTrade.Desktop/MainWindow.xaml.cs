@@ -17,17 +17,20 @@ public partial class MainWindow : Window
     public const string ApiBase = ControlApiClient.ApiBase;
 
     private readonly MainViewModel _viewModel;
+    private readonly ApplicationSession _applicationSession;
     private readonly DispatcherTimer _statusTimer = new() { Interval = TimeSpan.FromSeconds(2) };
     private bool _allowClose;
 
-    public MainWindow()
+    public MainWindow(ApplicationSession applicationSession)
     {
         InitializeComponent();
+        _applicationSession = applicationSession;
         _viewModel = new MainViewModel(
             new ControlApiClient(),
-            new BackendLauncher(),
+            new BackendLauncher(applicationSession),
             new WindowsDialogService(),
-            new WindowsClipboardService());
+            new WindowsClipboardService(),
+            applicationSession: applicationSession);
         DataContext = _viewModel;
 
         Loaded += WindowLoaded;
@@ -116,7 +119,7 @@ public partial class MainWindow : Window
         if (_allowClose) return;
         e.Cancel = true;
         if (!await _viewModel.CanCloseAsync()) return;
-        await BackendLauncher.StopAsync();
+        await BackendLauncher.StopAsync(_applicationSession);
         _allowClose = true;
         Close();
     }

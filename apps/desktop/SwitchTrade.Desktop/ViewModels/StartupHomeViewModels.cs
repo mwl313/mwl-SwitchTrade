@@ -13,6 +13,7 @@ public sealed class RecoveryScreenViewModel : ScreenViewModel
         AbandonLocalAuthorityCommand = new AsyncCommand(shell.AbandonLocalAuthorityAsync);
         ReturnHomeCommand = new RelayCommand(shell.ReturnHomeFromAuthorityRecovery);
         SettingsCommand = new AsyncCommand(shell.OpenSettingsAsync);
+        SupportCommand = new AsyncCommand(ExportSupportAsync);
     }
 
     public override string Title => "SwitchTrade needs attention";
@@ -26,6 +27,17 @@ public sealed class RecoveryScreenViewModel : ScreenViewModel
     public AsyncCommand AbandonLocalAuthorityCommand { get; }
     public RelayCommand ReturnHomeCommand { get; }
     public AsyncCommand SettingsCommand { get; }
+    public AsyncCommand SupportCommand { get; }
+
+    private async Task ExportSupportAsync()
+    {
+        try
+        {
+            var path = await Shell.ExportSupportLogsAsync();
+            Shell.Announce($"Support file saved to your Desktop: {path}");
+        }
+        catch (Services.UserFacingException error) { Shell.Announce(error.UserMessage); }
+    }
 
     public void NotifyRecoveryChanged()
     {

@@ -20,17 +20,18 @@ import zipfile
 RUN_ID = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{8}$")
 SENSITIVE_NAMES = (
     "password", "passcode", "passphrase", "secret", "token", "master_key", "prod.keys",
-    "session_id", "room_code",
+    "session_id", "room_code", "instance_id", "trainer", "pokemon",
 )
 TEXT_SECRETS = (
     (re.compile(r"(?i)\bauthorization\s*[:=]\s*bearer\s+[^\s,;\"']+"),
      "Authorization: Bearer <redacted>"),
     (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+"), "Bearer <redacted>"),
     (re.compile(
-        r"(?i)\b(member_token|reconnect_token)\b\s*[\"']?\s*[:=]\s*[\"']?[^\s,;}\"']+"
+        r"(?i)\b(member_token|reconnect_token|room_code|instance_id)\b\s*[\"']?\s*[:=]\s*[\"']?[^\s,;}\"']+"
     ), r"\1=<redacted>"),
     (re.compile(r"(?i)\b(pass(?:word|code|phrase)|token|secret)\s*[=:]\s*\S+"), r"\1=<redacted>"),
     (re.compile(r"(?i)\b(?:[0-9a-f]{2}:){5}[0-9a-f]{2}\b"), "<redacted-mac>"),
+    (re.compile(r"(?i)\b[A-Z]:\\Users\\[^\\\s\"']+"), r"%USERPROFILE%"),
 )
 
 
@@ -48,7 +49,8 @@ def _utc_now() -> datetime:
 def _redact(value: Any, name: str = "") -> Any:
     if value is None:
         return None
-    if any(fragment in name.lower() for fragment in SENSITIVE_NAMES):
+    if name.lower() != "app_session_id" and any(
+            fragment in name.lower() for fragment in SENSITIVE_NAMES):
         return "<redacted>"
     if isinstance(value, dict):
         return {str(key): _redact(item, str(key)) for key, item in value.items()}
@@ -103,6 +105,8 @@ class RunLogger:
         self._lock = threading.Lock()
         self._events = self.run_dir / "events.jsonl"
         self._console = self.run_dir / "console.log"
+        from switchtrade.session_evidence import ApplicationEvidence
+        self._application_evidence = ApplicationEvidence.from_environment(component)
         repo = Path(__file__).resolve().parents[1]
         base = {
             "run_id": self.run_id,
@@ -135,6 +139,11 @@ class RunLogger:
                 stream.write(line + "\n")
             with self._console.open("a", encoding="utf-8") as stream:
                 stream.write(readable + "\n")
+        if self._application_evidence is not None:
+            self._application_evidence.event(
+                event, run_id=str(fields.get("run_id") or self.run_id),
+                gate=fields.get("gate"), code=fields.get("code"), level=level,
+                **{key: value for key, value in fields.items() if key not in {"run_id", "gate", "code"}})
 
     def close(self, outcome: str = "stopped") -> None:
         self.event("run_finished", outcome=outcome)

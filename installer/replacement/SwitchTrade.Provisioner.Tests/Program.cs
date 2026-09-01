@@ -15,6 +15,7 @@ try
     RuntimeNamesAlwaysRetainUniqueGeneration();
     ProvisionerLogsAreSanitized();
     AtomicStateRoundTrip();
+    await RuntimeStatusReconcilesIndependentRegistrationViews();
     await HardwareAuthorizationUsesStableIdentity();
     await LifecycleFaultsConverge();
     await ConcurrentOperationsAreRejected();
@@ -165,7 +166,7 @@ void ReleaseManifestVerifiesPayloadsAndRejectsEscape()
     var file = Path.Combine(package, "payload", "runtime.wsl");
     File.WriteAllText(file, "runtime", Encoding.ASCII);
     var manifest = new ReleaseManifest(1, "beta-test", "0.2.0-beta.1", "x64", 19045, "2.4.4",
-        "app-readiness.v1", "https://relay.example.test", new string('1', 64), new KernelDescriptor("test", "rtl8xxxu", ["0bda:818b"]),
+        "local-app-readiness.v2", "https://relay.example.test", new string('1', 64), new KernelDescriptor("test", "rtl8xxxu", ["0bda:818b"]),
         new Dictionary<string, PayloadDescriptor> { ["runtime"] = new("payload/runtime.wsl", new FileInfo(file).Length, Contract.HashFile(file)) });
     File.WriteAllText(Path.Combine(package, "release-manifest.json"), JsonSerializer.Serialize(manifest, Contract.Json));
     Assert(ReleaseManifest.LoadVerified(package).ReleaseId == "beta-test", "valid manifest failed");
@@ -180,10 +181,46 @@ void ReleaseManifestVerifiesPayloadsAndRejectsEscape()
 void AtomicStateRoundTrip()
 {
     var path = Path.Combine(root, "state", "active.json");
-    var expected = new ActiveRuntime(1, "beta-test", "SwitchTrade-beta-test-a", null, "kernel", "app-readiness.v1");
+    var expected = new ActiveRuntime(1, "beta-test", "SwitchTrade-beta-test-a", null, "kernel", "local-app-readiness.v2");
     AtomicFile.Write(path, expected);
     Assert(AtomicFile.Read<ActiveRuntime>(path) == expected, "atomic state round trip failed");
     Assert(!Directory.EnumerateFiles(Path.GetDirectoryName(path)!, "*.tmp.*").Any(), "atomic temporary file leaked");
+}
+
+async Task RuntimeStatusReconcilesIndependentRegistrationViews()
+{
+    var test = Path.Combine(root, "runtime-status-reconciliation");
+    var data = Path.Combine(test, "data");
+    var profile = Path.Combine(test, "profile");
+    var package = CreateLifecyclePackage(test);
+    var manifest = ReleaseManifest.LoadVerified(package);
+    var paths = new ProvisionerPaths(data, profile);
+    var wsl = new FakeWsl(manifest.ReleaseId, manifest.RuntimeContentId, "none");
+    var engine = new ProvisioningEngine(paths, wsl, new FakeHealth("none"),
+        Guid.NewGuid(), _ => { });
+    await engine.RepairAsync(manifest, package, CancellationToken.None);
+    var active = AtomicFile.Read<ActiveRuntime>(paths.ActivePath)!;
+
+    wsl.HideRegistrationFromNextLookup(active.ActiveName);
+    var cliConfirmed = await engine.InspectAsync(CancellationToken.None);
+    Assert(cliConfirmed.SoftwareReady,
+        "a transient Lxss registry omission falsely marked a CLI-listed runtime corrupt");
+
+    wsl.HideFromNextEnumeration(active.ActiveName);
+    var registryConfirmed = await engine.InspectAsync(CancellationToken.None);
+    Assert(registryConfirmed.SoftwareReady,
+        "a transient CLI omission falsely marked a registry-confirmed runtime corrupt");
+
+    wsl.HideFromNextEnumeration(active.ActiveName);
+    wsl.HideRegistrationFromNextLookup(active.ActiveName);
+    var reconciled = await engine.InspectAsync(CancellationToken.None);
+    Assert(reconciled.SoftwareReady,
+        "one transient omission from both views falsely marked the runtime corrupt");
+
+    wsl.RemoveRegistrationForTest(active.ActiveName);
+    var absent = await engine.InspectAsync(CancellationToken.None);
+    Assert(!absent.SoftwareReady && absent.State == "corrupt",
+        "runtime absence from both independent views did not fail closed");
 }
 
 void RuntimeNamesAlwaysRetainUniqueGeneration()
@@ -549,7 +586,7 @@ string CreateLifecyclePackage(string test)
     File.WriteAllText(runtime, "immutable-runtime", Encoding.ASCII);
     File.WriteAllText(kernel, "custom-kernel", Encoding.ASCII);
     var manifest = new ReleaseManifest(1, "beta-fault-test", "0.2.0", "x64", 19045, "2.4.4",
-        "app-readiness.v1", "https://relay.example.test", new string('a', 64),
+        "local-app-readiness.v2", "https://relay.example.test", new string('a', 64),
         new KernelDescriptor("test-kernel", "rtl8xxxu", ["0bda:818b"]),
         new Dictionary<string, PayloadDescriptor>
         {
@@ -562,7 +599,7 @@ string CreateLifecyclePackage(string test)
 }
 
 ReleaseManifest TestManifest(string kernel, string package) => new(1, "beta-test", "0.2.0-beta.1", "x64", 19045, "2.4.4",
-    "app-readiness.v1", "https://relay.example.test", new string('1', 64), new KernelDescriptor("test-kernel", "rtl8xxxu", ["0bda:818b"]),
+    "local-app-readiness.v2", "https://relay.example.test", new string('1', 64), new KernelDescriptor("test-kernel", "rtl8xxxu", ["0bda:818b"]),
     new Dictionary<string, PayloadDescriptor> { ["kernel"] = new(Path.GetRelativePath(package, kernel), new FileInfo(kernel).Length, Contract.HashFile(kernel)) });
 
 static void Assert(bool condition, string message)
@@ -609,6 +646,7 @@ sealed class FakeWsl(string releaseId, string contentId, string fault) : IWslPla
     private readonly Dictionary<string, string> _rawMarkers = new(StringComparer.OrdinalIgnoreCase);
     private bool _failed;
     private string? _hiddenFromNextEnumeration;
+    private string? _hiddenFromNextRegistration;
 
     public HashSet<string> Names => _registrations.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
     public HashSet<string> UnregisterAttempts { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -623,8 +661,18 @@ sealed class FakeWsl(string releaseId, string contentId, string fault) : IWslPla
         }
         return Task.FromResult(names);
     }
-    public WslRegistration? Registration(string name) => _registrations.GetValueOrDefault(name);
+    public WslRegistration? Registration(string name)
+    {
+        if (string.Equals(_hiddenFromNextRegistration, name, StringComparison.OrdinalIgnoreCase))
+        {
+            _hiddenFromNextRegistration = null;
+            return null;
+        }
+        return _registrations.GetValueOrDefault(name);
+    }
     public void HideFromNextEnumeration(string name) => _hiddenFromNextEnumeration = name;
+    public void HideRegistrationFromNextLookup(string name) => _hiddenFromNextRegistration = name;
+    public void RemoveRegistrationForTest(string name) => _registrations.Remove(name);
 
     public void SeedOwned(string name, string location, string markerRelease, string markerContent)
     {

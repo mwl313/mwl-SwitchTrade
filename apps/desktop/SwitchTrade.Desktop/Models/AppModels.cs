@@ -95,7 +95,14 @@ public sealed record AuthoritativeRoomProjection(
     bool FailureRecoverable = false,
     string? FailureAction = null,
     string LocalTrainerDisplayName = "",
-    string PartnerTrainerDisplayName = "");
+    string PartnerTrainerDisplayName = "",
+    string? CurrentGate = null,
+    string? LastPassedGate = null,
+    string? CheckpointId = null,
+    string? CheckpointInstructions = null,
+    string? CleanupStatus = null,
+    bool CleanupVerified = false,
+    string? FunctionalStatus = null);
 
 public sealed record AdapterProfileViewData(
     string UsbId,
@@ -112,37 +119,6 @@ public sealed record HardwareDiagnosticViewData(
     string OverallStatus,
     string Summary,
     string ReportPath);
-
-public enum ProductionDiagnosticTest { Automated, RoomDetection, ApAssociation, Recommended }
-
-public sealed record ProductionDiagnosticStageViewData(
-    string Name,
-    string Status,
-    string Code,
-    string Message);
-
-public sealed record ProductionDiagnosticCheckpointViewData(
-    string Id,
-    string Instructions,
-    DateTimeOffset? Deadline);
-
-public sealed record ProductionDiagnosticViewData(
-    string RunId,
-    ProductionDiagnosticTest Test,
-    string Status,
-    string CurrentStage,
-    string? ResultLevel,
-    string? FailureCode,
-    string? FailureMessage,
-    ProductionDiagnosticCheckpointViewData? Checkpoint,
-    IReadOnlyList<ProductionDiagnosticStageViewData> Stages,
-    IReadOnlyList<string> Limitations,
-    string CleanupStatus)
-{
-    public bool IsTerminal => Status is "passed" or "partial" or "failed" or "canceled";
-    public bool IsWaiting => Status == "awaiting_user" && Checkpoint is not null;
-    public bool CleanupPassed => CleanupStatus == "passed";
-}
 
 public sealed record HardwareDeviceViewData(
     string BusId,

@@ -578,6 +578,11 @@ class DistributedLifecycle:
     def relay_role(self) -> str:
         return "creator" if self.session["switch_role"] == "a_room_joiner" else "finder"
 
+    def _publish_passed_gate(self, gate: str) -> None:
+        publish = getattr(self.control, "gate_passed", None)
+        if callable(publish):
+            publish(gate)
+
     def _versioned(self, operation) -> dict:
         """Retry only the relay's explicit optimistic-version conflict."""
         for attempt in range(8):
@@ -695,6 +700,7 @@ class DistributedLifecycle:
 
     def prepare(self, context: dict) -> dict:
         self.run_context = context
+        self._publish_passed_gate("P0_SIDE_READY")
         self.control.raise_if_canceled("C0_authority")
         command_id = self.relay.command_id()
         room = self._versioned(
@@ -854,21 +860,41 @@ class DistributedLifecycle:
                     kind = event["event"]
                     if kind in {"a_gate_passed", "b_gate_passed", "c_gate_passed", "c2_gate_passed"}:
                         self.last_gate = str(event["gate"])
+                        self._publish_passed_gate(self.last_gate)
                     elif kind == "side_ready":
                         self.last_gate = str(event["gate"])
+                        self._publish_passed_gate(self.last_gate)
                         _status("stage", test_id=self.session["test_id"], gate=self.last_gate)
                     elif kind == "bridge_ready":
                         self.last_gate = "C_BRIDGE_READY"
+                        self._publish_passed_gate(self.last_gate)
                         _status("stage", test_id=self.session["test_id"], gate=self.last_gate)
                     elif kind == "rfu_active":
                         self.last_gate = "C_RFU_ACTIVE"
+                        self._publish_passed_gate(self.last_gate)
                         _status(
                             "stage", test_id=self.session["test_id"], gate=self.last_gate,
                             bidirectional=True,
                         )
                     elif kind == "trade_complete":
                         self.last_gate = "C_TRADE_COMPLETE"
+                        self._publish_passed_gate(self.last_gate)
                         _status("stage", test_id=self.session["test_id"], gate=self.last_gate)
+                    elif kind == "endpoint_heartbeat":
+                        attempt = self.room.get("attempt") or {}
+                        if (
+                            event.get("attempt_id") != attempt.get("attempt_id") or
+                            event.get("launch_nonce") != context["launch_nonce"] or
+                            event.get("endpoint_pid") != context["p0b"]["wrapper_pid"] or
+                            event.get("process_start_ticks") != context["p0b"]["process_start_ticks"]
+                        ):
+                            raise P0Error(
+                                "DISTRIBUTED_ENDPOINT_IDENTITY_MISMATCH", self.last_gate,
+                                "endpoint heartbeat changed launch identity",
+                            )
+                        heartbeat = getattr(self.control, "heartbeat", None)
+                        if callable(heartbeat):
+                            heartbeat(str(event.get("gate") or self.last_gate))
                     elif kind == "user_checkpoint":
                         _status(
                             "user_checkpoint", test_id=self.session["test_id"],
@@ -1039,8 +1065,10 @@ class DistributedLifecycle:
             radio_probe=probes.temporary_interfaces,
         )
         acknowledged = control.acknowledge(room)["room"]
+        self._publish_passed_gate("D5_SIDE_QUIESCENT")
         _status("cleanup", test_id=self.session["test_id"], gate="D5_SIDE_QUIESCENT")
         terminal = self._wait_terminal(acknowledged)
+        self._publish_passed_gate("D6_TWO_SIDE_TERMINAL")
         _status("cleanup", test_id=self.session["test_id"], gate="D6_TWO_SIDE_TERMINAL")
         released = LocalDRelease(
             coordinator=self.coordinator, run_id=context["run_id"],
@@ -1054,6 +1082,7 @@ class DistributedLifecycle:
                 "DISTRIBUTED_LOCAL_RELEASE_FAILED", "D11_RELEASE",
                 "local D7-D11 cleanup was not verified",
             )
+        self._publish_passed_gate("D11_VERIFIED")
         _status("cleanup", test_id=self.session["test_id"], gate="D11_VERIFIED")
         room_finalization = self._room_finalize()
         self.session_path.unlink(missing_ok=True)

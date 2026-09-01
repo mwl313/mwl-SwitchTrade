@@ -59,6 +59,7 @@ class UsbAdapter:
 
 
 Runner = Callable[[list[str], float], subprocess.CompletedProcess[str]]
+LinuxIdentityResolver = Callable[[UsbAdapter], str]
 
 
 def wsl_root_command(
@@ -217,16 +218,74 @@ def selected_adapter(selection_file: Path, inventory: list[UsbAdapter]) -> UsbAd
     return adapter
 
 
-def linux_usb_probe(usb_id: str = USB_ID, sys_root: Path = Path("/sys")) -> dict:
+def linux_usb_inventory(usb_id: str = USB_ID, sys_root: Path = Path("/sys")) -> tuple[str, ...]:
+    """Return canonical sysfs identities for one USB profile without enumeration-order meaning."""
+    devices: list[str] = []
     try:
-        devices = []
         for vendor in (sys_root / "bus" / "usb" / "devices").glob("*/idVendor"):
             try:
-                found = f"{vendor.read_text().strip()}:{(vendor.parent / 'idProduct').read_text().strip()}".lower()
+                found = (
+                    f"{vendor.read_text().strip()}:"
+                    f"{(vendor.parent / 'idProduct').read_text().strip()}"
+                ).lower()
                 if found == usb_id:
-                    devices.append(vendor.parent.resolve())
+                    devices.append(str(vendor.parent.resolve(strict=True)))
             except OSError:
                 continue
+    except OSError:
+        return ()
+    return tuple(sorted(set(devices)))
+
+
+def linux_usb_descendants(identity: str, sys_root: Path = Path("/sys")) -> dict:
+    """Return radio descendants for one canonical USB sysfs identity."""
+    try:
+        device = Path(identity).resolve(strict=True)
+        if str(device) not in linux_usb_inventory(USB_ID, sys_root):
+            raise OSError("identity is outside USB sysfs")
+
+        def linked(root: Path) -> list[str]:
+            result = []
+            for item in root.glob("*/device"):
+                try:
+                    target = item.resolve(strict=True)
+                except OSError:
+                    continue
+                if target == device or device in target.parents:
+                    result.append(item.parent.name)
+            return sorted(set(result))
+
+        return {
+            "status": "present",
+            "netdevs": linked(sys_root / "class" / "net"),
+            "phys": linked(sys_root / "class" / "ieee80211"),
+        }
+    except OSError:
+        return {"status": "absent", "netdevs": [], "phys": []}
+
+
+def linux_usb_probe(usb_id: str = USB_ID, sys_root: Path = Path("/sys")) -> dict:
+    try:
+        exact_identity = usb_id.startswith("/") or Path(usb_id).is_absolute()
+        if exact_identity:
+            candidate = Path(usb_id)
+            try:
+                device = candidate.resolve(strict=True)
+            except OSError:
+                devices = []
+            else:
+                vendor = device / "idVendor"
+                product = device / "idProduct"
+                if (
+                    str(device) not in linux_usb_inventory(USB_ID, sys_root) or
+                    not vendor.is_file() or not product.is_file() or
+                    f"{vendor.read_text().strip()}:{product.read_text().strip()}".lower() != USB_ID
+                ):
+                    devices = []
+                else:
+                    devices = [device]
+        else:
+            devices = [Path(item) for item in linux_usb_inventory(usb_id, sys_root)]
         def linked_items(root: Path) -> list[Path]:
             result = []
             for item in root.glob("*/device"):
@@ -466,6 +525,7 @@ class UsbLease:
         distro: str = "SwitchTrade",
         runtime_root: str = "/opt/switchtrade",
         probe: Callable[[str], dict] = linux_usb_probe,
+        identity_resolver: LinuxIdentityResolver | None = None,
         deadline: float = 12,
     ):
         self.adapter = adapter
@@ -474,9 +534,12 @@ class UsbLease:
         self.distro = distro
         self.runtime_root = runtime_root
         self.probe = probe
+        self.identity_resolver = identity_resolver
+        self.exact_identity_required = identity_resolver is not None
         self.deadline = deadline
         self.acquired_by_run = False
         self.active = False
+        self.linux_identity: str | None = None
 
     @classmethod
     def from_recovery(
@@ -487,6 +550,7 @@ class UsbLease:
         distro: str = "SwitchTrade",
         runtime_root: str = "/opt/switchtrade",
         probe: Callable[[str], dict] = linux_usb_probe,
+        identity_resolver: LinuxIdentityResolver | None = None,
         deadline: float = 12,
     ) -> "UsbLease":
         value = _read_json(Path(recovery_file), "P0_RECOVERY_STATE_INVALID", "D10_usb_return")
@@ -496,7 +560,11 @@ class UsbLease:
                 not isinstance(value.get("instance_id"), str) or not value["instance_id"] or
                 not isinstance(value.get("bus_id"), str) or not _BUS_ID.fullmatch(value["bus_id"]) or
                 not isinstance(value.get("prior_attached"), bool) or
-                not isinstance(value.get("attach_intent"), bool)):
+                not isinstance(value.get("attach_intent"), bool) or
+                (value.get("exact_identity_required") is not None and
+                 not isinstance(value.get("exact_identity_required"), bool)) or
+                (value.get("linux_identity") is not None and
+                 not cls._valid_linux_identity(value.get("linux_identity")))):
             raise P0Error("P0_RECOVERY_STATE_INVALID", "D10_usb_return", "USB recovery state is invalid")
         lease = cls(
             UsbAdapter(
@@ -504,13 +572,66 @@ class UsbLease:
                 bus_id=value["bus_id"], shared=True, attached=value["prior_attached"],
             ),
             Path(recovery_file), runner=runner, distro=distro, probe=probe, deadline=deadline,
-            runtime_root=runtime_root,
+            runtime_root=runtime_root, identity_resolver=identity_resolver,
         )
         # An attach intent written for a previously detached adapter is sufficient recovery
         # authority. The attach command may have succeeded just before the control process died.
         lease.acquired_by_run = bool(value["attach_intent"] and not value["prior_attached"])
         lease.active = True
+        lease.linux_identity = value.get("linux_identity")
+        lease.exact_identity_required = bool(
+            value.get("exact_identity_required") or
+            lease.linux_identity is not None or
+            identity_resolver is not None
+        )
         return lease
+
+    @staticmethod
+    def _valid_linux_identity(value: object) -> bool:
+        if not isinstance(value, str) or not value or len(value) > 512 or "\x00" in value:
+            return False
+        path = PurePosixPath(value)
+        return (
+            path.is_absolute() and len(path.parts) >= 3 and
+            path.parts[1] == "sys" and ".." not in path.parts
+        )
+
+    def _probe(self) -> dict:
+        if self.exact_identity_required and self.linux_identity is None:
+            raise P0Error(
+                "P0_LINUX_IDENTITY_UNAVAILABLE", "P0b_enumeration",
+                "the exact Linux USB identity is required",
+            )
+        return self.probe(self.linux_identity or self.adapter.usb_id)
+
+    def _bind_linux_identity(
+        self, *, attach_intent: bool, gate: str = "P0b_enumeration",
+    ) -> None:
+        if self.linux_identity is not None:
+            return
+        if self.identity_resolver is None:
+            if not self.exact_identity_required:
+                return
+            raise P0Error(
+                "P0_LINUX_IDENTITY_UNAVAILABLE", gate,
+                "the exact Linux USB identity resolver is unavailable",
+            )
+        try:
+            identity = self.identity_resolver(self.adapter)
+        except P0Error:
+            raise
+        except (OSError, RuntimeError, ValueError) as error:
+            raise P0Error(
+                "P0_LINUX_IDENTITY_UNAVAILABLE", gate,
+                "the exact Linux USB identity could not be resolved",
+            ) from error
+        if not self._valid_linux_identity(identity):
+            raise P0Error(
+                "P0_LINUX_IDENTITY_INVALID", gate,
+                "the exact Linux USB identity is invalid",
+            )
+        self.linux_identity = identity
+        self._persist(attach_intent=attach_intent)
 
     def _inventory(self) -> list[UsbAdapter]:
         value = _run(
@@ -545,7 +666,7 @@ class UsbLease:
         return matches[0]
 
     def _persist(self, *, attach_intent: bool) -> None:
-        atomic_json(self.recovery_file, {
+        value = {
             "schema": 1,
             "usb_id": self.adapter.usb_id,
             "instance_id": self.adapter.instance_id,
@@ -553,7 +674,12 @@ class UsbLease:
             "prior_attached": self.adapter.attached,
             "attach_intent": attach_intent,
             "acquired_by_run": self.acquired_by_run,
-        }, private=True)
+        }
+        if self.linux_identity is not None:
+            value["linux_identity"] = self.linux_identity
+        if self.exact_identity_required:
+            value["exact_identity_required"] = True
+        atomic_json(self.recovery_file, value, private=True)
 
     def acquire(self, checkpoint: Callable[[], None] | None = None) -> dict:
         checkpoint = checkpoint or (lambda: None)
@@ -565,7 +691,8 @@ class UsbLease:
             raise P0Error("P0_ADAPTER_IDENTITY_CHANGED", "P0b_lease", "adapter changed after P0a")
         self._persist(attach_intent=not current.attached)
         if current.attached:
-            linux = self.probe(self.adapter.usb_id)
+            self._bind_linux_identity(attach_intent=False)
+            linux = self._probe()
             if linux.get("status") != "present" or linux.get("matches") != 1:
                 code, detail = _linux_probe_error(
                     linux, "P0_ADAPTER_OWNED_ELSEWHERE")
@@ -591,6 +718,7 @@ class UsbLease:
                 ["usbipd.exe", "attach", f"--wsl={self.distro}", "--busid", current.bus_id],
                 15, code="P0_ADAPTER_ATTACH_FAILED", gate="P0b_usbip",
             )
+            self._bind_linux_identity(attach_intent=True)
             deadline = time.monotonic() + self.deadline
             stable = 0
             while time.monotonic() < deadline:
@@ -601,7 +729,7 @@ class UsbLease:
                         "P0_ADAPTER_IDENTITY_CHANGED", "P0b_enumeration",
                         "adapter bus identity changed during P0b",
                     )
-                linux = self.probe(self.adapter.usb_id)
+                linux = self._probe()
                 matches = now.attached and linux.get("status") == "present" and linux.get("matches") == 1
                 stable = stable + 1 if matches else 0
                 if stable >= 2:
@@ -622,7 +750,7 @@ class UsbLease:
         return self.evidence()
 
     def evidence(self) -> dict:
-        return {
+        value = {
             "adapter_instance_sha256": self.adapter.instance_sha256,
             "usb_id": self.adapter.usb_id,
             "bus_id": self.adapter.bus_id,
@@ -630,6 +758,10 @@ class UsbLease:
             "acquired_by_run": self.acquired_by_run,
             "active": self.active,
         }
+        if self.linux_identity is not None:
+            value["linux_identity_sha256"] = hashlib.sha256(
+                self.linux_identity.encode("utf-8")).hexdigest()
+        return value
 
     def release(self) -> dict:
         if not self.recovery_file.exists() and not self.active:
@@ -640,6 +772,15 @@ class UsbLease:
                 "detached_by_run": False,
             }
         current = self._current()
+        if self.exact_identity_required and self.linux_identity is None:
+            if not current.attached:
+                raise P0Error(
+                    "P0_CLEANUP_UNKNOWN", "D10_usb_return",
+                    "the exact Linux USB identity disappeared before cleanup",
+                )
+            self._bind_linux_identity(
+                attach_intent=self.acquired_by_run, gate="D10_usb_return",
+            )
         if self.acquired_by_run:
             if current.bus_id != self.adapter.bus_id:
                 if current.attached:
@@ -651,7 +792,7 @@ class UsbLease:
                 # still identify the exact detached device; subsequent reads bind to its new bus.
                 self.adapter = current
             if current.attached:
-                before_detach = self.probe(self.adapter.usb_id)
+                before_detach = self._probe()
                 if (before_detach.get("status") != "present" or
                         before_detach.get("matches") != 1 or
                         before_detach.get("interfaces_up") != 0):
@@ -673,7 +814,7 @@ class UsbLease:
             windows_seen = False
             while time.monotonic() < deadline:
                 now = self._current_after_detach()
-                linux = self.probe(self.adapter.usb_id)
+                linux = self._probe()
                 windows_seen = windows_seen or now is not None
                 matches = (
                     now is not None and not now.attached and linux.get("status") == "absent" and
@@ -693,7 +834,7 @@ class UsbLease:
                 raise P0Error(
                     code, "D10_usb_return", "adapter release could not be verified" + detail)
         else:
-            linux = self.probe(self.adapter.usb_id)
+            linux = self._probe()
             if (not current.attached or linux.get("status") != "present" or
                     linux.get("matches") != 1 or linux.get("interfaces_up") != 0):
                 raise P0Error(
@@ -712,6 +853,6 @@ class UsbLease:
 
 __all__ = [
     "PASSIVE_CONTRACT", "P0Error", "PassiveValidator", "USB_ID", "UsbAdapter", "UsbLease",
-    "atomic_json", "linux_usb_probe", "parse_usbipd_state", "run_command", "selected_adapter",
+    "atomic_json", "linux_usb_descendants", "linux_usb_inventory", "linux_usb_probe", "parse_usbipd_state", "run_command", "selected_adapter",
     "wsl_root_command",
 ]

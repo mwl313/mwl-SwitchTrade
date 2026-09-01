@@ -18,14 +18,15 @@ from switchtrade.connection.a_stage import GATES as A_GATES
 from switchtrade.connection.b_stage import FIXTURE_SHA256, GATES as B_GATES
 from switchtrade.connection.p0 import (
     P0Error, PassiveValidator, USB_ID, UsbLease, _decode_native_output, atomic_json,
-    parse_usbipd_state,
+    linux_usb_inventory, linux_usb_probe, parse_usbipd_state,
 )
 from switchtrade.connection.p0_harness import (
-    P0Canceled, P0Harness, WorkerEvents, _installed_release, _wsl_linux_usb_probe,
+    P0Canceled, P0Harness, WorkerEvents, _BoundedTextLog, _installed_release, _wsl_linux_usb_probe,
     _wsl_netdev_exists, _wsl_process_start_ticks,
 )
 from switchtrade.connection.radio_worker import (
     REQUIRED_MODULES, RadioWorkerError, _validate_ticket, build_side_ready,
+    enable_parent_death_termination,
 )
 from switchtrade.connection.runtime_probe import RuntimeProbeError, _verify_channel
 from switchtrade.connection.runtime_probe import REQUIRED_MODULES as PASSIVE_REQUIRED_MODULES
@@ -252,6 +253,53 @@ class PassiveP0Tests(unittest.TestCase):
 
     def test_passive_and_active_module_identities_use_kernel_names(self):
         self.assertEqual(PASSIVE_REQUIRED_MODULES, REQUIRED_MODULES)
+
+
+class ExactLinuxUsbProbeTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.sys = Path(self.temporary.name) / "sys"
+        self.devices = self.sys / "bus" / "usb" / "devices"
+        self.devices.mkdir(parents=True)
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def add_device(self, name: str, *, usb_id: str = USB_ID) -> Path:
+        device = self.devices / name
+        device.mkdir()
+        vendor, product = usb_id.split(":")
+        (device / "idVendor").write_text(vendor, encoding="ascii")
+        (device / "idProduct").write_text(product, encoding="ascii")
+        return device
+
+    def test_inventory_is_canonical_and_has_no_enumeration_order_semantics(self):
+        second = self.add_device("2-2")
+        first = self.add_device("1-1")
+        self.add_device("3-3", usb_id="1234:5678")
+        self.assertEqual(
+            linux_usb_inventory(USB_ID, self.sys),
+            tuple(sorted((str(first.resolve()), str(second.resolve())))),
+        )
+
+    def test_exact_probe_never_counts_the_other_identical_radio(self):
+        first = self.add_device("1-1")
+        second = self.add_device("2-2")
+        self.assertEqual(linux_usb_probe(str(first), self.sys)["matches"], 1)
+        first.rename(self.devices / "1-1-removed")
+        missing = linux_usb_probe(str(first), self.sys)
+        self.assertEqual(missing["status"], "absent")
+        self.assertEqual(missing["matches"], 0)
+        self.assertEqual(linux_usb_probe(str(second), self.sys)["matches"], 1)
+
+    def test_exact_probe_accepts_the_canonical_target_of_a_usb_inventory_symlink(self):
+        canonical = self.sys / "devices" / "platform" / "vhci" / "usb1" / "1-1"
+        canonical.mkdir(parents=True)
+        (canonical / "idVendor").write_text("0bda", encoding="ascii")
+        (canonical / "idProduct").write_text("818b", encoding="ascii")
+        (self.devices / "1-1").symlink_to(canonical, target_is_directory=True)
+        self.assertEqual(linux_usb_inventory(USB_ID, self.sys), (str(canonical.resolve()),))
+        self.assertEqual(linux_usb_probe(str(canonical), self.sys)["matches"], 1)
 
 
 class StatefulUsbRunner:
@@ -546,6 +594,23 @@ class RadioWorkerTests(unittest.TestCase):
             firmware_root=self.firmware, runtime_root=self.runtime,
         )
 
+    def test_parent_death_guard_is_mandatory_on_linux(self):
+        libc = mock.Mock()
+        libc.prctl.return_value = 0
+        with mock.patch("switchtrade.connection.radio_worker.os.name", "posix"), \
+                mock.patch("switchtrade.connection.radio_worker.os.getppid", return_value=91), \
+                mock.patch("switchtrade.connection.radio_worker.ctypes.CDLL", return_value=libc):
+            enable_parent_death_termination()
+        libc.prctl.assert_called_once()
+
+        libc.prctl.return_value = 1
+        with mock.patch("switchtrade.connection.radio_worker.os.name", "posix"), \
+                mock.patch("switchtrade.connection.radio_worker.os.getppid", return_value=91), \
+                mock.patch("switchtrade.connection.radio_worker.ctypes.CDLL", return_value=libc):
+            with self.assertRaises(RadioWorkerError) as caught:
+                enable_parent_death_termination()
+        self.assertEqual(caught.exception.code, "P0_PARENT_DEATH_GUARD_FAILED")
+
     def test_side_ready_is_bound_and_ticket_cannot_change_identity(self):
         report = build_side_ready(self.args(), {
             "SWITCHTRADE_IFACE": "wlan7",
@@ -819,6 +884,19 @@ class FakeWorkerProcess:
 
 
 class WorkerCancellationTests(unittest.TestCase):
+    def test_worker_stream_log_stops_at_its_source_bound(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "worker.stderr.log"
+            log = _BoundedTextLog(path, limit=8)
+            try:
+                log.write("1234")
+                log.write("5678")
+                log.write("overflow")
+            finally:
+                log.close()
+            self.assertEqual(path.read_text(encoding="utf-8"), "12345678")
+            self.assertTrue(path.with_suffix(".log.truncated").exists())
+
     def test_endpoint_launch_wait_honors_explicit_cancel_without_stdin(self):
         process = FakeWorkerProcess({"status": "placeholder"})
         with tempfile.TemporaryDirectory() as temporary:
@@ -829,6 +907,22 @@ class WorkerCancellationTests(unittest.TestCase):
                         {"endpoint_started"}, 1, cancel_probe=lambda: True)
             finally:
                 process._exit(0)
+
+    def test_cleanup_treats_an_already_closed_worker_pipe_as_exited(self):
+        process = FakeWorkerProcess({"status": "placeholder"})
+        process._exit(1)
+
+        class ClosedInput:
+            def close(self):
+                raise BrokenPipeError("worker already exited")
+
+        process.stdin = ClosedInput()
+        with tempfile.TemporaryDirectory() as temporary:
+            events = WorkerEvents(process, Path(temporary) / "events.ndjson")
+            cleanup = events.stop(endpoint_started=False)
+        self.assertTrue(cleanup["worker_exited"])
+        self.assertFalse(cleanup["worker_forced"])
+        self.assertEqual(cleanup["worker_exit_code"], 1)
 
 
 class FakeLease:
@@ -1198,9 +1292,10 @@ class P0HarnessTests(unittest.TestCase):
                 "rtlwifi/rtl8192eu_nic.bin": "3" * 64,
             }
             integrity = "4" * 64
-            validator = SimpleNamespace(
-                requested_identity=lambda: (INSTANCE, USB_ID),
-                validate=lambda: (adapter, {
+            lifecycle_order = []
+            def validate():
+                lifecycle_order.append("P0a")
+                return adapter, {
                     "runtime": {
                         "kernel_release": "test-kernel",
                         "integrity_manifest_sha256": integrity,
@@ -1209,12 +1304,16 @@ class P0HarnessTests(unittest.TestCase):
                             name.replace("_", "-"): "test-kernel" for name in REQUIRED_MODULES
                         },
                     },
-                }),
+                }
+            validator = SimpleNamespace(
+                requested_identity=lambda: (INSTANCE, USB_ID),
+                validate=validate,
             )
             leases = []
             commands = []
 
             def lease_factory(selected, recovery):
+                lifecycle_order.append("P0b")
                 lease = FakeLease(selected, recovery)
                 leases.append(lease)
                 return lease
@@ -1251,6 +1350,10 @@ class P0HarnessTests(unittest.TestCase):
             with ConnectionCoordinator(root / "coordinator", "release-a") as coordinator:
                 class Lifecycle:
                     abort_calls = cleanup_calls = 0
+
+                    @staticmethod
+                    def establish(_context):
+                        lifecycle_order.append("C0.1")
 
                     def bind(self, run_id, _run):
                         return coordinator.bind_authority(
@@ -1311,6 +1414,7 @@ class P0HarnessTests(unittest.TestCase):
             self.assertEqual(leases[0].releases, 1)
             self.assertEqual(lifecycle.cleanup_calls, 1)
             self.assertEqual(lifecycle.abort_calls, 0)
+            self.assertEqual(lifecycle_order[:3], ["P0a", "C0.1", "P0b"])
             self.assertEqual(commands[0][commands[0].index("--role") + 1], "guest")
 
     def test_restart_recovery_clears_preflight_guard_without_hardware_actions(self):

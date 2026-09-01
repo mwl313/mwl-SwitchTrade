@@ -29,6 +29,12 @@ part of the public repository or release package.
   two-side barrier, D7-D11 local release, and the explicit remaining fault-qualification boundary.
 - [ABC+D Milestone 7 Physical Harness](91-abcd-milestone-7-physical-harness-20260830.md) — the
   GUI-independent two-PC/two-Switch runner and its installed qualification boundary.
+- [Single-PC dual-adapter Switchless C+D suite](93-single-pc-dual-adapter-switchless-cd-suite-20260831.md)
+  — closed 10/10 qualification campaign for the remaining non-physical C+D and exact-resource
+  boundaries; not a production dual-radio feature.
+- [ABC+D Production Wrapper and Beta Cutover](94-production-wrapper-beta-cutover-20260831.md) — the
+  current M8-M10 execution decision: deterministic one-radio wrapper, minimal GUI, Desktop support
+  export, immutable package, and final two-PC/two-Switch acceptance.
 - [M7 two-PC distributed handoff](HANDOFF-M7-TWO-PC-DISTRIBUTED-20260830.md) and
   [PC B preflight handoff](HANDOFF-PC-B-M7-TWO-SWITCH-PREFLIGHT-20260830.md) — coordinated physical
   execution and evidence rules.

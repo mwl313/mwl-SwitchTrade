@@ -996,7 +996,7 @@ function Test-SwitchTradeStagedControlReadiness {
             if ($process.HasExited) { break }
             try {
                 $probe = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/v1/app/readiness" -TimeoutSec 1
-                if ($probe.contract_version -eq 'app-readiness.v1' -and $probe.compatible -and
+                if ($probe.contract_version -eq 'local-app-readiness.v2' -and $probe.compatible -and
                     [string]$probe.release_id -eq $ExpectedReleaseId) { $ready = $true; break }
             } catch { }
             Start-Sleep -Milliseconds 500

@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://switchtrade.local/contracts/single-pc-dual-adapter-cd.v1.schema.json",
+  "title": "SwitchTrade single-PC dual-adapter Switchless C+D report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version", "schema", "run_id", "release", "revision", "phase", "status",
+    "functional_status", "cleanup_status", "last_passed_gate", "fixture", "sides",
+    "authority_cleanup_verified", "primary_failure", "secondary_failures", "recovery_required"
+  ],
+  "properties": {
+    "contract_version": { "const": "single-pc-dual-adapter-cd.v1" },
+    "schema": { "const": 1 },
+    "run_id": { "type": "string", "format": "uuid" },
+    "release": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "revision": { "type": "integer", "minimum": 1 },
+    "phase": {
+      "enum": [
+        "created", "passive_preflight", "acquiring_a", "acquiring_b", "p0_ready",
+        "authority_locked", "c0", "c1", "c2", "closing", "cleaning_b", "cleaning_a",
+        "terminal"
+      ]
+    },
+    "status": { "enum": ["running", "passed", "failed", "canceled"] },
+    "functional_status": { "enum": ["pending", "passed", "failed", "canceled"] },
+    "cleanup_status": { "enum": ["pending", "verified", "failed"] },
+    "last_passed_gate": { "type": ["string", "null"], "maxLength": 96 },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "advertisement_sha256", "advertisement_bytes", "rfu_payload"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "advertisement_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "advertisement_bytes": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "rfu_payload": { "const": "per-run-random" }
+      }
+    },
+    "sides": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["room_side", "ap_side"],
+      "properties": {
+        "room_side": { "$ref": "#/$defs/side" },
+        "ap_side": { "$ref": "#/$defs/side" }
+      }
+    },
+    "authority_cleanup_verified": { "type": "boolean" },
+    "primary_failure": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/failure" }
+      ]
+    },
+    "secondary_failures": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "$ref": "#/$defs/failure" }
+    },
+    "recovery_required": { "type": "boolean" }
+  },
+  "$defs": {
+    "side": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_seat", "switch_role", "usb_id", "adapter_identity_sha256",
+        "last_passed_gate", "cleanup_verified"
+      ],
+      "properties": {
+        "source_seat": { "enum": ["member_a", "member_b"] },
+        "switch_role": { "enum": ["a_room_joiner", "b_ap_host"] },
+        "usb_id": { "type": "string", "pattern": "^[0-9a-f]{4}:[0-9a-f]{4}$" },
+        "adapter_identity_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "last_passed_gate": { "type": ["string", "null"], "maxLength": 96 },
+        "cleanup_verified": { "type": "boolean" }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "gate", "message"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_.-]{0,95}$" },
+        "gate": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "message": { "type": "string", "maxLength": 500 }
+      }
+    }
+  }
+}

@@ -33,7 +33,11 @@ internal sealed partial class ProvisioningEngine(
             return new ProvisionerStatus(1, state, false, null, null, null, null,
                 state == "legacy" ? "Run Setup Repair" : null);
         }
-        if (wsl.Registration(active.ActiveName) is null)
+        // WSL's CLI inventory and its Lxss registry projection can briefly disagree while
+        // the service is starting. Either source positively identifying the exact active
+        // runtime is sufficient here; launch health remains the authoritative executable
+        // check. Only declare corruption when both independent views report it absent.
+        if (!await ActiveRuntimeExistsAsync(active.ActiveName, names, cancellationToken))
             return new ProvisionerStatus(1, "corrupt", false, active.ReleaseId, active.ActiveName,
                 active.KernelRelease, active.ControlContract, "Run Setup Repair");
         var kernel = AtomicFile.Read<KernelState>(paths.KernelStatePath);
@@ -43,6 +47,19 @@ internal sealed partial class ProvisioningEngine(
         return new ProvisionerStatus(1, ready ? readyState : "kernel_invalid", ready,
             active.ReleaseId, active.ActiveName, active.KernelRelease, active.ControlContract,
             ready ? null : "Run Setup Repair");
+    }
+
+    private async Task<bool> ActiveRuntimeExistsAsync(
+        string name, HashSet<string> initialNames, CancellationToken cancellationToken)
+    {
+        if (initialNames.Contains(name) || wsl.Registration(name) is not null) return true;
+
+        // A single absent snapshot is not destructive authority and is not enough to tell the
+        // desktop that Repair is required. Reconcile once after the WSL service has had a bounded
+        // opportunity to finish publishing both views.
+        await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken);
+        var repeatedNames = await wsl.NamesAsync(cancellationToken);
+        return repeatedNames.Contains(name) || wsl.Registration(name) is not null;
     }
 
     internal async Task InstallAsync(ReleaseManifest manifest, string packageRoot, CancellationToken cancellationToken)

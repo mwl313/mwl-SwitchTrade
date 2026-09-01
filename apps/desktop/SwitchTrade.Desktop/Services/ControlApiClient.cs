@@ -11,8 +11,8 @@ namespace SwitchTrade.Desktop.Services;
 
 public sealed class UserFacingException(string userMessage, string? technicalCode = null,
     string? stage = null, bool recoverable = false, string? primaryAction = null,
-    string? correlationId = null)
-    : Exception(userMessage)
+    string? correlationId = null, Exception? innerException = null)
+    : Exception(userMessage, innerException)
 {
     public string UserMessage { get; } = userMessage;
     public string? TechnicalCode { get; } = technicalCode;
@@ -34,7 +34,9 @@ public interface IControlGateway : IDisposable
     Task<AuthoritativeRoomProjection?> TryGetTradeRoomAsync(CancellationToken cancellationToken = default);
     Task StartConnectionAsync(SwitchRoomRole role, RoomMembershipRole membershipRole,
         string roomCode, CancellationToken cancellationToken = default);
+    Task ContinueConnectionAsync(string checkpointId, CancellationToken cancellationToken = default);
     Task StopConnectionAsync(CancellationToken cancellationToken = default);
+    Task EndConnectionAsync(CancellationToken cancellationToken = default);
     Task ReleaseTradeRoomAsync(string roomCode, RoomMembershipRole role, CancellationToken cancellationToken = default);
     Task AbandonLocalAuthorityAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<AdapterProfileViewData>> GetAdapterProfilesAsync(CancellationToken cancellationToken = default);
@@ -43,14 +45,6 @@ public interface IControlGateway : IDisposable
         string usbId, string instanceId, string busId, CancellationToken cancellationToken = default);
     Task<HardwareDiagnosticViewData> RunHardwareDiagnosticsAsync(
         string usbId, CancellationToken cancellationToken = default);
-    Task<ProductionDiagnosticViewData> StartProductionDiagnosticAsync(
-        ProductionDiagnosticTest test, string usbId, CancellationToken cancellationToken = default);
-    Task<ProductionDiagnosticViewData> GetProductionDiagnosticAsync(
-        string runId, CancellationToken cancellationToken = default);
-    Task<ProductionDiagnosticViewData> ContinueProductionDiagnosticAsync(
-        string runId, string checkpointId, CancellationToken cancellationToken = default);
-    Task<ProductionDiagnosticViewData> CancelProductionDiagnosticAsync(
-        string runId, CancellationToken cancellationToken = default);
     Task<LivePartyProjection?> TryGetPartiesAsync(CancellationToken cancellationToken = default);
     Task RepairAdapterAsync(CancellationToken cancellationToken = default);
     Task<string> CreateSupportBundleAsync(CancellationToken cancellationToken = default);
@@ -59,8 +53,7 @@ public interface IControlGateway : IDisposable
 public sealed class ControlApiClient : IControlGateway
 {
     public const string ApiBase = "http://127.0.0.1:8787";
-    public const string ReadinessContract = "app-readiness.v1";
-    private const string CompatibleProductPrefix = "0.2.";
+    public const string ReadinessContract = "local-app-readiness.v2";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -73,6 +66,10 @@ public sealed class ControlApiClient : IControlGateway
 
     private readonly HttpClient _http;
     private readonly string? _expectedReleaseId;
+    private readonly object _runSync = new();
+    private string? _runId;
+    private int _revision;
+    private string? _runPhase;
 
     public ControlApiClient(HttpMessageHandler? handler = null, string? expectedReleaseId = null)
     {
@@ -92,6 +89,7 @@ public sealed class ControlApiClient : IControlGateway
             if (!response.IsSuccessStatusCode) return null;
             var dto = await response.Content.ReadFromJsonAsync<ReadinessDto>(JsonOptions, probeTimeout.Token);
             if (dto is null) return null;
+            Remember(dto.ConnectionRun, dto.RunId, dto.Revision);
             var states = (dto.States ?? new Dictionary<string, ReadinessAxisDto>())
                 .ToDictionary(
                     item => item.Key,
@@ -105,7 +103,7 @@ public sealed class ControlApiClient : IControlGateway
                 ? sessionAxis.TechnicalCode.Replace("session.", "", StringComparison.OrdinalIgnoreCase)
                 : "idle";
             var compatible = dto.Compatible && dto.ContractVersion == ReadinessContract &&
-                             (dto.ProductVersion?.StartsWith(CompatibleProductPrefix, StringComparison.Ordinal) ?? false) &&
+                             !string.IsNullOrWhiteSpace(dto.ProductVersion) &&
                              _expectedReleaseId is not null && dto.ReleaseId == _expectedReleaseId;
             return new ControlStatus(
                 session, dto.ProductVersion ?? "unknown", dto.RunId ?? "",
@@ -166,7 +164,8 @@ public sealed class ControlApiClient : IControlGateway
     public async Task<TradeRoomInfo> CreateTradeRoomAsync(
         TradeRoomCreateRequest request, CancellationToken cancellationToken = default)
     {
-        var result = await PostAsync<RoomResponse>(
+        await RefreshRunIdentityAsync(cancellationToken);
+        var result = await MutateAsync<ConnectionRunDto>(HttpMethod.Post,
             "/api/v1/trade-room", new
             {
                 name = request.RoomName,
@@ -178,15 +177,18 @@ public sealed class ControlApiClient : IControlGateway
                 wanted = request.Wanted,
                 note = request.Note,
             }, cancellationToken);
+        Remember(result);
         return ToTradeRoom(result.Room, request.Offering, request.Wanted, request.Note);
     }
 
     public async Task<TradeRoomInfo> JoinTradeRoomAsync(
         string roomCode, CancellationToken cancellationToken = default)
     {
-        var result = await PostAsync<RoomResponse>(
+        await RefreshRunIdentityAsync(cancellationToken);
+        var result = await MutateAsync<ConnectionRunDto>(HttpMethod.Post,
             "/api/v1/trade-room/join", new { passcode = roomCode, trainer_display_name = "Trainer" },
             cancellationToken);
+        Remember(result);
         return ToTradeRoom(result.Room);
     }
 
@@ -250,9 +252,11 @@ public sealed class ControlApiClient : IControlGateway
     public async Task<TradeRoomInfo> JoinPublicRoomAsync(
         string listingId, string trainerDisplayName, CancellationToken cancellationToken = default)
     {
-        var result = await PostAsync<RoomResponse>(
+        await RefreshRunIdentityAsync(cancellationToken);
+        var result = await MutateAsync<ConnectionRunDto>(HttpMethod.Post,
             $"/api/v1/public-trade-rooms/{Uri.EscapeDataString(listingId)}/join",
             new { trainer_display_name = trainerDisplayName.Trim() }, cancellationToken);
+        Remember(result);
         return ToTradeRoom(result.Room);
     }
 
@@ -267,8 +271,32 @@ public sealed class ControlApiClient : IControlGateway
             _ => throw new UserFacingException(
                 "Choose Group Leader or Joining before connecting.", "switch_role_required"),
         };
-        _ = await PostAsync<JsonElement>("/api/v1/trade-room/connect",
-            new { switch_room_role = switchRoomRole }, cancellationToken);
+        string? phase;
+        lock (_runSync) phase = _runPhase;
+        if (phase == "terminal")
+        {
+            var retried = await MutateAsync<ConnectionRunDto>(HttpMethod.Post,
+                "/api/v1/app/retry", new { }, cancellationToken, runBound: true);
+            Remember(retried);
+        }
+        var result = await MutateAsync<ConnectionRunDto>(HttpMethod.Post,
+            "/api/v1/trade-room/connect", new { switch_room_role = switchRoomRole },
+            cancellationToken, runBound: true);
+        Remember(result);
+    }
+
+    public async Task ContinueConnectionAsync(
+        string checkpointId, CancellationToken cancellationToken = default)
+    {
+        string? runId;
+        lock (_runSync) runId = _runId;
+        if (string.IsNullOrWhiteSpace(runId))
+            throw new UserFacingException(
+                "The connection checkpoint is no longer active.", "checkpoint_stale");
+        var result = await MutateAsync<ConnectionRunDto>(HttpMethod.Post,
+            $"/api/v1/connection-runs/{Uri.EscapeDataString(runId)}/continue",
+            new { checkpoint_id = checkpointId }, cancellationToken, runBound: true);
+        Remember(result);
     }
 
     public async Task<AuthoritativeRoomProjection?> TryGetTradeRoomAsync(
@@ -293,31 +321,40 @@ public sealed class ControlApiClient : IControlGateway
                 catch (NotSupportedException) { }
                 return null;
             }
-            var room = await response.Content.ReadFromJsonAsync<AuthorityRoomDto>(JsonOptions, cancellationToken);
-            if (room is null) return null;
-            var local = room.Members?.FirstOrDefault(member => member.IsLocal);
-            var partner = room.Members?.FirstOrDefault(member => !member.IsLocal);
-            var membership = room.OwnerMemberId == room.LocalMemberId
+            var run = await response.Content.ReadFromJsonAsync<ConnectionRunDto>(JsonOptions, cancellationToken);
+            if (run is null) return null;
+            Remember(run);
+            var room = run.Room;
+            if (room is null)
+                return new(0, 0, "closed", RoomMembershipRole.Member,
+                    SwitchRoomRole.Unassigned, false, false, "none", false);
+            var membership = room.MembershipRole == "owner"
                 ? RoomMembershipRole.Owner : RoomMembershipRole.Member;
-            var selectedRole = room.Attempt?.LocalSwitchRole ?? local?.SwitchRoomRole;
-            var switchRole = selectedRole?.ToLowerInvariant() switch
+            var switchRole = run.LocalRole?.ToLowerInvariant() switch
             {
-                "creator" => SwitchRoomRole.Creator,
-                "finder" => SwitchRoomRole.Finder,
+                "a_room_joiner" => SwitchRoomRole.Creator,
+                "b_ap_host" => SwitchRoomRole.Finder,
                 _ => SwitchRoomRole.Unassigned,
             };
-            var active = room.Members?.Where(member => member.OnlineState != "left").ToArray() ?? [];
             var roomInfo = ToTradeRoom(room);
-            return new(room.RoomVersion, active.Length, room.State ?? "waiting_for_partner", membership,
-                switchRole, partner?.OnlineState == "online",
-                active.Length == 2 && active.All(member => member.ReadyState == "ready"),
-                room.Attempt?.Phase ?? "none", room.Attempt?.RoleLocked == true,
-                Room: roomInfo, FailureCode: room.Attempt?.Failure?.Code,
-                FailureStage: room.Attempt?.Failure?.Stage,
-                FailureRecoverable: room.Attempt?.Failure?.Recoverable == true,
-                FailureAction: room.Attempt?.Failure?.PrimaryAction,
+            var failure = run.Functional?.Failure;
+            return new(room.RoomVersion, room.Participants, run.Phase ?? "waiting_for_partner", membership,
+                switchRole, run.PeerState == "paired",
+                run.PeerState == "paired" && switchRole != SwitchRoomRole.Unassigned,
+                failure is null ? run.Phase ?? "none" : "failed",
+                switchRole != SwitchRoomRole.Unassigned,
+                Room: roomInfo, FailureCode: failure?.Code,
+                FailureStage: failure?.Stage,
+                FailureRecoverable: failure is not null,
+                FailureAction: failure is null ? null : "export_support_logs",
                 LocalTrainerDisplayName: roomInfo.LocalTrainerDisplayName,
-                PartnerTrainerDisplayName: roomInfo.PartnerTrainerDisplayName);
+                PartnerTrainerDisplayName: roomInfo.PartnerTrainerDisplayName,
+                CurrentGate: run.CurrentGate, LastPassedGate: run.LastPassedGate,
+                CheckpointId: run.UserCheckpoint?.Checkpoint,
+                CheckpointInstructions: run.UserCheckpoint?.Instructions,
+                CleanupStatus: run.Cleanup?.Status,
+                CleanupVerified: run.Cleanup?.Verified == true,
+                FunctionalStatus: run.Functional?.Status);
         }
         catch (HttpRequestException) { return null; }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return null; }
@@ -325,8 +362,21 @@ public sealed class ControlApiClient : IControlGateway
         catch (NotSupportedException) { return null; }
     }
 
-    public async Task StopConnectionAsync(CancellationToken cancellationToken = default) =>
-        _ = await PostAsync<JsonElement>("/api/v1/session/stop", new { }, cancellationToken);
+    public async Task StopConnectionAsync(CancellationToken cancellationToken = default)
+    {
+        var result = await MutateAsync<ConnectionRunDto>(HttpMethod.Post,
+            "/api/v1/session/stop", new { }, cancellationToken, runBound: true);
+        Remember(result);
+        await WaitForVerifiedCleanupAsync(cancellationToken);
+    }
+
+    public async Task EndConnectionAsync(CancellationToken cancellationToken = default)
+    {
+        var result = await MutateAsync<ConnectionRunDto>(HttpMethod.Post,
+            "/api/v1/session/end", new { }, cancellationToken, runBound: true);
+        Remember(result);
+        await WaitForVerifiedCleanupAsync(cancellationToken);
+    }
 
     public async Task ReleaseTradeRoomAsync(
         string roomCode, RoomMembershipRole role, CancellationToken cancellationToken = default)
@@ -336,8 +386,11 @@ public sealed class ControlApiClient : IControlGateway
             : "/api/v1/trade-room/members/me";
         try
         {
-            using var response = await _http.DeleteAsync(path, cancellationToken);
-            await EnsureSuccess(response, cancellationToken);
+            var result = await MutateAsync<ConnectionRunDto>(
+                HttpMethod.Delete, path, null, cancellationToken, runBound: true);
+            Remember(result);
+            if (result.Phase != "terminal" || result.Cleanup?.Verified != true)
+                await WaitForVerifiedCleanupAsync(cancellationToken);
         }
         catch (HttpRequestException)
         {
@@ -351,22 +404,9 @@ public sealed class ControlApiClient : IControlGateway
 
     public async Task AbandonLocalAuthorityAsync(CancellationToken cancellationToken = default)
     {
-        try
-        {
-            using var response = await _http.DeleteAsync(
-                "/api/v1/trade-room/local-authority", cancellationToken);
-            await EnsureSuccess(response, cancellationToken);
-        }
-        catch (HttpRequestException)
-        {
-            throw new UserFacingException(
-                "SwitchTrade’s local service is not available.", "local_service_unavailable");
-        }
-        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            throw new UserFacingException(
-                "SwitchTrade took too long to respond. Try again.", "request_timeout");
-        }
+        throw new UserFacingException(
+            "Saved room authority can only be released through Leave or Close.",
+            "authority_release_required", "room", true, "leave_or_close");
     }
 
     public async Task<IReadOnlyList<AdapterProfileViewData>> GetAdapterProfilesAsync(
@@ -444,87 +484,6 @@ public sealed class ControlApiClient : IControlGateway
             reportPath);
     }
 
-    public async Task<ProductionDiagnosticViewData> StartProductionDiagnosticAsync(
-        ProductionDiagnosticTest test, string usbId, CancellationToken cancellationToken = default) =>
-        ToProductionDiagnostic(await PostAsync<ProductionDiagnosticDto>(
-            "/api/v1/production-diagnostics",
-            new { test = ProductionDiagnosticName(test), usb_id = usbId }, cancellationToken));
-
-    public async Task<ProductionDiagnosticViewData> ContinueProductionDiagnosticAsync(
-        string runId, string checkpointId, CancellationToken cancellationToken = default) =>
-        ToProductionDiagnostic(await PostAsync<ProductionDiagnosticDto>(
-            $"/api/v1/production-diagnostics/{Uri.EscapeDataString(runId)}/continue",
-            new { checkpoint_id = checkpointId }, cancellationToken));
-
-    public Task<ProductionDiagnosticViewData> GetProductionDiagnosticAsync(
-        string runId, CancellationToken cancellationToken = default) =>
-        ReadProductionDiagnosticAsync(HttpMethod.Get,
-            $"/api/v1/production-diagnostics/{Uri.EscapeDataString(runId)}", cancellationToken);
-
-    public Task<ProductionDiagnosticViewData> CancelProductionDiagnosticAsync(
-        string runId, CancellationToken cancellationToken = default) =>
-        ReadProductionDiagnosticAsync(HttpMethod.Delete,
-            $"/api/v1/production-diagnostics/{Uri.EscapeDataString(runId)}", cancellationToken);
-
-    private async Task<ProductionDiagnosticViewData> ReadProductionDiagnosticAsync(
-        HttpMethod method, string path, CancellationToken cancellationToken)
-    {
-        try
-        {
-            using var request = new HttpRequestMessage(method, path);
-            using var response = await _http.SendAsync(request, cancellationToken);
-            await EnsureSuccess(response, cancellationToken);
-            var value = await response.Content.ReadFromJsonAsync<ProductionDiagnosticDto>(JsonOptions, cancellationToken);
-            return ToProductionDiagnostic(value ?? throw new UserFacingException(
-                "SwitchTrade received an incomplete diagnostic response.", "invalid_response"));
-        }
-        catch (HttpRequestException)
-        {
-            throw new UserFacingException("SwitchTrade’s local service is not available.", "local_service_unavailable");
-        }
-        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            throw new UserFacingException("SwitchTrade took too long to respond. Try again.", "request_timeout");
-        }
-        catch (JsonException)
-        {
-            throw new UserFacingException("SwitchTrade received an incomplete diagnostic response.", "invalid_response");
-        }
-        catch (NotSupportedException)
-        {
-            throw new UserFacingException("SwitchTrade received an incompatible diagnostic response.", "invalid_response");
-        }
-    }
-
-    private static string ProductionDiagnosticName(ProductionDiagnosticTest test) => test switch
-    {
-        ProductionDiagnosticTest.Automated => "automated",
-        ProductionDiagnosticTest.RoomDetection => "room_detection",
-        ProductionDiagnosticTest.ApAssociation => "ap_association",
-        ProductionDiagnosticTest.Recommended => "recommended",
-        _ => throw new ArgumentOutOfRangeException(nameof(test)),
-    };
-
-    private static ProductionDiagnosticViewData ToProductionDiagnostic(ProductionDiagnosticDto value)
-    {
-        var test = value.Test switch
-        {
-            "room_detection" => ProductionDiagnosticTest.RoomDetection,
-            "ap_association" => ProductionDiagnosticTest.ApAssociation,
-            "recommended" => ProductionDiagnosticTest.Recommended,
-            _ => ProductionDiagnosticTest.Automated,
-        };
-        var stages = (value.Stages ?? []).Select(stage => new ProductionDiagnosticStageViewData(
-            stage.Name ?? "diagnostic", stage.Status ?? "unknown", stage.Code ?? "DIAG_UNKNOWN",
-            stage.Message ?? "No stage detail available.")).ToArray();
-        var checkpoint = value.Checkpoint is null ? null : new ProductionDiagnosticCheckpointViewData(
-            value.Checkpoint.Id ?? "checkpoint", value.Checkpoint.Instructions ?? "Follow the on-screen instructions.",
-            DateTimeOffset.TryParse(value.Checkpoint.DeadlineUtc, out var deadline) ? deadline : null);
-        return new ProductionDiagnosticViewData(
-            value.RunId ?? "unknown", test, value.Status ?? "unknown", value.CurrentStage ?? "created",
-            value.ResultLevel, value.Failure?.Code, value.Failure?.Message, checkpoint,
-            stages, value.Limitations ?? [], value.Cleanup?.Status ?? "pending");
-    }
 
     private static async Task<string> SaveDiagnosticReportAsync(
         JsonElement report, string runId, CancellationToken cancellationToken)
@@ -808,6 +767,96 @@ public sealed class ControlApiClient : IControlGateway
         _ => GameLanguage.None,
     };
 
+    private void Remember(ConnectionRunDto? run, string? fallbackRunId = null, int fallbackRevision = 0)
+    {
+        lock (_runSync)
+        {
+            _runId = run?.RunId ?? fallbackRunId;
+            _revision = run?.Revision ?? fallbackRevision;
+            _runPhase = run?.Phase;
+        }
+    }
+
+    private async Task RefreshRunIdentityAsync(CancellationToken cancellationToken)
+    {
+        using var response = await _http.GetAsync("/api/v1/app/readiness", cancellationToken);
+        await EnsureSuccess(response, cancellationToken);
+        var readiness = await response.Content.ReadFromJsonAsync<ReadinessDto>(
+            JsonOptions, cancellationToken) ?? throw new UserFacingException(
+            "SwitchTrade received an incomplete response.", "invalid_response");
+        Remember(readiness.ConnectionRun, readiness.RunId, readiness.Revision);
+    }
+
+    private async Task<T> MutateAsync<T>(HttpMethod method, string path, object? body,
+        CancellationToken cancellationToken, bool runBound = false, bool retryOnStale = true)
+    {
+        string? runId;
+        int revision;
+        lock (_runSync) { runId = _runId; revision = _revision; }
+        if (runBound && string.IsNullOrWhiteSpace(runId))
+            throw new UserFacingException(
+                "The connection state changed. Return to the Trade Room and try again.",
+                "run_identity_missing", "connection", true, "refresh");
+        try
+        {
+            using var request = new HttpRequestMessage(method, path);
+            request.Headers.Add("X-SwitchTrade-Command-ID", Guid.NewGuid().ToString());
+            request.Headers.Add("X-SwitchTrade-Expected-Revision", revision.ToString(
+                System.Globalization.CultureInfo.InvariantCulture));
+            if (runBound) request.Headers.Add("X-SwitchTrade-Run-ID", runId);
+            if (body is not null) request.Content = JsonContent.Create(body);
+            using var response = await _http.SendAsync(request, cancellationToken);
+            await EnsureSuccess(response, cancellationToken);
+            return await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken) ??
+                   throw new UserFacingException(
+                       "SwitchTrade received an incomplete response.", "invalid_response");
+        }
+        catch (HttpRequestException)
+        {
+            throw new UserFacingException(
+                "SwitchTrade’s local service is not available.", "local_service_unavailable");
+        }
+        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new UserFacingException(
+                "SwitchTrade took too long to respond. Try again.", "request_timeout");
+        }
+        catch (JsonException)
+        {
+            throw new UserFacingException(
+                "SwitchTrade received an incomplete response.", "invalid_response");
+        }
+        catch (UserFacingException error) when (
+            retryOnStale && error.TechnicalCode == "revision_stale")
+        {
+            await RefreshRunIdentityAsync(cancellationToken);
+            return await MutateAsync<T>(method, path, body, cancellationToken, runBound, false);
+        }
+    }
+
+    private async Task WaitForVerifiedCleanupAsync(CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(55);
+        while (DateTime.UtcNow < deadline)
+        {
+            string? runId;
+            lock (_runSync) runId = _runId;
+            if (string.IsNullOrWhiteSpace(runId)) return;
+            using var response = await _http.GetAsync(
+                $"/api/v1/connection-runs/{Uri.EscapeDataString(runId)}", cancellationToken);
+            await EnsureSuccess(response, cancellationToken);
+            var run = await response.Content.ReadFromJsonAsync<ConnectionRunDto>(
+                JsonOptions, cancellationToken) ?? throw new UserFacingException(
+                "SwitchTrade received an incomplete response.", "invalid_response");
+            Remember(run);
+            if (run.Phase == "terminal" && run.Cleanup?.Verified == true) return;
+            await Task.Delay(250, cancellationToken);
+        }
+        throw new UserFacingException(
+            "SwitchTrade is still cleaning up the connection.",
+            "cleanup_timeout", "cleanup", true, "wait");
+    }
+
     private async Task<T> PostAsync<T>(string path, object body, CancellationToken cancellationToken)
     {
         try
@@ -861,7 +910,7 @@ public sealed class ControlApiClient : IControlGateway
              diagnosticCode.StartsWith("diagnostic_", StringComparison.Ordinal)))
         {
             return new UserFacingException(
-                problem.Message ?? "Production diagnostics could not start.", diagnosticCode, problem.Stage,
+                problem.Message ?? "The adapter check could not start.", diagnosticCode, problem.Stage,
                 problem.Recoverable, problem.PrimaryAction, problem.CorrelationId);
         }
         var message = problem?.Code switch
@@ -893,6 +942,7 @@ public sealed class ControlApiClient : IControlGateway
             "relay_unavailable" or "relay_internal_error" or "control_unavailable" =>
                 "Online rooms are temporarily unavailable.",
             "room_version_conflict" or "state_conflict" => "The Trade Room changed. Refresh it and try again.",
+            "revision_stale" => "The connection state changed. Refreshing it is required before retrying.",
             "session_active" => "This Switch connection is already starting.",
             "endpoint_start_failed" => problem.Message ??
                 "The local Switch connection could not start. Try again.",
@@ -907,6 +957,13 @@ public sealed class ControlApiClient : IControlGateway
             message, problem?.Code ?? "unknown_error", problem?.Stage,
             problem?.Recoverable ?? false, problem?.PrimaryAction, problem?.CorrelationId);
     }
+
+    private static TradeRoomInfo ToTradeRoom(SafeRoomDto? room, string offering = "",
+        string wanted = "", string note = "") => new(
+        room?.Name ?? "Private Trade Room", room?.RoomCode ?? "",
+        room?.Visibility ?? "private", room?.Participants ?? 1,
+        "authoritative", "", GameVersionChoice.None, GameLanguage.None,
+        offering, wanted, note, "Trainer", "");
 
     private static TradeRoomInfo ToTradeRoom(AuthorityRoomDto? room, string offering = "",
         string wanted = "", string note = "")
@@ -963,10 +1020,12 @@ public sealed class ControlApiClient : IControlGateway
         [property: JsonPropertyName("release_id")] string? ReleaseId,
         bool Compatible,
         [property: JsonPropertyName("run_id")] string? RunId,
+        int Revision,
         [property: JsonPropertyName("endpoint_process_running")] bool EndpointProcessRunning,
         [property: JsonPropertyName("session_id")] string? SessionId,
         IReadOnlyDictionary<string, ReadinessAxisDto>? States,
         FailureDto? Failure,
+        [property: JsonPropertyName("connection_run")] ConnectionRunDto? ConnectionRun,
         IReadOnlyList<string>? Capabilities);
     private sealed record ReadinessAxisDto(
         string? Status,
@@ -995,6 +1054,35 @@ public sealed class ControlApiClient : IControlGateway
     private sealed record RoomResponse(
         [property: JsonPropertyName("contract_version")] string? ContractVersion,
         AuthorityRoomDto? Room);
+    private sealed record ConnectionRunDto(
+        [property: JsonPropertyName("contract_version")] string? ContractVersion,
+        [property: JsonPropertyName("run_id")] string? RunId,
+        int Revision,
+        string? Phase,
+        [property: JsonPropertyName("current_gate")] string? CurrentGate,
+        [property: JsonPropertyName("last_passed_gate")] string? LastPassedGate,
+        [property: JsonPropertyName("local_role")] string? LocalRole,
+        [property: JsonPropertyName("peer_state")] string? PeerState,
+        [property: JsonPropertyName("user_checkpoint")] ConnectionCheckpointDto? UserCheckpoint,
+        ConnectionFunctionalDto? Functional,
+        ConnectionCleanupDto? Cleanup,
+        SafeRoomDto? Room,
+        [property: JsonPropertyName("allowed_actions")] IReadOnlyList<string>? AllowedActions);
+    private sealed record ConnectionCheckpointDto(
+        string? Checkpoint, string? Instructions,
+        [property: JsonPropertyName("deadline_utc")] string? DeadlineUtc);
+    private sealed record ConnectionFunctionalDto(string? Status, ConnectionFailureDto? Failure);
+    private sealed record ConnectionFailureDto(
+        string? Component, string? Stage, string? Gate, string? Code, string? Message);
+    private sealed record ConnectionCleanupDto(string? Status, bool Verified);
+    private sealed record SafeRoomDto(
+        [property: JsonPropertyName("room_id")] string? RoomId,
+        [property: JsonPropertyName("room_code")] string? RoomCode,
+        string? Name,
+        string? Visibility,
+        int Participants,
+        [property: JsonPropertyName("membership_role")] string? MembershipRole,
+        [property: JsonPropertyName("room_version")] int RoomVersion);
     private sealed record AuthorityRoomDto(
         [property: JsonPropertyName("room_id")] string? RoomId,
         [property: JsonPropertyName("room_version")] int RoomVersion,
@@ -1063,28 +1151,6 @@ public sealed class ControlApiClient : IControlGateway
         [property: JsonPropertyName("overall_status")] string? OverallStatus,
         IReadOnlyList<HardwareIncompatibilityDto>? Incompatibilities);
     private sealed record HardwareIncompatibilityDto(string? Code, string? Action);
-    private sealed record ProductionDiagnosticDto(
-        [property: JsonPropertyName("run_id")] string? RunId,
-        string? Test,
-        string? Status,
-        [property: JsonPropertyName("current_stage")] string? CurrentStage,
-        [property: JsonPropertyName("result_level")] string? ResultLevel,
-        ProductionDiagnosticFailureDto? Failure,
-        ProductionDiagnosticCheckpointDto? Checkpoint,
-        IReadOnlyList<ProductionDiagnosticStageDto>? Stages,
-        IReadOnlyList<string>? Limitations,
-        ProductionDiagnosticCleanupDto? Cleanup);
-    private sealed record ProductionDiagnosticFailureDto(string? Code, string? Message);
-    private sealed record ProductionDiagnosticCheckpointDto(
-        string? Id,
-        string? Instructions,
-        [property: JsonPropertyName("deadline_utc")] string? DeadlineUtc);
-    private sealed record ProductionDiagnosticStageDto(
-        string? Name,
-        string? Status,
-        string? Code,
-        string? Message);
-    private sealed record ProductionDiagnosticCleanupDto(string? Status);
     private sealed record HardwareDevicesResponse(IReadOnlyList<HardwareDeviceDto>? Devices);
     private sealed record HardwareDeviceDto(
         [property: JsonPropertyName("bus_id")] string? BusId,

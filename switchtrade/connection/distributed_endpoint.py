@@ -44,10 +44,20 @@ SEATS = {"member_a", "member_b"}
 _CODE = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,95}")
 _GATE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}")
 CHECKPOINTS = {"CREATE_SWITCH_ROOM", "JOIN_SWITCH_GROUP"}
+_EMIT_LOCK = threading.Lock()
+
+
+class _ClosingRequested(Exception):
+    """Carry a validated D intent out of a physical user checkpoint."""
+
+    def __init__(self, intent: dict):
+        super().__init__("distributed endpoint closing requested")
+        self.intent = intent
 
 
 def _emit(event: str, **value: object) -> None:
-    print(json.dumps({"event": event, **value}, sort_keys=True, separators=(",", ":")), flush=True)
+    with _EMIT_LOCK:
+        print(json.dumps({"event": event, **value}, sort_keys=True, separators=(",", ":")), flush=True)
 
 
 def _config(path: Path, args: argparse.Namespace) -> dict:
@@ -137,6 +147,8 @@ class _Commands:
                 continue
             if isinstance(value, BaseException):
                 raise value
+            if value.get("action") == "closing_intent":
+                raise _ClosingRequested(_closing_command(value, config))
             _checkpoint_command(value, config, checkpoint)
             return
 
@@ -239,6 +251,20 @@ def run(args: argparse.Namespace) -> int:
     closing_intent = None
     last_gate = "C0_DATA_PLANE_PROVEN"
     d_report = None
+    heartbeat_stop = threading.Event()
+
+    def heartbeat() -> None:
+        while not heartbeat_stop.wait(2):
+            _emit(
+                "endpoint_heartbeat", run_id=args.run_id,
+                attempt_id=config["attempt_id"], launch_nonce=args.launch_nonce,
+                endpoint_pid=os.getpid(), process_start_ticks=args.process_start_ticks,
+                gate=last_gate,
+            )
+
+    heartbeat_thread = threading.Thread(
+        target=heartbeat, name="distributed-heartbeat", daemon=True)
+    heartbeat_thread.start()
     try:
         c_stage.connect(args.relay_timeout)
         if config["switch_role"] == "a_room_joiner":
@@ -339,6 +365,8 @@ def run(args: argparse.Namespace) -> int:
                 next_observer = now + 0.5
             deadline += period
             time.sleep(max(0, deadline - time.monotonic()))
+    except _ClosingRequested as requested:
+        closing_intent = requested.intent
     except Exception as error:
         code = getattr(error, "code", "DISTRIBUTED_ENDPOINT_FAILED")
         gate = getattr(error, "last_passed_gate", None) or last_gate
@@ -375,6 +403,8 @@ def run(args: argparse.Namespace) -> int:
                         resource.stop() if hasattr(resource, "stop") else resource.close()
                 except Exception:
                     pass
+        heartbeat_stop.set()
+        heartbeat_thread.join(timeout=3)
     return 0 if d_report is not None and d_report["status"] == "passed" else 2
 
 

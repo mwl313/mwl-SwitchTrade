@@ -8,6 +8,11 @@ from .d_control import DControlError, MeasuredD5Control
 from .d_release import LocalDRelease
 from .d_probes import DProbeError, WslDProbes
 from .d_stage import EndpointDStage
+from .dual_adapter_cd import (
+    SuiteContractError,
+    SuitePhase,
+    SwitchlessCdState,
+)
 from .coordinator import (
     AuthoritySeat,
     CleanupOutcome,
@@ -30,6 +35,9 @@ __all__ = [
     "EndpointDStage",
     "ConnectionCoordinatorError", "CONTRACT_VERSION", "FunctionalOutcome", "LdnRole", "Phase",
     "LocalDRelease", "MeasuredD5Control", "RfuRole", "RunMode", "SwitchRole", "TunnelDirection",
-    "WslDProbes",
+    "SuiteContractError", "SuitePhase", "SwitchlessCdState", "WslDProbes",
     "DirectAStage", "DirectBStage", "P0Error", "PassiveValidator", "UsbAdapter", "UsbLease",
 ]
+from switchtrade.connection.service import ConnectionRunService, ConnectionRunServiceError
+
+__all__ = ["ConnectionRunService", "ConnectionRunServiceError"]

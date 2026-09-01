@@ -10,7 +10,7 @@ $InstallRoot = Split-Path -Parent $PSScriptRoot
 $ConfigFile = Join-Path $InstallRoot "config.json"
 $ManifestFile = Join-Path $InstallRoot "manifest.json"
 $ManifestSignature = Join-Path $InstallRoot "manifest.json.p7s"
-$ExpectedReadinessContract = "app-readiness.v1"
+$ExpectedReadinessContract = "local-app-readiness.v2"
 $ExpectedReleaseId = ""
 $LogRoot = Join-Path $env:LOCALAPPDATA "SwitchTrade\logs\startup"
 . (Join-Path $PSScriptRoot 'PackageIntegrity.ps1')

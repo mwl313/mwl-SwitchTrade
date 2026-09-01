@@ -32,6 +32,14 @@ class HardwarePolicyTests(unittest.TestCase):
         self.assertIn("flock -n 9", script)
         self.assertIn("RADIO_BUSY", script)
 
+    def test_dual_radio_selector_uses_exact_sysfs_identity_and_distinct_lock(self):
+        script = (Path(__file__).resolve().parents[1] / "scripts" /
+                  "wsl-radio-prepare.sh").read_text(encoding="utf-8")
+        self.assertIn("--device-path", script)
+        self.assertIn("dev_real == \"$requested_real\"", script)
+        self.assertIn("device_lock_id=", script)
+        self.assertIn("SWITCHTRADE_USB_DEVICE", script)
+
     def test_only_8192_is_auto_selected(self):
         profiles = load_profiles()
         automatic = [profile.usb_id for profile in profiles if profile.auto_select]

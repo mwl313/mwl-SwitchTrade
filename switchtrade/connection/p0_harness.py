@@ -32,11 +32,13 @@ from switchtrade.connection.p0 import (
     P0Error, PassiveValidator, UsbAdapter, UsbLease, atomic_json, linux_usb_probe, run_command,
     wsl_root_command,
 )
+from switchtrade.session_evidence import ApplicationEvidence
 from switchtrade.diagnostics import default_runs_root
 from switchtrade.relay_client import RelayClient
 
 
 WorkerFactory = Callable[[list[str], Path, Path], subprocess.Popen]
+WORKER_STREAM_LIMIT = 8 * 1024 * 1024
 LeaseFactory = Callable[[UsbAdapter, Path], UsbLease]
 EndpointCheckpoint = Callable[[dict], None]
 CancelProbe = Callable[[], bool]
@@ -198,6 +200,8 @@ def _worker_command(
     packaged_python: str,
     distro: str,
     target_channel: int,
+    linux_identity: str | None = None,
+    prepare_script: str = "./scripts/wsl-radio-prepare.sh",
 ) -> list[str]:
     worker = [
         packaged_python, "-m", "switchtrade.connection.radio_worker",
@@ -218,23 +222,66 @@ def _worker_command(
         ),
     }.get(run["identity"]["mode"], "relay")
     radio = [
-        "./scripts/wsl-radio-prepare.sh", "--usb-id", adapter.usb_id,
+        prepare_script, "--usb-id", adapter.usb_id,
         "--role", required_role, "--target-channel", str(target_channel), "--", *worker,
     ]
+    if linux_identity is not None:
+        radio[3:3] = ["--device-path", linux_identity]
     if os.name == "nt":
         return wsl_root_command(
             distro, runtime_root, "env", "SWITCHTRADE_LOG_FD=2", *radio)
     return ["env", "SWITCHTRADE_LOG_FD=2", *radio]
 
 
+class _BoundedTextLog:
+    """Line-oriented sink that keeps draining after its evidence file reaches the cap."""
+
+    def __init__(self, path: Path, limit: int = WORKER_STREAM_LIMIT):
+        self.path = path
+        self.limit = limit
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.stream = self.path.open("w", encoding="utf-8", newline="\n")
+        self.size = 0
+        self.truncated = False
+
+    def write(self, value: str) -> None:
+        encoded = value.encode("utf-8", "replace")
+        if self.size + len(encoded) > self.limit:
+            if not self.truncated:
+                self.path.with_suffix(self.path.suffix + ".truncated").write_text(
+                    f"TRUNCATED: worker stream reached {self.limit} bytes\n", encoding="utf-8")
+                self.truncated = True
+            return
+        self.stream.write(value)
+        self.size += len(encoded)
+
+    def flush(self) -> None:
+        self.stream.flush()
+
+    def close(self) -> None:
+        self.stream.close()
+
+
+def _drain_worker_stderr(process: subprocess.Popen, log: _BoundedTextLog) -> None:
+    stream = process.stderr
+    if stream is None:
+        return
+    try:
+        for line in stream:
+            log.write(line[:16_384] + (" [TRUNCATED_LINE]\n" if len(line) > 16_384 else ""))
+            log.flush()
+    except (OSError, ValueError):
+        pass
+
+
 def _default_worker_factory(command: list[str], stdout_path: Path, stderr_path: Path) -> subprocess.Popen:
-    # stdout is an NDJSON control channel; the preparation scripts use fd 2 for bounded human logs.
+    # Both streams are drained by the parent and bounded at the evidence source.
     stdout_path.parent.mkdir(parents=True, exist_ok=True)
-    stdout_file = stdout_path.open("w", encoding="utf-8", newline="\n")
-    stderr_file = stderr_path.open("w", encoding="utf-8", newline="\n")
+    stdout_file = _BoundedTextLog(stdout_path)
+    stderr_file = _BoundedTextLog(stderr_path)
     try:
         process = subprocess.Popen(
-            command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr_file,
+            command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, encoding="utf-8", bufsize=1,
         )
     except BaseException:
@@ -243,6 +290,11 @@ def _default_worker_factory(command: list[str], stdout_path: Path, stderr_path: 
         raise
     process._switchtrade_stdout_log = stdout_file  # type: ignore[attr-defined]
     process._switchtrade_stderr_log = stderr_file  # type: ignore[attr-defined]
+    stderr_thread = threading.Thread(
+        target=_drain_worker_stderr, args=(process, stderr_file),
+        name="p0-worker-stderr", daemon=True)
+    process._switchtrade_stderr_thread = stderr_thread  # type: ignore[attr-defined]
+    stderr_thread.start()
     return process
 
 
@@ -353,10 +405,25 @@ class WorkerEvents:
                 self.process.kill()
                 self.process.wait(timeout=3)
         if self.process.stdin is not None:
-            self.process.stdin.close()
+            try:
+                self.process.stdin.close()
+            except OSError:
+                pass
         if self.process.stdout is not None:
-            self.process.stdout.close()
+            try:
+                self.process.stdout.close()
+            except OSError:
+                pass
         self.thread.join(timeout=1)
+        stderr_thread = getattr(self.process, "_switchtrade_stderr_thread", None)
+        if stderr_thread is not None:
+            stderr_thread.join(timeout=1)
+        stderr = getattr(self.process, "stderr", None)
+        if stderr is not None:
+            try:
+                stderr.close()
+            except OSError:
+                pass
         for name in ("_switchtrade_stdout_log", "_switchtrade_stderr_log"):
             stream = getattr(self.process, name, None)
             if stream is not None:
@@ -368,7 +435,7 @@ class WorkerEvents:
         }
 
 
-class P0Harness:
+class ConnectionRunExecutor:
     def __init__(
         self,
         coordinator: ConnectionCoordinator,
@@ -410,6 +477,7 @@ class P0Harness:
         self.release_probes = release_probes
         self.after_endpoint_started = after_endpoint_started
         self.cancel_probe = cancel_probe
+        self.application_evidence = ApplicationEvidence.from_environment("connection-wrapper")
 
     def _check_canceled(self, gate: str) -> None:
         if self.cancel_probe is not None and self.cancel_probe():
@@ -845,21 +913,22 @@ class P0Harness:
     def run_direct_b(self) -> dict:
         return self._run(mode=RunMode.DIRECT_B, endpoint="direct_b", launch_endpoint=True)
 
-    def run_distributed(self, lifecycle: object) -> dict:
+    def run_distributed(self, lifecycle: object, *, run_id: str | None = None) -> dict:
         """Run one physical side while reusing the canonical P0 and release ownership path."""
         for method in ("bind", "prepare", "drive", "cleanup", "abort", "finalize_abort"):
             if not callable(getattr(lifecycle, method, None)):
                 raise ValueError(f"distributed lifecycle is missing {method}")
         return self._run(
             mode=RunMode.NORMAL, endpoint="distributed", launch_endpoint=True,
-            distributed=lifecycle,
+            distributed=lifecycle, requested_run_id=run_id,
         )
 
     def _run(self, *, mode: RunMode, endpoint: str, launch_endpoint: bool,
-             distributed: object | None = None) -> dict:
+             distributed: object | None = None, requested_run_id: str | None = None) -> dict:
         requested_instance, requested_usb = self.validator.requested_identity()
         run = self.coordinator.start(
-            mode, adapter_instance_id=requested_instance, usb_id=requested_usb)
+            mode, adapter_instance_id=requested_instance, usb_id=requested_usb,
+            run_id=requested_run_id)
         run_id = run["run_id"]
         run_root = self.root / run_id
         run_root.mkdir(parents=True, exist_ok=True)
@@ -895,10 +964,19 @@ class P0Harness:
             if adapter.instance_id.casefold() != requested_instance.casefold():
                 raise P0Error("P0_ADAPTER_IDENTITY_CHANGED", "P0a_adapter", "selected adapter changed during P0a")
             self.coordinator.pass_gate(run_id, "P0a_PASSIVE_READY")
+            if distributed is not None and callable(getattr(distributed, "establish", None)):
+                distributed.establish({
+                    "run_id": run_id, "run_root": run_root,
+                    "run": self.coordinator.snapshot(run_id),
+                    "adapter": adapter, "p0a": p0a,
+                })
             run = self.coordinator.transition(run_id, Phase.RUNNING, "P0b_lease")
             if distributed is not None:
                 run = distributed.bind(run_id, run)
             lease = self.lease_factory(adapter, run_root / "p0-usb-recovery.json")
+            if self.application_evidence is not None:
+                self.application_evidence.capture_wsl_snapshot(
+                    "p0b-before", selected_usb_identity=adapter.instance_id)
             lease_evidence = lease.acquire(
                 checkpoint=lambda: self._check_canceled("P0b_lease"))
             self._check_canceled("P0b_worker")
@@ -972,6 +1050,8 @@ class P0Harness:
                     run_id, launch_nonce=nonce, endpoint_pid=endpoint_event["endpoint_pid"],
                     process_start_ticks=endpoint_event["process_start_ticks"])
                 endpoint_started = True
+                if distributed is not None and callable(getattr(distributed, "endpoint_started", None)):
+                    distributed.endpoint_started(endpoint_event)
                 if self.after_endpoint_started is not None:
                     self.after_endpoint_started(self.coordinator.snapshot(run_id))
                 if distributed is not None:
@@ -1061,11 +1141,16 @@ class P0Harness:
                 )
             cleanup["lease"] = lease_evidence
         except Exception as error:
+            if self.application_evidence is not None:
+                self.application_evidence.capture_wsl_snapshot(
+                    "functional-failure", selected_usb_identity=requested_instance)
             canceled = (
                 isinstance(error, P0Canceled) or
                 getattr(error, "code", None) == "DISTRIBUTED_RUN_CANCELED"
             )
             primary = None if canceled else {
+                "component": "connection-executor",
+                "stage": getattr(error, "gate", "P0"),
                 "code": _stable_error_code(error),
                 "gate": getattr(error, "gate", "P0"),
                 "message": getattr(error, "message", type(error).__name__),
@@ -1223,7 +1308,30 @@ class P0Harness:
             "last_passed_gate": snapshot["last_passed_gate"],
         }
         atomic_json(final_path, result)
+        if self.application_evidence is not None:
+            self.application_evidence.capture_wsl_snapshot(
+                "d-cleanup", selected_usb_identity=requested_instance)
+            self.application_evidence.write_failure_summary({
+                "run_id": run_id,
+                "attempt_id": snapshot["identity"].get("attempt_id") or "not-created",
+                "release_id": snapshot["identity"]["release"],
+                "last_passed_gate": snapshot.get("last_passed_gate") or "none",
+                "primary_failure": primary,
+                "endpoint_identity": {
+                    "pid": snapshot["identity"].get("endpoint_pid"),
+                    "start_ticks": snapshot["identity"].get("endpoint_start_ticks"),
+                    "exit_code": (cleanup.get("worker") or {}).get("worker_exit_code"),
+                },
+                "functional_outcome": snapshot["functional"]["status"],
+                "cleanup": snapshot["cleanup"],
+                "startup_recovery": {"required": snapshot.get("recovery_required", False)},
+                "evidence": [str(final_path.name), "wsl-p0b-before.json", "wsl-d-cleanup.json"],
+            })
         return {**result, "report_path": str(final_path)}
+
+
+class P0Harness(ConnectionRunExecutor):
+    """Qualification compatibility adapter for the production connection executor."""
 
 
 def _installed_release(root: str, distro: str, runner=run_command) -> str:

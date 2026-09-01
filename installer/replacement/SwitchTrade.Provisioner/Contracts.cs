@@ -74,7 +74,7 @@ internal sealed record ReleaseManifest(
                 RegexOptions.CultureInvariant) ||
             value.Architecture != "x64" || value.MinimumWindowsBuild < 19045 ||
             !System.Version.TryParse(value.MinimumWslVersion, out _) ||
-            value.ControlContract != "app-readiness.v1" ||
+            value.ControlContract != "local-app-readiness.v2" ||
             !Regex.IsMatch(value.RuntimeContentId, "^[0-9a-f]{64}$", RegexOptions.CultureInvariant) ||
             !Uri.TryCreate(value.RelayUrl, UriKind.Absolute, out var relay) || relay.Scheme != Uri.UriSchemeHttps)
             throw ProvisionerException.Integrity("RELEASE_MANIFEST_INVALID", "Release metadata violates the v1 contract.");

@@ -20,6 +20,8 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
             () => ChooseRoleAsync(SwitchRoomRole.Finder), CanChooseRole);
         ConnectionCommand = new AsyncCommand(
             () => _coordinator.StopConnectionAsync(), CanEndConnection);
+        ContinueCommand = new AsyncCommand(
+            () => _coordinator.ContinueConnectionAsync(), () => _coordinator.HasUserCheckpoint);
         RepairAdapterCommand = new AsyncCommand(shell.RepairAdapterAsync, () => HasAdapterRepair);
         LeaveCommand = new AsyncCommand(LeaveAsync, () => !_coordinator.IsPending);
         CopyCodeCommand = new RelayCommand(() => Shell.Copy(RoomCode, "Room code copied"));
@@ -47,8 +49,13 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
     public bool PartnerOnline => _coordinator.PartnerOnline;
     public string ConnectionStatus => _coordinator.StatusText;
     public bool IsConnectionPending => _coordinator.IsPending;
-    public bool ShowRoleChoices => _coordinator.ConnectionState == LegacyConnectionState.Idle;
+    public bool ShowRoleChoices => _coordinator.ConnectionState == LegacyConnectionState.Idle ||
+                                   _coordinator.CanRetry;
     public bool ShowEndConnection => !ShowRoleChoices;
+    public string ConnectionActionText => _coordinator.ConnectionIsActive
+        ? "End connection" : "Stop connection";
+    public bool HasUserCheckpoint => _coordinator.HasUserCheckpoint;
+    public string CheckpointInstructions => _coordinator.CheckpointInstructions ?? "";
     public bool HasRecovery => !string.IsNullOrWhiteSpace(_coordinator.RecoveryMessage);
     public bool HasAdapterRepair => HasRecovery && RecoveryCode != "radio.switch_room_not_found" && RecoveryStage is
         "hardware_share" or "hardware_attach" or "radio";
@@ -105,6 +112,7 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
     }
     public bool HasSelectedPokemon => SelectedPokemon is not null;
     public AsyncCommand ConnectionCommand { get; }
+    public AsyncCommand ContinueCommand { get; }
     public AsyncCommand GroupLeaderCommand { get; }
     public AsyncCommand JoiningCommand { get; }
     public AsyncCommand RepairAdapterCommand { get; }
@@ -116,8 +124,11 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
 
     private bool CanChooseRole() => IsServiceReady && !_coordinator.IsPending &&
                                     _coordinator.HasRoom && _coordinator.PartnerOnline;
-    private bool CanEndConnection() => IsServiceReady && !_coordinator.IsPending &&
-                                       _coordinator.HasRoom && !ShowRoleChoices;
+    private bool CanEndConnection() => IsServiceReady && _coordinator.HasRoom &&
+                                       _coordinator.ConnectionState is
+                                           LegacyConnectionState.Starting or
+                                           LegacyConnectionState.Active or
+                                           LegacyConnectionState.NeedsRecovery;
 
     private Task<bool> ChooseRoleAsync(SwitchRoomRole role) => _coordinator.StartConnectionAsync(role);
 
@@ -158,6 +169,9 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
         OnPropertyChanged(nameof(IsConnectionPending));
         OnPropertyChanged(nameof(ShowRoleChoices));
         OnPropertyChanged(nameof(ShowEndConnection));
+        OnPropertyChanged(nameof(ConnectionActionText));
+        OnPropertyChanged(nameof(HasUserCheckpoint));
+        OnPropertyChanged(nameof(CheckpointInstructions));
         OnPropertyChanged(nameof(HasRecovery));
         OnPropertyChanged(nameof(HasAdapterRepair));
         OnPropertyChanged(nameof(AdapterRecoveryLabel));
@@ -168,6 +182,7 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
         OnPropertyChanged(nameof(RecoveryAction));
         OnPropertyChanged(nameof(LinklineState));
         ConnectionCommand.RaiseCanExecuteChanged();
+        ContinueCommand.RaiseCanExecuteChanged();
         GroupLeaderCommand.RaiseCanExecuteChanged();
         JoiningCommand.RaiseCanExecuteChanged();
         RepairAdapterCommand.RaiseCanExecuteChanged();
@@ -185,6 +200,7 @@ public sealed class TradeRoomScreenViewModel : ScreenViewModel, IDisposable
     {
         base.NotifyShellState();
         ConnectionCommand.RaiseCanExecuteChanged();
+        ContinueCommand.RaiseCanExecuteChanged();
         GroupLeaderCommand.RaiseCanExecuteChanged();
         JoiningCommand.RaiseCanExecuteChanged();
     }
