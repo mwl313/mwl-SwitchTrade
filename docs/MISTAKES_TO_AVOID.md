@@ -1345,6 +1345,17 @@ Full trade, save, menu return, and graceful exit remain separate physical eviden
   either shell can inspect directly. Prefer a literal-safe single-shell command, and split
   cross-shell diagnostics at the process boundary.
 
+#### Recurrence (2026-09-01, GitHub release notes)
+
+- **Observed:** the first `v0.2.20-beta.1` release description displayed literal `\\n` sequences
+  because PowerShell does not translate backslash-newline escapes in a normal string. The published
+  assets, tag, target SHA, hashes, and release state were unaffected.
+- **Correction:** replace the description through `gh release edit --notes-file -` with a PowerShell
+  here-string sent on standard input, then read the release body back from GitHub.
+- **Permanent guard:** multiline external text is passed as a file or standard input, never encoded
+  as C-style escapes in a PowerShell argument. Verify the remote rendered content as well as the
+  command exit code.
+
 ### MTA-OPS-024 — A combined desktop stop/relaunch command was rejected before execution
 
 - **Observed:** during the 2026-08-31 `SOFTWARE_NOT_READY` investigation, one compound PowerShell
