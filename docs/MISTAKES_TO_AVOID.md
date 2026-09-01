@@ -1863,6 +1863,26 @@ Full trade, save, menu return, and graceful exit remain separate physical eviden
   Never assemble a hybrid installation by copying individual sidecars or relaxing release checks just
   to make a source window reach Home.
 
+### MTA-APP-028 — Home displayed an adapter that the backend had not selected
+
+- **Observed (2026-09-01, rejected installed candidate `0.2.15-beta.1`, release
+  `beta-0540ac862ae8`):** the installed Home screen displayed the first compatible USB adapter in the
+  closed ComboBox even though the authoritative inventory reported every adapter with
+  `selected=false`. The status described supported hardware and Create/Join remained enabled. No
+  relay room, connection run, USB attach, endpoint, or Switch action occurred; both adapters remained
+  Windows-owned and residue-free.
+- **Definitive cause:** `HomeScreenViewModel.LoadAdaptersAsync()` projected the first inventory item
+  as `SelectedDevice` whenever the backend had no selection. That UI-only fallback could not be
+  distinguished from an authoritative selection and, because it was already the ComboBox value,
+  choosing the same first item did not reliably emit a selection change.
+- **Correction:** project only the item marked `IsSelected` by the backend, show `Select an adapter`
+  when none exists, and disable connection entry actions until the selected adapter is selectable and
+  Windows-authorized. Provide an explicit authorization action for the valid selected-but-unshared
+  state, then reload the authoritative inventory after every mutation.
+- **Never repeat:** candidate availability is not selection. A UI must never invent persisted or
+  hardware authority state from list order, a previous local value, or a visual default. Installed QA
+  must cover no selection, selected/unshared, selected/shared, cancellation, and first-item selection.
+
 ## 11. Required preflight checklists
 
 ### Any code or documentation change

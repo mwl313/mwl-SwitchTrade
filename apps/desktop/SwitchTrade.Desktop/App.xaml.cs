@@ -253,6 +253,41 @@ public partial class App : Application
                                             home.SelectedDevice?.InstanceId.EndsWith(
                                                 "RADIO-A", StringComparison.Ordinal) == true &&
                                             home.AdapterStatus == "Inventory failed.";
+            var noSelectionGateway = new SelfTestGateway
+            {
+                Status = ReadyStatus(),
+                HardwareDevices = [new HardwareDeviceViewData(
+                    "9-7", "USB\\VID_0BDA&PID_818B\\RADIO-A", "0bda:818b", "RTL8192EU",
+                    "Beta candidate", true, false, true, false, false)],
+            };
+            using var noSelectionShell = new MainViewModel(
+                noSelectionGateway, new BackendLauncher(), new WindowsDialogService(),
+                new WindowsClipboardService());
+            noSelectionShell.InitializeAsync().GetAwaiter().GetResult();
+            var noSelectionHome = new HomeScreenViewModel(noSelectionShell);
+            noSelectionHome.LoadAdaptersAsync().GetAwaiter().GetResult();
+            var missingAuthoritativeSelectionBlocksRuns =
+                noSelectionHome.SelectedDevice is null &&
+                noSelectionHome.AdapterStatus == "Select an adapter" &&
+                !noSelectionHome.CreateCommand.CanExecute(null) &&
+                !noSelectionHome.JoinCommand.CanExecute(null);
+            var unsharedSelectionGateway = new SelfTestGateway
+            {
+                Status = ReadyStatus(),
+                HardwareDevices = [new HardwareDeviceViewData(
+                    "9-7", "USB\\VID_0BDA&PID_818B\\RADIO-A", "0bda:818b", "RTL8192EU",
+                    "Beta candidate", true, false, false, false, true)],
+            };
+            using var unsharedSelectionShell = new MainViewModel(
+                unsharedSelectionGateway, new BackendLauncher(), new WindowsDialogService(),
+                new WindowsClipboardService());
+            unsharedSelectionShell.InitializeAsync().GetAwaiter().GetResult();
+            var unsharedSelectionHome = new HomeScreenViewModel(unsharedSelectionShell);
+            unsharedSelectionHome.LoadAdaptersAsync().GetAwaiter().GetResult();
+            var unsharedAuthoritativeSelectionRequiresAuthorization =
+                unsharedSelectionHome.NeedsAdapterAuthorization &&
+                unsharedSelectionHome.AuthorizeAdapterCommand.CanExecute(null) &&
+                !unsharedSelectionHome.CreateCommand.CanExecute(null);
             var selectionGateway = new SelfTestGateway
             {
                 Status = ReadyStatus(),
@@ -400,6 +435,9 @@ public partial class App : Application
                 [nameof(malformedInventoryContained)] = malformedInventoryContained,
                 [nameof(timedOutInventoryContained)] = timedOutInventoryContained,
                 [nameof(lastGoodInventorySurvives)] = lastGoodInventorySurvives,
+                [nameof(missingAuthoritativeSelectionBlocksRuns)] = missingAuthoritativeSelectionBlocksRuns,
+                [nameof(unsharedAuthoritativeSelectionRequiresAuthorization)] =
+                    unsharedAuthoritativeSelectionRequiresAuthorization,
                 [nameof(homeAdapterSelectionWorks)] = homeAdapterSelectionWorks,
                 [nameof(adapterAuthorizationRecoveryWorks)] = adapterAuthorizationRecoveryWorks,
             };

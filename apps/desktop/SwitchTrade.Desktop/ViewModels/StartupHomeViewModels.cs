@@ -58,10 +58,12 @@ public sealed class HomeScreenViewModel : ScreenViewModel
 
     public HomeScreenViewModel(MainViewModel shell) : base(shell)
     {
-        CreateCommand = new RelayCommand(shell.OpenCreate, () => shell.IsServiceReady);
+        CreateCommand = new RelayCommand(shell.OpenCreate, () => CanStartConnection);
         PublicCommand = new RelayCommand(
             shell.OpenPublicRooms, () => shell.IsPublicDirectoryAvailable);
-        JoinCommand = new RelayCommand(shell.OpenPrivateJoin, () => shell.IsServiceReady);
+        JoinCommand = new RelayCommand(shell.OpenPrivateJoin, () => CanStartConnection);
+        AuthorizeAdapterCommand = new AsyncCommand(
+            UseSelectedAdapterAsync, () => IsServiceReady && NeedsAdapterAuthorization);
     }
 
     public override string Title => "Home";
@@ -75,12 +77,21 @@ public sealed class HomeScreenViewModel : ScreenViewModel
     public HardwareDeviceViewData? SelectedDevice
     {
         get => _selectedDevice;
-        set => Set(ref _selectedDevice, value);
+        set
+        {
+            if (!Set(ref _selectedDevice, value)) return;
+            NotifyAdapterState();
+        }
     }
+    public bool CanStartConnection => IsServiceReady &&
+        SelectedDevice is { IsSelected: true, IsShared: true, IsSelectable: true };
+    public bool NeedsAdapterAuthorization =>
+        SelectedDevice is { IsSelected: true, IsShared: false, IsSelectable: true };
     public string AdapterStatus { get => _adapterStatus; private set => Set(ref _adapterStatus, value); }
     public RelayCommand CreateCommand { get; }
     public RelayCommand PublicCommand { get; }
     public RelayCommand JoinCommand { get; }
+    public AsyncCommand AuthorizeAdapterCommand { get; }
 
     public override Task OnNavigatedToAsync() => LoadAdaptersAsync();
 
@@ -113,13 +124,14 @@ public sealed class HomeScreenViewModel : ScreenViewModel
             }
             if (changed)
                 await LoadAdaptersAsync();
-            AdapterStatus = SelectedDevice is { IsSelected: true, IsShared: true }
+            AdapterStatus = SelectedDevice is { IsSelected: true, IsShared: true, IsSelectable: true }
                 ? "Ready"
                 : SelectedDevice?.Disclaimer ?? "Adapter unavailable";
             Shell.Announce($"{device.FriendlyName} selected");
         }
         catch (UserFacingException error)
         {
+            await LoadAdaptersAsync();
             AdapterStatus = error.UserMessage;
             Shell.Announce(AdapterStatus);
         }
@@ -136,17 +148,13 @@ public sealed class HomeScreenViewModel : ScreenViewModel
         _loadingAdapters = true;
         try
         {
-            var previousIdentity = SelectedDevice?.InstanceId;
             var devices = await Shell.Gateway.GetHardwareDevicesAsync();
             Devices.Clear();
             foreach (var device in devices) Devices.Add(device);
-            SelectedDevice = Devices.FirstOrDefault(device => device.IsSelected) ??
-                             Devices.FirstOrDefault(device =>
-                                 device.InstanceId == previousIdentity) ??
-                             Devices.FirstOrDefault();
+            SelectedDevice = Devices.FirstOrDefault(device => device.IsSelected);
             AdapterStatus = SelectedDevice is null
-                ? "No compatible adapter found"
-                : SelectedDevice.IsSelected && SelectedDevice.IsShared
+                ? Devices.Count == 0 ? "No compatible adapter found" : "Select an adapter"
+                : SelectedDevice.IsShared && SelectedDevice.IsSelectable
                     ? "Ready"
                     : SelectedDevice.Disclaimer;
         }
@@ -158,7 +166,17 @@ public sealed class HomeScreenViewModel : ScreenViewModel
         finally
         {
             _loadingAdapters = false;
+            NotifyAdapterState();
         }
+    }
+
+    private void NotifyAdapterState()
+    {
+        OnPropertyChanged(nameof(CanStartConnection));
+        OnPropertyChanged(nameof(NeedsAdapterAuthorization));
+        CreateCommand.RaiseCanExecuteChanged();
+        JoinCommand.RaiseCanExecuteChanged();
+        AuthorizeAdapterCommand.RaiseCanExecuteChanged();
     }
 
     public override void NotifyShellState()
@@ -167,6 +185,9 @@ public sealed class HomeScreenViewModel : ScreenViewModel
         CreateCommand.RaiseCanExecuteChanged();
         PublicCommand.RaiseCanExecuteChanged();
         JoinCommand.RaiseCanExecuteChanged();
+        AuthorizeAdapterCommand.RaiseCanExecuteChanged();
+        OnPropertyChanged(nameof(CanStartConnection));
+        OnPropertyChanged(nameof(NeedsAdapterAuthorization));
         OnPropertyChanged(nameof(ShowAttention));
         OnPropertyChanged(nameof(AttentionText));
         OnPropertyChanged(nameof(PublicAvailabilityText));

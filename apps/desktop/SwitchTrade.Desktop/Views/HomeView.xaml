@@ -29,6 +29,10 @@
           <TextBlock Text="{Binding AdapterStatus}" Style="{StaticResource SecondaryText}"
                      TextWrapping="Wrap" Margin="0,8,0,0"
                      automation:AutomationProperties.LiveSetting="Polite" />
+          <Button Content="Authorize adapter" Command="{Binding AuthorizeAdapterCommand}"
+                  Style="{StaticResource SecondaryButton}" Margin="0,12,0,0"
+                  Visibility="{Binding NeedsAdapterAuthorization, Converter={StaticResource BooleanToVisibility}}"
+                  automation:AutomationProperties.Name="Authorize adapter" />
         </StackPanel>
       </Border>
     </StackPanel>
