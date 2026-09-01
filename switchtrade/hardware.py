@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 import re
 
@@ -10,11 +10,16 @@ import re
 DEFAULT_PROFILE_PATH = Path(__file__).resolve().parents[1] / "config" / "wsl-radio-hardware.tsv"
 USB_ID = re.compile(r"^[0-9a-f]{4}:[0-9a-f]{4}$")
 LEGACY_PROFILE_COLUMNS = 8
-PROFILE_COLUMNS = 12
+PROFILE_COLUMNS = 13
 SAFE_STATUSES = frozenset({"production-verified", "beta-candidate"})
 EXPERIMENTAL_STATUSES = frozenset({"upstream-candidate", "driver-candidate"})
 BLOCKED_STATUSES = frozenset({"quarantined"})
 KNOWN_STATUSES = SAFE_STATUSES | EXPERIMENTAL_STATUSES | BLOCKED_STATUSES
+COMMON_MODULES = (
+    "usbip_core", "vhci_hcd", "cfg80211", "libarc4", "mac80211", "led_class",
+    "ccm", "cmac", "tun",
+)
+COMMON_FIRMWARE_FILES = ("regulatory.db", "regulatory.db.p7s")
 
 
 class HardwarePolicyError(ValueError):
@@ -67,17 +72,29 @@ class HardwareProfile:
     chipset: str = "Unknown"
     host_engine: str = "ldn"
     evidence: tuple[str, ...] = ()
+    firmware_files: tuple[str, ...] = ()
 
     def public(self) -> dict:
-        data = asdict(self)
-        data["allowed_drivers"] = list(self.allowed_drivers)
-        data["roles"] = list(self.roles)
-        data["evidence"] = list(self.evidence)
-        data["operational"] = any(role in {"host", "guest", "relay"} for role in self.roles)
-        data["experimental"] = self.status in EXPERIMENTAL_STATUSES
-        data["blocked"] = self.status in BLOCKED_STATUSES
-        data["selectable"] = data["operational"] and not data["blocked"]
-        return data
+        """Return only user-facing identity and capability, never evidence maturity."""
+        return {
+            "usb_id": self.usb_id,
+            "model": self.model,
+            "chipset": self.chipset,
+            "selectable": (
+                any(role in {"host", "guest", "relay"} for role in self.roles)
+                and self.status not in BLOCKED_STATUSES
+            ),
+        }
+
+
+def required_modules(profile: HardwareProfile) -> tuple[str, ...]:
+    """Return kernel/sysfs module identities required for one selected profile."""
+    selected = tuple(driver.replace("-", "_") for driver in profile.allowed_drivers)
+    return tuple(dict.fromkeys((*COMMON_MODULES, *selected)))
+
+
+def required_firmware(profile: HardwareProfile) -> tuple[str, ...]:
+    return tuple(dict.fromkeys((*COMMON_FIRMWARE_FILES, *profile.firmware_files)))
 
 
 def host_engines_public() -> list[dict]:
@@ -91,16 +108,17 @@ def load_profiles(path: str | Path = DEFAULT_PROFILE_PATH) -> tuple[HardwareProf
         if not raw or raw.startswith("#"):
             continue
         columns = raw.split("\t")
-        if len(columns) not in {LEGACY_PROFILE_COLUMNS, PROFILE_COLUMNS}:
+        if len(columns) not in {LEGACY_PROFILE_COLUMNS, PROFILE_COLUMNS - 1, PROFILE_COLUMNS}:
             raise ValueError(
-                f"{path}:{line_number}: expected {LEGACY_PROFILE_COLUMNS} or "
-                f"{PROFILE_COLUMNS} tab-separated columns"
+                f"{path}:{line_number}: expected {LEGACY_PROFILE_COLUMNS}, "
+                f"{PROFILE_COLUMNS - 1}, or {PROFILE_COLUMNS} tab-separated columns"
             )
         usb_id, strategy, module_file, drivers, roles, status, auto_select, notes = columns[:8]
         model, chipset, host_engine, evidence = (
-            columns[8:] if len(columns) == PROFILE_COLUMNS else
+            columns[8:12] if len(columns) >= PROFILE_COLUMNS - 1 else
             ["Unknown USB Wi-Fi adapter", "Unknown", "ldn", ""]
         )
+        firmware = columns[12] if len(columns) == PROFILE_COLUMNS else ""
         usb_id = usb_id.lower()
         if not USB_ID.fullmatch(usb_id):
             raise ValueError(f"{path}:{line_number}: invalid USB ID {usb_id!r}")
@@ -112,8 +130,6 @@ def load_profiles(path: str | Path = DEFAULT_PROFILE_PATH) -> tuple[HardwareProf
             raise ValueError(f"{path}:{line_number}: unknown hardware status {status!r}")
         if host_engine not in {engine["id"] for engine in HOST_ENGINES}:
             raise ValueError(f"{path}:{line_number}: unknown host engine {host_engine!r}")
-        if auto_select == "yes" and status not in SAFE_STATUSES:
-            raise ValueError(f"{path}:{line_number}: only verified/beta hardware may auto-select")
         seen.add(usb_id)
         profiles.append(HardwareProfile(
             usb_id=usb_id,
@@ -128,26 +144,32 @@ def load_profiles(path: str | Path = DEFAULT_PROFILE_PATH) -> tuple[HardwareProf
             chipset=chipset,
             host_engine=host_engine,
             evidence=tuple(item for item in evidence.split("|") if item),
+            firmware_files=tuple(item for item in firmware.split(",") if item),
         ))
     if not profiles:
         raise ValueError(f"{path}: no hardware profiles")
-    auto = [profile.usb_id for profile in profiles if profile.auto_select]
-    if len(auto) != 1:
-        raise ValueError(f"{path}: expected exactly one auto-select profile, found {auto}")
     return tuple(profiles)
 
 
 def select_profile(usb_id: str | None = None,
                    path: str | Path = DEFAULT_PROFILE_PATH) -> HardwareProfile:
-    """Select an explicit adapter or the registry's sole automatic candidate."""
+    """Select one explicit adapter; omission is safe only for a one-profile registry."""
     profiles = load_profiles(path)
     if usb_id is None:
-        return next(profile for profile in profiles if profile.auto_select)
+        automatic = [profile for profile in profiles if profile.auto_select]
+        if len(automatic) != 1:
+            raise HardwarePolicyError(
+                "HARDWARE_SELECTION_REQUIRED",
+                "select one connected Wi-Fi adapter before starting a connection",
+            )
+        return automatic[0]
     wanted = usb_id.lower()
     try:
         return next(profile for profile in profiles if profile.usb_id == wanted)
     except StopIteration as error:
-        raise ValueError(f"unsupported USB adapter {wanted}") from error
+        raise HardwarePolicyError(
+            "HARDWARE_UNSUPPORTED", f"unsupported USB adapter {wanted}"
+        ) from error
 
 
 def require_role(profile: HardwareProfile, role: str,

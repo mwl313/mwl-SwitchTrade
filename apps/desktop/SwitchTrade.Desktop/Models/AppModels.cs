@@ -107,12 +107,8 @@ public sealed record AuthoritativeRoomProjection(
 public sealed record AdapterProfileViewData(
     string UsbId,
     string FriendlyName,
-    string SupportLabel,
-    string Summary,
     string TechnicalDetails,
-    bool IsSelectable,
-    bool IsExperimental,
-    string HostEngine);
+    bool IsSelectable);
 
 public sealed record HardwareDiagnosticViewData(
     string RunId,
@@ -125,22 +121,18 @@ public sealed record HardwareDeviceViewData(
     string InstanceId,
     string UsbId,
     string FriendlyName,
-    string SupportLabel,
     bool IsSelectable,
-    bool IsExperimental,
     bool IsShared,
     bool IsAttached,
     bool IsSelected)
 {
-    public string DisplayLabel => $"USB {BusId} · {FriendlyName} · {SupportLabel}";
+    public string DisplayLabel => $"USB {BusId} · {FriendlyName}";
     public string ConnectionGate => IsAttached ? "Attached to WSL" : IsShared
         ? "Authorized by Windows"
         : "Windows authorization required";
     public string Disclaimer => !IsSelectable
-        ? "Quarantined — available for diagnostics only and blocked from trading."
-        : IsExperimental
-            ? $"Experimental — untested with SwitchTrade and may not work reliably. {ConnectionGate}."
-            : $"Supported hardware profile. {ConnectionGate}.";
+        ? "This adapter is unavailable."
+        : $"{ConnectionGate}.";
 }
 
 public enum PublicRoomAvailability { Open, Full }

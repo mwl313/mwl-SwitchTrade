@@ -32,7 +32,8 @@ internal sealed record PayloadDescriptor(
 internal sealed record KernelDescriptor(
     [property: JsonPropertyName("release")] string Release,
     [property: JsonPropertyName("primary_driver")] string PrimaryDriver,
-    [property: JsonPropertyName("driver_profiles")] string[] DriverProfiles);
+    [property: JsonPropertyName("driver_profiles")] string[] DriverProfiles,
+    [property: JsonPropertyName("driver_modules")] string[] DriverModules);
 
 internal sealed record ReleaseManifest(
     [property: JsonPropertyName("schema")] int Schema,
@@ -78,6 +79,21 @@ internal sealed record ReleaseManifest(
             !Regex.IsMatch(value.RuntimeContentId, "^[0-9a-f]{64}$", RegexOptions.CultureInvariant) ||
             !Uri.TryCreate(value.RelayUrl, UriKind.Absolute, out var relay) || relay.Scheme != Uri.UriSchemeHttps)
             throw ProvisionerException.Integrity("RELEASE_MANIFEST_INVALID", "Release metadata violates the v1 contract.");
+
+        if (value.Kernel is null || string.IsNullOrWhiteSpace(value.Kernel.Release) ||
+            string.IsNullOrWhiteSpace(value.Kernel.PrimaryDriver) ||
+            value.Kernel.DriverProfiles is not { Length: > 0 } ||
+            value.Kernel.DriverProfiles.Distinct(StringComparer.OrdinalIgnoreCase).Count() !=
+                value.Kernel.DriverProfiles.Length ||
+            value.Kernel.DriverProfiles.Any(profile =>
+                !Regex.IsMatch(profile, "^[0-9a-f]{4}:[0-9a-f]{4}$", RegexOptions.CultureInvariant)) ||
+            value.Kernel.DriverModules is not { Length: > 0 } ||
+            value.Kernel.DriverModules.Distinct(StringComparer.Ordinal).Count() !=
+                value.Kernel.DriverModules.Length ||
+            value.Kernel.DriverModules.Any(module =>
+                !Regex.IsMatch(module, "^[A-Za-z0-9_-]{1,64}$", RegexOptions.CultureInvariant)))
+            throw ProvisionerException.Integrity(
+                "RELEASE_MANIFEST_INVALID", "Kernel hardware metadata violates the v1 contract.");
 
         foreach (var (name, payload) in value.Payloads)
         {

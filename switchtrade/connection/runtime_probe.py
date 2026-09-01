@@ -17,15 +17,14 @@ import shutil
 import subprocess
 import sys
 
+from switchtrade.hardware import (
+    HardwarePolicyError, require_hardware, required_firmware, required_modules, select_profile,
+)
 
 CONTRACT_VERSION = "p0-runtime-passive.v1"
 REQUIRED_COMMANDS = (
     "bash", "flock", "timeout", "ip", "iw", "tcpdump", "rfkill", "readlink",
     "pgrep", "pkill", "modprobe", "modinfo", "usbreset",
-)
-REQUIRED_MODULES = (
-    "usbip_core", "vhci_hcd", "cfg80211", "libarc4", "mac80211", "led_class",
-    "rtl8xxxu", "ccm", "cmac", "tun",
 )
 REQUIRED_ARTIFACTS = (
     "switchtrade/connection/coordinator.py",
@@ -35,9 +34,6 @@ REQUIRED_ARTIFACTS = (
     "scripts/wsl-radio-prepare.sh",
     "scripts/radio-health-gate.sh",
     "config/prod.keys",
-)
-FIRMWARE_FILES = (
-    "regulatory.db", "regulatory.db.p7s", "rtlwifi/rtl8192eu_nic.bin",
 )
 
 
@@ -151,12 +147,13 @@ def _verify_dependencies(root: Path) -> dict[str, str]:
     return found
 
 
-def _verify_modules(kernel_release: str, modules_root: Path) -> dict[str, str]:
+def _verify_modules(kernel_release: str, modules_root: Path,
+                    names: tuple[str, ...]) -> dict[str, str]:
     tree = modules_root / kernel_release
     if not tree.is_dir():
         raise RuntimeProbeError("P0_MODULE_TREE_MISSING", "P0a_modules", "running kernel module tree is missing")
     evidence = {}
-    for name in REQUIRED_MODULES:
+    for name in names:
         path = _command(["modinfo", "-n", name], "P0_MODULE_MISSING")
         if path == "(builtin)":
             evidence[name] = f"builtin:{kernel_release}"
@@ -174,7 +171,8 @@ def _verify_modules(kernel_release: str, modules_root: Path) -> dict[str, str]:
     return evidence
 
 
-def _verify_firmware(firmware_root: Path, manifest_path: Path) -> dict[str, str]:
+def _verify_firmware(firmware_root: Path, manifest_path: Path,
+                     files: tuple[str, ...]) -> dict[str, str]:
     try:
         entries = {
             relative: expected.lower()
@@ -185,7 +183,7 @@ def _verify_firmware(firmware_root: Path, manifest_path: Path) -> dict[str, str]
     except (OSError, ValueError) as error:
         raise RuntimeProbeError("P0_FIRMWARE_MANIFEST_INVALID", "P0a_firmware", "firmware manifest is invalid") from error
     evidence = {}
-    for relative in FIRMWARE_FILES:
+    for relative in files:
         expected = entries.get(f"firmware/{relative}") or entries.get(relative)
         if not expected or not re.fullmatch(r"[0-9a-f]{64}", expected):
             raise RuntimeProbeError("P0_FIRMWARE_MANIFEST_INVALID", "P0a_firmware", f"firmware is not pinned: {relative}")
@@ -241,6 +239,13 @@ def _active_endpoint_count(proc_root: Path) -> int:
 
 
 def probe(args: argparse.Namespace) -> dict:
+    try:
+        profile = require_hardware(select_profile(args.usb_id), "relay")
+    except (HardwarePolicyError, ValueError) as error:
+        raise RuntimeProbeError(
+            "P0_HARDWARE_POLICY_REJECTED", "P0a_adapter",
+            "selected hardware profile is unavailable",
+        ) from error
     missing = [name for name in REQUIRED_COMMANDS if shutil.which(name) is None]
     if missing:
         raise RuntimeProbeError("P0_TOOL_MISSING", "P0a_tools", f"required tools are missing: {','.join(missing)}")
@@ -251,8 +256,9 @@ def probe(args: argparse.Namespace) -> dict:
     integrity_sha, artifact_count = _verify_integrity(args.root, args.release)
     dependencies = _verify_dependencies(args.root)
     kernel_release = os.uname().release
-    modules = _verify_modules(kernel_release, args.modules_root)
-    firmware = _verify_firmware(args.firmware_root, args.firmware_manifest)
+    modules = _verify_modules(kernel_release, args.modules_root, required_modules(profile))
+    firmware = _verify_firmware(
+        args.firmware_root, args.firmware_manifest, required_firmware(profile))
     _verify_channel(args.target_channel)
     keys = args.root / "config" / "prod.keys"
     try:
@@ -263,7 +269,9 @@ def probe(args: argparse.Namespace) -> dict:
     active_endpoints = _active_endpoint_count(args.proc_root)
     if active_endpoints:
         raise RuntimeProbeError("P0_ENDPOINT_ACTIVE", "P0a_exclusivity", "an endpoint or radio worker is already active")
-    if not _radio_lock_available(args.radio_lock):
+    radio_lock = args.radio_lock or Path(
+        f"/run/lock/switchtrade-radio-{profile.usb_id.replace(':', '-')}.lock")
+    if not _radio_lock_available(radio_lock):
         raise RuntimeProbeError("P0_RADIO_BUSY", "P0a_exclusivity", "the Linux radio lock is already owned")
     return {
         "contract_version": CONTRACT_VERSION,
@@ -299,8 +307,8 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--firmware-root", type=Path, default=Path("/lib/firmware"))
     value.add_argument("--firmware-manifest", type=Path, default=Path("/etc/switchtrade/firmware-manifest.sha256"))
     value.add_argument("--distro-marker", type=Path, default=Path("/etc/switchtrade-distro.json"))
-    value.add_argument("--radio-lock", type=Path, default=Path("/run/lock/switchtrade-radio-0bda-818b.lock"))
-    value.add_argument("--usb-id", default="0bda:818b")
+    value.add_argument("--radio-lock", type=Path)
+    value.add_argument("--usb-id", required=True)
     return value
 
 

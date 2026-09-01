@@ -420,27 +420,11 @@ public sealed class ControlApiClient : IControlGateway
             return (result?.Profiles ?? []).Select(profile =>
             {
                 var friendly = profile.Model ?? "USB Wi-Fi adapter";
-                var supported = profile.Status is "production-verified" or "beta-candidate";
-                var experimental = profile.Experimental;
-                var label = profile.Status switch
-                {
-                    "production-verified" => "Production verified",
-                    "beta-candidate" => "Beta candidate",
-                    "upstream-candidate" => "Research candidate",
-                    "driver-candidate" => "Driver candidate",
-                    "quarantined" => "Quarantined",
-                    _ => "Needs review",
-                };
                 return new AdapterProfileViewData(
                     profile.UsbId ?? "unknown",
-                    friendly, label,
-                    supported ? "Available for the current beta workflow; two-adapter certification is pending."
-                              : experimental
-                                  ? "Experimental and untested with SwitchTrade; it may not connect or trade reliably. Diagnostics are available."
-                                  : "Blocked from trading; retained for diagnostic evidence only.",
-                    $"USB {profile.UsbId?.ToUpperInvariant()} · {profile.Chipset ?? "Unknown chipset"} · " +
-                    $"{string.Join(", ", profile.Roles ?? [])} · engine {profile.HostEngine ?? "ldn"}",
-                    supported || experimental, experimental, profile.HostEngine ?? "ldn");
+                    friendly,
+                    $"USB {profile.UsbId?.ToUpperInvariant()} · {profile.Chipset ?? "Unknown chipset"}",
+                    profile.Selectable);
             }).ToArray();
         }
         catch (HttpRequestException)
@@ -538,14 +522,7 @@ public sealed class ControlApiClient : IControlGateway
             return result.Devices.Select(device => new HardwareDeviceViewData(
                 device.BusId!, device.InstanceId!, device.UsbId!,
                 device.Description ?? device.Model ?? "USB Wi-Fi adapter",
-                device.Status switch
-                {
-                    "production-verified" => "Production verified",
-                    "beta-candidate" => "Beta candidate",
-                    "upstream-candidate" or "driver-candidate" => "Experimental",
-                    _ => "Blocked",
-                },
-                device.Selectable, device.Experimental, device.Shared,
+                device.Selectable, device.Shared,
                 device.Attached, device.Selected)).ToArray();
         }
         catch (HttpRequestException)
@@ -1139,12 +1116,9 @@ public sealed class ControlApiClient : IControlGateway
     private sealed record ProfilesResponse(IReadOnlyList<ProfileDto>? Profiles);
     private sealed record ProfileDto(
         [property: JsonPropertyName("usb_id")] string? UsbId,
-        string? Status,
-        IReadOnlyList<string>? Roles,
         string? Model,
         string? Chipset,
-        [property: JsonPropertyName("host_engine")] string? HostEngine,
-        bool Experimental);
+        bool Selectable);
     private sealed record HardwareDiagnosticResponse(JsonElement Report);
     private sealed record HardwareDiagnosticReportDto(
         [property: JsonPropertyName("run_id")] string? RunId,
@@ -1158,9 +1132,7 @@ public sealed class ControlApiClient : IControlGateway
         [property: JsonPropertyName("usb_id")] string? UsbId,
         string? Description,
         string? Model,
-        string? Status,
         bool Selectable,
-        bool Experimental,
         bool Shared,
         bool Attached,
         bool Selected);

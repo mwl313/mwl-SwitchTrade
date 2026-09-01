@@ -85,3 +85,28 @@ def test_production_source_payload_excludes_test_and_internal_documentation():
         assert required in installer_block
     for forbidden in ("Test-", "Build-Package.ps1", "Build-Rootfs.sh", "bootstrap", "README.md"):
         assert forbidden not in installer_block
+
+
+def test_replacement_package_requires_the_complete_dynamic_hardware_contract():
+    replacement = (
+        ROOT / "installer" / "replacement" / "Build-ReplacementPackage.ps1"
+    ).read_text(encoding="utf-8")
+    immutable = (
+        ROOT / "installer" / "replacement" / "Build-ImmutableWsl.ps1"
+    ).read_text(encoding="utf-8")
+    validator = (
+        ROOT / "installer" / "replacement" / "Test-ReplacementPackage.ps1"
+    ).read_text(encoding="utf-8")
+
+    assert "[string]$KernelArtifact" in replacement
+    assert "verify-kernel-artifact.py" in replacement
+    assert "config\\wsl-radio-hardware.tsv" in replacement
+    assert "driver_profiles = $driverProfiles" in replacement
+    assert "driver_modules = $driverModules" in replacement
+    assert "Get-NormalizedFirmwareManifest" in replacement
+    assert "Compare-Object" in replacement
+    assert "final-package-27d17b1" not in replacement
+    assert "artifacts\\kernel-production" in immutable
+    assert "final-package-27d17b1" not in immutable
+    assert "The packaged hardware contract does not match the source matrix." in validator
+    assert "The packaged kernel is missing a matrix driver" in validator

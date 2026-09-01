@@ -10,7 +10,10 @@ import zipfile
 
 from switchtrade.diagnostics import RunLogger, redact_text
 from switchtrade.endpoint import cleanup_resources, run_endpoint, runtime_phy, runtime_plan
-from switchtrade.hardware import HardwarePolicyError, load_profiles, require_host_engine
+from switchtrade.hardware import (
+    HardwarePolicyError, load_profiles, require_host_engine, required_firmware,
+    required_modules,
+)
 from switchtrade.hardware_diagnostics import (
     classify_output, diagnose_hardware, parse_iw_capabilities,
 )
@@ -40,31 +43,44 @@ class HardwarePolicyTests(unittest.TestCase):
         self.assertIn("device_lock_id=", script)
         self.assertIn("SWITCHTRADE_USB_DEVICE", script)
 
-    def test_only_8192_is_auto_selected(self):
+    def test_every_executable_profile_is_auto_eligible(self):
         profiles = load_profiles()
         automatic = [profile.usb_id for profile in profiles if profile.auto_select]
-        self.assertEqual(automatic, ["0bda:818b"])
-        rtl8188 = next(profile for profile in profiles if profile.usb_id == "0bda:8179")
-        self.assertEqual(rtl8188.status, "quarantined")
-        self.assertEqual(rtl8188.roles, ("observe",))
+        self.assertEqual(automatic, [
+            "0bda:818b", "0e8d:7610", "0e8d:7612", "148f:2770",
+            "148f:3070", "148f:3572", "0bda:c811",
+        ])
+        self.assertNotIn("0bda:8179", automatic)
+        self.assertNotIn("0cf3:9271", automatic)
         self.assertTrue(all(profile.host_engine == "ldn" for profile in profiles))
-        self.assertEqual(len(profiles), 9)
+        self.assertEqual(len(profiles), 7)
 
     def test_endpoint_roles_are_resolved_through_profiles(self):
-        self.assertEqual(runtime_plan("host")["radio_role"], "guest")
-        self.assertEqual(runtime_plan("guest")["radio_role"], "host")
-        independent = runtime_plan("member_a", switch_room_role="finder")
+        for profile in load_profiles():
+            self.assertEqual(runtime_plan("host", profile.usb_id)["radio_role"], "guest")
+            self.assertEqual(runtime_plan("guest", profile.usb_id)["radio_role"], "host")
+        independent = runtime_plan(
+            "member_a", "0bda:818b", switch_room_role="finder")
         self.assertEqual(independent["tunnel_role"], "host")
         self.assertEqual(independent["radio_role"], "host")
         with self.assertRaises(ValueError):
             runtime_plan("host", "0bda:8179")
 
+    def test_profile_projection_hides_internal_evidence_and_selects_exact_requirements(self):
+        for profile in load_profiles():
+            self.assertEqual(
+                set(profile.public()), {"usb_id", "model", "chipset", "selectable"})
+            self.assertTrue(profile.public()["selectable"])
+            self.assertTrue(set(profile.allowed_drivers).issubset(required_modules(profile)))
+            self.assertTrue(set(profile.firmware_files).issubset(required_firmware(profile)))
+
     def test_candidate_is_selectable_without_repeated_confirmation(self):
         plan = runtime_plan("host", "0e8d:7610")
         self.assertEqual(plan["hardware_model"], "ALFA AWUS036ACHM")
         self.assertEqual(plan["host_engine"], "ldn")
-        self.assertTrue(plan["experimental_hardware"])
-        self.assertFalse(plan["allow_experimental_hardware"])
+        self.assertEqual(plan["driver_strategy"], "vanilla")
+        self.assertNotIn("experimental_hardware", plan)
+        self.assertNotIn("allow_experimental_hardware", plan)
 
     def test_endpoint_uses_health_gate_phy_and_never_guesses_phy0(self):
         with mock.patch.dict("os.environ", {"SWITCHTRADE_PHY": "phy7"}, clear=False):

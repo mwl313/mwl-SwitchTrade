@@ -238,20 +238,17 @@ class StartSession(BaseModel):
     passcode: str = Field(min_length=4, max_length=8, pattern="^[A-Za-z0-9]+$")
     usb_id: str | None = Field(default=None, pattern="^[0-9A-Fa-f]{4}:[0-9A-Fa-f]{4}$")
     attempt_id: str | None = Field(default=None, max_length=80)
-    allow_experimental_hardware: bool = False
 
 
 class RepairRequest(BaseModel):
     action: str = Field(pattern="^recheck_adapter$")
     usb_id: str | None = Field(default=None, pattern="^[0-9A-Fa-f]{4}:[0-9A-Fa-f]{4}$")
-    allow_experimental_hardware: bool = False
 
 
 class HardwareDiagnosticRequest(BaseModel):
     usb_id: str | None = Field(default=None, pattern="^[0-9A-Fa-f]{4}:[0-9A-Fa-f]{4}$")
     mode: str = Field(default="quick", pattern="^(quick|certify|full)$")
     role: str = Field(default="host", pattern="^(host|guest|relay)$")
-    allow_experimental_hardware: bool = False
 
 
 class HardwareSelectionRequest(BaseModel):
@@ -818,7 +815,6 @@ def endpoint_command(identity: str, passcode: str, relay_url: str,
                      party_state_file: Path | None = None,
                      attempt_id: str | None = None,
                      member_token_file: Path | None = None,
-                     allow_experimental_hardware: bool = False,
                      launch_nonce: str | None = None,
                      launch_ack_file: Path | None = None,
                      diagnostic_run_id: str | None = None,
@@ -835,8 +831,6 @@ def endpoint_command(identity: str, passcode: str, relay_url: str,
                  if os.name == "nt" else str(launch_ack_file)]
     if usb_id:
         args += ["--usb-id", usb_id.lower()]
-    if allow_experimental_hardware:
-        args += ["--allow-experimental-hardware"]
     if state_file:
         args += ["--state-file", _wsl_path(state_file) if os.name == "nt" else str(state_file)]
     if party_state_file:
@@ -863,15 +857,12 @@ def endpoint_command(identity: str, passcode: str, relay_url: str,
 
 def hardware_diagnostic_command(usb_id: str, mode: str, role: str,
                                 runs_root: Path,
-                                *, allow_experimental_hardware: bool = False,
-                                active_check: bool = False) -> list[str]:
+                                *, active_check: bool = False) -> list[str]:
     args = [
         "-m", "switchtrade.hardware_diagnostics", "--usb-id", usb_id.lower(),
         "--mode", mode, "--role", role, "--runs-root",
         _wsl_path(runs_root) if os.name == "nt" else str(runs_root),
     ]
-    if allow_experimental_hardware:
-        args.append("--allow-experimental-hardware")
     if active_check:
         args.append("--active-check")
     if os.name == "nt":
@@ -1197,8 +1188,8 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             inventory.append({
                 "bus_id": device["BusId"], "instance_id": instance_id, "usb_id": usb_id,
                 "description": device.get("Description") or profile.model,
-                "model": profile.model, "status": profile.status,
-                "selectable": public["selectable"], "experimental": public["experimental"],
+                "model": profile.model, "chipset": profile.chipset,
+                "selectable": public["selectable"],
                 "shared": bool(device.get("PersistedGuid") or device.get("StubInstanceId")),
                 "attached": bool(device.get("ClientIPAddress")),
                 "selected": is_selected,
@@ -1740,7 +1731,6 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                        switch_room_role: str, usb_id: str | None,
                        attempt_id: str | None = None,
                        member_token_file: Path | None = None,
-                       allow_experimental_hardware: bool = False,
                        retry: bool = False,
                        launch_generation: int | None = None,
                        diagnostic_run_id: str | None = None,
@@ -1749,7 +1739,6 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         try:
             plan = runtime_plan(
                 tunnel_seat, usb_id, switch_room_role=switch_room_role,
-                allow_experimental_hardware=allow_experimental_hardware,
             )
         except RelayError as error:
             raise relay_api_error(error) from error
@@ -1855,7 +1844,6 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                     "tunnel_seat": plan["tunnel_seat"],
                     "switch_room_role": plan["switch_room_role"],
                     "usb_id": plan["usb_id"],
-                    "allow_experimental_hardware": allow_experimental_hardware,
                     "radio_checked": False, "tunnel_connected": False,
                     "failure_stage": None, "recovery_action": None,
                     "diagnostic_run_id": diagnostic_run_id,
@@ -1866,7 +1854,6 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                     state.endpoint_state, switch_room_role=plan["switch_room_role"],
                     party_state_file=state.party_state, attempt_id=launch_key,
                     member_token_file=member_token_file,
-                    allow_experimental_hardware=allow_experimental_hardware,
                     launch_nonce=launch_nonce,
                     launch_ack_file=state.endpoint_launch_ack,
                     diagnostic_run_id=diagnostic_run_id,
@@ -2056,7 +2043,6 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 launch_nonce=launch_nonce, tunnel_seat=plan["tunnel_seat"],
                 switch_room_role=plan["switch_room_role"], usb_id=plan["usb_id"],
                 host_engine=plan["host_engine"],
-                experimental_hardware=plan["experimental_hardware"],
                 launcher_pid=process.pid, endpoint_pid=initialized["pid"],
             )
             return {"status": initialized.get("state", "initializing"),
@@ -2492,8 +2478,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 stage="hardware_selection", recoverable=False, primary_action="select_adapter",
             )
         state.write_hardware_selection(usb_id, device["instance_id"], device["bus_id"])
-        state.log.event("hardware_selected", usb_id=usb_id, bus_id=payload.bus_id,
-                        experimental=device["experimental"])
+        state.log.event("hardware_selected", usb_id=usb_id, bus_id=payload.bus_id)
         return {"device": {**device, "selected": True}, "run_id": state.log.run_id}
 
     @app.post("/api/v1/hardware/diagnostics")
@@ -2526,12 +2511,10 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             diagnostic_root = state.log.run_dir / "hardware-diagnostics"
             command = hardware_diagnostic_command(
                 usb_id, payload.mode, payload.role, diagnostic_root,
-                allow_experimental_hardware=payload.allow_experimental_hardware,
                 active_check=True,
             )
             state.log.event(
                 "hardware_diagnostic_started", usb_id=usb_id, mode=payload.mode,
-                experimental_hardware=payload.allow_experimental_hardware,
             )
             try:
                 result = subprocess.run(
@@ -3293,7 +3276,6 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
         try:
             plan = runtime_plan(
                 identity, payload.usb_id, switch_room_role=switch_role,
-                allow_experimental_hardware=payload.allow_experimental_hardware,
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
@@ -3301,7 +3283,6 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             state, code=code, tunnel_seat=plan["tunnel_seat"],
             switch_room_role=plan["switch_room_role"], usb_id=payload.usb_id,
             attempt_id=payload.attempt_id,
-            allow_experimental_hardware=payload.allow_experimental_hardware,
         )
 
     @app.post("/api/v1/session/start")
@@ -3340,7 +3321,6 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
             state, code=previous["session_id"], tunnel_seat=previous["tunnel_seat"],
             switch_room_role=previous["switch_room_role"], usb_id=previous.get("usb_id"),
             attempt_id=previous.get("attempt_id"),
-            allow_experimental_hardware=bool(previous.get("allow_experimental_hardware")),
             retry=True,
         )
 
@@ -3376,15 +3356,12 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                     previous.get("tunnel_seat", "member_a"),
                     payload.usb_id or previous.get("usb_id") or selected_usb_id,
                     switch_room_role=switch_role,
-                    allow_experimental_hardware=payload.allow_experimental_hardware,
                 )
             except ValueError as error:
                 raise HTTPException(status_code=400, detail=str(error)) from error
             prepare = Path(__file__).resolve().parents[1] / "scripts" / "wsl-radio-prepare.sh"
             command = [str(prepare), "--usb-id", plan["usb_id"], "--role", plan["radio_role"],
                        "--reset-on-rx-failure"]
-            if payload.allow_experimental_hardware:
-                command.append("--allow-experimental-hardware")
             state.log.event("repair_started", action=payload.action, usb_id=plan["usb_id"])
             result = subprocess.run(
                 command, cwd=prepare.parent.parent, capture_output=True, text=True,
@@ -3428,8 +3405,7 @@ def create_app(profile_path: str | Path = DEFAULT_PROFILE_PATH, runs_root: str |
                 "inventory_status": "ready",
                 "selected": None if selected is None else {
                     name: selected[name] for name in (
-                        "usb_id", "bus_id", "model", "status", "experimental",
-                        "shared", "attached",
+                        "usb_id", "bus_id", "model", "chipset", "shared", "attached",
                     )
                 },
             }

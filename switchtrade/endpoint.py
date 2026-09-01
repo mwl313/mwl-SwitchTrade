@@ -129,8 +129,9 @@ def runtime_plan(identity: str, usb_id: str | None = None,
     if switch_room_role not in SWITCH_TO_RADIO_ROLE:
         raise ValueError("Switch room role must be creator or finder")
     radio_role = SWITCH_TO_RADIO_ROLE[switch_room_role]
+    selected_usb_id = usb_id or os.environ.get("SWITCHTRADE_USB_ID")
     profile = require_role(
-        select_profile(usb_id), radio_role,
+        select_profile(selected_usb_id), radio_role,
         allow_experimental=allow_experimental_hardware,
     )
     return {
@@ -141,11 +142,8 @@ def runtime_plan(identity: str, usb_id: str | None = None,
         "usb_id": profile.usb_id,
         "driver_strategy": profile.strategy,
         "allowed_drivers": list(profile.allowed_drivers),
-        "profile_status": profile.status,
-        "experimental_hardware": profile.status in {"upstream-candidate", "driver-candidate"},
         "hardware_model": profile.model,
         "host_engine": profile.host_engine,
-        "allow_experimental_hardware": allow_experimental_hardware,
     }
 
 
@@ -418,10 +416,13 @@ def build_parser() -> argparse.ArgumentParser:
                         help="temporary compatibility input; prefer the two independent role axes")
     parser.add_argument("--relay-url", required=True)
     parser.add_argument("--session-id", required=True)
-    parser.add_argument("--usb-id", help="profiled VID:PID; defaults to the registry auto candidate")
+    parser.add_argument(
+        "--usb-id",
+        help="selected profiled VID:PID; otherwise uses the exact radio prepared by the wrapper",
+    )
     parser.add_argument(
         "--allow-experimental-hardware", action="store_true",
-        help="allow one explicit upstream/driver candidate for this attempt",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument("--phy", help="verified radio PHY; normally supplied by the health gate")
     parser.add_argument("--channel", type=int, choices=range(1, 14), default=6)

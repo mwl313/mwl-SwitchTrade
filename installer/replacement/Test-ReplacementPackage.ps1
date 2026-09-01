@@ -49,6 +49,27 @@ if ([string]$result.version -ne $applicationVersion -or
     [string]$manifest.version -ne $applicationVersion) {
     throw 'Release, installer, and application versions do not share switchtrade/VERSION.'
 }
+$expectedProfiles = @()
+$expectedModules = @()
+foreach ($line in Get-Content -LiteralPath (Join-Path $repo 'config\wsl-radio-hardware.tsv')) {
+    if (-not $line -or $line.StartsWith('#')) { continue }
+    $columns = @($line -split "`t")
+    if ($columns.Count -ne 13 -or $columns[6] -ne 'yes') {
+        throw 'The source hardware matrix is malformed or not fully auto-eligible.'
+    }
+    $expectedProfiles += $columns[0]
+    $expectedModules += @($columns[3] -split ',')
+}
+$expectedProfiles = @($expectedProfiles | Sort-Object -Unique)
+$expectedModules = @($expectedModules | Sort-Object -Unique)
+$packagedProfiles = @($manifest.kernel.driver_profiles | Sort-Object -Unique)
+$packagedModules = @($manifest.kernel.driver_modules | Sort-Object -Unique)
+if ($packagedProfiles.Count -ne $expectedProfiles.Count -or
+    (Compare-Object $expectedProfiles $packagedProfiles) -or
+    $packagedModules.Count -ne $expectedModules.Count -or
+    (Compare-Object $expectedModules $packagedModules)) {
+    throw 'The packaged hardware contract does not match the source matrix.'
+}
 foreach ($payload in $manifest.payloads.PSObject.Properties) {
     $file = [IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $manifestPath) ([string]$payload.Value.path)))
     if (-not $file.StartsWith((Split-Path -Parent $manifestPath).TrimEnd('\') + '\',
@@ -57,6 +78,17 @@ foreach ($payload in $manifest.payloads.PSObject.Properties) {
         [string]$payload.Value.sha256 -ne
             (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()) {
         throw "Release payload verification failed: $($payload.Name)"
+    }
+}
+$packagedModuleArchive = [IO.Path]::GetFullPath((Join-Path (
+    Split-Path -Parent $manifestPath) ([string]$manifest.payloads.kernel_modules.path)))
+$moduleEntries = @(& tar -tzf $packagedModuleArchive)
+if ($LASTEXITCODE -ne 0) { throw 'The packaged kernel module archive cannot be inspected.' }
+foreach ($driver in $expectedModules) {
+    $modulePattern = [regex]::Escape($driver.Replace('-', '_') + '.ko') +
+        '(?:\.(?:xz|zst|gz))?$'
+    if (-not @($moduleEntries | Where-Object { $_ -match $modulePattern })) {
+        throw "The packaged kernel is missing a matrix driver: $driver"
     }
 }
 

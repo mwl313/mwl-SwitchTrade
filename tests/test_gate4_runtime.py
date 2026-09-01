@@ -852,6 +852,8 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                     "member_token": "m" * 43, "reconnect_token": "r" * 43,
                 })
                 runtime.endpoint_session = "ABC123"
+                runtime.write_hardware_selection(
+                    "0bda:818b", r"USB\VID_0BDA&PID_818B\RADIO-A", "2-4")
                 room = {
                     "room_id": "room-1", "room_code": "ABC123", "room_version": 4,
                     "members": [{"is_local": True, "seat": "member_a",
@@ -873,8 +875,21 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                     acknowledge_initialized(runtime, command, 1234)
                     return process
 
+                def hardware_run(command, **_kwargs):
+                    if command[:2] == ["usbipd.exe", "state"]:
+                        return MagicMock(returncode=0, stdout=json.dumps({"Devices": [{
+                            "BusId": "2-4", "ClientIPAddress": "172.20.0.1",
+                            "PersistedGuid": "shared-radio", "Description": "RTL8192EU",
+                            "InstanceId": r"USB\VID_0BDA&PID_818B\RADIO-A",
+                        }]}), stderr="")
+                    return MagicMock(returncode=0, stdout=json.dumps({
+                        "status": "present", "interface_present": True,
+                        "phy_present": True,
+                    }), stderr="")
+
                 with patch.object(runtime, "authoritative_room", return_value=room), patch.object(
                         runtime, "_verified_endpoint_pid", side_effect=verify_after_launch), patch(
+                        "switchtrade.control.subprocess.run", side_effect=hardware_run), patch(
                         "switchtrade.control.subprocess.Popen", side_effect=acknowledge_launch) as popen:
                     response = client.post("/api/v1/app/retry")
                 self.assertEqual(response.status_code, 200, response.text)
@@ -1263,20 +1278,20 @@ class Gate4RuntimeContractTests(unittest.TestCase):
             self.assertEqual(response.json()["code"], "endpoint_start_failed")
             self.assertEqual(response.json()["stage"], "radio")
 
-    def test_hardware_profiles_publish_engine_availability_and_candidates(self):
+    def test_hardware_profiles_publish_only_safe_user_fields(self):
         with tempfile.TemporaryDirectory() as temporary:
             with TestClient(create_app(runs_root=temporary)) as client:
                 body = client.get("/api/hardware/profiles").json()
-                self.assertEqual(len(body["profiles"]), 9)
+                self.assertEqual(len(body["profiles"]), 7)
                 self.assertEqual(
                     [engine["id"] for engine in body["host_engines"] if engine["selectable"]],
                     ["ldn"],
                 )
                 candidate = next(
                     profile for profile in body["profiles"] if profile["usb_id"] == "0e8d:7610")
-                self.assertTrue(candidate["experimental"])
                 self.assertTrue(candidate["selectable"])
-                self.assertEqual(candidate["host_engine"], "ldn")
+                self.assertEqual(
+                    set(candidate), {"usb_id", "model", "chipset", "selectable"})
 
     def test_hardware_diagnostic_api_returns_machine_readable_report(self):
         fake_report = {
@@ -1321,7 +1336,7 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                                      for call in run.call_args_list))
                 upload.assert_called_once()
 
-    def test_detected_experimental_adapter_can_be_selected_without_confirmation(self):
+    def test_detected_matrix_adapter_can_be_selected_without_confirmation(self):
         usbipd_state = {
             "Devices": [
                 {
@@ -1345,8 +1360,8 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                     self.assertEqual(devices.status_code, 200, devices.text)
                     by_id = {item["usb_id"]: item for item in devices.json()["devices"]}
                     self.assertTrue(by_id["0e8d:7610"]["selectable"])
-                    self.assertTrue(by_id["0e8d:7610"]["experimental"])
-                    self.assertFalse(by_id["0bda:8179"]["selectable"])
+                    self.assertNotIn("experimental", by_id["0e8d:7610"])
+                    self.assertNotIn("0bda:8179", by_id)
                     selected = client.post("/api/v1/hardware/selection", json={
                         "usb_id": "0e8d:7610", "bus_id": "4-20",
                         "instance_id": r"USB\VID_0E8D&PID_7610\TEST",

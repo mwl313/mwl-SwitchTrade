@@ -12,6 +12,10 @@ import tarfile
 
 REQUIRED_MODULES = (
     "rtl8xxxu.ko",
+    "mt76x0u.ko",
+    "mt76x2u.ko",
+    "rt2800usb.ko",
+    "rtw88_8821cu.ko",
     "vhci-hcd.ko",
     "tun.ko",
     "tap.ko",

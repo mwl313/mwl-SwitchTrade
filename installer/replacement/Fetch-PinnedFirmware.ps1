@@ -18,7 +18,12 @@ $items = @(
     @{ Relative = 'regulatory.db'; Url = "https://kernel.googlesource.com/pub/scm/linux/kernel/git/wens/wireless-regdb/+/$regulatoryCommit/regulatory.db?format=TEXT" },
     @{ Relative = 'regulatory.db.p7s'; Url = "https://kernel.googlesource.com/pub/scm/linux/kernel/git/wens/wireless-regdb/+/$regulatoryCommit/regulatory.db.p7s?format=TEXT" },
     @{ Relative = 'rtlwifi/rtl8188eufw.bin'; Url = "https://kernel.googlesource.com/pub/scm/linux/kernel/git/firmware/linux-firmware/+/$linuxFirmwareCommit/rtlwifi/rtl8188eufw.bin?format=TEXT" },
-    @{ Relative = 'rtlwifi/rtl8192eu_nic.bin'; Url = "https://kernel.googlesource.com/pub/scm/linux/kernel/git/firmware/linux-firmware/+/$linuxFirmwareCommit/rtlwifi/rtl8192eu_nic.bin?format=TEXT" }
+    @{ Relative = 'rtlwifi/rtl8192eu_nic.bin'; Url = "https://kernel.googlesource.com/pub/scm/linux/kernel/git/firmware/linux-firmware/+/$linuxFirmwareCommit/rtlwifi/rtl8192eu_nic.bin?format=TEXT" },
+    @{ Relative = 'mediatek/mt7610u.bin'; Url = "https://kernel.googlesource.com/pub/scm/linux/kernel/git/firmware/linux-firmware/+/$linuxFirmwareCommit/mediatek/mt7610u.bin?format=TEXT" },
+    @{ Relative = 'mt7662.bin'; Url = "https://kernel.googlesource.com/pub/scm/linux/kernel/git/firmware/linux-firmware/+/$linuxFirmwareCommit/mediatek/mt7662.bin?format=TEXT" },
+    @{ Relative = 'mt7662_rom_patch.bin'; Url = "https://kernel.googlesource.com/pub/scm/linux/kernel/git/firmware/linux-firmware/+/$linuxFirmwareCommit/mediatek/mt7662_rom_patch.bin?format=TEXT" },
+    @{ Relative = 'rt2870.bin'; Url = "https://kernel.googlesource.com/pub/scm/linux/kernel/git/firmware/linux-firmware/+/$linuxFirmwareCommit/rt2870.bin?format=TEXT" },
+    @{ Relative = 'rtw88/rtw8821c_fw.bin'; Url = "https://kernel.googlesource.com/pub/scm/linux/kernel/git/firmware/linux-firmware/+/$linuxFirmwareCommit/rtw88/rtw8821c_fw.bin?format=TEXT" }
 )
 $expected = @{}
 foreach ($line in Get-Content -LiteralPath $manifestPath) {

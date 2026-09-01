@@ -136,17 +136,16 @@ def diagnose_hardware(usb_id: str, *, mode: str = "quick", role: str = "host",
     elif profile.status in BLOCKED_STATUSES:
         stages.append(_stage(
             "profile_policy", "failed", "HARDWARE_QUARANTINED",
-            "The card is quarantined for trading attempts.", profile_status=profile.status,
+            "This adapter is unavailable for trading attempts.",
         ))
         incompatibilities.append({
             "code": "HARDWARE_QUARANTINED",
-            "action": "Keep this card diagnostic-only unless new physical evidence changes its status.",
+            "action": "Select another Wi-Fi adapter.",
         })
     else:
         stages.append(_stage(
             "profile_policy", "passed", "HARDWARE_POLICY_ACCEPTED",
-            "The profile is eligible for this diagnostic mode.", profile_status=profile.status,
-            host_engine=profile.host_engine,
+            "The selected adapter is eligible for this diagnostic mode.",
         ))
     can_mutate = profile is not None and profile.status not in BLOCKED_STATUSES
 
@@ -417,7 +416,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--usb-id", required=True)
     parser.add_argument("--mode", choices=("quick", "certify", "full"), default="quick")
     parser.add_argument("--role", choices=("host", "guest", "relay"), default="host")
-    parser.add_argument("--allow-experimental-hardware", action="store_true")
+    parser.add_argument(
+        "--allow-experimental-hardware", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--active-check", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--profile-file", default=str(DEFAULT_PROFILE_PATH))
     parser.add_argument("--runs-root")

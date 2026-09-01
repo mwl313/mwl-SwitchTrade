@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verify that a Realtek LDN radio can receive before starting a capture command.
+# Verify that the selected LDN radio can receive before starting a capture command.
 # Usage: sudo radio-health-gate.sh [--iface IFACE] [--target-channel N] [-- COMMAND...]
 
 set -euo pipefail
@@ -24,8 +24,8 @@ Usage:
   sudo radio-health-gate.sh [options] [-- COMMAND...]
 
 Options:
-  --iface IFACE          Realtek radio interface (required when multiple cards exist)
-  --usb-id VID:PID       Exact USB ID expected on IFACE (enables profile-added cards)
+  --iface IFACE          Selected radio interface
+  --usb-id VID:PID       Exact matrix USB ID expected on IFACE (required)
   --health-channels CSV  Receive-test channels (default: 1,6,11)
   --target-channel N     Channel left configured for COMMAND (default: 6)
   --timeout SECONDS      Per-channel receive timeout (default: 2)
@@ -56,13 +56,7 @@ find_card_ifaces() {
     for name in "$SYSFS_ROOT"/class/net/*; do
         name="$(basename "$name")"
         id="$(usb_id_of_iface "$name")" || continue
-        if [[ -n $EXPECTED_USB_ID ]]; then
-            [[ $id == "$EXPECTED_USB_ID" ]] && printf '%s\n' "$name"
-        else
-            case $id in
-                0bda:8179|0bda:818b) printf '%s\n' "$name" ;;
-            esac
-        fi
+        [[ $id == "$EXPECTED_USB_ID" ]] && printf '%s\n' "$name"
     done
 }
 
@@ -71,18 +65,11 @@ select_iface() {
     if [[ -n $IFACE ]]; then
         [[ -d $SYSFS_ROOT/class/net/$IFACE ]] || die "interface not found: $IFACE"
         id="$(usb_id_of_iface "$IFACE" || true)"
-        if [[ -n $EXPECTED_USB_ID ]]; then
-            [[ $id == "$EXPECTED_USB_ID" ]] || die "$IFACE USB ID $id != expected $EXPECTED_USB_ID"
-        else
-            case $id in
-                0bda:8179|0bda:818b) ;;
-                *) die "$IFACE is not a supported Realtek radio" ;;
-            esac
-        fi
+        [[ $id == "$EXPECTED_USB_ID" ]] || die "$IFACE USB ID $id != expected $EXPECTED_USB_ID"
         return 0
     fi
     mapfile -t cards < <(find_card_ifaces)
-    (( ${#cards[@]} > 0 )) || die "no Realtek 0bda:8179/818b radio found"
+    (( ${#cards[@]} > 0 )) || die "selected USB radio not found: $EXPECTED_USB_ID"
     (( ${#cards[@]} == 1 )) || die "multiple radios found; pass --iface (${cards[*]})"
     IFACE="${cards[0]}"
 }
@@ -175,6 +162,8 @@ while [[ $# -gt 0 ]]; do
         *) die "unknown argument: $1" ;;
     esac
 done
+
+[[ $EXPECTED_USB_ID =~ ^[0-9a-f]{4}:[0-9a-f]{4}$ ]] || die "--usb-id VID:PID is required"
 
 select_iface
 CARD_ID="$(usb_id_of_iface "$IFACE")"

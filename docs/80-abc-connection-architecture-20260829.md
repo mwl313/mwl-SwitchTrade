@@ -7,10 +7,13 @@ connection rework. This document defines required components, order, ownership, 
 stage boundaries. The TODO records implementation and qualification status. If an older design or
 implementation disagrees with either source, it is not authoritative.
 
-The scope is the existing FireRed/LeafGreen path using one supported RTL8192EU (`0bda:818b`) USB
-radio per PC, the packaged SwitchTrade WSL runtime, the canonical `ldn.create_network()` host path,
-and the hosted relay. Experimental adapters, alternate AP engines, other games, and a claim of full
-trade compatibility without a two-PC/two-Switch test are outside this version's scope.
+The scope is the existing FireRed/LeafGreen path using one selected full-role USB radio profile per
+PC from the executable hardware matrix, the packaged SwitchTrade WSL runtime, the canonical
+`ldn.create_network()` host path, and the hosted relay. Alternate AP engines, other games, and a claim
+of full trade compatibility without a two-PC/two-Switch test are outside this version's scope. A
+matrix row is software eligibility, not physical qualification; RTL8192EU (`0bda:818b`) remains the
+only profile with current SwitchTrade physical evidence until each additional profile passes the same
+immutable-package gates.
 
 ## 1. Decision
 
@@ -136,10 +139,10 @@ but neither a Debug menu nor a test harness may duplicate it.
 | 4 | Required executables and privilege | Windows can run `wsl.exe` and `usbipd.exe`; Linux has root/CAP_NET_ADMIN/CAP_NET_RAW plus `bash`, `flock`, `timeout`, `ip`, `iw`, `tcpdump`, `rfkill`, `readlink`, `pgrep`/`pkill`, `modprobe`, `modinfo`, recovery-only `usbreset`, and the packaged Python. |
 | 5 | Relay network path | System time, DNS, TLS certificate/CA validation, HTTPS/WebSocket egress, relay health, and required relay capabilities pass without creating a room or launching work. |
 | 6 | Recovery and exclusivity | No normal attempt, diagnostic, endpoint launch, unresolved recovery, or cleanup owns the control/radio locks. Read-only polling has no mutation or launch side effect. |
-| 7 | Adapter identity | The saved Windows InstanceId resolves to exactly one connected, authorized `0bda:818b` adapter. Resolve its current bus ID immediately before active use. |
+| 7 | Adapter identity | The saved Windows InstanceId and VID:PID resolve to exactly one connected, authorized adapter in the executable hardware matrix. Resolve its current bus ID immediately before active use. |
 | 8 | Windows USB/IP eligibility | The pinned compatible `usbipd-win` is available; the exact adapter is shared/bound and is not owned by another WSL distribution or process. |
-| 9 | WSL/kernel artifacts | The running kernel matches `/lib/modules/<kernel>`. `usbip-core`, `vhci-hcd`, `cfg80211`, `libarc4`, `mac80211`, `led-class`, `rtl8xxxu`, `ccm`, `cmac`, and `tun` are present with matching vermagic. Packaged `tap.ko` is verified as an artifact but need not be loaded separately when `/dev/net/tun` is supplied by `tun`. |
-| 10 | Firmware and regulatory data | `rtlwifi/rtl8192eu_nic.bin`, `regulatory.db`, and its signature exist with release-manifest hashes; the configured regulatory domain permits the selected 2.4 GHz channel. |
+| 9 | WSL/kernel artifacts | The running kernel matches `/lib/modules/<kernel>`. Common `usbip-core`, `vhci-hcd`, `cfg80211`, `libarc4`, `mac80211`, `led-class`, `ccm`, `cmac`, and `tun` modules plus the selected profile's exact allowed driver are present with matching vermagic. Packaged `tap.ko` is verified as an artifact but need not be loaded separately when `/dev/net/tun` is supplied by `tun`. |
+| 10 | Firmware and regulatory data | `regulatory.db`, its signature, and every firmware file named by the selected hardware profile exist with release-manifest hashes; the configured regulatory domain permits the selected 2.4 GHz channel. |
 
 Only after P0a passes may C0.1 create or reuse the authoritative private room and establish the two
 distinct members. P0a failure must leave Windows/WSL hardware ownership unchanged.
@@ -154,7 +157,7 @@ published ready to create the authoritative attempt.
 | 1 | Hardware lease | Acquire the local control-owned attempt and radio locks for the exact saved InstanceId. Capture InstanceId, current bus ID, VID:PID, prior attach state, and ownership provenance. |
 | 2 | USB/IP kernel path | Load/verify `usbip-core` and `vhci-hcd`, then attach the exact current bus ID to the exact SwitchTrade WSL distribution once. Do not infer Linux readiness from `ClientIPAddress`. |
 | 3 | Linux enumeration | The matching VID:PID appears under Linux USB sysfs, remains stable, and binds to the expected physical device. A timeout or probe error is `unknown`, never proof of absence or readiness. |
-| 4 | Radio modules and firmware probe | Load/verify `cfg80211`; load `mac80211` with its `libarc4` dependency; then load `rtl8xxxu` with `led-class`; wait through EFuse and firmware initialization until the exact device has one allowed driver, PHY, and netdev. |
+| 4 | Radio modules and firmware probe | Load/verify `cfg80211`; load `mac80211` with its `libarc4` dependency; then load the selected matrix profile's in-kernel driver and pinned firmware; wait through device-specific initialization until the exact device has one allowed driver, PHY, and netdev. No orchestration branch may be keyed to a chipset. |
 | 5 | LDN crypto and TUN | Explicitly load/verify `ccm`, `cmac`, and `tun`; verify `/dev/net/tun` is the expected character device before any `ldn.connect()` or `ldn.create_network()` call. |
 | 6 | Exclusive PHY preparation | Unblock rfkill, prove NetworkManager/wpa_supplicant/other capture tools do not own the PHY, stop stale capture processes, and remove only stale vifs belonging to the selected PHY. |
 | 7 | Actual RX health | Receive real 802.11 traffic on the configured health channels, then restore the intended target channel. Interface existence alone is insufficient. |
@@ -195,7 +198,8 @@ Switch-hosted network. The existing production implementation is `LiveTransport`
 - the C0.2 attempt and authenticated remote app peer from C0.3;
 - `ldn==0.0.17`, `python-netlink==0.0.15`, `trio==0.33.0`,
   `pycryptodome==3.23.0`, and the installed `prod.keys`;
-- `rtl8xxxu`, `led-class`, `cfg80211`, `mac80211`, `libarc4`, `ccm`, `cmac`, and `tun` loaded;
+- the selected matrix profile's exact driver and firmware plus `led-class`, `cfg80211`, `mac80211`,
+  `libarc4`, `ccm`, `cmac`, and `tun` loaded;
 - `LiveTransport`, Nintendo LDN control-port support, TAP/TUN, and UDP port 12345 transport;
 - the FRLG communication ID `0x01006FA0233F8000`, scene ID `22287`, protocol `3`, application
   version `88`, 64-byte application passphrase, and advertisement parser;
@@ -246,7 +250,8 @@ state, and expose a usable local data plane. The existing production implementat
 - A's exact validated application data delivered by C1;
 - `ldn==0.0.17`, `python-netlink==0.0.15`, `trio==0.33.0`,
   `pycryptodome==3.23.0`, and the installed `prod.keys`;
-- `rtl8xxxu`, `led-class`, `cfg80211`, `mac80211`, `libarc4`, `ccm`, `cmac`, and `tun` loaded;
+- the selected matrix profile's exact driver and firmware plus `led-class`, `cfg80211`, `mac80211`,
+  `libarc4`, `ccm`, `cmac`, and `tun` loaded;
 - host-side AP and monitor vifs, beacon-head compatibility, CCMP monitor compatibility, LDN destroy compatibility, TAP/TUN, and UDP port 12345 transport.
 - one nearby Switch that only searches/joins after B reports the room advertised; no second Switch
   hosts a room, because that would create a direct Switch-to-Switch path and bypass B/C.

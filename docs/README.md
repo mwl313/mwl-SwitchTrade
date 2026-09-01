@@ -35,9 +35,6 @@ part of the public repository or release package.
 - [ABC+D Production Wrapper and Beta Cutover](94-production-wrapper-beta-cutover-20260831.md) — the
   current M8-M10 execution decision: deterministic one-radio wrapper, minimal GUI, Desktop support
   export, immutable package, and final two-PC/two-Switch acceptance.
-- [M7 two-PC distributed handoff](HANDOFF-M7-TWO-PC-DISTRIBUTED-20260830.md) and
-  [PC B preflight handoff](HANDOFF-PC-B-M7-TWO-SWITCH-PREFLIGHT-20260830.md) — coordinated physical
-  execution and evidence rules.
 - [Future TODO](FUTURE_TODO.md) — definitive implementation and qualification ledger for that
   architecture.
 - [Known Issues](KNOWN_ISSUES.md) — authoritative beta defect register, evidence, workarounds, and

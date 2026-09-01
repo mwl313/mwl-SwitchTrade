@@ -22,8 +22,14 @@ unregistered in `finally`.
 The supported release command is:
 
 ```powershell
-pwsh -NoProfile -File installer/replacement/Build-ReplacementPackage.ps1
+pwsh -NoProfile -File installer/replacement/Build-ReplacementPackage.ps1 `
+  -KernelArtifact artifacts/kernel-production
 ```
+
+The kernel artifact directory must contain `manifest.json`, `bzImage-wsl-st`, exactly one
+`modules-*.tar.gz`, and `firmware-manifest.sha256`. The builder verifies its hashes, requires every
+driver named by the executable hardware matrix, and requires the firmware manifest to match this
+source tree. It never falls back to a retained RTL8192EU-only package.
 
 `switchtrade/VERSION` is the only application and installer version source. The builder derives the
 three-part MSI/Burn version and GitHub release tag from it, rejects a version lower than repository

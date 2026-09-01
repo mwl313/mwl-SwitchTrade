@@ -16,16 +16,12 @@ import sys
 import time
 import uuid
 
+from switchtrade.hardware import (
+    HardwarePolicyError, require_hardware, required_firmware, required_modules, select_profile,
+)
 
 CONTRACT_VERSION = "p0-side-ready.v1"
 LAUNCH_TICKET_VERSION = "p0-launch-ticket.v1"
-REQUIRED_MODULES = (
-    "usbip_core", "vhci_hcd", "cfg80211", "libarc4", "mac80211", "led_class",
-    "rtl8xxxu", "ccm", "cmac", "tun",
-)
-FIRMWARE_FILES = (
-    "regulatory.db", "regulatory.db.p7s", "rtlwifi/rtl8192eu_nic.bin",
-)
 MODES = {
     "normal", "p0_harness", "direct_a", "direct_b", "diagnostic_automated",
     "diagnostic_a", "diagnostic_b", "diagnostic_suite",
@@ -170,13 +166,19 @@ def build_side_ready(args: argparse.Namespace, environ: dict[str, str] | None = 
     usb_id = _bounded(env.get("SWITCHTRADE_USB_ID"), "usb_id", 32).lower()
     if not _LINUX_NAME.fullmatch(netdev) or not re.fullmatch(r"phy[0-9]+", phy):
         raise RadioWorkerError("P0_RADIO_IDENTITY_INVALID", "radio interface identity is invalid")
-    if usb_id != "0bda:818b" or _usb_id_for_netdev(netdev, args.sys_root) != usb_id:
+    try:
+        profile = require_hardware(select_profile(usb_id), "relay")
+    except (HardwarePolicyError, ValueError) as error:
+        raise RadioWorkerError(
+            "P0_HARDWARE_POLICY_REJECTED", "selected hardware profile is unavailable") from error
+    if _usb_id_for_netdev(netdev, args.sys_root) != usb_id:
         raise RadioWorkerError("P0_ADAPTER_IDENTITY_MISMATCH", "radio USB identity changed during P0b")
     driver = _driver_for_netdev(netdev, args.sys_root)
-    if driver != "rtl8xxxu":
+    if driver not in profile.allowed_drivers:
         raise RadioWorkerError("P0_DRIVER_MISMATCH", f"unexpected selected radio driver: {driver}")
 
-    missing = [name for name in REQUIRED_MODULES if not (args.sys_root / "module" / name).is_dir()]
+    modules = required_modules(profile)
+    missing = [name for name in modules if not (args.sys_root / "module" / name).is_dir()]
     if missing:
         raise RadioWorkerError("P0_MODULE_NOT_LOADED", f"required modules are not loaded: {','.join(missing)}")
     tun_path = args.dev_root / "net" / "tun"
@@ -197,7 +199,7 @@ def build_side_ready(args: argparse.Namespace, environ: dict[str, str] | None = 
 
     firmware = {
         name: _sha256(args.firmware_root / name, "P0_FIRMWARE_MISSING")
-        for name in FIRMWARE_FILES
+        for name in required_firmware(profile)
     }
     kernel_release = platform.release()
     report = {
@@ -227,7 +229,7 @@ def build_side_ready(args: argparse.Namespace, environ: dict[str, str] | None = 
         "runtime": {
             "kernel_release": kernel_release,
             "integrity_manifest_sha256": _sha256(args.runtime_root / ".switchtrade-integrity.json"),
-            "modules": list(REQUIRED_MODULES),
+            "modules": list(modules),
             "firmware_sha256": firmware,
             "tun_device": True,
         },

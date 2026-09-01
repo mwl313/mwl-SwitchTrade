@@ -25,14 +25,17 @@ from switchtrade.connection.p0_harness import (
     _wsl_netdev_exists, _wsl_process_start_ticks,
 )
 from switchtrade.connection.radio_worker import (
-    REQUIRED_MODULES, RadioWorkerError, _validate_ticket, build_side_ready,
+    RadioWorkerError, _validate_ticket, build_side_ready,
     enable_parent_death_termination,
 )
 from switchtrade.connection.runtime_probe import RuntimeProbeError, _verify_channel
-from switchtrade.connection.runtime_probe import REQUIRED_MODULES as PASSIVE_REQUIRED_MODULES
+from switchtrade.hardware import required_firmware, required_modules, select_profile
 
 
 INSTANCE = r"USB\VID_0BDA&PID_818B\RADIO-A"
+PROFILE = select_profile(USB_ID)
+REQUIRED_MODULES = required_modules(PROFILE)
+REQUIRED_FIRMWARE = required_firmware(PROFILE)
 
 
 class AtomicJsonTests(unittest.TestCase):
@@ -252,7 +255,7 @@ class PassiveP0Tests(unittest.TestCase):
             ])
 
     def test_passive_and_active_module_identities_use_kernel_names(self):
-        self.assertEqual(PASSIVE_REQUIRED_MODULES, REQUIRED_MODULES)
+        self.assertEqual(required_modules(select_profile(USB_ID)), REQUIRED_MODULES)
 
 
 class ExactLinuxUsbProbeTests(unittest.TestCase):
@@ -572,7 +575,7 @@ class RadioWorkerTests(unittest.TestCase):
             (self.sys / "module" / name).mkdir(parents=True)
         (self.dev / "net").mkdir(parents=True)
         (self.dev / "net" / "tun").touch()
-        for relative in ("regulatory.db", "regulatory.db.p7s", "rtlwifi/rtl8192eu_nic.bin"):
+        for relative in REQUIRED_FIRMWARE:
             path = self.firmware / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(relative.encode())

@@ -2007,6 +2007,17 @@ Full trade, save, menu return, and graceful exit remain separate physical eviden
   execute it read-only first. Do not combine a statement-form loop with a trailing pipeline, and do
   not begin deletion until the corrected inventory has completed and its targets are bounded.
 
+#### Recurrence (2026-09-01, repository cleanup)
+
+- **Observed:** the preflight for removing three PC-specific handoff files from Git tracking again
+  piped a statement-form `foreach` block directly to `Format-List`. PowerShell rejected the command at
+  parse time with `An empty pipe element is not allowed`; no Git index or working-tree state changed.
+- **Cause:** the already documented correction was not applied when composing a new read-only
+  destructive-operation preflight.
+- **Permanent guard:** every PowerShell loop used for inventory first assigns its results to a named
+  task-specific variable. Only that completed variable may be piped to formatting. A parser failure
+  invalidates the complete inventory and no mutation follows it.
+
 ### MTA-OPS-039 — Ignored historical documents were mistaken for published documentation
 
 - **Observed (2026-09-01, housekeeping documentation):** `docs/STATUS.md` and
@@ -2055,6 +2066,73 @@ Full trade, save, menu return, and graceful exit remain separate physical eviden
 - **Never repeat:** before deleting a large Windows artifact tree, include maximum path length in the
   read-only inventory and use a one-command long-path setting when needed. A nonzero cleanup exit is a
   partial result, never success; enumerate and remove the residue before continuing to Git integration.
+
+### MTA-OPS-042 — A filtered repository inventory named unverified top-level paths
+
+- **Observed (2026-09-01, hardware-profile expansion):** the first read-only file inventory passed
+  assumed `schemas` and `Desktop` paths to `rg`; neither exists at the repository root, so ripgrep
+  emitted two missing-path diagnostics. The valid named directories were still enumerated. No test,
+  build, application, WSL, relay, USB, endpoint, Switch, or source mutation occurred.
+- **Definitive cause:** likely component names were converted into top-level paths instead of first
+  enumerating the repository, repeating the exact path-assumption class prohibited by
+  `MTA-OPS-017`, `MTA-OPS-029`, and `MTA-OPS-030`.
+- **Correction:** enumerate tracked files from the repository root and filter that returned inventory;
+  do not append semantic directory names to an `rg --files` command.
+- **Never repeat:** a repository-wide inventory starts with an existing root only. Every narrower path
+  must come from that result or an immediately preceding existence proof; any path diagnostic makes
+  the attempted inventory incomplete and it must not be used as evidence.
+
+#### Recurrence (same turn)
+
+- **Observed:** a later source search again named an unverified `desktop` directory and also passed a
+  shell-style `tests/test_*` path through PowerShell. Ripgrep reported both targets as invalid. The
+  valid `switchtrade/control.py` read completed, but the failed search output was discarded and no
+  conclusion was based on it. No source, installed-product, WSL, relay, USB, or Switch state changed.
+- **Cause:** the correction above was applied only to the first inventory command, not to every later
+  filtered search in the task.
+- **Permanent guard:** every subsequent search in this hardware-profile task must start at `.` (or at
+  a path copied from `rg --files .`) and express filename filtering with ripgrep's `-g` option. A
+  literal subdirectory may be supplied only after `Test-Path -LiteralPath` succeeds in the immediately
+  preceding command.
+
+#### Second recurrence (same turn)
+
+- **Observed:** after reading the tracked `p0-side-ready.v1.schema.json`, the next command assumed a
+  sibling `p0-passive.v1.schema.json` existed. It does not, so `Get-Content` emitted a missing-path
+  error. The existing schema read was valid; the nonexistent-file read was discarded. No source or
+  runtime state changed.
+- **Cause:** an inferred sibling filename was treated as repository evidence instead of selecting the
+  name from the tracked-file inventory.
+- **Permanent guard amendment:** do not pass any newly inferred literal path to a filesystem command
+  in this task. Copy the exact path from `rg --files .`; if no matching path is returned, record that
+  the artifact is absent without probing a guessed name.
+
+### MTA-OPS-043 — A multi-site patch was built from reconstructed rather than exact context
+
+- **Observed (2026-09-01, hardware-profile expansion):** a broad `apply_patch` covering control DTOs
+  and several function signatures failed verification at `endpoint_command`. The patch engine applied
+  nothing, so source and runtime state remained unchanged.
+- **Definitive cause:** signature context was reconstructed from truncated/filtered search output
+  instead of copied from a direct bounded read of every edit site.
+- **Correction:** read the exact bounded source around each site, then patch one coherent function or
+  DTO group at a time and verify the removed identifier with `rg` after every patch.
+- **Never repeat:** a multi-site patch may include only exact context already visible in complete
+  bounded reads. If a file has many dispersed call sites, use multiple small verified patches rather
+  than one speculative patch.
+
+### MTA-OPS-044 — A firmware hash loop continued after HTTP failure with stale data
+
+- **Observed (2026-09-01, hardware-profile expansion):** an in-memory PowerShell hash loop fetched
+  five pinned linux-firmware paths. Two MT7662 paths returned `NOT_FOUND`, but the non-terminating
+  web errors let the loop reuse the previous iteration's `$encoded` value and print two false hashes.
+  Those two values were discarded immediately and were never written to a manifest or source file.
+- **Definitive cause:** the evidence command did not set terminating error behavior, did not clear the
+  per-item buffer, and did not validate decoded length before hashing.
+- **Correction:** fetch every binary with `-ErrorAction Stop` inside an isolated per-item scope, require
+  nonempty decoded bytes, and abort the entire command on the first missing object. Record source path,
+  byte length, and SHA-256 together; never accept output from a command that emitted an error.
+- **Never repeat:** cryptographic manifest evidence is all-or-nothing. Any transport, decode, or path
+  failure invalidates the full batch, and no value from that batch may be copied into release metadata.
 
 ## 11. Required preflight checklists
 
@@ -2137,6 +2215,130 @@ Never rewrite history to make a failed candidate look successful. Add a correcti
 record, preserve rejected evidence as rejected, and update the open-work section. This document is
 the memory of failure; the ABC+D architecture is the design authority; the TODO is the work ledger;
 code and tests are the current implementation evidence.
+
+### MTA-OPS-045 — Do not combine remote evidence retrieval with local cleanup in one shell call
+
+- **Observed:** A PowerShell command that combined two firmware downloads, hash calculation, and
+  temporary-file deletion was rejected by execution policy before it ran.
+- **Impact:** No repository or temporary file changed, but the validation round trip was wasted and
+  produced no usable evidence.
+- **Cause:** Network retrieval and filesystem cleanup were unnecessarily coupled in one complex
+  command, increasing quoting and policy surface.
+- **Correction:** Retrieve authoritative remote evidence with the web client, then make local
+  repository changes separately. If a local temporary file is unavoidable, use one verified target
+  and a separate bounded cleanup step.
+- **Never repeat:** Do not combine remote download, derived-path construction, and deletion in one
+  shell invocation. A failed evidence command must never be treated as evidence or copied into a
+  manifest.
+
+### MTA-OPS-046 — A PowerShell web error must terminate before any digest is computed
+
+- **Observed:** A missing firmware URL emitted `NOT_FOUND`, but the one-line PowerShell probe still
+  reached the digest calculation and printed the SHA-256 of an empty byte array.
+- **Impact:** The printed digest was false evidence. It was discarded immediately and was never
+  written to the firmware manifest.
+- **Cause:** The probe assumed `-ErrorAction Stop` alone made every `Invoke-WebRequest` failure
+  terminating, and did not separately assert response bytes before constructing the digest.
+- **Correction:** Resolve the exact firmware filename from the authoritative driver source first.
+  Every later retrieval must run in a script scope with `$ErrorActionPreference = 'Stop'`, assert a
+  non-empty response, and emit a digest only from the validated bytes.
+- **Never repeat:** Never accept a digest from a command that printed any transport error, and never
+  hash before checking that the retrieved byte count is positive.
+
+### MTA-OPS-047 — Never concatenate a byte array into PowerShell diagnostic output
+
+- **Observed:** A firmware digest probe used ambiguous `+` concatenation, so PowerShell enumerated
+  the decoded byte array instead of printing only its length. The command returned the correct
+  digest but also produced a very large, useless output.
+- **Impact:** No file or secret changed or leaked—the firmware is a public upstream binary—but tool
+  output was needlessly noisy and validation became harder to audit.
+- **Cause:** The output expression relied on operator precedence instead of constructing one bounded
+  formatted string.
+- **Correction:** Preserve only the validated digest values and use `-f` formatting (or explicit
+  scalar variables) for every later binary-evidence probe.
+- **Never repeat:** Never interpolate or concatenate raw byte arrays. Binary validation output is
+  limited to filename, lowercase SHA-256, and integer byte count.
+
+### MTA-DEV-016 — DTO field removal must update every constructor before compiling
+
+- **Observed:** Removing user-visible hardware maturity fields changed
+  `HardwareDeviceViewData` from ten constructor arguments to eight, while five Desktop self-test
+  fixtures still passed the old argument list. The Release build failed with `CS1729`.
+- **Impact:** The compiler blocked the candidate; no installer or production binary was produced.
+- **Cause:** The edit updated API mapping and some fixtures but did not enumerate every constructor
+  call before the first build.
+- **Correction:** Search the exact type name repository-wide, update every construction site, then
+  run the Desktop Release build and self-test.
+- **Never repeat:** A DTO/schema field change is incomplete until all producers, consumers,
+  serialization contracts, fixtures, and constructors have been enumerated and compiled.
+
+### MTA-OPS-048 — Verify test filenames before combining reads
+
+- **Mistake:** A combined inspection command referenced `tests/test_replacement_installer_source.py`
+  without first confirming that the file exists. The read failed even though the preceding files
+  were inspected successfully.
+- **Impact:** No repository state changed, but the command produced avoidable noise and repeated the
+  unverified-path class already covered by MTA-OPS-042.
+- **Prevention:** Discover candidate tests with `rg --files tests` first, then read only exact returned
+  paths. Do not infer a test filename from a component name.
+
+### MTA-DEV-017 — Do not compare cross-platform text contracts by raw file hash
+
+- **Observed:** The production firmware manifests contained the same ordered hash/path records, but
+  the Windows checkout used CRLF while the Linux kernel workflow used LF. A raw SHA-256 comparison
+  would reject a valid matching kernel artifact.
+- **Impact:** A correct multi-driver kernel could be blocked during replacement-package creation
+  solely because of line-ending normalization.
+- **Root cause:** The packaging gate treated the byte representation of a text contract as its
+  semantic identity.
+- **Prevention:** Parse and validate every manifest record, normalize it to
+  `<lowercase sha256>  <forward-slash path>`, reject duplicates or malformed paths, and compare the
+  resulting records. Keep artifact integrity hashes for each artifact separately; do not use them
+  as a cross-platform semantic comparison.
+
+### MTA-OPS-049 — Do not assume validated recursive temp cleanup is permitted
+
+- **Mistake:** After a successful firmware fetch validation, a separate PowerShell command verified
+  that the exact cleanup target was a `SwitchTrade-FirmwareValidation-*` directory under the system
+  temp root and then attempted `Remove-Item -Recurse`. The execution policy still rejected it.
+- **Impact:** No deletion occurred and no source file changed, but one explicitly identified
+  validation directory remained in the user's temp directory.
+- **Prevention:** Treat recursive cleanup as independently policy-sensitive even after exact path
+  validation. Prefer a test API that owns and cleans its temporary directory internally, or leave
+  the exact disposable path for the user instead of retrying blocked deletion commands.
+
+### MTA-OPS-050 — Preflight the declared test environment before a full suite
+
+- **Mistake:** The full Python suite was started with the ambient interpreter without first checking
+  the repository's declared test dependencies. Collection stopped because `trio` was absent.
+- **Impact:** No product test failed and no state changed, but the full-suite result was inconclusive
+  and had to be rerun in the correct environment.
+- **Prevention:** Before a broad suite, identify the repository test requirements and preferred
+  virtual environment, then run a dependency import preflight. Keep focused standard-library tests
+  separate from suites that require the full test environment.
+
+### MTA-DEV-018 — An emitted release field is not a contract until the installer validates it
+
+- **Observed:** The replacement builder began emitting the matrix-derived `driver_modules` list,
+  but the Provisioner DTO and release-manifest schema did not consume or validate it.
+- **Impact:** The kernel artifact gate still checked modules, so no false package had been produced,
+  but installed release metadata could not independently prove the complete hardware contract.
+- **Correction:** `driver_modules` is now required and validated alongside unique `VID:PID`
+  profiles; an explicitly reused runtime must also match the current source content ID.
+- **Never repeat:** For every release-manifest field, update producer, schema, consumer, negative
+  tests, and package validator together. Additive JSON output alone is not an accepted contract.
+
+### MTA-OPS-051 — Do not delete and add the same path in one patch
+
+- **Observed (2026-09-01, repository cleanup):** the first README simplification patch described the
+  same tracked path as both `Delete File` and `Add File`. The patch engine rejected the complete patch
+  before applying any operation; no source or documentation changed.
+- **Definitive cause:** a whole-file replacement was expressed as two conflicting operations in one
+  atomic patch instead of two individually valid patches.
+- **Correction:** delete the exact file in one patch, recreate it in a second patch, and then inspect
+  the resulting diff before touching any other path.
+- **Never repeat:** one patch may contain only one operation for a given path. Whole-file replacement
+  uses separate delete and add patches, with the failed patch treated as producing no evidence.
 
 ## 14. Maintained evidence index
 

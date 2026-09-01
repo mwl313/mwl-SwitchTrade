@@ -31,7 +31,7 @@
       "required": ["instance_sha256", "usb_id", "bus_id"],
       "properties": {
         "instance_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-        "usb_id": { "const": "0bda:818b" },
+        "usb_id": { "type": "string", "pattern": "^[0-9a-f]{4}:[0-9a-f]{4}$" },
         "bus_id": { "type": "string", "pattern": "^[0-9]+-[0-9]+(?:\\.[0-9]+)*$" }
       }
     },
@@ -42,7 +42,7 @@
       "properties": {
         "phy": { "type": "string", "pattern": "^phy[0-9]+$" },
         "netdev": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$" },
-        "driver": { "const": "rtl8xxxu" },
+        "driver": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$" },
         "rx_passed": { "const": true },
         "rx_channel": { "type": "integer", "minimum": 1, "maximum": 196 },
         "target_channel": { "type": "integer", "minimum": 1, "maximum": 196 }
@@ -58,18 +58,17 @@
         "modules": {
           "type": "array",
           "minItems": 10,
-          "maxItems": 10,
+          "maxItems": 32,
           "uniqueItems": true,
           "items": { "type": "string" }
         },
         "firmware_sha256": {
           "type": "object",
-          "additionalProperties": false,
-          "required": ["regulatory.db", "regulatory.db.p7s", "rtlwifi/rtl8192eu_nic.bin"],
+          "additionalProperties": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "required": ["regulatory.db", "regulatory.db.p7s"],
           "properties": {
             "regulatory.db": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-            "regulatory.db.p7s": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-            "rtlwifi/rtl8192eu_nic.bin": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            "regulatory.db.p7s": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
           }
         },
         "tun_device": { "const": true }

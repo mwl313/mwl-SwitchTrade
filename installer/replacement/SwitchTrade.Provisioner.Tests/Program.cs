@@ -166,12 +166,21 @@ void ReleaseManifestVerifiesPayloadsAndRejectsEscape()
     var file = Path.Combine(package, "payload", "runtime.wsl");
     File.WriteAllText(file, "runtime", Encoding.ASCII);
     var manifest = new ReleaseManifest(1, "beta-test", "0.2.0-beta.1", "x64", 19045, "2.4.4",
-        "local-app-readiness.v2", "https://relay.example.test", new string('1', 64), new KernelDescriptor("test", "rtl8xxxu", ["0bda:818b"]),
+        "local-app-readiness.v2", "https://relay.example.test", new string('1', 64),
+        new KernelDescriptor("test", "rtl8xxxu", ["0bda:818b"], ["rtl8xxxu"]),
         new Dictionary<string, PayloadDescriptor> { ["runtime"] = new("payload/runtime.wsl", new FileInfo(file).Length, Contract.HashFile(file)) });
     File.WriteAllText(Path.Combine(package, "release-manifest.json"), JsonSerializer.Serialize(manifest, Contract.Json));
     Assert(ReleaseManifest.LoadVerified(package).ReleaseId == "beta-test", "valid manifest failed");
     Assert(ReleaseManifest.LoadVerified(package + Path.DirectorySeparatorChar).ReleaseId == "beta-test",
         "valid manifest with a trailing directory separator failed");
+    var incompleteKernel = manifest with
+    {
+        Kernel = manifest.Kernel with { DriverModules = [] },
+    };
+    File.WriteAllText(Path.Combine(package, "release-manifest.json"),
+        JsonSerializer.Serialize(incompleteKernel, Contract.Json));
+    try { ReleaseManifest.LoadVerified(package); throw new InvalidOperationException("empty driver matrix accepted"); }
+    catch (ProvisionerException error) { Assert(error.Code == "RELEASE_MANIFEST_INVALID", "wrong matrix error"); }
     var escaped = manifest with { Payloads = new Dictionary<string, PayloadDescriptor> { ["runtime"] = new("../outside", 1, new string('0', 64)) } };
     File.WriteAllText(Path.Combine(package, "release-manifest.json"), JsonSerializer.Serialize(escaped, Contract.Json));
     try { ReleaseManifest.LoadVerified(package); throw new InvalidOperationException("path escape accepted"); }
@@ -587,7 +596,7 @@ string CreateLifecyclePackage(string test)
     File.WriteAllText(kernel, "custom-kernel", Encoding.ASCII);
     var manifest = new ReleaseManifest(1, "beta-fault-test", "0.2.0", "x64", 19045, "2.4.4",
         "local-app-readiness.v2", "https://relay.example.test", new string('a', 64),
-        new KernelDescriptor("test-kernel", "rtl8xxxu", ["0bda:818b"]),
+        new KernelDescriptor("test-kernel", "rtl8xxxu", ["0bda:818b"], ["rtl8xxxu"]),
         new Dictionary<string, PayloadDescriptor>
         {
             ["runtime"] = new("payload/runtime.wsl", new FileInfo(runtime).Length, Contract.HashFile(runtime)),
@@ -599,7 +608,8 @@ string CreateLifecyclePackage(string test)
 }
 
 ReleaseManifest TestManifest(string kernel, string package) => new(1, "beta-test", "0.2.0-beta.1", "x64", 19045, "2.4.4",
-    "local-app-readiness.v2", "https://relay.example.test", new string('1', 64), new KernelDescriptor("test-kernel", "rtl8xxxu", ["0bda:818b"]),
+    "local-app-readiness.v2", "https://relay.example.test", new string('1', 64),
+    new KernelDescriptor("test-kernel", "rtl8xxxu", ["0bda:818b"], ["rtl8xxxu"]),
     new Dictionary<string, PayloadDescriptor> { ["kernel"] = new(Path.GetRelativePath(package, kernel), new FileInfo(kernel).Length, Contract.HashFile(kernel)) });
 
 static void Assert(bool condition, string message)

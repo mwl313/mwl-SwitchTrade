@@ -246,10 +246,10 @@ public partial class App : Application
             {
                 Status = ReadyStatus(),
                 AdapterProfiles = [new AdapterProfileViewData(
-                    "0bda:818b", "RTL8192EU", "Beta candidate", "", "", true, false, "ldn")],
+                    "0bda:818b", "RTL8192EU", "USB 0BDA:818B · RTL8192EU", true)],
                 HardwareDevices = [new HardwareDeviceViewData(
                     "9-7", "USB\\VID_0BDA&PID_818B\\RADIO-A", "0bda:818b", "RTL8192EU",
-                    "Beta candidate", true, false, false, false, true)],
+                    true, false, false, true)],
             };
             using var inventoryShell = new MainViewModel(
                 inventoryGateway, new BackendLauncher(), new WindowsDialogService(),
@@ -270,7 +270,7 @@ public partial class App : Application
                 Status = ReadyStatus(),
                 HardwareDevices = [new HardwareDeviceViewData(
                     "9-7", "USB\\VID_0BDA&PID_818B\\RADIO-A", "0bda:818b", "RTL8192EU",
-                    "Beta candidate", true, false, true, false, false)],
+                    true, true, false, false)],
             };
             using var noSelectionShell = new MainViewModel(
                 noSelectionGateway, new BackendLauncher(), new WindowsDialogService(),
@@ -288,7 +288,7 @@ public partial class App : Application
                 Status = ReadyStatus(),
                 HardwareDevices = [new HardwareDeviceViewData(
                     "9-7", "USB\\VID_0BDA&PID_818B\\RADIO-A", "0bda:818b", "RTL8192EU",
-                    "Beta candidate", true, false, false, false, true)],
+                    true, false, false, true)],
             };
             using var unsharedSelectionShell = new MainViewModel(
                 unsharedSelectionGateway, new BackendLauncher(), new WindowsDialogService(),
@@ -307,10 +307,10 @@ public partial class App : Application
                 [
                     new HardwareDeviceViewData(
                         "9-7", "USB\\VID_0BDA&PID_818B\\RADIO-A", "0bda:818b", "RTL8192EU A",
-                        "Beta candidate", true, false, true, false, true),
+                        true, true, false, true),
                     new HardwareDeviceViewData(
                         "9-8", "USB\\VID_0BDA&PID_818B\\RADIO-B", "0bda:818b", "RTL8192EU B",
-                        "Beta candidate", true, false, true, false, false),
+                        true, true, false, false),
                 ],
             };
             using var selectionShell = new MainViewModel(
@@ -331,7 +331,7 @@ public partial class App : Application
                 Status = ReadyStatus(),
                 HardwareDevices = [new HardwareDeviceViewData(
                     "9-7", "USB\\VID_0BDA&PID_818B\\RADIO-A", "0bda:818b", "RTL8192EU",
-                    "Beta candidate", true, false, false, false, true)],
+                    true, false, false, true)],
             };
             var authorization = new SelfTestHardwareAuthorizationService();
             using var authorizationShell = new MainViewModel(

@@ -41,8 +41,6 @@ Options:
   --timeout SECONDS      Per-channel health timeout (default: 2)
   --role ROLE            Require a profile role: host, guest, or relay
   --reset-on-rx-failure  Explicit recovery: USB-reset once after an RX timeout
-  --allow-experimental-hardware
-                         Deprecated compatibility flag; candidates no longer require confirmation
   --driver-only          Prepare and validate the profile driver, then exit before RX health
   --status               Report attached USB devices/drivers without mutation
   --list-profiles        Print supported profiles without mutation
@@ -63,8 +61,8 @@ profile_for() {
 
 list_profiles() {
     awk -F '\t' '
-        BEGIN { printf "%-10s %-20s %-20s %-18s %-20s %-5s %-24s\n", "USB_ID", "STRATEGY", "DRIVERS", "ROLES", "STATUS", "AUTO", "ENGINE" }
-        $0 !~ /^#/ && NF >= 8 { printf "%-10s %-20s %-20s %-18s %-20s %-5s %-24s\n", $1, $2, $4, $5, $6, $7, (NF >= 11 ? $11 : "ldn") }
+        BEGIN { printf "%-10s %-32s %-20s\n", "USB_ID", "MODEL", "DRIVER" }
+        $0 !~ /^#/ && NF >= 8 { printf "%-10s %-32s %-20s\n", $1, (NF >= 9 ? $9 : "USB Wi-Fi adapter"), $4 }
     ' "$PROFILE_FILE"
 }
 
@@ -346,7 +344,7 @@ fi
 exec 9>"$LOCK_PATH"
 flock -n 9 || die "RADIO_BUSY: another SwitchTrade endpoint, diagnostic, or repair owns $USB_ID"
 profile="$(profile_for "$USB_ID")"
-IFS=$'\t' read -r _ strategy module_file allowed_drivers roles status auto_select _notes _model _chipset host_engine _evidence <<< "$profile"
+IFS=$'\t' read -r _ strategy module_file allowed_drivers roles status auto_select _notes _model _chipset host_engine _evidence _firmware <<< "$profile"
 host_engine=${host_engine:-ldn}
 case $status in
     production-verified|beta-candidate) ;;
@@ -437,7 +435,7 @@ if [[ $module_file != - ]]; then
         die "$USB_ID uses $driver but its profiled artifact $module_file is unavailable"
     fi
 fi
-msg "[driver] PASS usb=$USB_ID strategy=$strategy driver=$driver iface=$iface roles=$roles status=$status auto_select=$auto_select engine=$host_engine${REQUIRED_ROLE:+ required_role=$REQUIRED_ROLE}"
+msg "[driver] PASS usb=$USB_ID strategy=$strategy driver=$driver iface=$iface${REQUIRED_ROLE:+ required_role=$REQUIRED_ROLE}"
 export SWITCHTRADE_USB_DEVICE="$(readlink -f "$DEVICE")"
 
 load_prerequisite_module ccm

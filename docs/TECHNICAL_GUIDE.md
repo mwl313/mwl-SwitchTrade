@@ -17,10 +17,10 @@ The `0.2.0-beta.1` product boundary is intentionally narrow:
 - FireRed/LeafGreen Direct Connection trading;
 - opaque, authenticated RFU relay transport;
 - structured local diagnostics and a redacted support bundle;
-- RTL8192EU as the beta hardware candidate.
+- one explicitly selected adapter from the executable external-USB hardware matrix.
 
-Battles, Union Room, 5 GHz operation, analytics, automatic updates, and the quarantined RTL8188EU
-path are not beta capabilities. They are tracked in [Future TODO](FUTURE_TODO.md).
+Battles, Union Room, 5 GHz operation, analytics, automatic updates, and retired/quarantined adapter
+paths are not beta capabilities. They are tracked in [Future TODO](FUTURE_TODO.md).
 
 For the byte-level protocol, read the
 [FireRed/LeafGreen Communication Protocol](FRLG_PROTOCOL.md). This guide covers only where that
@@ -266,18 +266,18 @@ commands, and teardown are compatible. The complete known stack is documented in
 ## 9. Hardware policy and diagnostics
 
 `config/wsl-radio-hardware.tsv` is the source of truth. A profile separates USB identity, driver
-strategy, allowed drivers, allowed roles, host engine, status, automatic-selection policy, and
-evidence. New adapters are added as data and diagnostics first; core control and UI code should not
-special-case product IDs.
+strategy, allowed drivers, required firmware, allowed roles, host engine, automatic-selection policy,
+and internal evidence. Core control, ABC+D orchestration, and UI code do not special-case product IDs.
 
 Current status:
 
 | Adapter | Driver | Status | Beta behavior |
 | --- | --- | --- | --- |
-| Realtek RTL8192EU (`0bda:818b`) | in-kernel `rtl8xxxu` | beta candidate | Auto-selectable for host, guest, and relay. Passed real room join, full trade, and 30-minute RX soak; two-adapter qualification remains. |
-| Realtek RTL8188EU (`0bda:8179`) | `rtl8xxxu` or optional vendor module | quarantined | Diagnostics/observation only. Control-port association fails and concurrent AP+monitor can deadlock or lose receive. |
-| MT7610U, MT7612U, RT2770/3070/3572, RTL8821CU | in-kernel candidates | experimental | Manually selectable with an explicit untested label and diagnostics; not auto-selected. |
-| AR9271 | `ath9k_htc` | quarantined | Diagnostics only due to application-specific association failures. |
+| Realtek RTL8192EU (`0bda:818b`) | in-kernel `rtl8xxxu` | physically proven beta profile | Auto-eligible for host, guest, and relay. Passed real room join, full trade, and 30-minute RX soak; final two-endpoint acceptance remains. |
+| MT7610U (`0e8d:7610`) | in-kernel `mt76x0u` | internal upstream evidence | Auto-eligible for all production roles; SwitchTrade physical certification remains. |
+| MT7612U (`0e8d:7612`) | in-kernel `mt76x2u` | internal driver evidence | Auto-eligible for all production roles; SwitchTrade physical certification remains. |
+| RT2770/3070/3572 (`148f:2770/3070/3572`) | in-kernel `rt2800usb` | internal driver evidence | Auto-eligible for all production roles; exact-device certification remains. |
+| RTL8821CU (`0bda:c811`) | in-kernel `rtw88_8821cu` | internal driver evidence | Auto-eligible for all production roles; SwitchTrade physical certification remains. |
 
 Every capture and session workflow must pass `scripts/radio-health-gate.sh` first. The gate verifies
 USB presence, WSL attachment, kernel/driver binding, phy/interface state, channel configuration, and
@@ -291,8 +291,8 @@ shared state. Normal connection then performs an unprivileged attach to the acti
 Linux-only diagnostics cannot infer a driver defect when the preceding USB-visible gate failed.
 
 The staged diagnostic pipeline is in `switchtrade/hardware_diagnostics.py`. It redacts MAC addresses,
-tokens, and common secret fields. Experimental adapters may be selected without per-attempt consent,
-but the UI must keep the untested disclaimer and diagnostic action visible.
+tokens, and common secret fields. Candidate maturity remains internal; user-visible state is limited to
+selection/authorization, current gate, stable failure, recommended action, and support-log export.
 
 ### When a custom kernel rebuild is required
 

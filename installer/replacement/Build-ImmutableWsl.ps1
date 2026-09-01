@@ -16,18 +16,40 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
-$retained = Join-Path $repo 'artifacts\final-package-27d17b1\SwitchTrade-unsigned-private-beta-27d17b1'
 if (-not $BaseRootfs) { $BaseRootfs = & (Join-Path $PSScriptRoot 'Fetch-PinnedBaseRootfs.ps1') }
-if (-not $BuilderRootfs) { $BuilderRootfs = Join-Path $retained 'payload\switchtrade-rootfs.tar.gz' }
-if (-not $Modules) { $Modules = Join-Path $retained 'payload\kernel\modules.tar.gz' }
+if (-not $BuilderRootfs) { $BuilderRootfs = $BaseRootfs }
+if (-not $Modules) {
+    $kernelArtifact = Join-Path $repo 'artifacts\kernel-production'
+    if (-not (Test-Path -LiteralPath $kernelArtifact -PathType Container)) {
+        throw "The production kernel artifact directory is missing: $kernelArtifact"
+    }
+    $moduleCandidates = @(Get-ChildItem -LiteralPath $kernelArtifact -Filter 'modules-*.tar.gz' -File)
+    if ($moduleCandidates.Count -ne 1) {
+        throw 'The production kernel artifact must contain exactly one module archive.'
+    }
+    $Modules = $moduleCandidates[0].FullName
+}
 if (-not $FirmwareDirectory) { $FirmwareDirectory = Join-Path $repo 'artifacts\replacement\firmware' }
 if (-not $FirmwareManifest) { $FirmwareManifest = Join-Path $PSScriptRoot 'runtime\firmware-manifest.sha256' }
+if (-not (Test-Path -LiteralPath $FirmwareManifest -PathType Leaf)) {
+    throw "The firmware manifest is missing: $FirmwareManifest"
+}
 if (-not $Wheelhouse) { $Wheelhouse = Join-Path $repo 'artifacts\audit-wheelhouse-linux-cp312' }
 if (-not $WheelhouseManifest) { $WheelhouseManifest = Join-Path $PSScriptRoot 'runtime\wheelhouse-manifest.sha256' }
 if (-not $SourceDateEpoch) {
     $SourceDateEpoch = [long]((& git -C $repo show -s --format=%ct HEAD).Trim())
 }
-if (-not (Test-Path -LiteralPath (Join-Path $FirmwareDirectory 'rtlwifi\rtl8192eu_nic.bin'))) {
+$firmwareMissing = $false
+foreach ($line in Get-Content -LiteralPath $FirmwareManifest) {
+    if ($line -notmatch '^[0-9a-f]{64}\s+firmware/(.+)$') { continue }
+    $candidate = [IO.Path]::GetFullPath((Join-Path $FirmwareDirectory $Matches[1]))
+    $firmwareRoot = [IO.Path]::GetFullPath($FirmwareDirectory).TrimEnd('\') + '\'
+    if (-not $candidate.StartsWith($firmwareRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Unsafe firmware manifest path: $($Matches[1])"
+    }
+    if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { $firmwareMissing = $true }
+}
+if ($firmwareMissing) {
     $FirmwareDirectory = & (Join-Path $PSScriptRoot 'Fetch-PinnedFirmware.ps1') -Destination $FirmwareDirectory
 }
 foreach ($path in @($BaseRootfs, $BuilderRootfs, $Modules, $FirmwareDirectory, $FirmwareManifest, $Wheelhouse, $WheelhouseManifest)) {
@@ -40,9 +62,14 @@ if ((Get-Item -LiteralPath $BaseRootfs).Length -ne [long]$baseDefinition.size -o
         [string]$baseDefinition.sha256) {
     throw 'Pinned Ubuntu base rootfs verification failed.'
 }
-if ((Get-Item -LiteralPath $BuilderRootfs).Length -ne [long]$baseDefinition.builder_source.size -or
+$builderDefinition = if ([IO.Path]::GetFullPath($BuilderRootfs) -eq [IO.Path]::GetFullPath($BaseRootfs)) {
+    $baseDefinition
+} else {
+    $baseDefinition.builder_source
+}
+if ((Get-Item -LiteralPath $BuilderRootfs).Length -ne [long]$builderDefinition.size -or
     (Get-FileHash -LiteralPath $BuilderRootfs -Algorithm SHA256).Hash.ToLowerInvariant() -ne
-        [string]$baseDefinition.builder_source.sha256) {
+        [string]$builderDefinition.sha256) {
     throw 'Pinned disposable-builder rootfs verification failed.'
 }
 $outputPath = [IO.Path]::GetFullPath($Output)

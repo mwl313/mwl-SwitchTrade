@@ -3,6 +3,7 @@ param(
     [string]$ReleaseId = '',
     [string]$OutputDirectory = '',
     [string]$RuntimeWsl = '',
+    [string]$KernelArtifact = '',
     [string]$CertificateThumbprint = '',
     [switch]$AllowDirtyForDevelopment
 )
@@ -90,6 +91,49 @@ function Get-RuntimeContentId {
 }
 
 $contentId = Get-RuntimeContentId
+$kernelArtifactPath = if ($KernelArtifact) {
+    [IO.Path]::GetFullPath($KernelArtifact)
+} else {
+    [IO.Path]::GetFullPath((Join-Path $repo 'artifacts\kernel-production'))
+}
+
+function Get-NormalizedFirmwareManifest([string]$Path) {
+    $records = @()
+    $seen = @{}
+    foreach ($raw in Get-Content -LiteralPath $Path) {
+        $line = $raw.Trim()
+        if (-not $line) { continue }
+        $match = [regex]::Match($line, '^(?<hash>[0-9A-Fa-f]{64})\s+\*?(?<path>firmware/[A-Za-z0-9._/-]+)$')
+        if (-not $match.Success) { throw "Malformed firmware manifest record in ${Path}: $line" }
+        $relative = $match.Groups['path'].Value.Replace('\', '/')
+        if ($relative.Contains('/../') -or $relative.EndsWith('/..') -or $seen.ContainsKey($relative)) {
+            throw "Unsafe or duplicate firmware manifest path in ${Path}: $relative"
+        }
+        $seen[$relative] = $true
+        $records += ($match.Groups['hash'].Value.ToLowerInvariant() + '  ' + $relative)
+    }
+    if ($records.Count -eq 0) { throw "Firmware manifest is empty: $Path" }
+    return @($records)
+}
+if (-not (Test-Path -LiteralPath $kernelArtifactPath -PathType Container)) {
+    throw "The verified production kernel artifact is missing: $kernelArtifactPath"
+}
+$kernelVerification = & python (Join-Path $repo 'scripts\verify-kernel-artifact.py') $kernelArtifactPath
+if ($LASTEXITCODE -ne 0) { throw 'The production kernel artifact failed verification.' }
+$kernelMetadata = Get-Content -Raw -LiteralPath (Join-Path $kernelArtifactPath 'manifest.json') |
+    ConvertFrom-Json
+$kernelSource = Join-Path $kernelArtifactPath 'bzImage-wsl-st'
+$moduleCandidates = @(Get-ChildItem -LiteralPath $kernelArtifactPath -Filter 'modules-*.tar.gz' -File)
+if ($moduleCandidates.Count -ne 1) { throw 'The production kernel artifact must contain one module archive.' }
+$modulesSource = $moduleCandidates[0].FullName
+$firmwareManifestSource = Join-Path $PSScriptRoot 'runtime\firmware-manifest.sha256'
+$kernelFirmwareManifest = Join-Path $kernelArtifactPath 'firmware-manifest.sha256'
+$sourceFirmwareContract = @(Get-NormalizedFirmwareManifest $firmwareManifestSource)
+$kernelFirmwareContract = @(Get-NormalizedFirmwareManifest $kernelFirmwareManifest)
+if ($sourceFirmwareContract.Count -ne $kernelFirmwareContract.Count -or
+    (Compare-Object -ReferenceObject $sourceFirmwareContract -DifferenceObject $kernelFirmwareContract)) {
+    throw 'The production kernel artifact firmware contract differs from this release source.'
+}
 $prerequisites = & (Join-Path $PSScriptRoot 'Fetch-PinnedPrerequisites.ps1')
 $runtimeName = "SwitchTrade-$ReleaseId.wsl"
 $runtimeTarget = Join-Path $output $runtimeName
@@ -103,10 +147,12 @@ if ($RuntimeWsl) {
     Copy-Item -LiteralPath "$runtimeSource.build.json" -Destination $runtimeBuild -Force
 } elseif (-not (Test-Path -LiteralPath $runtimeTarget)) {
     & (Join-Path $PSScriptRoot 'Build-ImmutableWsl.ps1') -Output $runtimeTarget `
-        -ReleaseId $ReleaseId -ContentId $contentId
+        -ReleaseId $ReleaseId -ContentId $contentId -Modules $modulesSource `
+        -FirmwareManifest $firmwareManifestSource
 }
 $runtimeMetadata = Get-Content -Raw -LiteralPath $runtimeBuild | ConvertFrom-Json
 if ([string]$runtimeMetadata.release_id -ne $ReleaseId -or
+    [string]$runtimeMetadata.content_id -ne $contentId -or
     [long]$runtimeMetadata.size -ne (Get-Item -LiteralPath $runtimeTarget).Length -or
     [string]$runtimeMetadata.sha256 -ne
         (Get-FileHash -LiteralPath $runtimeTarget -Algorithm SHA256).Hash.ToLowerInvariant()) {
@@ -139,13 +185,31 @@ $kernelDirectory = Join-Path $payload 'kernel'
 New-Item -ItemType Directory -Force -Path $kernelDirectory | Out-Null
 $packagedRuntime = Join-Path $payload $runtimeName
 Copy-Item -LiteralPath $runtimeTarget -Destination $packagedRuntime -Force
-$retained = Join-Path $repo 'artifacts\final-package-27d17b1\SwitchTrade-unsigned-private-beta-27d17b1'
-$kernelSource = Join-Path $retained 'payload\kernel\kernel'
-$kernelMetadata = Get-Content -Raw -LiteralPath (Join-Path $retained 'payload\kernel\manifest.json') | ConvertFrom-Json
 $kernelTarget = Join-Path $kernelDirectory 'kernel'
-$modulesSource = Join-Path $retained 'payload\kernel\modules.tar.gz'
 $modulesTarget = Join-Path $kernelDirectory 'modules.tar.gz'
-$firmwareManifestSource = Join-Path $PSScriptRoot 'runtime\firmware-manifest.sha256'
+$driverProfiles = @()
+$driverModules = @()
+foreach ($line in Get-Content -LiteralPath (Join-Path $repo 'config\wsl-radio-hardware.tsv')) {
+    if (-not $line -or $line.StartsWith('#')) { continue }
+    $columns = @($line -split "`t")
+    if ($columns.Count -ne 13 -or $columns[6] -ne 'yes') {
+        throw 'The production hardware matrix contains a malformed or non-automatic profile.'
+    }
+    $driverProfiles += $columns[0]
+    $driverModules += @($columns[3] -split ',')
+}
+$driverProfiles = @($driverProfiles | Sort-Object -Unique)
+$driverModules = @($driverModules | Sort-Object -Unique)
+if (-not $driverProfiles -or -not $driverModules) { throw 'The production hardware matrix is empty.' }
+$moduleEntries = @(& tar -tzf $modulesSource)
+if ($LASTEXITCODE -ne 0) { throw 'The kernel module archive cannot be inspected.' }
+foreach ($driver in $driverModules) {
+    $moduleName = ($driver.Replace('-', '_') + '.ko')
+    $modulePattern = [regex]::Escape($moduleName) + '(?:\.(?:xz|zst|gz))?$'
+    if (-not @($moduleEntries | Where-Object { $_ -match $modulePattern })) {
+        throw "The kernel module archive does not support matrix driver: $driver"
+    }
+}
 $firmwareManifestTarget = Join-Path $kernelDirectory 'firmware-manifest.sha256'
 Copy-Item -LiteralPath $kernelSource -Destination $kernelTarget -Force
 Copy-Item -LiteralPath $modulesSource -Destination $modulesTarget -Force
@@ -174,7 +238,8 @@ $manifest = [ordered]@{
     kernel = [ordered]@{
         release = [string]$kernelMetadata.kernel_release
         primary_driver = [string]$kernelMetadata.primary_driver
-        driver_profiles = @('0bda:818b')
+        driver_profiles = $driverProfiles
+        driver_modules = $driverModules
     }
     payloads = [ordered]@{
         runtime = Payload $package ("payload\$runtimeName")

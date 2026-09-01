@@ -28,6 +28,16 @@ M8-M10 sequence and beta definition are normative in
 [`94-production-wrapper-beta-cutover-20260831.md`](94-production-wrapper-beta-cutover-20260831.md).
 No additional repetition campaign begins before the production wrapper exists.
 
+**Hardware matrix update (2026-09-01):** the executable matrix is limited to seven full-role external
+USB profiles (`0bda:818b`, `0e8d:7610`, `0e8d:7612`, `148f:2770`, `148f:3070`, `148f:3572`,
+`0bda:c811`). They all follow the same selected-profile ABC+D path and are auto-eligible when uniquely
+attached. RTL8188EU and AR9271 remain documentation evidence only. Source, safe UI/API projection,
+profile-specific P0 module/firmware checks, and fail-closed packaging checks are implemented on the
+hardware-matrix branch. Before any expanded installer ships, the separate authoritative kernel build
+must produce an immutable artifact containing all five driver modules and the matching pinned firmware
+manifest. Only RTL8192EU carries current SwitchTrade physical proof; the other rows remain theoretically
+supported candidates until device-specific physical evidence exists.
+
 ## Critical and urgent blockers
 
 0A. **CRITICAL — URGENT: Eliminate false installed-runtime corruption and qualify desktop launch.**

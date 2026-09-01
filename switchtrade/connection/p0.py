@@ -18,6 +18,7 @@ from switchtrade.hardware import HardwarePolicyError, require_hardware, select_p
 
 
 PASSIVE_CONTRACT = "p0-passive.v1"
+# Qualification fixtures retain this proven-card alias. Production selection is profile-driven.
 USB_ID = "0bda:818b"
 QUALIFIED_USBIPD_VERSION = (5, 3, 0)
 MINIMUM_WSL_VERSION = (2, 4, 4)
@@ -197,14 +198,20 @@ def parse_usbipd_state(text: str) -> list[UsbAdapter]:
 def selected_adapter(selection_file: Path, inventory: list[UsbAdapter]) -> UsbAdapter:
     selection = _read_json(selection_file, "P0_ADAPTER_SELECTION_INVALID", "P0a_adapter")
     instance_id = selection.get("instance_id")
-    if (selection.get("schema") != 1 or selection.get("usb_id") != USB_ID or
+    usb_id = selection.get("usb_id")
+    if (selection.get("schema") != 1 or not isinstance(usb_id, str) or
             not isinstance(instance_id, str) or not instance_id):
         raise P0Error(
             "P0_ADAPTER_SELECTION_INVALID", "P0a_adapter",
             "select one authorized production adapter before P0",
         )
+    usb_id = usb_id.lower()
+    try:
+        require_hardware(select_profile(usb_id), "relay")
+    except (HardwarePolicyError, ValueError) as error:
+        raise P0Error("P0_HARDWARE_POLICY_REJECTED", "P0a_adapter", str(error)) from error
     matches = [item for item in inventory if item.instance_id.casefold() == instance_id.casefold()]
-    if len(matches) != 1 or matches[0].usb_id != USB_ID:
+    if len(matches) != 1 or matches[0].usb_id != usb_id:
         raise P0Error(
             "P0_ADAPTER_IDENTITY_UNAVAILABLE", "P0a_adapter",
             "the saved Windows adapter identity does not resolve exactly once",
@@ -218,7 +225,7 @@ def selected_adapter(selection_file: Path, inventory: list[UsbAdapter]) -> UsbAd
     return adapter
 
 
-def linux_usb_inventory(usb_id: str = USB_ID, sys_root: Path = Path("/sys")) -> tuple[str, ...]:
+def linux_usb_inventory(usb_id: str, sys_root: Path = Path("/sys")) -> tuple[str, ...]:
     """Return canonical sysfs identities for one USB profile without enumeration-order meaning."""
     devices: list[str] = []
     try:
@@ -241,7 +248,11 @@ def linux_usb_descendants(identity: str, sys_root: Path = Path("/sys")) -> dict:
     """Return radio descendants for one canonical USB sysfs identity."""
     try:
         device = Path(identity).resolve(strict=True)
-        if str(device) not in linux_usb_inventory(USB_ID, sys_root):
+        vendor = (device / "idVendor").read_text().strip()
+        product = (device / "idProduct").read_text().strip()
+        usb_id = f"{vendor}:{product}".lower()
+        select_profile(usb_id)
+        if str(device) not in linux_usb_inventory(usb_id, sys_root):
             raise OSError("identity is outside USB sysfs")
 
         def linked(root: Path) -> list[str]:
@@ -260,11 +271,11 @@ def linux_usb_descendants(identity: str, sys_root: Path = Path("/sys")) -> dict:
             "netdevs": linked(sys_root / "class" / "net"),
             "phys": linked(sys_root / "class" / "ieee80211"),
         }
-    except OSError:
+    except (OSError, ValueError):
         return {"status": "absent", "netdevs": [], "phys": []}
 
 
-def linux_usb_probe(usb_id: str = USB_ID, sys_root: Path = Path("/sys")) -> dict:
+def linux_usb_probe(usb_id: str, sys_root: Path = Path("/sys")) -> dict:
     try:
         exact_identity = usb_id.startswith("/") or Path(usb_id).is_absolute()
         if exact_identity:
@@ -276,13 +287,17 @@ def linux_usb_probe(usb_id: str = USB_ID, sys_root: Path = Path("/sys")) -> dict
             else:
                 vendor = device / "idVendor"
                 product = device / "idProduct"
+                found_usb_id = (
+                    f"{vendor.read_text().strip()}:{product.read_text().strip()}".lower()
+                    if vendor.is_file() and product.is_file() else ""
+                )
                 if (
-                    str(device) not in linux_usb_inventory(USB_ID, sys_root) or
-                    not vendor.is_file() or not product.is_file() or
-                    f"{vendor.read_text().strip()}:{product.read_text().strip()}".lower() != USB_ID
+                    not found_usb_id or
+                    str(device) not in linux_usb_inventory(found_usb_id, sys_root)
                 ):
                     devices = []
                 else:
+                    select_profile(found_usb_id)
                     devices = [device]
         else:
             devices = [Path(item) for item in linux_usb_inventory(usb_id, sys_root)]
@@ -315,7 +330,7 @@ def linux_usb_probe(usb_id: str = USB_ID, sys_root: Path = Path("/sys")) -> dict
             "phy_present": bool(linked_items(sys_root / "class" / "ieee80211")),
             "interfaces_up": interfaces_up,
         }
-    except OSError:
+    except (OSError, ValueError):
         return {
             "status": "unknown", "matches": None, "interface_present": None,
             "phy_present": None, "interfaces_up": None,
@@ -372,19 +387,25 @@ class PassiveValidator:
         selection = _read_json(
             self.selection_file, "P0_ADAPTER_SELECTION_INVALID", "P0a_adapter")
         instance_id = selection.get("instance_id")
-        if (selection.get("schema") != 1 or selection.get("usb_id") != USB_ID or
+        usb_id = selection.get("usb_id")
+        if (selection.get("schema") != 1 or not isinstance(usb_id, str) or
                 not isinstance(instance_id, str) or not instance_id):
             raise P0Error(
                 "P0_ADAPTER_SELECTION_INVALID", "P0a_adapter",
                 "select one authorized production adapter before P0",
             )
-        return instance_id, USB_ID
+        usb_id = usb_id.lower()
+        try:
+            require_hardware(select_profile(usb_id), "relay")
+        except (HardwarePolicyError, ValueError) as error:
+            raise P0Error("P0_HARDWARE_POLICY_REJECTED", "P0a_adapter", str(error)) from error
+        return instance_id, usb_id
 
-    def _runtime_probe(self) -> dict:
+    def _runtime_probe(self, usb_id: str) -> dict:
         arguments = [
             self.packaged_python, "-m", "switchtrade.connection.runtime_probe",
             "--release", self.release, "--target-channel", str(self.target_channel),
-            "--root", self.runtime_root,
+            "--root", self.runtime_root, "--usb-id", usb_id,
         ]
         if os.name == "nt":
             command = wsl_root_command(self.distro, self.runtime_root, *arguments)
@@ -411,10 +432,7 @@ class PassiveValidator:
         return value
 
     def validate(self) -> tuple[UsbAdapter, dict]:
-        try:
-            require_hardware(select_profile(USB_ID), "relay")
-        except (HardwarePolicyError, ValueError) as error:
-            raise P0Error("P0_HARDWARE_POLICY_REJECTED", "P0a_adapter", str(error)) from error
+        _requested_instance, requested_usb_id = self.requested_identity()
         if any(path.exists() for path in self.blocking_state_paths):
             raise P0Error(
                 "P0_RECOVERY_REQUIRED", "P0a_exclusivity",
@@ -440,7 +458,12 @@ class PassiveValidator:
             code="P0_USBIPD_STATE_UNAVAILABLE", gate="P0a_adapter",
         )
         adapter = selected_adapter(self.selection_file, parse_usbipd_state(state_text))
-        runtime = self._runtime_probe()
+        if adapter.usb_id != requested_usb_id:
+            raise P0Error(
+                "P0_ADAPTER_IDENTITY_UNAVAILABLE", "P0a_adapter",
+                "the saved Windows adapter identity changed during P0",
+            )
+        runtime = self._runtime_probe(adapter.usb_id)
         matches = runtime.get("attached_usb_matches")
         if adapter.attached and matches != 1:
             raise P0Error(
@@ -555,7 +578,8 @@ class UsbLease:
     ) -> "UsbLease":
         value = _read_json(Path(recovery_file), "P0_RECOVERY_STATE_INVALID", "D10_usb_return")
         required = ("usb_id", "instance_id", "bus_id", "prior_attached", "attach_intent")
-        if (value.get("schema") != 1 or value.get("usb_id") != USB_ID or
+        usb_id = value.get("usb_id")
+        if (value.get("schema") != 1 or not isinstance(usb_id, str) or
                 not all(name in value for name in required) or
                 not isinstance(value.get("instance_id"), str) or not value["instance_id"] or
                 not isinstance(value.get("bus_id"), str) or not _BUS_ID.fullmatch(value["bus_id"]) or
@@ -566,6 +590,13 @@ class UsbLease:
                 (value.get("linux_identity") is not None and
                  not cls._valid_linux_identity(value.get("linux_identity")))):
             raise P0Error("P0_RECOVERY_STATE_INVALID", "D10_usb_return", "USB recovery state is invalid")
+        try:
+            require_hardware(select_profile(usb_id.lower()), "relay")
+        except (HardwarePolicyError, ValueError) as error:
+            raise P0Error(
+                "P0_RECOVERY_STATE_INVALID", "D10_usb_return",
+                "USB recovery profile is invalid",
+            ) from error
         lease = cls(
             UsbAdapter(
                 usb_id=value["usb_id"], instance_id=value["instance_id"],

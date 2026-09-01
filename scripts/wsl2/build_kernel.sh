@@ -3,9 +3,8 @@
 # WSL2 커스텀 커널 빌드 — MWL-SwitchTrade 배포 트랙 α (A-2)
 # 실행 위치: 주인님 Windows PC의 WSL2(Ubuntu) 안
 # 사용법:   bash build_kernel.sh   (sudo 암호 1회 물어봄)
-# 신규 in-kernel 카드 예:
-#   EXTRA_KERNEL_CONFIG='CONFIG_MT76_USB=m CONFIG_MT76x2U=m' \
-#   EXTRA_FIRMWARE_SPECS='mediatek/file.bin=https://pinned.example/file.bin' bash build_kernel.sh
+# 추가 실험 카드만 EXTRA_KERNEL_CONFIG/EXTRA_FIRMWARE_SPECS로 전달한다.
+# production matrix의 드라이버와 firmware는 이 스크립트가 항상 포함하고 검증한다.
 # 소요:     20~60분 (PC 사양 따라) · 디스크 12GB+ 필요
 # 검증 문서: docs/12-wsl2-poc-windows.md (G1~G2 게이트)
 # ============================================================
@@ -52,23 +51,42 @@ git checkout --detach FETCH_HEAD
 say "3/6 설정 — Wi-Fi 드라이버 + 펌웨어 내장 + usbip 클라이언트"
 cp Microsoft/config-wsl .config
 mkdir -p firmware/rtlwifi
-FW_BASE="https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain"
-REGDB_BASE="https://git.kernel.org/pub/scm/linux/kernel/git/wens/wireless-regdb.git/plain"
+mkdir -p firmware/mediatek firmware/rtw88
+LINUX_FIRMWARE_COMMIT="01205307636157a12c29e6a774bf83b218732050"
+REGULATORY_COMMIT="74cb99ff3853e0092d909a8b8afeadea88dfd16b"
+LINUX_FIRMWARE_BASE="https://kernel.googlesource.com/pub/scm/linux/kernel/git/firmware/linux-firmware/+/$LINUX_FIRMWARE_COMMIT"
+REGULATORY_BASE="https://kernel.googlesource.com/pub/scm/linux/kernel/git/wens/wireless-regdb/+/$REGULATORY_COMMIT"
 EXTRA_KERNEL_CONFIG="${EXTRA_KERNEL_CONFIG:-}"
 EXTRA_FIRMWARE_SPECS="${EXTRA_FIRMWARE_SPECS:-}"
-# RTL8188EU/RTL8192EU 펌웨어 (커널 이미지에 내장 — 배포 시 펌웨어 파일 불필요)
-if [[ ! -s firmware/rtlwifi/rtl8188eufw.bin ]]; then
-  wget -q "$FW_BASE/rtlwifi/rtl8188eufw.bin" \
-       -O firmware/rtlwifi/rtl8188eufw.bin
-fi
-if [[ ! -s firmware/rtlwifi/rtl8192eu_nic.bin ]]; then
-  wget -q "$FW_BASE/rtlwifi/rtl8192eu_nic.bin" \
-       -O firmware/rtlwifi/rtl8192eu_nic.bin
-fi
-for REGDB in regulatory.db regulatory.db.p7s; do
-  [[ -s firmware/$REGDB ]] || wget -q "$REGDB_BASE/$REGDB" -O "firmware/$REGDB"
-done
-FW_LIST="rtlwifi/rtl8188eufw.bin rtlwifi/rtl8192eu_nic.bin regulatory.db regulatory.db.p7s"
+
+fetch_pinned() {
+  local target=$1 url=$2 expected=$3 actual
+  mkdir -p "firmware/$(dirname "$target")"
+  wget -qO- "$url?format=TEXT" | base64 -d >"firmware/$target"
+  [[ -s firmware/$target ]] || { echo "[오류] firmware 다운로드 실패: $target"; exit 1; }
+  actual="$(sha256sum "firmware/$target" | awk '{print $1}')"
+  [[ $actual == "$expected" ]] || { echo "[오류] firmware 해시 불일치: $target"; exit 1; }
+}
+
+fetch_pinned regulatory.db "$REGULATORY_BASE/regulatory.db" \
+  2fb33ca0074db573e05ef7dd50bb45b63c0ff98b7e852e1105ebad536fae8e6b
+fetch_pinned regulatory.db.p7s "$REGULATORY_BASE/regulatory.db.p7s" \
+  c941c08f51c93e46722293b85631604c3740d86c3de0c75f79aef50d2e919179
+fetch_pinned rtlwifi/rtl8188eufw.bin "$LINUX_FIRMWARE_BASE/rtlwifi/rtl8188eufw.bin" \
+  2ff74315287529dec2e50eb57d6e0c97d2116f28ae166773ccdf93b6360000c4
+fetch_pinned rtlwifi/rtl8192eu_nic.bin "$LINUX_FIRMWARE_BASE/rtlwifi/rtl8192eu_nic.bin" \
+  b15bc955fba2fc3abc093affe62c9f7284a0b84d4f13f8ce55366488dc9aad8b
+fetch_pinned mediatek/mt7610u.bin "$LINUX_FIRMWARE_BASE/mediatek/mt7610u.bin" \
+  5a4268e9021bb587426ba624b425f1e660bfc82cd63b36ad3ce6fb9ce6751760
+fetch_pinned mt7662.bin "$LINUX_FIRMWARE_BASE/mediatek/mt7662.bin" \
+  f7e52492f58088cae50e51a54cca68e4abc5b74f7d0b6b731dbb4c04465a94b6
+fetch_pinned mt7662_rom_patch.bin "$LINUX_FIRMWARE_BASE/mediatek/mt7662_rom_patch.bin" \
+  6f0e871268f6e4d99196d90d89bcc09fe493d010366260a2cfcaa5dd66095f8c
+fetch_pinned rt2870.bin "$LINUX_FIRMWARE_BASE/rt2870.bin" \
+  251b8918391eac6415d60dca239e415aad0177e885376f2a17782e64fcbbe317
+fetch_pinned rtw88/rtw8821c_fw.bin "$LINUX_FIRMWARE_BASE/rtw88/rtw8821c_fw.bin" \
+  2ef409bc418549fcf294061dd0cae1fc22fd9da79b60524950b25de18732f3f0
+FW_LIST="regulatory.db regulatory.db.p7s rtlwifi/rtl8188eufw.bin rtlwifi/rtl8192eu_nic.bin mediatek/mt7610u.bin mt7662.bin mt7662_rom_patch.bin rt2870.bin rtw88/rtw8821c_fw.bin"
 for SPEC in $EXTRA_FIRMWARE_SPECS; do
   PATH_PART="${SPEC%%=*}"
   URL_PART="${SPEC#*=}"
@@ -95,6 +113,11 @@ scripts/config \
   --module CONFIG_MAC80211 \
   --module CONFIG_RTL8XXXU \
   --enable CONFIG_RTL8XXXU_UNTESTED \
+  --module CONFIG_MT76x0U \
+  --module CONFIG_MT76x2U \
+  --module CONFIG_RT2800USB \
+  --enable CONFIG_RT2800USB_RT35XX \
+  --module CONFIG_RTW88_8821CU \
   --module CONFIG_USBIP_CORE \
   --module CONFIG_USBIP_VHCI_HCD
 for SPEC in $EXTRA_KERNEL_CONFIG; do
@@ -120,7 +143,7 @@ for SPEC in $EXTRA_KERNEL_CONFIG; do
   fi || { echo "[오류] olddefconfig가 $SPEC 요청을 변경했습니다."; exit 1; }
 done
 
-for OPT in CONFIG_USB CONFIG_USB_COMMON CONFIG_CFG80211 CONFIG_MAC80211 CONFIG_RTL8XXXU CONFIG_USBIP_CORE CONFIG_USBIP_VHCI_HCD; do
+for OPT in CONFIG_USB CONFIG_USB_COMMON CONFIG_CFG80211 CONFIG_MAC80211 CONFIG_RTL8XXXU CONFIG_MT76x0U CONFIG_MT76x2U CONFIG_RT2800USB CONFIG_RT2800USB_RT35XX CONFIG_RTW88_8821CU CONFIG_USBIP_CORE CONFIG_USBIP_VHCI_HCD; do
   grep -qE "^${OPT}=(y|m)" .config || { echo "[오류] olddefconfig가 ${OPT}를 제거했습니다."; exit 1; }
 done
 
