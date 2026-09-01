@@ -2376,6 +2376,18 @@ code and tests are the current implementation evidence.
   `ErrorActionPreference` is not a native exit-code guard; no dependent command runs until the prior
   native command's exit code is explicitly accepted.
 
+### MTA-OPS-053 — Never poll a process with an unreturned session identifier
+
+- **Observed (2026-09-01, CI wait):** a bounded command returned no session identifier, but a later
+  poll used an unrelated numeric value. The process tool rejected it as an unknown process ID.
+- **Impact:** no external or repository state changed; one status poll failed and was repeated as a
+  fresh read-only GitHub query.
+- **Definitive cause:** the absence of a returned session ID was not treated as terminal evidence for
+  that tool call.
+- **Correction:** poll only an identifier copied verbatim from the immediately preceding command
+  result. If none is returned, issue a new bounded read-only status command.
+- **Never repeat:** never infer, reuse, or invent process/session identifiers.
+
 ### MTA-QA-016 — Local green is not cross-platform evidence when a fixture observes ambient state
 
 - **Observed (2026-09-01, hardware-matrix candidate):** the complete Windows suite passed locally,
@@ -2400,6 +2412,23 @@ code and tests are the current implementation evidence.
   observe only the state named by its contract, and every environment-sensitive dependency must be
   gated, mocked, encoded, or explicitly incorporated into the baseline.
 
+### MTA-QA-017 — A CI stage hidden behind an earlier failure is still unvalidated
+
+- **Observed (2026-09-01, second hardware-matrix CI):** both operating systems passed their full
+  functional tests, but Ubuntu then failed ShellCheck on pre-existing code. Earlier CI runs had
+  stopped during pytest, so the later lint stage had never supplied green evidence. The findings
+  were intentional inner-shell/dpkg expansions, functions invoked indirectly by `EXIT` traps, and
+  one combined `export`/`readlink` assignment that masked the command result.
+- **Impact:** no runtime or release was published. CI correctly blocked the candidate after its
+  functional tests passed.
+- **Definitive cause:** successful completion of later CI stages had been inferred from the pipeline
+  definition rather than observed on the exact commit.
+- **Correction:** add narrow ShellCheck annotations where indirect expansion is the contract, and
+  split the `readlink` assignment from `export` so resolution failure is checked. Rerun the complete
+  pipeline rather than only the formerly failing test stage.
+- **Never repeat:** a release gate is green only when every ordered stage completes on the exact
+  candidate SHA. A skipped stage is unknown, not passed.
+
 ### MTA-DEV-019 — Selecting a leaf kernel driver does not enable hidden Kconfig parents
 
 - **Observed (2026-09-01, first multi-driver kernel run):** `olddefconfig` retained `rtl8xxxu` but
@@ -2416,6 +2445,18 @@ code and tests are the current implementation evidence.
 - **Never repeat:** derive every required leaf's full dependency chain from the exact pinned kernel
   Kconfig before dispatching. A config request is not evidence; post-`olddefconfig` symbols and built
   modules are the acceptance gates.
+
+#### Recurrence (2026-09-01, second multi-driver kernel run)
+
+- **Observed:** after the vendor/menu parents were fixed, every Ralink and Realtek symbol survived,
+  but `MT76x0U` and `MT76x2U` were still dropped. The workflow again stopped before compilation and
+  uploaded no artifact.
+- **Definitive cause:** the pinned kernel's `scripts/config` uppercases symbols by default. It wrote
+  the nonexistent `MT76X0U`/`MT76X2U` names even though Kconfig defines lowercase `x`. The exact
+  source tool documents `--keep-case`; the workflow had not enabled it.
+- **Permanent guard:** pass `--keep-case` before every case-sensitive Kconfig symbol and keep the
+  exact-case post-`olddefconfig` assertions. Dependency-chain review includes the configuration
+  tool's name-normalization behavior, not just Kconfig expressions.
 
 ## 14. Maintained evidence index
 

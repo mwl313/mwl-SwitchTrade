@@ -133,6 +133,7 @@ printf '{"schema":1,"owner":"switchtrade-provisioner","product":"SwitchTrade","r
   "$release_id" "$content_id" >"$stage/etc/switchtrade-distro.json"
 printf '{"schema":1,"release_id":"%s"}\n' "$release_id" >"$stage/opt/switchtrade/.switchtrade-release.json"
 printf '{"schema":1,"ubuntu_snapshot":"%s"}\n' "$ubuntu_snapshot" >"$stage/etc/switchtrade/build-source.json"
+# shellcheck disable=SC2016 # dpkg-query, not this shell, expands its format fields.
 chroot "$stage" dpkg-query -W -f='${Package}=${Version}\n' | LC_ALL=C sort \
   >"$stage/etc/switchtrade/package-lock.txt"
 chmod 0644 "$stage/etc/wsl.conf" "$stage/etc/wsl-distribution.conf" \

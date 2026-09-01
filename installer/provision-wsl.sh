@@ -177,7 +177,7 @@ case $MODE in
         [[ -z $INTEGRITY_SHA256 ]] || require_integrity "$previous" "$INTEGRITY_SHA256"
         [[ -d $TARGET && ! -e $swap ]] || die "one active runtime and a clean swap path are required"
         current_release=$(release_of "$TARGET") || die "RUNTIME_RELEASE_MARKER_INVALID: $TARGET"
-        # shellcheck disable=SC2329 # Invoked by the EXIT trap below.
+        # shellcheck disable=SC2317,SC2329 # Invoked indirectly by the EXIT trap below.
         recover_rollback() {
             if [[ -d $swap ]]; then
                 if [[ -d $TARGET && ! -e $previous ]]; then mv -- "$TARGET" "$previous" || true; fi
@@ -205,7 +205,7 @@ case $MODE in
             current_release=$(release_of "$TARGET") || die "RUNTIME_ACTIVE_UNOWNED"
             [[ ! -e $previous || -d $previous ]] || die "RUNTIME_PREVIOUS_UNSAFE"
             rm -rf -- "$previous"
-            # shellcheck disable=SC2329 # Invoked by the EXIT trap below.
+            # shellcheck disable=SC2317,SC2329 # Invoked indirectly by the EXIT trap below.
             recover_commit() {
                 if [[ -d $swap ]]; then
                     if [[ -d $TARGET && ! -e $CANDIDATE ]]; then mv -- "$TARGET" "$CANDIDATE" || true; fi

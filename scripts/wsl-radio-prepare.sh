@@ -436,7 +436,8 @@ if [[ $module_file != - ]]; then
     fi
 fi
 msg "[driver] PASS usb=$USB_ID strategy=$strategy driver=$driver iface=$iface${REQUIRED_ROLE:+ required_role=$REQUIRED_ROLE}"
-export SWITCHTRADE_USB_DEVICE="$(readlink -f "$DEVICE")"
+SWITCHTRADE_USB_DEVICE="$(readlink -f "$DEVICE")" || die "unable to resolve USB device path: $DEVICE"
+export SWITCHTRADE_USB_DEVICE
 
 load_prerequisite_module ccm
 load_prerequisite_module cmac

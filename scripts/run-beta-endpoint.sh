@@ -68,6 +68,7 @@ gate=("$PREP")
 gate+=(--role "$radio_role" --target-channel "$channel" --)
 
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+# shellcheck disable=SC2016 # The nested bash expands every quoted variable below.
 exec "${gate[@]}" bash -c '
     ack_file=$1
     nonce=$2

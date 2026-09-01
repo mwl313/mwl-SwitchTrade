@@ -110,6 +110,7 @@ jobs:
             --enable CONFIG_WLAN_VENDOR_REALTEK \
             --module CONFIG_RTL8XXXU \
             --enable CONFIG_RTL8XXXU_UNTESTED \
+            --keep-case \
             --module CONFIG_MT76x0U \
             --module CONFIG_MT76x2U \
             --module CONFIG_RT2X00 \
