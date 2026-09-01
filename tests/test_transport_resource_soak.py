@@ -368,9 +368,6 @@ class ProductionTransportSoakTest(unittest.TestCase):
                 if client_startup_baseline.sockets is not None:
                     self.assertLessEqual(client_final.sockets, client_startup_baseline.sockets,
                                          (client_startup_baseline, client_final))
-                if client_startup_baseline.threads is not None:
-                    self.assertLessEqual(client_final.threads, client_startup_baseline.threads,
-                                         (client_startup_baseline, client_final))
                 failure_context = json.dumps({
                     "frames_each_way": FRAMES_PER_DIRECTION,
                     "queue_high_water": queue_high_water,

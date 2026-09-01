@@ -2460,6 +2460,22 @@ code and tests are the current implementation evidence.
   observe only the state named by its contract, and every environment-sensitive dependency must be
   gated, mocked, encoded, or explicitly incorporated into the baseline.
 
+#### Recurrence (2026-09-01, final soak cleanup measurement)
+
+- **Observed:** the exact release candidate transferred all 8,192 RFU frames, bounded its queues,
+  released the relay session, and proved both owned `TunnelClient` threads stopped. Windows CI still
+  failed because the containing pytest process had six threads at the final sample versus five at
+  startup; descriptor use had dropped and no product-owned worker remained alive.
+- **Definitive cause:** the test used total threads in the shared pytest process as a second cleanup
+  oracle after already checking the exact product-owned thread objects. A runner/plugin thread may
+  start independently at any point, so total-process parity cannot identify an owned leak.
+- **Correction:** retain the exact `host._thread` and `guest._thread` termination assertions, relay
+  live-session zero gate, queue bounds, and descriptor/socket cleanup bounds. Remove only the
+  ambient pytest-process thread-count equality assertion.
+- **Permanent guard:** resource cleanup tests identify and assert owned resources directly. Shared
+  process totals may provide bounded soak telemetry, but they must not be used as an ownership-proof
+  terminal gate when the exact owned object is available.
+
 ### MTA-QA-017 — A CI stage hidden behind an earlier failure is still unvalidated
 
 - **Observed (2026-09-01, second hardware-matrix CI):** both operating systems passed their full
