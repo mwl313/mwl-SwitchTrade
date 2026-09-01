@@ -110,3 +110,14 @@ def test_replacement_package_requires_the_complete_dynamic_hardware_contract():
     assert "final-package-27d17b1" not in immutable
     assert "The packaged hardware contract does not match the source matrix." in validator
     assert "The packaged kernel is missing a matrix driver" in validator
+
+
+def test_appliance_manifests_are_safe_across_the_windows_wsl_boundary():
+    attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+    builder = (
+        ROOT / "installer" / "replacement" / "runtime" / "build-appliance.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "*.sha256 text eol=lf" in attributes
+    assert 'sed \'s/\\r$//\' "$wheelhouse_manifest"' in builder
+    assert 'sed \'s/\\r$//\' "$firmware_manifest"' in builder

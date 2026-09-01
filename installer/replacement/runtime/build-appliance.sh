@@ -25,11 +25,13 @@ die() { printf 'switchtrade appliance: %s\n' "$*" >&2; exit 1; }
 [[ $source_epoch =~ ^[0-9]{9,}$ ]] || die 'invalid source epoch'
 expected_wheels=$(mktemp)
 actual_wheels=$(mktemp)
-awk '{print $2}' "$wheelhouse_manifest" | LC_ALL=C sort >"$expected_wheels"
+normalized_wheel_manifest=$(mktemp)
+sed 's/\r$//' "$wheelhouse_manifest" >"$normalized_wheel_manifest"
+awk '{print $2}' "$normalized_wheel_manifest" | LC_ALL=C sort >"$expected_wheels"
 find "$wheelhouse" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort >"$actual_wheels"
 cmp -s "$expected_wheels" "$actual_wheels" || die 'wheelhouse file set does not match its pinned manifest'
-(cd "$wheelhouse" && sha256sum -c "$wheelhouse_manifest") >/dev/null || die 'wheelhouse hash verification failed'
-rm -f -- "$expected_wheels" "$actual_wheels"
+(cd "$wheelhouse" && sha256sum -c "$normalized_wheel_manifest") >/dev/null || die 'wheelhouse hash verification failed'
+rm -f -- "$expected_wheels" "$actual_wheels" "$normalized_wheel_manifest"
 
 stage=$(mktemp -d /var/tmp/switchtrade-appliance.XXXXXX)
 cleanup() { rm -rf -- "$stage"; }
@@ -94,7 +96,7 @@ kernel_release=$(tar -tzf "$modules" | awk -F/ 'NF >= 2 && $2 != "" {print $2; e
 chroot "$stage" /usr/sbin/depmod "$kernel_release"
 
 cp -a "$firmware_directory/." "$stage/usr/lib/firmware/"
-cp -a "$firmware_manifest" "$stage/etc/switchtrade/firmware-manifest.sha256"
+sed 's/\r$//' "$firmware_manifest" >"$stage/etc/switchtrade/firmware-manifest.sha256"
 
 while read -r expected relative; do
   [[ -n ${expected:-} && -n ${relative:-} ]] || continue
@@ -103,7 +105,7 @@ while read -r expected relative; do
   [[ -f $candidate ]] || die "required firmware is missing: $relative"
   actual=$(sha256sum "$candidate" | cut -d' ' -f1)
   [[ $actual == "$expected" ]] || die "firmware hash mismatch: $relative"
-done <"$firmware_manifest"
+done <"$stage/etc/switchtrade/firmware-manifest.sha256"
 
 cat >"$stage/etc/wsl.conf" <<'EOF'
 [boot]

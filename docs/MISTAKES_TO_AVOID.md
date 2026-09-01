@@ -1334,6 +1334,17 @@ Full trade, save, menu return, and graceful exit remain separate physical eviden
   peel expressions. A read-only failure cannot corrupt state, but it still consumes time and must not
   be normalized as harmless noise.
 
+#### Recurrence (2026-09-01, WSL manifest diagnosis)
+
+- **Observed:** an ad hoc PowerShell-to-`bash -lc` diagnostic over-escaped an `awk` expression and
+  failed with `unexpected character '\\'`. It was read-only and changed no repository, package,
+  WSL, USB, relay, or installed state.
+- **Correction:** the manifest bytes and line endings were inspected directly from PowerShell, then
+  the production consumer was corrected without relying on the failed compound diagnostic.
+- **Permanent guard:** do not embed a quoted `awk` program through two shell parsers for a fact that
+  either shell can inspect directly. Prefer a literal-safe single-shell command, and split
+  cross-shell diagnostics at the process boundary.
+
 ### MTA-OPS-024 — A combined desktop stop/relaunch command was rejected before execution
 
 - **Observed:** during the 2026-08-31 `SOFTWARE_NOT_READY` investigation, one compound PowerShell
@@ -2316,6 +2327,19 @@ code and tests are the current implementation evidence.
 - **Permanent guard:** exact repository mirrors compare Git tree/blob object IDs from the source tree
   and target index. Cross-platform text contracts additionally pass their semantic parser. Raw
   working-tree hashes are reserved for binary artifacts whose byte identity is the contract.
+
+#### Recurrence (2026-09-01, immutable appliance manifest handoff)
+
+- **Observed:** Windows verified the wheelhouse's 25 filenames and hashes, but the disposable Linux
+  appliance rejected the file set. Git stored the manifest with LF while the Windows checkout used
+  CRLF; WSL's `awk` retained the trailing carriage return in every expected filename. The same issue
+  would later have affected firmware paths. No appliance or installer was produced.
+- **Correction:** track every `*.sha256` contract with `eol=lf`, and defensively strip only a terminal
+  carriage return before Linux filename/hash processing. The normalized firmware contract is also
+  the one stored in the appliance.
+- **Permanent guard:** text contracts crossing Windows/WSL boundaries require both repository EOL
+  policy and consumer-side semantic normalization. A Windows-side successful parse does not prove
+  the mounted byte representation is safe for Linux line tools.
 
 ### MTA-OPS-049 — Do not assume validated recursive temp cleanup is permitted
 
