@@ -1467,6 +1467,7 @@ class P0HarnessTests(unittest.TestCase):
                     coordinator, SimpleNamespace(requested_identity=lambda: (INSTANCE, USB_ID)),
                     root / "runs")
                 harness._process_start_ticks = lambda _pid: None
+                harness._quiesce_netdev = lambda _netdev: None
                 with mock.patch(
                         "switchtrade.connection.p0_harness._wsl_netdev_exists",
                         return_value=False):

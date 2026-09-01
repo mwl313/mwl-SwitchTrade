@@ -602,11 +602,12 @@ Test-SwitchTradeUsbipdCapabilities -VersionText '5.3.0' -MinimumVersion ([versio
     -HelpText 'attach bind state --wsl --busid' -State ($usbState) | Out-Null
 
 $argumentScript = Join-Path $TestRoot 'echo-argument.ps1'
-'param([string]$Value); [Console]::Out.Write($Value)' | Set-Content -LiteralPath $argumentScript -Encoding UTF8
+'param([string]$Value); [Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Value)))' | Set-Content -LiteralPath $argumentScript -Encoding UTF8
 $argumentValue = Join-Path $TestRoot '공백 경로\usbipd-win.msi'
+$argumentExpected = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($argumentValue))
 $argumentResult = Invoke-BoundedNativeProcess -FilePath 'powershell.exe' `
     -Arguments @('-NoProfile', '-File', $argumentScript, '-Value', $argumentValue) -TimeoutSeconds 10
-if ($argumentResult.ExitCode -ne 0 -or $argumentResult.Output -cne $argumentValue) {
+if ($argumentResult.ExitCode -ne 0 -or $argumentResult.Output -cne $argumentExpected) {
     throw 'argument-safe process invocation corrupted a path with spaces/non-ASCII characters'
 }
 $timedOut = $false

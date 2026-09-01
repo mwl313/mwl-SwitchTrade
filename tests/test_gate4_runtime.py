@@ -105,7 +105,8 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 ]
 
             first_ack = runtime / "first.json"
-            first = subprocess.Popen(command("1" * 32, first_ack), env=environment)
+            first = subprocess.Popen(
+                command("1" * 32, first_ack), env=environment, start_new_session=True)
             try:
                 time.sleep(0.05)
                 self.assertFalse(first_ack.exists(), "launch acknowledged before the radio gate")
@@ -125,18 +126,19 @@ class Gate4RuntimeContractTests(unittest.TestCase):
                 self.assertFalse(second_ack.exists())
                 self.assertIn("already running", second.stderr)
             finally:
-                first.terminate()
+                os.killpg(first.pid, signal.SIGTERM)
                 first.wait(timeout=3)
 
             third_ack = runtime / "third.json"
-            third = subprocess.Popen(command("3" * 32, third_ack), env=environment)
+            third = subprocess.Popen(
+                command("3" * 32, third_ack), env=environment, start_new_session=True)
             try:
                 deadline = time.monotonic() + 3
                 while not third_ack.exists() and time.monotonic() < deadline:
                     time.sleep(0.02)
                 self.assertTrue(third_ack.exists(), "lock was not released after exit")
             finally:
-                third.terminate()
+                os.killpg(third.pid, signal.SIGTERM)
                 third.wait(timeout=3)
 
     def test_pidfd_is_pinned_before_endpoint_identity_check(self):
@@ -939,6 +941,7 @@ class Gate4RuntimeContractTests(unittest.TestCase):
             self.assertIn("--switch-room-role", command)
             self.assertIn("finder", command)
 
+    @unittest.skipUnless(os.name == "nt", "Windows endpoint adoption requires Windows")
     def test_windows_control_adopts_and_stops_verified_wsl_endpoint(self):
         with tempfile.TemporaryDirectory() as temporary:
             state_path = Path(temporary) / "runtime" / "endpoint-state.json"

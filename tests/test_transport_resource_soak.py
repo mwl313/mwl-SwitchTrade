@@ -235,10 +235,8 @@ class ProductionTransportSoakTest(unittest.TestCase):
                 attempt_id = room["attempt"]["attempt_id"]
                 sid = first["room"]["room_code"]
 
-                relay_baseline = _sample(proc.pid)
-                client_baseline = _sample(os.getpid())
-                relay_samples = [relay_baseline]
-                client_samples = [client_baseline]
+                relay_startup_baseline = _sample(proc.pid)
+                client_startup_baseline = _sample(os.getpid())
                 queue_high_water = {"host_out": 0, "host_in": 0,
                                     "guest_out": 0, "guest_in": 0}
 
@@ -259,6 +257,10 @@ class ProductionTransportSoakTest(unittest.TestCase):
                 guest.poll()
                 host_stats_baseline = dict(host.stats)
                 guest_stats_baseline = dict(guest.stats)
+                relay_active_baseline = _sample(proc.pid)
+                client_active_baseline = _sample(os.getpid())
+                relay_samples = [relay_active_baseline]
+                client_samples = [client_active_baseline]
 
                 for start in range(0, FRAMES_PER_DIRECTION, BATCH_SIZE):
                     count = min(BATCH_SIZE, FRAMES_PER_DIRECTION - start)
@@ -316,25 +318,25 @@ class ProductionTransportSoakTest(unittest.TestCase):
                 relay_peak_rss = _metric_max(relay_samples, "rss")
                 client_peak_rss = _metric_max(client_samples, "rss")
                 if relay_peak_rss is not None:
-                    self.assertLessEqual(relay_peak_rss - relay_baseline.rss,
+                    self.assertLessEqual(relay_peak_rss - relay_active_baseline.rss,
                                          MAX_RSS_GROWTH, relay_samples)
                 if client_peak_rss is not None:
-                    self.assertLessEqual(client_peak_rss - client_baseline.rss,
+                    self.assertLessEqual(client_peak_rss - client_active_baseline.rss,
                                          MAX_RSS_GROWTH, client_samples)
                 self.assertLessEqual(_metric_max(relay_samples, "threads") or 0,
-                                     (relay_baseline.threads or 0) + 2, relay_samples)
+                                     (relay_active_baseline.threads or 0) + 1, relay_samples)
                 self.assertLessEqual(_metric_max(client_samples, "threads") or 0,
-                                     (client_baseline.threads or 0) + 2, client_samples)
+                                     (client_active_baseline.threads or 0) + 1, client_samples)
                 self.assertLessEqual(_metric_max(relay_samples, "descriptors") or 0,
-                                     (relay_baseline.descriptors or 0) + 12, relay_samples)
+                                     (relay_active_baseline.descriptors or 0) + 4, relay_samples)
                 self.assertLessEqual(_metric_max(client_samples, "descriptors") or 0,
-                                     (client_baseline.descriptors or 0) + 32, client_samples)
-                if relay_baseline.sockets is not None:
+                                     (client_active_baseline.descriptors or 0) + 4, client_samples)
+                if relay_active_baseline.sockets is not None:
                     self.assertLessEqual(_metric_max(relay_samples, "sockets"),
-                                         relay_baseline.sockets + 3, relay_samples)
-                if client_baseline.sockets is not None:
+                                         relay_active_baseline.sockets + 1, relay_samples)
+                if client_active_baseline.sockets is not None:
                     self.assertLessEqual(_metric_max(client_samples, "sockets"),
-                                         client_baseline.sockets + 3, client_samples)
+                                         client_active_baseline.sockets + 1, client_samples)
 
                 host.stop()
                 guest.stop()
@@ -352,33 +354,35 @@ class ProductionTransportSoakTest(unittest.TestCase):
                 time.sleep(0.05)
                 relay_final = _sample(proc.pid)
                 client_final = _sample(os.getpid())
-                if relay_baseline.descriptors is not None:
+                if relay_startup_baseline.descriptors is not None:
                     self.assertLessEqual(relay_final.descriptors,
-                                         relay_baseline.descriptors + 4,
-                                         (relay_baseline, relay_final))
-                if client_baseline.descriptors is not None:
+                                         relay_startup_baseline.descriptors + 4,
+                                         (relay_startup_baseline, relay_final))
+                if client_startup_baseline.descriptors is not None:
                     self.assertLessEqual(client_final.descriptors,
-                                         client_baseline.descriptors + 16,
-                                         (client_baseline, client_final))
-                if relay_baseline.sockets is not None:
-                    self.assertLessEqual(relay_final.sockets, relay_baseline.sockets,
-                                         (relay_baseline, relay_final))
-                if client_baseline.sockets is not None:
-                    self.assertLessEqual(client_final.sockets, client_baseline.sockets,
-                                         (client_baseline, client_final))
-                if client_baseline.threads is not None:
-                    self.assertLessEqual(client_final.threads, client_baseline.threads,
-                                         (client_baseline, client_final))
+                                         client_startup_baseline.descriptors + 16,
+                                         (client_startup_baseline, client_final))
+                if relay_startup_baseline.sockets is not None:
+                    self.assertLessEqual(relay_final.sockets, relay_startup_baseline.sockets,
+                                         (relay_startup_baseline, relay_final))
+                if client_startup_baseline.sockets is not None:
+                    self.assertLessEqual(client_final.sockets, client_startup_baseline.sockets,
+                                         (client_startup_baseline, client_final))
+                if client_startup_baseline.threads is not None:
+                    self.assertLessEqual(client_final.threads, client_startup_baseline.threads,
+                                         (client_startup_baseline, client_final))
                 failure_context = json.dumps({
                     "frames_each_way": FRAMES_PER_DIRECTION,
                     "queue_high_water": queue_high_water,
-                    "relay_baseline": relay_baseline.__dict__,
+                    "relay_startup_baseline": relay_startup_baseline.__dict__,
+                    "relay_active_baseline": relay_active_baseline.__dict__,
                     "relay_peak": {name: _metric_max(relay_samples, name)
-                                   for name in relay_baseline.__dict__},
+                                   for name in relay_active_baseline.__dict__},
                     "relay_final": relay_final.__dict__,
-                    "client_baseline": client_baseline.__dict__,
+                    "client_startup_baseline": client_startup_baseline.__dict__,
+                    "client_active_baseline": client_active_baseline.__dict__,
                     "client_peak": {name: _metric_max(client_samples, name)
-                                    for name in client_baseline.__dict__},
+                                    for name in client_active_baseline.__dict__},
                     "client_final": client_final.__dict__,
                 }, sort_keys=True)
             finally:

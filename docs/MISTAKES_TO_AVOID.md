@@ -2282,6 +2282,15 @@ code and tests are the current implementation evidence.
 - **Prevention:** Discover candidate tests with `rg --files tests` first, then read only exact returned
   paths. Do not infer a test filename from a component name.
 
+#### Recurrence (2026-09-01, focused CI regression command)
+
+- **Observed:** a focused pytest node used the invented class name `DistributedHarnessTests`; the
+  actual class is `DistributedContractTests`. Pytest rejected collection before running any test.
+- **Impact:** no test or product action ran and no state changed; the command only wasted one local
+  invocation.
+- **Permanent guard:** discover both the exact file and enclosing class with `rg` before composing
+  pytest node IDs. An uncollected command is not validation evidence.
+
 ### MTA-DEV-017 — Do not compare cross-platform text contracts by raw file hash
 
 - **Observed:** The production firmware manifests contained the same ordered hash/path records, but
@@ -2295,6 +2304,18 @@ code and tests are the current implementation evidence.
   `<lowercase sha256>  <forward-slash path>`, reject duplicates or malformed paths, and compare the
   resulting records. Keep artifact integrity hashes for each artifact separately; do not use them
   as a cross-platform semantic comparison.
+
+#### Recurrence (2026-09-01, kernel mirror verification)
+
+- **Observed:** after the correct source subtree was loaded into a temporary kernel-repository clone,
+  verification compared raw working-tree SHA-256 values. `firmware-manifest.sha256` differed because
+  checkout line-ending filters produced different byte representations of the same tracked text. No
+  kernel commit, push, workflow, or artifact was created.
+- **Cause:** the existing semantic-text rule was not applied to repository mirroring; raw worktree
+  bytes were mistaken for tracked content identity.
+- **Permanent guard:** exact repository mirrors compare Git tree/blob object IDs from the source tree
+  and target index. Cross-platform text contracts additionally pass their semantic parser. Raw
+  working-tree hashes are reserved for binary artifacts whose byte identity is the contract.
 
 ### MTA-OPS-049 — Do not assume validated recursive temp cleanup is permitted
 
@@ -2339,6 +2360,62 @@ code and tests are the current implementation evidence.
   the resulting diff before touching any other path.
 - **Never repeat:** one patch may contain only one operation for a given path. Whole-file replacement
   uses separate delete and add patches, with the failed patch treated as producing no evidence.
+
+### MTA-OPS-052 — A local Git fetch needs a real ref and explicit native exit checks
+
+- **Observed (2026-09-01, kernel-repository synchronization):** a temporary clean clone attempted to
+  fetch abbreviated commit `a5410f3` from the local product repository as though it were a remote ref.
+  Git rejected the fetch. PowerShell's `ErrorActionPreference` did not stop the later native Git
+  commands, so the subsequent read-tree and inventory check also failed. The temporary clone remained
+  on the unmodified kernel-repository main tree and no remote commit or artifact was created.
+- **Definitive cause:** an abbreviated object name was used where fetch requires an advertised ref or
+  full refspec, and native process exit codes were assumed to behave like PowerShell terminating errors.
+- **Correction:** fetch the exact advertised feature branch, immediately require `$LASTEXITCODE -eq 0`,
+  then read its `FETCH_HEAD` subtree. Check every native Git command before using its output.
+- **Never repeat:** cross-repository synchronization fetches only a verified branch/tag/full refspec.
+  `ErrorActionPreference` is not a native exit-code guard; no dependent command runs until the prior
+  native command's exit code is explicitly accepted.
+
+### MTA-QA-016 — Local green is not cross-platform evidence when a fixture observes ambient state
+
+- **Observed (2026-09-01, hardware-matrix candidate):** the complete Windows suite passed locally,
+  while GitHub's Ubuntu and Windows jobs exposed six fixture assumptions: a command snapshot was
+  taken before its final gate publication, a Windows-only adoption test ran on Linux, a P0 recovery
+  fixture touched the runner's real network namespace, a launcher status read required a
+  development-only virtual environment, Unicode was compared through an unspecified console
+  encoding, and a soak limit counted the clients' fixed startup resources as growth. A bounded
+  multi-case rollback simulation also exceeded an outer 90-second CI timeout despite each internal
+  operation remaining bounded.
+- **Impact:** no product runtime, installer, USB device, or published release changed. CI correctly
+  rejected the candidate, but the release was delayed and the local result had overstated portable
+  confidence.
+- **Definitive cause:** tests mixed the contract under test with scheduler timing, host platform,
+  ambient network inventory, console code page, and pre-activation resource baselines.
+- **Correction:** wait for the named stable gate before issuing revision-bound commands; skip a
+  platform-specific test outside its platform; mock every external recovery probe not under test;
+  make status a dependency-free read; compare UTF-8 argument digests through ASCII output; measure
+  steady-state growth from an active baseline and final cleanup from the pre-client baseline; size
+  only the outer orchestration timeout for the number of already-bounded cases.
+- **Never repeat:** a cross-platform release requires both CI operating systems to pass. A test may
+  observe only the state named by its contract, and every environment-sensitive dependency must be
+  gated, mocked, encoded, or explicitly incorporated into the baseline.
+
+### MTA-DEV-019 — Selecting a leaf kernel driver does not enable hidden Kconfig parents
+
+- **Observed (2026-09-01, first multi-driver kernel run):** `olddefconfig` retained `rtl8xxxu` but
+  dropped `mt76x0u`, `mt76x2u`, `rt2800usb`, `RT2800USB_RT35XX`, and `rtw88_8821cu`. The workflow's
+  required-option gate stopped before compilation and uploaded no artifact.
+- **Impact:** no invalid kernel or installer was produced, and the existing public releases were
+  untouched. One remote build run was consumed.
+- **Definitive cause:** Microsoft's WSL config disabled the MediaTek, Ralink, and Realtek vendor
+  menus. Ralink and rtw88 also have `RT2X00` and `RTW88` menu parents. Writing only the leaf symbols
+  cannot satisfy hidden Kconfig dependencies, so `olddefconfig` correctly removed them.
+- **Correction:** enable `WLAN` and all three vendor menus, select the `RT2X00` and `RTW88` parents,
+  then select the leaf modules. Verify both parents and leaves after `olddefconfig`, and still verify
+  the exact built `.ko` artifacts after compilation.
+- **Never repeat:** derive every required leaf's full dependency chain from the exact pinned kernel
+  Kconfig before dispatching. A config request is not evidence; post-`olddefconfig` symbols and built
+  modules are the acceptance gates.
 
 ## 14. Maintained evidence index
 

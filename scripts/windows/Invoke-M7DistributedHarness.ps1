@@ -146,6 +146,14 @@ if ($packagedMode) {
         Fail 'DISTRIBUTED_SOURCE_IDENTITY_INVALID'
     }
 }
+
+if (-not $packagedMode -and $Command -eq 'status') {
+    if (-not $StateRoot) { Fail 'DISTRIBUTED_STATE_ROOT_REQUIRED' }
+    $StateRoot = [IO.Path]::GetFullPath($StateRoot)
+    Get-ControlState $StateRoot | ConvertTo-Json -Depth 12
+    exit 0
+}
+
 $module = Join-Path $repo 'switchtrade\connection\distributed_harness.py'
 
 if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
@@ -297,10 +305,11 @@ if ($needsRuntime) {
     } catch {
         Fail 'P0_ADAPTER_SELECTION_INVALID'
     }
+    $selectionUsbId = ([string]$selection.usb_id).ToLowerInvariant()
     if ($selection.PSObject.Properties.Name -notcontains 'schema' -or
         $selection.PSObject.Properties.Name -notcontains 'usb_id' -or
         $selection.PSObject.Properties.Name -notcontains 'instance_id' -or
-        [int]$selection.schema -ne 1 -or [string]$selection.usb_id -ne '0bda:818b' -or
+        [int]$selection.schema -ne 1 -or $selectionUsbId -notmatch '^[0-9a-f]{4}:[0-9a-f]{4}$' -or
         [string]::IsNullOrWhiteSpace([string]$selection.instance_id)) {
         Fail 'P0_ADAPTER_SELECTION_INVALID'
     }

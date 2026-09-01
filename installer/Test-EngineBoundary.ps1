@@ -38,7 +38,11 @@ $echo = Join-Path $TestRoot 'echo-args.ps1'
 $echoSource = @'
 param()
 $i = 0
-foreach ($a in $args) { Write-Output ("ARG[{0}]={1}" -f $i, $a); $i++ }
+foreach ($a in $args) {
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($a))
+    Write-Output ("ARG[{0}]={1}" -f $i, $encoded)
+    $i++
+}
 '@
 Set-Content -LiteralPath $echo -Value $echoSource -Encoding UTF8
 
@@ -58,7 +62,8 @@ if ($rt.ExitCode -ne 0) { throw "echo round trip failed: $($rt.Error)" }
 $linesOut = @($rt.Output -split "\r?\n" | Where-Object { $_ })
 if ($linesOut.Count -ne $roundTripArgs.Count) { throw "argv count mismatch: expected $($roundTripArgs.Count), got $($linesOut.Count)" }
 for ($i = 0; $i -lt $linesOut.Count; $i++) {
-    $expected = "ARG[$i]=" + $roundTripArgs[$i]
+    $expected = "ARG[$i]=" + [Convert]::ToBase64String(
+        [Text.Encoding]::UTF8.GetBytes($roundTripArgs[$i]))
     if ($linesOut[$i] -cne $expected) { throw "argv[$i] corrupted: expected [$expected], got [$($linesOut[$i])]" }
 }
 

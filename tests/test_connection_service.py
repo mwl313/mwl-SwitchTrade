@@ -288,9 +288,11 @@ class ConnectionRunServiceTests(unittest.TestCase):
                 started = service.start(
                     command_id=str(uuid.uuid4()), expected_revision=0, request=self.request())
                 deadline = time.monotonic() + 1
-                while service.snapshot()["room"] is None and time.monotonic() < deadline:
+                while (service.snapshot()["current_gate"] != "C_RFU_ACTIVE" and
+                       time.monotonic() < deadline):
                     time.sleep(0.01)
                 current = service.snapshot()
+                self.assertEqual(current["current_gate"], "C_RFU_ACTIVE")
                 service.command(
                     command_id=str(uuid.uuid4()), run_id=current["run_id"],
                     expected_revision=current["revision"], action="close")
