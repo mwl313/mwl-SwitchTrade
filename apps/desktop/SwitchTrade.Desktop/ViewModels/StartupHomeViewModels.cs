@@ -1,3 +1,7 @@
+using System.Collections.ObjectModel;
+using SwitchTrade.Desktop.Models;
+using SwitchTrade.Desktop.Services;
+
 namespace SwitchTrade.Desktop.ViewModels;
 
 public sealed class StartupScreenViewModel(MainViewModel shell) : ScreenViewModel(shell)
@@ -12,7 +16,6 @@ public sealed class RecoveryScreenViewModel : ScreenViewModel
         RetryCommand = new AsyncCommand(shell.InitializeAsync);
         AbandonLocalAuthorityCommand = new AsyncCommand(shell.AbandonLocalAuthorityAsync);
         ReturnHomeCommand = new RelayCommand(shell.ReturnHomeFromAuthorityRecovery);
-        SettingsCommand = new AsyncCommand(shell.OpenSettingsAsync);
         SupportCommand = new AsyncCommand(ExportSupportAsync);
     }
 
@@ -20,13 +23,11 @@ public sealed class RecoveryScreenViewModel : ScreenViewModel
     public string RecoverySummary => Shell.RecoverySummary;
     public string RecoveryInstructions => Shell.RecoveryInstructions;
     public string RecoveryTechnicalDetails => Shell.RecoveryTechnicalDetails;
-    public bool ShowConnectionSettings => Shell.RecoveryStage == "radio";
     public bool ShowAbandonLocalAuthority => Shell.CanAbandonLocalAuthority;
     public bool ShowReturnHome => Shell.CanReturnHomeFromAuthorityRecovery;
     public AsyncCommand RetryCommand { get; }
     public AsyncCommand AbandonLocalAuthorityCommand { get; }
     public RelayCommand ReturnHomeCommand { get; }
-    public AsyncCommand SettingsCommand { get; }
     public AsyncCommand SupportCommand { get; }
 
     private async Task ExportSupportAsync()
@@ -44,7 +45,6 @@ public sealed class RecoveryScreenViewModel : ScreenViewModel
         OnPropertyChanged(nameof(RecoverySummary));
         OnPropertyChanged(nameof(RecoveryInstructions));
         OnPropertyChanged(nameof(RecoveryTechnicalDetails));
-        OnPropertyChanged(nameof(ShowConnectionSettings));
         OnPropertyChanged(nameof(ShowAbandonLocalAuthority));
         OnPropertyChanged(nameof(ShowReturnHome));
     }
@@ -52,6 +52,10 @@ public sealed class RecoveryScreenViewModel : ScreenViewModel
 
 public sealed class HomeScreenViewModel : ScreenViewModel
 {
+    private HardwareDeviceViewData? _selectedDevice;
+    private string _adapterStatus = "Checking adapters...";
+    private bool _loadingAdapters;
+
     public HomeScreenViewModel(MainViewModel shell) : base(shell)
     {
         CreateCommand = new RelayCommand(shell.OpenCreate, () => shell.IsServiceReady);
@@ -67,9 +71,95 @@ public sealed class HomeScreenViewModel : ScreenViewModel
         Justification = "The message is a bindable property of this screen projection.")]
     public string AttentionText => "SwitchTrade needs attention before a connection can start.";
     public string PublicAvailabilityText => Shell.PublicDirectoryStatusText;
+    public ObservableCollection<HardwareDeviceViewData> Devices { get; } = [];
+    public HardwareDeviceViewData? SelectedDevice
+    {
+        get => _selectedDevice;
+        set => Set(ref _selectedDevice, value);
+    }
+    public string AdapterStatus { get => _adapterStatus; private set => Set(ref _adapterStatus, value); }
     public RelayCommand CreateCommand { get; }
     public RelayCommand PublicCommand { get; }
     public RelayCommand JoinCommand { get; }
+
+    public override Task OnNavigatedToAsync() => LoadAdaptersAsync();
+
+    public async Task UseSelectedAdapterAsync()
+    {
+        if (_loadingAdapters || SelectedDevice is null) return;
+        var device = SelectedDevice;
+        if (!device.IsSelectable)
+        {
+            AdapterStatus = device.Disclaimer;
+            Shell.Announce(AdapterStatus);
+            return;
+        }
+
+        try
+        {
+            var changed = false;
+            if (!device.IsSelected)
+            {
+                await Shell.Gateway.SelectHardwareDeviceAsync(
+                    device.UsbId, device.InstanceId, device.BusId);
+                changed = true;
+            }
+            if (!device.IsShared)
+            {
+                AdapterStatus = "Approve the Windows prompt.";
+                Shell.Announce(AdapterStatus);
+                await Shell.AuthorizeHardwareAsync(device);
+                changed = true;
+            }
+            if (changed)
+                await LoadAdaptersAsync();
+            AdapterStatus = SelectedDevice is { IsSelected: true, IsShared: true }
+                ? "Ready"
+                : SelectedDevice?.Disclaimer ?? "Adapter unavailable";
+            Shell.Announce($"{device.FriendlyName} selected");
+        }
+        catch (UserFacingException error)
+        {
+            AdapterStatus = error.UserMessage;
+            Shell.Announce(AdapterStatus);
+        }
+    }
+
+    internal async Task LoadAdaptersAsync()
+    {
+        if (!IsServiceReady)
+        {
+            AdapterStatus = "Local service unavailable";
+            return;
+        }
+
+        _loadingAdapters = true;
+        try
+        {
+            var previousIdentity = SelectedDevice?.InstanceId;
+            var devices = await Shell.Gateway.GetHardwareDevicesAsync();
+            Devices.Clear();
+            foreach (var device in devices) Devices.Add(device);
+            SelectedDevice = Devices.FirstOrDefault(device => device.IsSelected) ??
+                             Devices.FirstOrDefault(device =>
+                                 device.InstanceId == previousIdentity) ??
+                             Devices.FirstOrDefault();
+            AdapterStatus = SelectedDevice is null
+                ? "No compatible adapter found"
+                : SelectedDevice.IsSelected && SelectedDevice.IsShared
+                    ? "Ready"
+                    : SelectedDevice.Disclaimer;
+        }
+        catch (UserFacingException error)
+        {
+            AdapterStatus = error.UserMessage;
+            Shell.Announce(AdapterStatus);
+        }
+        finally
+        {
+            _loadingAdapters = false;
+        }
+    }
 
     public override void NotifyShellState()
     {

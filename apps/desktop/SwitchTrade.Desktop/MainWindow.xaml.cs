@@ -60,7 +60,6 @@ public partial class MainWindow : Window
         const double right = 24;
         HeaderContent.Margin = new Thickness(left, 0, right, 0);
         BackButton.Margin = new Thickness(left - 10, 0, 0, 0);
-        CreditsButton.Margin = new Thickness(left - 10, 0, 0, 4);
         ScenePresenter.Margin = new Thickness(left, 12, right, 16);
         ScenePresenter.Width = Math.Min(ScenePresenter.MaxWidth, Math.Max(0, ActualWidth - left - right));
     }
@@ -88,12 +87,7 @@ public partial class MainWindow : Window
     private async void HandleGlobalKey(object sender, KeyEventArgs e)
     {
         if (e.Handled) return;
-        if (e.Key == Key.OemComma && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
-        {
-            await _viewModel.OpenSettingsAsync();
-            e.Handled = true;
-        }
-        else if (e.Key == Key.F5)
+        if (e.Key == Key.F5)
         {
             await _viewModel.RefreshAsync();
             e.Handled = true;

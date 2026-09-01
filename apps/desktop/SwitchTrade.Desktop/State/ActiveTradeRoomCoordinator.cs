@@ -274,7 +274,7 @@ public sealed class ActiveTradeRoomCoordinator(IControlGateway gateway)
                     _ => status.FailureStage switch
                     {
                         "relay" => "Check this PC’s internet connection, end this attempt, and try again. Export a support bundle if it repeats.",
-                        "radio" => "Run the adapter check. End this attempt before reattaching USB or starting another room.",
+                        "radio" => "End this attempt, then select the Wi-Fi adapter on the home screen before trying again.",
                         "session" => "End this attempt and try once more. Export a support bundle if the same session failure repeats.",
                         "cleanup" => "Restart SwitchTrade before trying another connection. Export a support bundle if it repeats.",
                         "decoder" => "End this attempt and repair or update SwitchTrade; the installed decoder does not match this app.",

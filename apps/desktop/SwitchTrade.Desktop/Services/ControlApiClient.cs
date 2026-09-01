@@ -917,7 +917,7 @@ public sealed class ControlApiClient : IControlGateway
         {
             "adapter_disconnected" => "The selected adapter is no longer connected.",
             "adapter_quarantined" => "This adapter is quarantined and cannot trade.",
-            "adapter_selection_required" => "Select an available Wi-Fi adapter in Settings.",
+            "adapter_selection_required" => "Select an available Wi-Fi adapter on the home screen.",
             "adapter_not_shared" =>
                 "Windows must authorize this adapter before SwitchTrade can use it.",
             "adapter_attach_failed" => "The selected adapter could not be attached. Run Repair adapter and try again.",

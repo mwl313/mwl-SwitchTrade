@@ -53,7 +53,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         RoomCoordinator = new ActiveTradeRoomCoordinator(gateway);
         _currentScreen = new StartupScreenViewModel(this);
         BackCommand = new AsyncCommand(GoBackAsync, () => CanGoBack);
-        SettingsCommand = new AsyncCommand(OpenSettingsAsync);
+        SupportCommand = new AsyncCommand(ExportSupportLogsToDesktopAsync);
     }
 
     public ScreenViewModel CurrentScreen
@@ -126,7 +126,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public bool CanGoBack => _history.Count > 0 && CurrentScreen is not HomeScreenViewModel;
     public AsyncCommand BackCommand { get; }
-    public AsyncCommand SettingsCommand { get; }
+    public AsyncCommand SupportCommand { get; }
 
     public async Task InitializeAsync()
     {
@@ -309,7 +309,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             "version" => "Close SwitchTrade and run a newer SwitchTrade Setup package with Update.",
             "relay" => "Check this PC’s internet connection, then try again. If the relay still fails, export a support bundle before changing WSL.",
-            "radio" => "Open Settings → Connection, select the adapter, and run the adapter check. Reattach USB only when the diagnostic asks.",
+            "radio" => "Select the Wi-Fi adapter on the home screen, then try again. Reattach USB only when SwitchTrade asks.",
             "session" => "End the failed connection and try once more. If it repeats, export a support bundle before creating another room.",
             "decoder" => "End the current connection and try again. Trading remains blocked until the installed decoder matches this app.",
             _ => "Close SwitchTrade, run the latest SwitchTradeSetup.exe, and choose Repair. Do not reset or unregister WSL.",
@@ -386,12 +386,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public void OpenPrivateJoin() => Navigate(new JoinPrivateRoomScreenViewModel(this));
     public void OpenPublicRooms() => Navigate(new PublicRoomsScreenViewModel(this));
 
-    public async Task OpenSettingsAsync()
-    {
-        if (CurrentScreen is SettingsScreenViewModel) return;
-        Navigate(new SettingsScreenViewModel(this));
-    }
-
     public async Task<string> ExportSupportLogsAsync(CancellationToken cancellationToken = default)
     {
         if (_applicationSession is null)
@@ -405,6 +399,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             throw new UserFacingException(
                 "SwitchTrade could not save the support file to your Desktop.",
                 "support_export_failed", "support", true, "retry", innerException: error);
+        }
+    }
+
+    private async Task ExportSupportLogsToDesktopAsync()
+    {
+        try
+        {
+            var path = await ExportSupportLogsAsync();
+            Announce($"Support file saved to your Desktop: {path}");
+        }
+        catch (UserFacingException error)
+        {
+            Announce(error.UserMessage);
         }
     }
 

@@ -99,7 +99,8 @@ without invoking legacy orchestration or exposing test-only dual-adapter logic.
 ### M9 — Minimal GUI, support export, and atomic cutover
 
 1. Connect a small desktop UI to the typed connection-run API: create/join, factual progress,
-   Stop/End/Leave/Close/Retry, recovery guidance, Settings, and Export support logs.
+   Stop/End/Leave/Close/Retry, recovery guidance, main-screen adapter selection, and Export support
+   logs. A separate Settings scene is not part of the owner-approved minimal flow.
 2. Keep all connection decisions in the service. The GUI contains no USB, relay, retry, timeout,
    cleanup, or diagnosis engine.
 3. Make the old endpoint/orchestration and Debug menu unreachable, then remove them only after import,

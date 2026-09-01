@@ -23,8 +23,6 @@
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="*" />
           <ColumnDefinition Width="Auto" />
-          <ColumnDefinition Width="8" />
-          <ColumnDefinition Width="Auto" />
         </Grid.ColumnDefinitions>
 
         <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
@@ -88,15 +86,6 @@
           </Border>
         </Popup>
 
-        <Button Grid.Column="3" Command="{Binding SettingsCommand}" Style="{StaticResource TextButton}"
-                automation:AutomationProperties.Name="Open settings">
-          <StackPanel Orientation="Horizontal">
-            <Path Data="{StaticResource Icon.Settings}" Width="17" Height="17" Stretch="Uniform"
-                  Stroke="{DynamicResource SecondaryTextBrush}" StrokeThickness="1.6" Margin="0,0,7,0"
-                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
-            <TextBlock Text="Settings" />
-          </StackPanel>
-        </Button>
       </Grid>
     </Border>
 
@@ -119,11 +108,18 @@
                              MaxWidth="1080" Margin="24,12,24,16" HorizontalAlignment="Left"
                              HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
 
-    <Button x:Name="CreditsButton" Grid.Row="3" Content="Credits"
-            Click="OpenCredits" Style="{StaticResource TextButton}"
-            HorizontalAlignment="Left" VerticalAlignment="Center" Margin="14,0,0,4"
-            Padding="10,5" MinHeight="30" FontSize="12"
-            automation:AutomationProperties.Name="Open credits" />
+    <Grid Grid.Row="3" Margin="14,0,14,4">
+      <Button x:Name="CreditsButton" Content="Credits"
+              Click="OpenCredits" Style="{StaticResource TextButton}"
+              HorizontalAlignment="Left" VerticalAlignment="Center"
+              Padding="10,5" MinHeight="30" FontSize="12"
+              automation:AutomationProperties.Name="Open credits" />
+      <Button x:Name="SupportButton" Content="Export support logs"
+              Command="{Binding SupportCommand}" Style="{StaticResource TextButton}"
+              HorizontalAlignment="Right" VerticalAlignment="Center"
+              Padding="10,5" MinHeight="30" FontSize="12"
+              automation:AutomationProperties.Name="Export support logs" />
+    </Grid>
 
     <TextBlock Text="{Binding Announcement}" Width="1" Height="1" Opacity="0.01" IsHitTestVisible="False"
                automation:AutomationProperties.LiveSetting="Assertive"

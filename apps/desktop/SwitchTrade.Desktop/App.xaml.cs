@@ -243,17 +243,42 @@ public partial class App : Application
                 inventoryGateway, new BackendLauncher(), new WindowsDialogService(),
                 new WindowsClipboardService());
             inventoryShell.InitializeAsync().GetAwaiter().GetResult();
-            var settings = new SettingsScreenViewModel(inventoryShell);
-            settings.LoadAsync().GetAwaiter().GetResult();
+            var home = new HomeScreenViewModel(inventoryShell);
+            home.LoadAdaptersAsync().GetAwaiter().GetResult();
             inventoryGateway.HardwareFailure = new UserFacingException(
                 "Inventory failed.", "usb_inventory_timeout", "hardware", true,
                 "run_hardware_diagnostics");
-            settings.LoadAsync().GetAwaiter().GetResult();
-            var lastGoodInventorySurvives = settings.Devices.Count == 1 &&
-                                            settings.SelectedDevice?.InstanceId.EndsWith(
+            home.LoadAdaptersAsync().GetAwaiter().GetResult();
+            var lastGoodInventorySurvives = home.Devices.Count == 1 &&
+                                            home.SelectedDevice?.InstanceId.EndsWith(
                                                 "RADIO-A", StringComparison.Ordinal) == true &&
-                                            settings.InventoryErrorCode == "usb_inventory_timeout" &&
-                                            settings.InventoryRecoveryAction == "run_hardware_diagnostics";
+                                            home.AdapterStatus == "Inventory failed.";
+            var selectionGateway = new SelfTestGateway
+            {
+                Status = ReadyStatus(),
+                HardwareDevices =
+                [
+                    new HardwareDeviceViewData(
+                        "9-7", "USB\\VID_0BDA&PID_818B\\RADIO-A", "0bda:818b", "RTL8192EU A",
+                        "Beta candidate", true, false, true, false, true),
+                    new HardwareDeviceViewData(
+                        "9-8", "USB\\VID_0BDA&PID_818B\\RADIO-B", "0bda:818b", "RTL8192EU B",
+                        "Beta candidate", true, false, true, false, false),
+                ],
+            };
+            using var selectionShell = new MainViewModel(
+                selectionGateway, new BackendLauncher(), new WindowsDialogService(),
+                new WindowsClipboardService());
+            selectionShell.InitializeAsync().GetAwaiter().GetResult();
+            var selectionHome = new HomeScreenViewModel(selectionShell);
+            selectionHome.LoadAdaptersAsync().GetAwaiter().GetResult();
+            selectionHome.SelectedDevice = selectionHome.Devices.Single(device =>
+                device.InstanceId.EndsWith("RADIO-B", StringComparison.Ordinal));
+            selectionHome.UseSelectedAdapterAsync().GetAwaiter().GetResult();
+            var homeAdapterSelectionWorks = selectionGateway.SelectHardwareCount == 1 &&
+                                            selectionHome.SelectedDevice?.InstanceId.EndsWith(
+                                                "RADIO-B", StringComparison.Ordinal) == true &&
+                                            selectionHome.AdapterStatus == "Ready";
             var authorizationGateway = new SelfTestGateway
             {
                 Status = ReadyStatus(),
@@ -375,6 +400,7 @@ public partial class App : Application
                 [nameof(malformedInventoryContained)] = malformedInventoryContained,
                 [nameof(timedOutInventoryContained)] = timedOutInventoryContained,
                 [nameof(lastGoodInventorySurvives)] = lastGoodInventorySurvives,
+                [nameof(homeAdapterSelectionWorks)] = homeAdapterSelectionWorks,
                 [nameof(adapterAuthorizationRecoveryWorks)] = adapterAuthorizationRecoveryWorks,
             };
             var failedChecks = checks.Where(item => !item.Value).Select(item => item.Key).ToArray();
@@ -435,13 +461,14 @@ public partial class App : Application
     {
         public ControlStatus? Status { get; init; }
         public IReadOnlyList<AdapterProfileViewData> AdapterProfiles { get; init; } = [];
-        public IReadOnlyList<HardwareDeviceViewData> HardwareDevices { get; init; } = [];
+        public IReadOnlyList<HardwareDeviceViewData> HardwareDevices { get; set; } = [];
         public UserFacingException? HardwareFailure { get; set; }
         public UserFacingException? RoomFailure { get; init; }
         public AuthoritativeRoomProjection? ActiveRoom { get; init; }
         public int RoomProbeCount { get; private set; }
         public int AbandonCount { get; private set; }
         public int RepairAdapterCount { get; private set; }
+        public int SelectHardwareCount { get; private set; }
         public int StopCount { get; private set; }
         public int EndCount { get; private set; }
         public SwitchRoomRole? LastSwitchRole { get; private set; }
@@ -501,7 +528,16 @@ public partial class App : Application
                 : Task.FromException<IReadOnlyList<HardwareDeviceViewData>>(HardwareFailure);
         public Task SelectHardwareDeviceAsync(
             string usbId, string instanceId, string busId,
-            CancellationToken cancellationToken = default) => Task.CompletedTask;
+            CancellationToken cancellationToken = default)
+        {
+            SelectHardwareCount++;
+            HardwareDevices = HardwareDevices.Select(device => device with
+            {
+                IsSelected = device.InstanceId == instanceId && device.BusId == busId &&
+                             device.UsbId == usbId,
+            }).ToArray();
+            return Task.CompletedTask;
+        }
         public Task<HardwareDiagnosticViewData> RunHardwareDiagnosticsAsync(
             string usbId, CancellationToken cancellationToken = default) =>
             Task.FromResult(new HardwareDiagnosticViewData("self-test", "partial", "Self-test", ""));

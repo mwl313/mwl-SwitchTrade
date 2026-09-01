@@ -18,4 +18,7 @@ substituted.
 
 Architecture, UI flow, contracts, and extension rules are maintained in
 [`docs/TECHNICAL_GUIDE.md`](../../docs/TECHNICAL_GUIDE.md). Protocol and radio logic remain outside
-this project behind the local v1 API.
+this project behind the typed local readiness and production connection-run APIs.
+
+The owner-approved minimal layout is implemented directly in `SwitchTrade.Desktop`. There is no
+second no-backend application or alternate connection path.

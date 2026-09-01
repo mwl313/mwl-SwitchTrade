@@ -1,52 +1,36 @@
 <UserControl x:Class="SwitchTrade.Desktop.Views.HomeView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:automation="clr-namespace:System.Windows.Automation;assembly=PresentationCore"
-             xmlns:components="clr-namespace:SwitchTrade.Desktop.Views.Components">
+             xmlns:automation="clr-namespace:System.Windows.Automation;assembly=PresentationCore">
   <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-    <StackPanel MaxWidth="760" HorizontalAlignment="Left" Margin="0,34,0,28">
-      <TextBlock Text="LINK TWO TRAINERS" Style="{StaticResource KickerText}" Margin="0,0,0,12" />
-      <TextBlock Text="Trade Pokémon online,&#x0a;from your Switch." Style="{StaticResource HeroTitle}"
-                 automation:AutomationProperties.HeadingLevel="Level1" />
-      <TextBlock Text="Create a room, share it with another trainer, and let SwitchTrade handle the connection."
-                 FontSize="16" LineHeight="24" Foreground="{DynamicResource SecondaryTextBrush}"
-                 MaxWidth="620" HorizontalAlignment="Left" Margin="0,6,0,28" />
-
+    <StackPanel MaxWidth="620" HorizontalAlignment="Left" Margin="0,56,0,28">
       <Border Style="{StaticResource WarningNotice}"
               Visibility="{Binding ShowAttention, Converter={StaticResource BooleanToVisibility}}">
         <TextBlock Text="{Binding AttentionText}" />
       </Border>
 
-      <Button Command="{Binding CreateCommand}" Style="{StaticResource PrimaryButton}"
-              Height="96" HorizontalContentAlignment="Stretch" Margin="0,0,0,14"
-              automation:AutomationProperties.Name="Create a Trade Room">
-        <Grid Margin="8,0">
-          <Grid.ColumnDefinitions><ColumnDefinition Width="48" /><ColumnDefinition Width="*" /><ColumnDefinition Width="24" /></Grid.ColumnDefinitions>
-          <Border Width="40" Height="40" CornerRadius="8" Background="#1A000000">
-            <Path Data="{StaticResource Icon.Create}" Width="20" Height="20" Stretch="Uniform"
-                  Stroke="{DynamicResource OnActionGreenBrush}" StrokeThickness="2"
-                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                  HorizontalAlignment="Center" VerticalAlignment="Center" />
-          </Border>
-          <StackPanel Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center">
-            <TextBlock Text="Create a Trade Room" FontFamily="{StaticResource HeadingFontFamily}"
-                       FontSize="18" FontWeight="SemiBold" />
-            <TextBlock Text="Start a room and share its six-character code." FontWeight="Normal" Margin="0,4,0,0" />
-          </StackPanel>
-          <Path Grid.Column="2" Data="{StaticResource Icon.Chevron}" Width="16" Height="16" Stretch="Uniform"
-                Stroke="{DynamicResource OnActionGreenBrush}" StrokeThickness="2" VerticalAlignment="Center" />
-        </Grid>
-      </Button>
+      <Button Content="Create Room" Command="{Binding CreateCommand}"
+              Style="{StaticResource PrimaryButton}" Height="62" FontSize="17" Margin="0,0,0,10"
+              automation:AutomationProperties.Name="Create Room" />
+      <Button Content="Join Private Room" Command="{Binding JoinCommand}"
+              Style="{StaticResource SecondaryButton}" Height="56" FontSize="16" Margin="0,0,0,10"
+              automation:AutomationProperties.Name="Join Private Room" />
+      <Button Content="Browse Public Rooms" Command="{Binding PublicCommand}"
+              Style="{StaticResource SecondaryButton}" Height="56" FontSize="16"
+              automation:AutomationProperties.Name="Browse Public Rooms" />
 
-      <Grid>
-        <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="14" /><ColumnDefinition /></Grid.ColumnDefinitions>
-        <components:NavigationActionButton Grid.Column="0" Title="Browse Public Rooms"
-                  Description="{Binding PublicAvailabilityText}" Icon="{StaticResource Icon.Search}"
-                  Command="{Binding PublicCommand}" />
-        <components:NavigationActionButton Grid.Column="2" Title="Join a Private Room"
-                  Description="Enter a code shared by another trainer." Icon="{StaticResource Icon.Join}"
-                  Command="{Binding JoinCommand}" />
-      </Grid>
+      <Border Style="{StaticResource SurfaceCard}" Margin="0,24,0,0" Padding="18">
+        <StackPanel>
+          <TextBlock Text="Wi-Fi adapter" FontWeight="SemiBold" Margin="0,0,0,8" />
+          <ComboBox ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}"
+                    DisplayMemberPath="DisplayLabel" Foreground="{DynamicResource PrimaryTextBrush}"
+                    SelectionChanged="AdapterSelectionChanged"
+                    automation:AutomationProperties.Name="Wi-Fi adapter" />
+          <TextBlock Text="{Binding AdapterStatus}" Style="{StaticResource SecondaryText}"
+                     TextWrapping="Wrap" Margin="0,8,0,0"
+                     automation:AutomationProperties.LiveSetting="Polite" />
+        </StackPanel>
+      </Border>
     </StackPanel>
   </ScrollViewer>
 </UserControl>

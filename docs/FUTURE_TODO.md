@@ -17,9 +17,11 @@ per PC; dual-adapter concurrency remains a source qualification tool only. The s
 AI/agent dependency.
 
 The production Debug menu requirement is canceled. The deterministic headless ABC+D connection-run
-service, minimal typed GUI cutover, and **Export support logs** implementation now exist in source.
+service, owner-approved minimal typed GUI, and **Export support logs** implementation now exist in source.
 They archive bounded redacted evidence accumulated since application startup to the Windows Desktop.
-Production-entry-point integration, installed-runtime, and physical acceptance remain open. The updated
+The GUI uses the existing typed production gateway for room actions, adapter selection, immutable status,
+and lifecycle commands; the separate no-backend playtest executable has been retired. Installed-runtime
+cutover and physical acceptance remain open. The updated
 M8-M10 sequence and beta definition are normative in
 [`94-production-wrapper-beta-cutover-20260831.md`](94-production-wrapper-beta-cutover-20260831.md).
 No additional repetition campaign begins before the production wrapper exists.
@@ -350,16 +352,19 @@ No additional repetition campaign begins before the production wrapper exists.
    adapter. Retain PC B and repeated physical qualification before closing the wider release gate.
 
 7. **CRITICAL — NEXT: Wrap admitted ABC+D as the only deterministic production connection path.**
-   **Status (2026-09-01): source implementation and the Switchless source dry-run are accepted for
-   minimal-GUI rework. The dry-run passed production API/service command semantics, full source
+   **Status (2026-09-01): source implementation, Switchless source dry-run, and minimal production-GUI
+   cutover are accepted for installed qualification. The dry-run passed production API/service command semantics, full source
    regressions, hosted-relay C+D normal and worker-death paths, and verified residue cleanup without
    an AI runtime. It also found and corrected checkpoint Stop handling at both the endpoint parser and
    production-adapter outcome boundary before hardware mutation.
    The neutral executor/service, single mutation queue, identity-bound command/revision API,
    heartbeat supervision, recovery guard, typed WPF projection, application-session evidence, and
-   backend-independent Desktop export are implemented. All 588 Python regressions, Desktop/Provisioner
-   Release builds, Provisioner contract tests, and Desktop/session self-tests pass. Installed immutable
-   entry-point, live WPF flow, interruption/recovery, and backend-dead export acceptance remain open;
+   backend-independent Desktop export are implemented. The simplified WPF shell now exposes only
+   create/join/browse, main-screen adapter selection, factual status/checkpoints, lifecycle controls,
+   credits, and support export; Settings and the alternate no-backend executable are unreachable/removed.
+   All 588 Python regressions, Desktop/Provisioner Release builds, Provisioner contract tests, and
+   Desktop/session self-tests pass. Installed immutable entry-point, interruption/recovery, and
+   backend-dead export acceptance remain open;
    the source dry-run is not an installed or physical result.**
    Extract one neutral connection-run service from the generic lifecycle already exercised by the
    distributed harness. The product and qualification adapters must call that service rather than

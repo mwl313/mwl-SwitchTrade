@@ -1019,6 +1019,12 @@ Full trade, save, menu return, and graceful exit remain separate physical eviden
 - **Never repeat:** before running repository tests, resolve the tracked/declared test environment
   and prove required imports. An ambient `python` result may be used only for syntax discovery and
   must never be reported as qualification evidence.
+- **Recurrence (2026-09-01, `0.2.15-beta.1` packaging preflight):** the first full-suite command again
+  used ambient `python`; collection stopped on `test_direct_a_stage.py` and
+  `test_direct_b_stage.py` with `ModuleNotFoundError: trio`. Desktop and Provisioner checks passed in
+  parallel, and no installer, WSL, relay, USB, endpoint, or Switch mutation occurred. The exact
+  `.audit-venv` interpreter then proved `trio 0.33.0` and `pytest 8.3.5` before the retry. Release
+  preflights must print this import probe before invoking pytest, not merely rely on shell PATH.
 
 ### MTA-QA-003 — New control-contract tests retained obsolete fixture assumptions
 
@@ -1345,6 +1351,11 @@ Full trade, save, menu return, and graceful exit remain separate physical eviden
   WSL, and USB cleanup were then verified.
 - **Definitive cause:** the accessibility tree exposed a close-button index without actionable input
   geometry. The selection was valid, but that observation type could not support the requested click.
+- **Recurrence (2026-09-01):** the standalone UI walkthrough selected the accessibility index for
+  **Create a Trade Room**, but the same helper returned `coordinate input geometry is unavailable`.
+  The result was treated as unknown and no second index click was attempted; a fresh screenshot-backed
+  observation was required before any coordinate action. No backend, WSL, relay, USB, or production
+  process was involved.
 - **Rule:** after any UI input failure, assume the outcome is unknown, re-observe, and do not reuse the
   index. For a standard window close, prefer a freshly targeted `Alt+F4` when accessibility geometry is
   unavailable; never escalate directly to forced termination.
@@ -1450,6 +1461,30 @@ Full trade, save, menu return, and graceful exit remain separate physical eviden
   the resulting string to `Join-Path`.
 - **Never repeat:** compute and validate conditional PowerShell values in a separate statement before
   placing them in lifecycle command arguments. An argument-parser exit is not a test attempt.
+
+### MTA-OPS-033 — Ripgrep's default regex engine was given unsupported look-around
+
+- **Observed (2026-09-01):** a read-only display-string audit for the standalone
+  `SwitchTradeNoBackend` project used a negative look-ahead in `rg` without selecting PCRE2. Ripgrep
+  rejected the pattern before searching. No source, process, backend, WSL, relay, USB, or installed
+  state changed.
+- **Definitive cause:** a PCRE feature was assumed to be available in ripgrep's default regex engine
+  even though the same audit could be expressed as two literal searches.
+- **Correction:** use `rg -F` for the required literal inventories and compare their results without
+  advanced regex syntax.
+- **Never repeat:** default every repository string audit to literal `rg -F`; select `--pcre2` only
+  when look-around is genuinely necessary and independently justified.
+
+### MTA-OPS-034 — Ripgrep file filters were placed after the end-of-options marker
+
+- **Observed (2026-09-01):** the final standalone-GUI string audit put `-g` filters after `--`.
+  Ripgrep correctly treated them as file paths, emitted Windows path errors, and did not perform the
+  intended searches. No source, process, backend, WSL, relay, USB, or installed state changed.
+- **Definitive cause:** the command used `--` before all options had been supplied.
+- **Correction:** place every `-g` filter before `--`, then pass the literal pattern and search root.
+  Discard the failed command's apparent `clear` results and rerun the full inventory.
+- **Never repeat:** construct ripgrep commands as `rg [options and globs] -- [pattern] [paths]`; any
+  ripgrep diagnostic makes the entire audit unknown rather than partially successful.
 
 ### MTA-APP-011 — A WPF self-test synchronously waited on an async export bound to the UI context
 
@@ -1716,6 +1751,117 @@ Full trade, save, menu return, and graceful exit remain separate physical eviden
 - **Never repeat:** every adapter between state machines needs an explicit outcome matrix, not merely
   matching method names. Test success, user cancellation, timeout, stale identity, and cleanup
   separately at each blocking boundary.
+
+### MTA-APP-022 — An implicit base Window style did not theme the standalone WPF window
+
+- **Observed (2026-09-01):** the first visible `SwitchTradeNoBackend` render had the intended dark
+  header but a white main canvas and low-contrast body copy. Build and construction self-tests had
+  passed; no backend, WSL, relay, USB, or installed-product action occurred.
+- **Definitive cause:** the standalone app relied on an implicit `Style TargetType="Window"`, but
+  the generated `MainWindow` is a derived type and did not inherit that implicit style as assumed.
+- **Correction:** set the root window's background, foreground, font family, and font size explicitly,
+  then require one screenshot-backed render check in addition to construction self-tests.
+- **Never repeat:** a WPF compile or hidden construction test does not prove theme application. Every
+  new root window needs explicit shell colors and one visible render inspection at release scale.
+
+### MTA-APP-023 — The longer standalone app name clipped inherited home copy
+
+- **Observed (2026-09-01):** after the dark shell correction, screenshot inspection showed the home
+  subtitle ending mid-word and both navigation-card descriptions colliding with their action labels.
+  No input beyond normal launch/close occurred and no backend, WSL, relay, USB, or production process
+  was touched.
+- **Definitive cause:** current-GUI copy was adapted from `SwitchTrade` to the longer
+  `SwitchTradeNoBackend` name without adding wrapping, while navigation cards retained a fixed height
+  sized for the shorter original copy.
+- **Correction:** enable bounded text wrapping and give the two fixed navigation cards enough height
+  for the supported copy at the minimum window size.
+- **Never repeat:** any product-name or localization-length change requires visible checks at both the
+  default and minimum window widths; fixed-height cards must either wrap within their bound or grow.
+
+### MTA-APP-024 — Native ComboBox chrome erased the selected-value contrast
+
+- **Observed (2026-09-01):** the standalone create-room screen rendered its closed game and language
+  ComboBoxes with Windows' light native chrome while the app-level style forced a light foreground.
+  The selected values were present but nearly invisible. No backend, WSL, relay, USB, or production
+  process was involved.
+- **Definitive cause:** a foreground-only dark-theme style assumed the native ComboBox template would
+  honor the requested dark background; the active Windows template retained its light field surface.
+- **Correction:** use an explicit high-contrast dark text color for the native closed field and its
+  items instead of partially overriding the template.
+- **Never repeat:** do not theme only one axis of a native control. If its full template is not owned,
+  visually verify text/background contrast in closed, open, selected, disabled, and focused states.
+
+### MTA-QA-013 — The standalone UI build targeted an executable that was still running
+
+- **Observed (2026-09-01):** the first Release build after the owner-led GUI simplification stopped
+  with `MSB3027`/`MSB3021`; the existing `SwitchTradeNoBackend` process held the destination
+  executable open. No production Desktop, backend, WSL, relay, USB, or Switch state was touched.
+- **Definitive cause:** the app had intentionally been relaunched for playtesting, but the build
+  preflight did not check for a running standalone instance before targeting the same output path.
+- **Correction:** close only the exact standalone window before rebuilding, then relaunch the newly
+  verified executable. Source changes remain independent from the production Desktop project.
+- **Never repeat:** before an in-place WPF build, check whether its exact output executable is
+  running. Close and relaunch that exact standalone app, or use an isolated output directory when it
+  must remain open; do not spend the SDK retry window on a known file lock.
+
+### MTA-APP-025 — Adapter selection fired before later XAML fields were initialized
+
+- **Observed (2026-09-01):** the simplified standalone GUI built cleanly, but its first construction
+  self-test exited with a `NullReferenceException` in `AdapterChanged`. No window became usable and
+  no production Desktop, backend, WSL, relay, USB, or Switch state was touched.
+- **Definitive cause:** `SelectedIndex="0"` raised `SelectionChanged` while XAML was still loading;
+  the handler tried to update `AdapterStatus`, which appears later in the same XAML object graph and
+  had not yet been assigned.
+- **Correction:** attach the event after `InitializeComponent()` returns, then call one shared state
+  updater explicitly for the initial selection.
+- **Never repeat:** an event that reads sibling named controls must not be attached declaratively when
+  initialization order can fire it during XAML construction. Wire it after initialization and keep a
+  construction self-test that instantiates the exact window.
+
+### MTA-APP-026 — The global TextBlock style overrode the ComboBox contrast correction
+
+- **Observed (2026-09-01):** screenshot QA of the simplified home screen showed the selected adapter
+  as pale text on the native light ComboBox field. Build and construction tests passed; no production
+  Desktop, backend, WSL, relay, USB, or Switch state was touched.
+- **Definitive cause:** the earlier ComboBox and ComboBoxItem foreground correction relied on normal
+  property inheritance, while the app also applied an explicit implicit `TextBlock` foreground style.
+  The generated selection presenter used a TextBlock, so that more local style setter won.
+- **Correction:** remove the redundant global TextBlock foreground setter. Normal body text inherits
+  the explicitly themed root window; text hosted by native controls inherits that control's verified
+  foreground.
+- **Never repeat:** inspect the effective child element produced by native WPF templates. A parent
+  foreground setter is not sufficient when an implicit child style sets the same property; verify the
+  exact closed selected field after every global typography change.
+
+### MTA-APP-027 — Left-aligned shared content width compressed the trade status layout
+
+- **Observed (2026-09-01):** visible navigation from Create Room to the simplified trade screen
+  rendered the participant strip and status panel at their minimum desired width. `You`/`Partner`
+  and `Online` overlapped even though the window had ample free space. No production Desktop,
+  backend, WSL, relay, USB, or Switch state was touched.
+- **Definitive cause:** the shared screen host used `HorizontalAlignment="Left"`; home and form
+  screens looked acceptable at desired width, but the trade grid never received the available width.
+- **Correction:** let the bounded shared host stretch to its `MaxWidth`, while individual home and
+  join stacks retain their own intentional widths.
+- **Never repeat:** verify every screen hosted by a shared WPF grid. A layout that fits one child's
+  desired width does not prove sibling screens receive the available width; inspect the narrowest
+  multi-column state at both default and minimum window sizes.
+
+### MTA-QA-014 — A bare Desktop build was treated as an installed backend-connected artifact
+
+- **Observed (2026-09-01):** visible QA launched the Release output directly and expected the local
+  service to start. The new production shell rendered correctly, but startup factually stopped at
+  `PROVISIONER_MISSING`; no relay room, USB mutation, endpoint, or Switch action occurred.
+- **Definitive cause:** `dotnet build` emits the WPF executable but not the package-owned adjacent
+  `SwitchTradeProvisioner.exe`. The installed provisioner/runtime on this PC also exposes the older
+  `app-readiness.v1` contract, so copying that one sidecar beside a newer source build would not make
+  a valid immutable release.
+- **Correction:** use Desktop/self-test and typed contract tests for source validation. Prove the live
+  local-service path only through one complete replacement package whose Desktop, provisioner,
+  runtime, release ID, and contracts were produced together.
+- **Never repeat:** distinguish a bare UI build from an installed product artifact before visible QA.
+  Never assemble a hybrid installation by copying individual sidecars or relaxing release checks just
+  to make a source window reach Home.
 
 ## 11. Required preflight checklists
 
