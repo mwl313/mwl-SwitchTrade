@@ -171,7 +171,7 @@ beta claim:
   overwritten. The local Desktop projections are deliberately named `local-app-readiness.v2` and
   `production-connection-run.v1` to prevent two incompatible payloads sharing one versioned name.
 
-Current source evidence is 588 Python tests passed with 3 environment-dependent skips, 140 focused
+Current source evidence is 589 Python tests passed with 3 environment-dependent skips, 140 focused
 P0/A/B/C/D regressions passed, zero-warning Desktop and Provisioner Release builds, Provisioner
 contract tests passed, and Desktop/session self-tests passed under the non-ASCII repository path.
 
@@ -198,3 +198,20 @@ This is a **source-level deterministic wrapper dry-run**, not an installed-produ
 It intentionally leaves A/B Switch behavior untested. The exact immutable packaged normal entry point,
 live WPF-to-control flow, backend-dead installed export, and startup interruption/recovery still belong
 to M9/M10 acceptance. Two-PC/two-Switch RFU and trade acceptance remains wholly separate.
+
+### 8.2 Installed PC A checkpoint — 2026-09-01
+
+The minimal GUI and production wrapper were packaged as `0.2.19-beta.1`, release ID
+`beta-f49938017c36`, from exact source
+`f49938017c364966ee91d989263cb7fb2df66a47`. The finished `SwitchTradeSetup.exe` SHA-256 was
+`e8d7b311b4f03b9a0ee0729fb41a28cf295a221327777713d0678895586e2bea`. Static package and embedded
+bundle verification passed; installation returned success; the installed app reported
+`local-app-readiness.v2`, compatible release/runtime contracts, relay ready, and no recovery guard.
+Installed visual verification covered the final equal-size/equal-color Home actions, authoritative
+adapter-selection block, public-room action, and readable adapter dropdown.
+
+This closes the PC A normal-entry packaging checkpoint only. Backend-dead installed export/privacy,
+startup interruption/recovery, matching PC B package identity, and the normal-GUI two-PC/two-Switch
+M10 run remain open. The deleted local build directories are reproducible artifacts and are not
+qualification evidence; the source SHA, package identity, hash, and results above are the retained
+record.

@@ -20,8 +20,10 @@ the FireRed/LeafGreen protocol endpoint, and the connection to the hosted Switch
 - one Nintendo Switch console running FireRed or LeafGreen per player
 - internet access for both PCs
 
-The Realtek RTL8192EU (`0bda:818b`) is the current beta adapter. Other adapters shown as
-**Experimental** in Settings can be selected and diagnosed, but are not yet qualified.
+The Realtek RTL8192EU (`0bda:818b`) is the only adapter currently admitted by the production
+runtime. The repository hardware matrix also records upstream and driver candidates, but a matrix
+entry is not a support claim: each candidate still needs an exact USB-ID/driver evidence audit,
+release packaging, and the same P0/A/B/C/D qualification before the product may enable it.
 
 ## Install
 
@@ -31,7 +33,7 @@ The Realtek RTL8192EU (`0bda:818b`) is the current beta adapter. Other adapters 
 4. Accept the requested WSL, USB/IP, and custom-kernel setup steps. Restart Windows if Setup asks,
    then sign in to let installation continue.
 5. Finish Setup and open **SwitchTrade**. A Wi-Fi adapter may be added later.
-6. In **Settings → Connection**, select the adapter and approve the one-time Windows authorization
+6. On the Home screen, select the Wi-Fi adapter and approve the one-time Windows authorization
    prompt. SwitchTrade resolves the device again after replug or reboot before using it.
 
 The ZIP contents must stay together while Setup runs. After a successful installation, the extracted
@@ -59,9 +61,10 @@ Both players install SwitchTrade and connect one USB Wi-Fi adapter.
 6. Return to the trade menu or leave the room. SwitchTrade closes the radio session and online room
    in order.
 
-If the adapter or local service needs attention, open **Settings**, refresh the device list, authorize
-the selected adapter if requested, and run **Diagnostics**. Setup **Repair** replaces the installed
-software; it is not required merely to authorize a newly added adapter.
+If the adapter or local service needs attention, use the Home-screen adapter selector and follow the
+factual status action. **Export support logs** writes the bounded, redacted application-session evidence
+to the Windows Desktop even when the backend is unavailable. Setup **Repair** replaces installed
+SwitchTrade software; it is not required merely to authorize a newly added adapter.
 
 ## How it works
 
@@ -110,11 +113,12 @@ Implementation proceeds in this order:
 Current status (2026-09-01): M0-M7 core implementation is substantially complete; standalone A/B
 physical evidence is accepted on both PCs, hosted C/D qualification passes, and the focused
 one-PC/two-adapter C+D campaign closed at the user-approved 10/10 result. Dual-adapter operation is
-test-only. M8 headless production wrapping and application-session export are implemented in source.
-The Switchless source dry-run passed production command/recovery regressions and hosted-relay C+D
-normal/worker-death cases with verified cleanup, so minimal GUI rework is next. The immutable packaged
-entry point, live GUI, and installed acceptance gates remain open; M10 packaging and final physical
-acceptance begin only after those gates close. See the
+test-only. M8 headless production wrapping, application-session evidence/export, and the minimal typed
+M9 GUI are implemented. Installed PC A candidate `0.2.19-beta.1` from exact source `f499380` passed
+package integrity, normal launch, local readiness, and the final Home/public-room UI checks. This is
+installed product evidence, not the remaining two-PC/two-Switch M10 physical acceptance. The next
+engineering scope is evidence-driven hardware-matrix expansion without weakening the current
+RTL8192EU gate. See the
 [production wrapper and beta cutover decision](docs/94-production-wrapper-beta-cutover-20260831.md).
 
 The detailed paragraphs below preserve historical checkpoint evidence. Where an older pending-status

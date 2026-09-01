@@ -5,10 +5,12 @@
 > Read this document before changing, testing, packaging, installing, deploying, recovering, or
 > deleting anything in this repository or an installed SwitchTrade environment.
 >
-> **Last updated:** 2026-08-31
-> **Current qualification branch:** `codex/m7-safe-pairing`
-> **Current immutable release:** `v0.2.14-beta.1`; its exact source is the release tag target and its
-> release ID must be `beta-<first 12 characters of that source SHA>`.
+> **Last updated:** 2026-09-01
+> **Current integration target:** `main`; the completed feature line is being fast-forwarded from
+> `codex/m7-safe-pairing` and obsolete audit/feature branches are intentionally retired.
+> **Current published immutable release:** `v0.2.14-beta.1`; its exact source is the tag target.
+> **Current installed validation candidate:** `0.2.19-beta.1`, release ID `beta-f49938017c36`, exact
+> source `f49938017c364966ee91d989263cb7fb2df66a47`. This is not yet M10 physical acceptance.
 
 This document records what went wrong, not just what the current code intends to do. The normative
 target remains the [ABC+D architecture](80-abc-connection-architecture-20260829.md), and open work
@@ -1992,6 +1994,68 @@ Full trade, save, menu return, and graceful exit remain separate physical eviden
   When a user asks for equality across states, compare the installed states visually before calling the
   change complete and keep any necessary state signal orthogonal to the requested color/geometry.
 
+### MTA-OPS-038 — A PowerShell inventory pipeline was syntactically invalid
+
+- **Observed (2026-09-01, housekeeping preflight):** the first read-only branch/worktree inventory
+  command failed with `An empty pipe element is not allowed`. No deletion, Git mutation, process,
+  WSL, USB, relay, installed-app, or hardware action occurred.
+- **Definitive cause:** a statement-form `foreach` block was piped directly to `Format-List` instead
+  of first being evaluated or assigned as a pipeline expression.
+- **Correction:** collect the loop results into a variable, then pipe that variable to the formatter;
+  the exact inventory subsequently completed.
+- **Never repeat:** for destructive-operation preflight, keep enumeration syntactically simple and
+  execute it read-only first. Do not combine a statement-form loop with a trailing pipeline, and do
+  not begin deletion until the corrected inventory has completed and its targets are bounded.
+
+### MTA-OPS-039 — Ignored historical documents were mistaken for published documentation
+
+- **Observed (2026-09-01, housekeeping documentation):** `docs/STATUS.md` and
+  `docs/67-hardware-support-expansion-20260826.md` were edited before verifying that the current
+  distribution branch tracks them. `git status` correctly omitted both because `/docs/**` is ignored
+  except for an explicit public allowlist. No commit, push, build, runtime, WSL, USB, relay, installed
+  app, or hardware state was affected.
+- **Definitive cause:** filesystem presence and historical Git log entries were incorrectly treated as
+  proof that a path was tracked at `HEAD`.
+- **Correction:** restore the local historical files and place the current status/hardware-expansion
+  decision only in tracked `README.md`, `FUTURE_TODO.md`, and the tracked M8/M9 decision document.
+- **Never repeat:** before editing documentation that must ship, verify the exact path with both
+  `git ls-files --error-unmatch` and `git check-ignore -v`. Filesystem presence, old history, and a
+  plausible filename are not current publication authority.
+
+### MTA-OPS-040 — Artifact verification and recursive deletion were combined at one execution boundary
+
+- **Observed (2026-09-01, housekeeping cleanup):** an intended PowerShell command both resolved and
+  validated the artifact root and then recursively deleted the computed variable. The execution
+  safety boundary rejected the command before PowerShell started. No artifact, source, process, WSL,
+  USB, relay, installed-app, or hardware state changed.
+- **Definitive cause:** the read-only target proof and destructive operation were composed into one
+  invocation, so the deletion target was still computed at the point of mutation even though the
+  script contained an internal prefix check.
+- **Correction:** finish target/path/tracked-file/size verification in a separate read-only call, then
+  issue deletion against that already verified absolute literal path and independently confirm absence.
+  The execution boundary also rejected a direct literal `Remove-Item -Recurse` before launch. Because
+  `artifacts/` is an ignored repository path with zero tracked files, the accepted fallback is an
+  exact-path `git clean -ndX -- artifacts/` preview followed by the matching `git clean -fdX` action;
+  do not switch shells or broaden the path.
+- **Never repeat:** a recursive filesystem mutation uses an exact literal target established by a
+  completed earlier read-only check. Do not ask an execution boundary to trust validation and deletion
+  of a computed path inside the same command.
+
+### MTA-OPS-041 — Ignored-artifact cleanup was partial because of Windows long paths
+
+- **Observed (2026-09-01, housekeeping cleanup):** the exact-path `git clean -ffdX -- artifacts/`
+  removed the ordinary generated artifacts but exited 1 after several deeply duplicated UI-evidence
+  paths exceeded Git for Windows' default path-length handling. The command clearly reported every
+  retained path; source and installed-product state were not targeted.
+- **Definitive cause:** the generated DRAFT evidence tree recursively contained copies of its own long
+  path, while the cleanup invocation did not enable Git's long-path support for that one operation.
+- **Correction:** inventory the remaining exact artifact root, preview with
+  `git -c core.longPaths=true clean -nffdX -- artifacts/`, then apply the identical command without
+  `-n` and verify the root is absent. Do not change global Git configuration.
+- **Never repeat:** before deleting a large Windows artifact tree, include maximum path length in the
+  read-only inventory and use a one-command long-path setting when needed. A nonzero cleanup exit is a
+  partial result, never success; enumerate and remove the residue before continuing to Git integration.
+
 ## 11. Required preflight checklists
 
 ### Any code or documentation change
@@ -2042,18 +2106,18 @@ Full trade, save, menu return, and graceful exit remain separate physical eviden
 
 The following remain open even though source corrections or workarounds allowed safe recovery:
 
-1. Qualify the now-implemented deterministic M8 production wrapper through its packaged entry point:
-   explicit WSL cwd, identity-bound control, cancellation, one launch, interruption, startup recovery,
-   and verified cleanup must all pass without invoking the qualification harness as product runtime
-   (`MTA-M7-005` through `MTA-M7-015`).
-2. Qualify the now-implemented M9 application-session logging and Desktop exporter in an installed
+1. Complete the remaining deterministic M8/M9 installed cases after PC A's `0.2.19-beta.1` normal
+   entry/readiness/UI pass: explicit WSL cwd, identity-bound control, cancellation, one launch,
+   interruption, startup recovery, and verified cleanup must pass without invoking the qualification
+   harness as product runtime (`MTA-M7-005` through `MTA-M7-015`).
+2. Qualify the application-session logging and Desktop exporter in an installed
    backend-dead/startup-failure scenario. The exporter remains read-only and cannot launch, retry,
    recover, or clean a connection.
 3. Complete the installed two-PC/two-Switch M10 qualification through the normal packaged GUI and
    production wrapper, not a repository CLI or retired Debug menu.
-5. Investigate credentialless `waiting_for_complementary_role` rooms by ordered event history without
+4. Investigate credentialless `waiting_for_complementary_role` rooms by ordered event history without
    breaking reconnect grace (`MTA-RELAY-006`).
-6. Continue the critical and post-release work in `FUTURE_TODO.md`; this document prevents recurrence
+5. Continue the critical and post-release work in `FUTURE_TODO.md`; this document prevents recurrence
    but does not replace implementation or acceptance work.
 
 ## 13. Update protocol

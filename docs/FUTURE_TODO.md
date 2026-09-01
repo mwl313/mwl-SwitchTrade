@@ -20,8 +20,10 @@ The production Debug menu requirement is canceled. The deterministic headless AB
 service, owner-approved minimal typed GUI, and **Export support logs** implementation now exist in source.
 They archive bounded redacted evidence accumulated since application startup to the Windows Desktop.
 The GUI uses the existing typed production gateway for room actions, adapter selection, immutable status,
-and lifecycle commands; the separate no-backend playtest executable has been retired. Installed-runtime
-cutover and physical acceptance remain open. The updated
+and lifecycle commands; the separate no-backend playtest executable has been retired. PC A's exact
+`0.2.19-beta.1` package from source `f499380` passed package integrity, normal installed launch,
+readiness, and final Home/public-room UI checks. Backend-dead installed export/privacy, matching PC B
+package identity, and two-PC/two-Switch physical acceptance remain open. The updated
 M8-M10 sequence and beta definition are normative in
 [`94-production-wrapper-beta-cutover-20260831.md`](94-production-wrapper-beta-cutover-20260831.md).
 No additional repetition campaign begins before the production wrapper exists.
@@ -29,8 +31,10 @@ No additional repetition campaign begins before the production wrapper exists.
 ## Critical and urgent blockers
 
 0A. **CRITICAL — URGENT: Eliminate false installed-runtime corruption and qualify desktop launch.**
-    **Status (2026-08-31): root cause confirmed and corrected in source; focused provisioner contract
-    tests pass. New immutable package and installed qualification are pending.** PC A's installed
+    **Status (2026-09-01): root cause confirmed and corrected. PC A's exact `0.2.19-beta.1`
+    (`beta-f49938017c36`) package passed embedded-payload verification, normal installed launch,
+    `local-app-readiness.v2`, relay readiness, and recovery=false. PC B upgrade/cold-launch and the
+    complete release lifecycle remain pending.** PC A's earlier installed
     `0.2.14-beta.1` desktop reported `SOFTWARE_NOT_READY` / `corrupt` before creating a control log even
     though the release/runtime/kernel identities and a direct installed `verify-software` were healthy.
     Read-only status had ignored the successful WSL CLI inventory and trusted one transient Lxss
@@ -362,10 +366,10 @@ No additional repetition campaign begins before the production wrapper exists.
    backend-independent Desktop export are implemented. The simplified WPF shell now exposes only
    create/join/browse, main-screen adapter selection, factual status/checkpoints, lifecycle controls,
    credits, and support export; Settings and the alternate no-backend executable are unreachable/removed.
-   All 588 Python regressions, Desktop/Provisioner Release builds, Provisioner contract tests, and
-   Desktop/session self-tests pass. Installed immutable entry-point, interruption/recovery, and
-   backend-dead export acceptance remain open;
-   the source dry-run is not an installed or physical result.**
+   All 589 Python regressions, Desktop/Provisioner Release builds, Provisioner contract tests, and
+   Desktop/session self-tests pass. The exact PC A `0.2.19-beta.1` package and normal entry point are
+   verified; interruption/recovery, backend-dead export/privacy, matching PC B identity, and M10
+   physical acceptance remain open.**
 
    **MVP public-directory update (2026-09-01):** the existing relay
    `public-directory.v1`, typed Desktop list/detail/join client, and production public-join request are
@@ -548,24 +552,39 @@ future product mode.
 
 ## 5. Hardware and driver expansion
 
-This section is post-beta optional work. It does not restore the retired Debug menu or make an
-Adapter Test button a current production-beta requirement; the current beta exposes support-log
+This is the next engineering scope after the current housekeeping integration, but it does not change
+the open M10 acceptance boundary for the existing RTL8192EU beta. It does not restore the retired
+Debug menu or make an Adapter Test button a current product requirement; the app exposes support-log
 export only.
 
-1. Add an **Adapter Test** button beside **Use selected adapter**. It must work with any detected USB
-   Wi-Fi adapter and report staged compatibility results for Windows authorization, WSL attachment,
-   driver binding, PHY/interface creation, supported radio modes, channel control, and RX health.
-   Clearly distinguish a software capability pass from physical Switch qualification.
-2. Diagnose and fix RTL8188EU control-port association, AP+monitor concurrency, and receive-death
+The registry in `config/wsl-radio-hardware.tsv` is broader than current product enforcement. The
+production radio worker, P0 default, and release manifest still admit only RTL8192EU (`0bda:818b`).
+The immediate next task is therefore evidence reconciliation, not merely adding more TSV rows.
+
+1. Re-audit the repositories cited in `67-hardware-support-expansion-20260826.md` at immutable
+   revisions. Record exact model, chipset, USB VID:PID, driver, firmware, claimed A/B role, and whether
+   each statement is application-specific real-Switch evidence or generic Linux compatibility. Reject
+   ambiguous aliases and do not label a candidate supported from an upstream README claim alone.
+2. Convert the production RTL8192EU constants into one selected immutable hardware-profile object
+   shared by P0, radio worker, wrapper, cleanup, and the package manifest. Keep one ABC+D lifecycle;
+   do not fork orchestration by chipset. Fail closed if the selected profile is absent from the exact
+   installed release.
+3. Add an **Adapter Test** button only if a later product requirement restores it. It must work with
+   any detected USB Wi-Fi adapter and report staged compatibility results for Windows authorization,
+   WSL attachment, driver binding, PHY/interface creation, supported radio modes, channel control, and
+   RX health. Clearly distinguish a software capability pass from physical Switch qualification.
+4. Diagnose and fix RTL8188EU control-port association, AP+monitor concurrency, and receive-death
    behavior under WSL; keep it quarantined until it passes the same gates as RTL8192EU.
-3. Physically qualify the already-profiled MT7610U, MT7612U, RT2770, RT3070, RT3572, and RTL8821CU
-   candidates through observe → join → host → full trade → soak.
-4. Re-evaluate AR9271 only after the known association failures have a reproducible driver-level fix.
-5. Add other upstream-supported adapters through the data-driven matrix and diagnostic promotion
+5. Physically qualify the evidence-confirmed candidates through immutable packaging, passive P0,
+   Direct A, Direct B, hosted C+D, interruption/recovery, full two-PC/two-Switch, and soak gates. The
+   current provisional list is MT7610U, MT7612U, RT2770, RT3070, RT3572, and RTL8821CU; the evidence
+   re-audit may narrow it before implementation.
+6. Re-evaluate AR9271 only after the known association failures have a reproducible driver-level fix.
+7. Add other upstream-supported adapters through the data-driven matrix and diagnostic promotion
    process.
-6. Add 5 GHz-capable hardware and validate LDN channels 36, 40, 44, and 48.
-7. Automate firmware inventory and package validation for newly supported adapters.
-8. Build a new custom kernel only when a required driver/configuration is absent; do not fork the core
+8. Add 5 GHz-capable hardware and validate LDN channels 36, 40, 44, and 48.
+9. Automate firmware inventory and package validation for newly supported adapters.
+10. Build a new custom kernel only when a required driver/configuration is absent; do not fork the core
    application for a chipset.
 
 ## 6. Party display, history, and optional statistics
