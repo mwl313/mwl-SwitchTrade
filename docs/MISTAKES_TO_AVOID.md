@@ -2388,6 +2388,30 @@ code and tests are the current implementation evidence.
   result. If none is returned, issue a new bounded read-only status command.
 - **Never repeat:** never infer, reuse, or invent process/session identifiers.
 
+### MTA-OPS-054 — Release preflight must prove every retained immutable input
+
+- **Observed (2026-09-01, 0.2.20 release build):** the replacement builder passed kernel
+  verification, then stopped because `artifacts/audit-wheelhouse-linux-cp312` was absent. Repository
+  cleanup had correctly classified that directory as a retained immutable input, but the release
+  preflight did not check it before starting. A generic cross-platform `pip download` could not
+  recreate it because `ldn 0.0.17` and `python-netlink 0.0.15` publish only source archives; the
+  manifest pins internally built wheels. A first PyPI catalog pass also omitted those transitive
+  source-built artifacts. An exact generated-wheel removal command was rejected by the execution
+  policy and was not retried.
+- **Impact:** no incomplete installer was produced and no installed runtime changed. The first build
+  left only an empty release directory and already verified downloaded prerequisites. Recovery used
+  the two locally retained wheels whose hashes exactly matched the manifest, while every published
+  wheel was retrieved only after its PyPI filename and digest matched the same manifest.
+- **Definitive cause:** release readiness was inferred from a clean Git tree and kernel artifact,
+  while one required artifact class lived outside Git and had no automatic reconstruction path.
+- **Correction:** enumerate all builder inputs before invocation. A wheelhouse is ready only when its
+  file set exactly equals `wheelhouse-manifest.sha256` and every digest matches. Source-only pinned
+  packages must come from a previously verified retained wheel or a separately versioned,
+  reproducible build recipe; never silently replace the manifest with a freshly built wheel hash.
+- **Never repeat:** artifact cleanup preserves every input named by the release builder. Run the
+  complete input preflight—including kernel, firmware, base rootfs, prerequisites, and wheelhouse—
+  before creating a release output directory.
+
 ### MTA-QA-016 — Local green is not cross-platform evidence when a fixture observes ambient state
 
 - **Observed (2026-09-01, hardware-matrix candidate):** the complete Windows suite passed locally,
