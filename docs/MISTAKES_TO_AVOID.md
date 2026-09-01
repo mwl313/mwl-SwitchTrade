@@ -1927,6 +1927,71 @@ Full trade, save, menu return, and graceful exit remain separate physical eviden
   interpreter. Before every full Python run, resolve the exact executable and prove its required test
   imports; never use an ambient `python` by convenience.
 
+### MTA-OPS-036 — Post-install verification reused an obsolete manifest path
+
+- **Observed (2026-09-01):** the `0.2.18-beta.1` upgrade returned exit code 0 and the installed EXE
+  reported the correct product/file versions, but the same read-only verification command then tried
+  an assumed `%LOCALAPPDATA%\SwitchTrade\current\release-manifest.json` path that was absent. The app
+  had not yet been relaunched; no WSL, relay, USB, endpoint, or Switch action occurred.
+- **Definitive cause:** a path from an earlier installation layout was recalled instead of enumerating
+  the current package-owned state or asking the installed service's versioned readiness projection.
+- **Correction:** enumerate the exact installed state tree, launch the installed entry point normally,
+  and use `app-readiness.v2` plus the EXE version as authoritative installed identity evidence.
+- **Never repeat:** package build paths, staging paths, and installed state paths are distinct. Never
+  verify a release by a remembered filesystem location; resolve the current layout or use its typed
+  public readiness contract first.
+
+### MTA-APP-030 — The first `0.2.18-beta.1` launch did not expose local readiness
+
+- **Observed (2026-09-01, release `beta-98183bdd9370`):** the verified installer returned exit code 0,
+  the installed EXE reported `0.2.18-beta.1`, and a normal launch started the Desktop process, but
+  `GET /api/v1/app/readiness` did not become available within the bounded 45-second observation. No
+  connection run, relay room, USB attach, endpoint, or Switch action was requested.
+- **Status:** **investigating**. An installer success code and correct Desktop file version prove
+  neither provisioner completion nor local-service readiness.
+- **Immediate rule:** do not click Retry, relaunch, Repair, reinstall, unregister WSL, or mutate runtime
+  state until the exact current process tree and newest package-owned launcher/provisioner evidence are
+  inspected. Preserve the first failure and distinguish Desktop, provisioner, WSL appliance, and
+  control-service identity before choosing recovery.
+- **Definitive correction:** this was a verifier false negative, not an application failure. The
+  launcher recorded `BACKEND_READY` 4.8 seconds after session start, Uvicorn was healthy on the
+  package-owned port `8787`, and its log contained repeated 200 responses for the readiness route.
+  The external check had queried an obsolete port `8765` for 45 seconds.
+- **Never repeat:** resolve the installed local-service endpoint from the current launcher/source or
+  observed child command before polling it. Never carry a port across release architectures from
+  memory, and never label a timeout as product failure until package-owned evidence is reconciled.
+
+### MTA-OPS-037 — A stale JavaScript binding shadowed the Windows automation client
+
+- **Observed (2026-09-01):** the first read-only installed-window inspection returned
+  `sky.list_apps is not a function`. No window input, navigation, connection command, WSL, relay, USB,
+  endpoint, or Switch action occurred.
+- **Definitive cause:** the persistent JavaScript session already contained a top-level `sky` binding;
+  initializing `globalThis.sky` did not replace what the bare identifier resolved to. Direct inspection
+  proved `globalThis.sky.list_apps` was the expected function on the Windows target.
+- **Correction:** use the explicitly validated `globalThis.sky` object for every remaining operation
+  and keep selected windows on `globalThis` as required by the tool workflow.
+- **Never repeat:** persistent automation sessions are shared state. Never assume a bare top-level name
+  refers to the object just assigned on `globalThis`; inspect and call the qualified binding before the
+  first app query, and perform no input after a binding mismatch until selection is refreshed.
+
+### MTA-APP-031 — The first Home correction retained a color difference the user asked to remove
+
+- **Observed (2026-09-01, installed `0.2.18-beta.1`):** installed visual QA proved all three main
+  actions had equal width and height and the new adapter instruction was present, but the shared base
+  template still painted disabled Create/Join with `DisabledSurfaceBrush` and disabled text while the
+  enabled Browse action used the normal surface and text colors. No connection run, relay room, USB,
+  endpoint, or Switch action occurred.
+- **Definitive cause:** the implementation deliberately retained a conventional muted disabled cue,
+  overriding the user's explicit request that enabled and adapter-blocked main actions have the same
+  color. Source compilation could not reveal that requirement mismatch; the installed screenshot did.
+- **Correction:** use a Home-only action template with identical normal and disabled surface, border,
+  and text rendering. Command `CanExecute` still blocks unavailable actions; an arrow cursor identifies
+  disabled mouse interaction and the standard focus ring preserves keyboard navigation feedback.
+- **Never repeat:** do not silently substitute a general UX preference for a specific visual direction.
+  When a user asks for equality across states, compare the installed states visually before calling the
+  change complete and keep any necessary state signal orthogonal to the requested color/geometry.
+
 ## 11. Required preflight checklists
 
 ### Any code or documentation change
