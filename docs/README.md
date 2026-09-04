@@ -39,6 +39,8 @@ part of the public repository or release package.
   architecture.
 - [Core simplification planning bundle](core-simplification/README.md) — staged A/B/C planning
   documents for reducing the core architecture before implementation work begins.
+- [Development hot-deploy](../scripts/dev/README.md) — source-only sync, run, test, doctor, and
+  overlay cleanup without changing the installed production runtime.
 - [Known Issues](KNOWN_ISSUES.md) — authoritative beta defect register, evidence, workarounds, and
   acceptance checks.
 
