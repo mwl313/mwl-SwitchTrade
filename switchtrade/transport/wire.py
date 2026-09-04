@@ -15,7 +15,7 @@ VERSION = 1
 MAX_GENERATION_ID_BYTES = 128
 PROBE_BYTES = 32
 MAX_RETIRED_EPOCHS = 64
-HEADER = struct.Struct("!4sBBBBQQHI")
+HEADER = struct.Struct("!4sBBBHQQHI")
 
 
 class TransportError(ValueError):
@@ -85,7 +85,7 @@ class Envelope:
         return envelope
 
     def _validate(self, generation: bytes, payload: bytes) -> None:
-        if not 0 <= self.flags <= 0xFF or not 0 <= self.source_epoch <= 0xFFFFFFFFFFFFFFFF or not 0 <= self.sequence <= 0xFFFFFFFFFFFFFFFF:
+        if not 0 <= self.flags <= 0xFFFF or not 0 <= self.source_epoch <= 0xFFFFFFFFFFFFFFFF or not 0 <= self.sequence <= 0xFFFFFFFFFFFFFFFF:
             raise TransportError("T_ENVELOPE_INVALID")
         if len(generation) > MAX_GENERATION_ID_BYTES or len(payload) > MAX_PACKET_BYTES:
             raise TransportError("T_FRAME_TOO_LARGE")
@@ -127,16 +127,15 @@ class WireState:
         self._epoch, self._next_sequence = candidate, 0
         self._reset_generation_and_probe()
         ready = self.emit(FrameKind.PEER_READY)
-        self._challenge = secrets.token_bytes(PROBE_BYTES)
-        return ready, self.emit(FrameKind.PROBE_CHALLENGE, payload=self._challenge)
+        return ready, self._new_probe()
 
-    def emit(self, kind: FrameKind, generation_id: str = "", payload: bytes = b"") -> Envelope:
+    def emit(self, kind: FrameKind, generation_id: str = "", payload: bytes = b"", flags: int = 0) -> Envelope:
         if self._epoch is None:
             raise TransportError("T_NOT_CONNECTED")
         kind = FrameKind(kind)
-        self._outbound_transition(kind, generation_id)
-        envelope = Envelope(kind, self.seat, self._epoch, self._next_sequence, generation_id, payload)
+        envelope = Envelope(kind, self.seat, self._epoch, self._next_sequence, generation_id, payload, flags)
         envelope.encode()
+        self._outbound_transition(kind, generation_id)
         self._next_sequence += 1
         return envelope
 
@@ -150,7 +149,8 @@ class WireState:
             if envelope.kind is not FrameKind.PEER_READY or envelope.sequence != 0:
                 raise TransportError("T_EPOCH_START_INVALID")
             previous = self._peer_epoch
-            if previous is not None:
+            peer_reconnected = previous is not None
+            if peer_reconnected:
                 if len(self._retired_epochs) >= MAX_RETIRED_EPOCHS:
                     raise TransportError("T_EPOCH_EXHAUSTED")
                 self._retired_epochs.add(previous)
@@ -164,8 +164,8 @@ class WireState:
             raise TransportError("T_PEER_READY_INVALID")
         self._peer_next_sequence += 1
         replies: list[Envelope] = []
-        if is_new_epoch and self._epoch is not None and self._peer_epoch is not None and self._peer_next_sequence == 1 and self._retired_epochs:
-            replies.extend(self.start())
+        if is_new_epoch and peer_reconnected:
+            replies.append(self._new_probe())
         if envelope.kind is FrameKind.PROBE_CHALLENGE:
             self._responded_to_peer = True
             replies.append(self.emit(FrameKind.PROBE_RESPONSE, payload=envelope.payload))
@@ -222,3 +222,7 @@ class WireState:
         self._challenge_confirmed = False
         self._responded_to_peer = False
         self._inbound_offer = self._outbound_offer = self.active_generation = None
+
+    def _new_probe(self) -> Envelope:
+        self._challenge = secrets.token_bytes(PROBE_BYTES)
+        return self.emit(FrameKind.PROBE_CHALLENGE, payload=self._challenge)

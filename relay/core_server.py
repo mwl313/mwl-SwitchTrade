@@ -18,6 +18,8 @@ def create_app(store: PairStore | None = None) -> FastAPI:
     app, pairs = FastAPI(), store or PairStore()
     sockets: dict[tuple[str, str], WebSocket] = {}
     pending: dict[tuple[str, str], deque[bytes]] = {}
+    seen_seats: dict[str, set[str]] = {}
+    app.state.core_sockets = sockets
 
     def clear_pending(pair_id: str) -> None:
         pending.pop((pair_id, PairSeat.HOST.value), None)
@@ -75,10 +77,13 @@ def create_app(store: PairStore | None = None) -> FastAPI:
             await websocket.close(code=4401)
             return
         key = (pair_id, seat.value)
+        if seat.value in seen_seats.get(pair_id, set()):
+            clear_pending(pair_id)
         previous = sockets.get(key)
         if previous is not None:
             clear_pending(pair_id)
             await previous.close(code=4000)
+        seen_seats.setdefault(pair_id, set()).add(seat.value)
         sockets[key] = websocket
         await websocket.accept()
         await websocket.send_json({"seat": seat.value})
@@ -110,13 +115,18 @@ def create_app(store: PairStore | None = None) -> FastAPI:
                 except (asyncio.TimeoutError, RuntimeError):
                     if sockets.get(peer_key) is target:
                         sockets.pop(peer_key, None)
+                    await target.close(code=4408)
                     clear_pending(pair_id)
                     await websocket.close(code=4408)
                     return
         except WebSocketDisconnect:
+            pass
+        finally:
             if sockets.get(key) is websocket:
                 sockets.pop(key, None)
+            if not any(current_pair_id == pair_id for current_pair_id, _ in sockets):
                 clear_pending(pair_id)
+                seen_seats.pop(pair_id, None)
 
     return app
 

@@ -16,7 +16,8 @@ MIRROR = {**CAPABILITIES, "generation_roles": ["mirror"]}
 
 class CoreRelayWebSocketTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.client = TestClient(create_app())
+        self.app = create_app()
+        self.client = TestClient(self.app)
         self.host = self.client.post("/core/v1/pairs", json={"capabilities": CAPABILITIES}).json()
         self.guest = self.client.post("/core/v1/pairs:join", json={"code": self.host["code"], "capabilities": MIRROR}).json()
         self.path = f"/core/v1/pairs/{self.host['pair_id']}/ws"
@@ -36,6 +37,7 @@ class CoreRelayWebSocketTests(unittest.TestCase):
             with self.assertRaises(WebSocketDisconnect) as closed:
                 host.receive_bytes()
             self.assertEqual(closed.exception.code, 4403)
+        self.assertFalse(self.app.state.core_sockets)
 
     def test_relay_closes_malformed_binary_frame(self) -> None:
         with self.client.websocket_connect(self.path, headers={"authorization": f"Bearer {self.host['access_token']}"}) as host:
@@ -44,6 +46,29 @@ class CoreRelayWebSocketTests(unittest.TestCase):
             with self.assertRaises(WebSocketDisconnect) as closed:
                 host.receive_bytes()
             self.assertEqual(closed.exception.code, 4400)
+        self.assertFalse(self.app.state.core_sockets)
+
+    def test_reconnect_discards_stale_pending_frames(self) -> None:
+        with self.client.websocket_connect(self.path, headers={"authorization": f"Bearer {self.host['access_token']}"}) as host:
+            self.assertEqual(host.receive_json(), {"seat": "host"})
+            with self.client.websocket_connect(self.path, headers={"authorization": f"Bearer {self.guest['access_token']}"}) as guest:
+                self.assertEqual(guest.receive_json(), {"seat": "guest"})
+            host.send_bytes(Envelope(FrameKind.DATA, PairSeat.HOST, 1, 1, "old-generation", b"stale").encode())
+            with self.client.websocket_connect(self.path, headers={"authorization": f"Bearer {self.guest['access_token']}"}) as guest:
+                self.assertEqual(guest.receive_json(), {"seat": "guest"})
+                fresh = Envelope(FrameKind.HEARTBEAT, PairSeat.HOST, 1, 2).encode()
+                host.send_bytes(fresh)
+                self.assertEqual(guest.receive_bytes(), fresh)
+
+    def test_relay_queue_overflow_closes_and_cleans_socket(self) -> None:
+        with self.client.websocket_connect(self.path, headers={"authorization": f"Bearer {self.host['access_token']}"}) as host:
+            self.assertEqual(host.receive_json(), {"seat": "host"})
+            for sequence in range(9):
+                host.send_bytes(Envelope(FrameKind.HEARTBEAT, PairSeat.HOST, 1, sequence).encode())
+            with self.assertRaises(WebSocketDisconnect) as closed:
+                host.receive_bytes()
+            self.assertEqual(closed.exception.code, 4408)
+        self.assertFalse(self.app.state.core_sockets)
 
 
 if __name__ == "__main__":

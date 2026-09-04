@@ -810,3 +810,46 @@ archive list and regenerate the index.
 - **Correction status:** pending independent staged review.
 - **Mandatory prevention gate:** Keep each staged-diff, staged-statistics, and status observation in
   its own shell invocation even when all use the same Git index.
+
+### MTA-CORE-002 — Reconnect must not rotate the peer source epoch
+
+- **Observed failure:** B3 review identified that accepting a new peer epoch called local `start()`,
+  allowing alternating reconnects to create an epoch-restart ping-pong. The reviewed source had not
+  been deployed or connected to a product endpoint.
+- **Cause certainty:** certain from the state transition: each accepted new epoch emitted another
+  local `PEER_READY`, which the peer treats as a new source epoch in turn.
+- **Disproven alternatives:** Queue replacement alone does not prove a two-sided reconnect handshake,
+  and the existing one-client test could not exercise this state cycle.
+- **Recovery and residue:** Preserve the reviewed state machine, keep the local epoch stable when the
+  peer reconnects, reset probe/generation state, and send a new challenge on the current epoch.
+- **Correction status:** focused two-sided reconnect and reprobe test passed with the live epoch unchanged.
+- **Mandatory prevention gate:** A reconnect test must keep one client live, reconnect the other, and
+  prove both probes recover while the live client's epoch remains unchanged.
+
+### MTA-OPS-223 — Patch only against verified local hunk context
+
+- **Observed failure:** The first B3 repair patch contained a stale hunk context and `apply_patch`
+  rejected it before changing any source or relay state.
+- **Cause certainty:** certain from the patch verifier's exact missing-context diagnostic.
+- **Disproven alternatives:** The rejection did not indicate a transport defect or partial source
+  mutation; no hunk was applied.
+- **Recovery and residue:** Preserve the rejection, use the immediately observed file text as the
+  patch context, and reapply the repair. No cleanup is required.
+- **Correction status:** verified-context repair patch applied.
+- **Mandatory prevention gate:** For every multi-hunk repair, match each hunk against the latest
+  bounded source read rather than reconstructed context.
+
+### MTA-CORE-003 — Wait for the transport failure signal, not a scheduler guess
+
+- **Observed failure:** The first B3 send-timeout test slept for a fixed short interval and then
+  expected a failed client; the event-loop schedule had not made that observation deterministic.
+  No relay listener, product socket, WSL, or endpoint resource was created.
+- **Cause certainty:** certain from the assertion: the test checked client state without awaiting the
+  transport's own failure event.
+- **Disproven alternatives:** The result does not prove that timeout handling is absent or that the
+  bounded writer loop delivered a frame; it only invalidates the timing-based test observation.
+- **Recovery and residue:** Preserve the failed assertion and wait on the client failure event with a
+  bounded timeout before asserting the public failure code. The in-memory socket is disposable.
+- **Correction status:** focused transport rerun passed after awaiting the failure event.
+- **Mandatory prevention gate:** Async failure tests must await their explicit failure/completion signal
+  under a timeout; never infer a state transition from an arbitrary scheduler sleep.

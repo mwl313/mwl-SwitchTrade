@@ -223,3 +223,6 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-OPS-221` | Retry a wrapper syntax failure with the minimal invocation | Current ledger | 769 |
 | `MTA-CORE-001` | Do not expose consumed-code state through concurrent join tests | Current ledger | 783 |
 | `MTA-OPS-222` | Keep staged diff checks to one evidence question | Current ledger | 799 |
+| `MTA-CORE-002` | Reconnect must not rotate the peer source epoch | Current ledger | 814 |
+| `MTA-OPS-223` | Patch only against verified local hunk context | Current ledger | 829 |
+| `MTA-CORE-003` | Wait for the transport failure signal, not a scheduler guess | Current ledger | 842 |

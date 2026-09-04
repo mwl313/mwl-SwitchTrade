@@ -3,14 +3,15 @@ from __future__ import annotations
 import asyncio
 import unittest
 
-from switchtrade.core.contracts import PairSeat
+from switchtrade.core.contracts import MAX_PACKET_BYTES, PairSeat
 from switchtrade.transport import Envelope, FrameKind, TransportError, WireClient, WireState
 
 
 class EnvelopeTests(unittest.TestCase):
     def test_round_trip_and_invalid_header(self) -> None:
-        frame = Envelope(FrameKind.GENERATION_OFFER, PairSeat.HOST, 7, 3, "generation-1", b"setup")
-        self.assertEqual(Envelope.decode(frame.encode()), frame)
+        for flags in (0x0000, 0x00FF, 0x0100, 0xFFFF):
+            frame = Envelope(FrameKind.GENERATION_OFFER, PairSeat.HOST, 7, 3, "generation-1", b"setup", flags)
+            self.assertEqual(Envelope.decode(frame.encode()), frame)
         with self.assertRaisesRegex(TransportError, "T_MAGIC_INVALID"):
             Envelope.decode(b"BAD!" + frame.encode()[4:])
         with self.assertRaisesRegex(TransportError, "T_GENERATION_INVALID"):
@@ -49,23 +50,40 @@ class WireStateTests(unittest.TestCase):
         host = WireState(PairSeat.HOST)
         ready, challenge = host.start(1)
         guest.accept(ready)
+        with self.assertRaisesRegex(TransportError, "T_SEQUENCE_DUPLICATE"):
+            guest.accept(ready)
         with self.assertRaisesRegex(TransportError, "T_SEQUENCE_GAP"):
             guest.accept(host.emit(FrameKind.HEARTBEAT))
         with self.assertRaisesRegex(TransportError, "T_SOURCE_SEAT_MISMATCH"):
             guest.accept(Envelope(FrameKind.PEER_READY, PairSeat.GUEST, 2, 0))
         self.assertIsNotNone(challenge)
 
+    def test_invalid_offer_does_not_advance_local_state(self) -> None:
+        state = WireState(PairSeat.HOST)
+        state.start(1)
+        sequence = state._next_sequence
+        with self.assertRaisesRegex(TransportError, "T_FRAME_TOO_LARGE"):
+            state.emit(FrameKind.GENERATION_OFFER, "generation-1", b"x" * (MAX_PACKET_BYTES + 1))
+        self.assertEqual(state._next_sequence, sequence)
+        self.assertIsNone(state._outbound_offer)
+
 
 class MemorySocket:
     def __init__(self) -> None:
         self.incoming: asyncio.Queue[bytes] = asyncio.Queue()
         self.peer: "MemorySocket | None" = None
+        self.closed = 0
 
     async def send(self, data: bytes) -> None:
+        if self.peer is None:
+            await asyncio.Future()
         await self.peer.incoming.put(data)  # type: ignore[union-attr]
 
     async def recv(self) -> bytes:
         return await self.incoming.get()
+
+    async def close(self) -> None:
+        self.closed += 1
 
 
 class WireClientTests(unittest.TestCase):
@@ -81,8 +99,9 @@ class WireClientTests(unittest.TestCase):
             self.assertEqual((await guest.receive()).kind, FrameKind.GENERATION_OFFER)
             await guest.send(FrameKind.GENERATION_ACCEPT, "generation-1")
             self.assertEqual((await host.receive()).kind, FrameKind.GENERATION_ACCEPT)
-            await host.send(FrameKind.DATA, "generation-1", b"host-data")
-            self.assertEqual((await guest.receive()).payload, b"host-data")
+            await host.send(FrameKind.DATA, "generation-1", b"host-data", flags=0x0100)
+            received = await guest.receive()
+            self.assertEqual((received.payload, received.flags), (b"host-data", 0x0100))
             await guest.send(FrameKind.DATA, "generation-1", b"guest-data")
             self.assertEqual((await host.receive()).payload, b"guest-data")
             await asyncio.gather(host.close(), guest.close())
@@ -135,6 +154,65 @@ class WireClientTests(unittest.TestCase):
             self.assertNotEqual(client.state._epoch, first_epoch)
             self.assertIsNot(client._outgoing, first_queue)
             await client.close()
+
+        asyncio.run(run())
+
+    def test_two_sided_reconnect_reprobes_without_epoch_ping_pong(self) -> None:
+        async def run() -> None:
+            host_socket, guest_socket = MemorySocket(), MemorySocket()
+            host_socket.peer, guest_socket.peer = guest_socket, host_socket
+            host, guest = WireClient(PairSeat.HOST), WireClient(PairSeat.GUEST)
+            await host.connect(host_socket)
+            await guest.connect(guest_socket)
+            await asyncio.gather(host.wait_ready(), guest.wait_ready())
+            host_epoch, guest_epoch = host.state._epoch, guest.state._epoch
+            reconnected_guest = MemorySocket()
+            host_socket.peer, reconnected_guest.peer = reconnected_guest, host_socket
+            await guest.connect(reconnected_guest)
+            await asyncio.gather(host.wait_ready(), guest.wait_ready())
+            self.assertEqual(host.state._epoch, host_epoch)
+            self.assertNotEqual(guest.state._epoch, guest_epoch)
+            await asyncio.gather(host.close(), guest.close())
+
+        asyncio.run(run())
+
+    def test_queue_full_and_close_do_not_corrupt_client_state(self) -> None:
+        async def run() -> None:
+            socket = MemorySocket()
+            client = WireClient(PairSeat.HOST, queue_limit=2)
+            await client.connect(socket)
+            sequence = client.state._next_sequence
+            with self.assertRaisesRegex(TransportError, "T_SEND_QUEUE_FULL"):
+                await client.send(FrameKind.GENERATION_OFFER, "generation-1", b"setup")
+            self.assertEqual(client.state._next_sequence, sequence)
+            self.assertIsNone(client.state._outbound_offer)
+            await client.close()
+            await client.close()
+            self.assertEqual(socket.closed, 1)
+
+        asyncio.run(run())
+
+    def test_receive_queue_full_and_send_timeout_fail_closed(self) -> None:
+        async def run() -> None:
+            first, second = MemorySocket(), MemorySocket()
+            first.peer, second.peer = second, first
+            host, guest = WireClient(PairSeat.HOST, queue_limit=2), WireClient(PairSeat.GUEST)
+            await host.connect(first)
+            await guest.connect(second)
+            await asyncio.gather(host.wait_ready(), guest.wait_ready())
+            for _ in range(3):
+                await guest.send(FrameKind.CAPABILITIES, payload=b"caps")
+            await asyncio.sleep(0)
+            with self.assertRaisesRegex(TransportError, "T_RECEIVE_QUEUE_FULL"):
+                await host.receive()
+            await asyncio.gather(host.close(), guest.close())
+            timeout_socket = MemorySocket()
+            timed_out = WireClient(PairSeat.HOST, send_timeout=0.001)
+            await timed_out.connect(timeout_socket)
+            await asyncio.wait_for(timed_out._failed.wait(), timeout=1)
+            with self.assertRaisesRegex(TransportError, "T_TRANSPORT_FAILED"):
+                await timed_out.send(FrameKind.HEARTBEAT)
+            await timed_out.close()
 
         asyncio.run(run())
 

@@ -13,6 +13,7 @@ from switchtrade.transport.wire import Envelope, FrameKind, TransportError, Wire
 class BinarySocket(Protocol):
     async def send(self, data: bytes) -> None: ...
     async def recv(self) -> bytes: ...
+    async def close(self) -> None: ...
 
 
 class WireClient:
@@ -42,9 +43,10 @@ class WireClient:
     async def wait_ready(self, timeout: float = 5.0) -> None:
         await self._wait(self._ready, timeout)
 
-    async def send(self, kind: FrameKind, generation_id: str = "", payload: bytes = b"") -> None:
+    async def send(self, kind: FrameKind, generation_id: str = "", payload: bytes = b"", flags: int = 0) -> None:
         self._raise_if_failed()
-        self._enqueue(self.state.emit(kind, generation_id, payload))
+        self._reserve_outgoing()
+        self._enqueue(self.state.emit(kind, generation_id, payload, flags))
 
     async def receive(self, timeout: float = 5.0) -> Envelope:
         self._raise_if_failed()
@@ -61,13 +63,15 @@ class WireClient:
         return get.result()
 
     async def close(self) -> None:
+        socket, self._socket = self._socket, None
         tasks = tuple(task for task in (self._writer, self._reader) if task is not None)
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._writer = self._reader = None
-        self._socket = None
+        if socket is not None:
+            await socket.close()
 
     async def run(self, connector: Callable[[], Awaitable[BinarySocket]], cancel: asyncio.Event, *, backoff_base: float = 0.1, backoff_cap: float = 1.0) -> None:
         if not 0 < backoff_base <= backoff_cap:
@@ -99,6 +103,10 @@ class WireClient:
             self._outgoing.put_nowait(envelope)
         except asyncio.QueueFull as exc:
             raise TransportError("T_SEND_QUEUE_FULL") from exc
+
+    def _reserve_outgoing(self) -> None:
+        if self._outgoing.full():
+            raise TransportError("T_SEND_QUEUE_FULL")
 
     async def _write_loop(self) -> None:
         try:
