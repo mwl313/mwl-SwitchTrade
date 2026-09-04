@@ -735,3 +735,33 @@ archive list and regenerate the index.
 - **Correction status:** pending.
 - **Mandatory prevention gate:** For a path already staged as deleted, verify staged state instead of
   including its absent historical name in another `git add` pathspec.
+
+### MTA-OPS-219 — Read dependency locks by the required package entry
+
+- **Observed failure:** A Phase B dependency inspection read the complete hash-locked relay
+  requirements file when only FastAPI availability was relevant. The output was truncated and cannot
+  serve as complete lock-file evidence. No source, WSL, installed runtime, installer, product, or
+  production path changed.
+- **Cause certainty:** certain from the tool's truncation diagnostic and the oversized hash lock.
+- **Disproven alternatives:** The visible FastAPI entry remains a valid narrow observation; the
+  truncated output does not establish the rest of the lock's contents or compatibility.
+- **Recovery and residue:** Discard the aggregate lock output and query only named package entries in
+  future dependency checks. No runtime cleanup is required.
+- **Correction status:** recorded before Phase B implementation proceeds.
+- **Mandatory prevention gate:** For a hash-locked dependency file, search the exact required package
+  name instead of reading the full lock unless the entire lock is itself the scoped evidence.
+
+### MTA-OPS-220 — Run package tests through the repository import boundary
+
+- **Observed failure:** The first Phase B contract test was executed as a file, so Python placed
+  `tests/` rather than the repository root on `sys.path` and could not import `switchtrade`. No source,
+  relay process, WSL, installed runtime, installer, or product state changed.
+- **Cause certainty:** certain from `ModuleNotFoundError: No module named 'switchtrade'` before test
+  collection.
+- **Disproven alternatives:** The result does not indicate a missing Core package or failed fake
+  endpoint implementation; imports never reached those modules.
+- **Recovery and residue:** Preserve the first traceback and rerun the exact tests with `python -m
+  unittest` from the repository root. No runtime cleanup is required.
+- **Correction status:** pending.
+- **Mandatory prevention gate:** Tests importing repository packages must run through the repository
+  module import boundary, not as a bare test-file script.

@@ -218,3 +218,5 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-OPS-216` | Stage renamed paths by their present index or worktree identity | Current ledger | 691 |
 | `MTA-OPS-217` | Force-stage verified ignored documentation paths | Current ledger | 708 |
 | `MTA-OPS-218` | Do not restage an already-indexed deletion by an absent path | Current ledger | 724 |
+| `MTA-OPS-219` | Read dependency locks by the required package entry | Current ledger | 739 |
+| `MTA-OPS-220` | Run package tests through the repository import boundary | Current ledger | 754 |
