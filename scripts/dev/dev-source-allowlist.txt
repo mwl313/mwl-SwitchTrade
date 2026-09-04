@@ -1,0 +1,9 @@
+switchtrade/**/*.py
+bridge/**/*.py
+bridge/**/*.sh
+scripts/**/*.sh
+tests/**/*.py
+pytest.ini
+requirements.txt
+bridge/requirements.txt
+config/wsl-radio-hardware.tsv
