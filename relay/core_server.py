@@ -2,16 +2,30 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections import deque
+
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket
 from fastapi.websockets import WebSocketDisconnect
 
 from relay.core_contracts import CreatePairRequest, JoinPairRequest
 from relay.pair_store import PairStore, PairStoreError
+from switchtrade.core.contracts import PairSeat
+from switchtrade.transport.wire import Envelope, TransportError
 
 
 def create_app(store: PairStore | None = None) -> FastAPI:
     app, pairs = FastAPI(), store or PairStore()
     sockets: dict[tuple[str, str], WebSocket] = {}
+    pending: dict[tuple[str, str], deque[bytes]] = {}
+
+    def clear_pending(pair_id: str) -> None:
+        pending.pop((pair_id, PairSeat.HOST.value), None)
+        pending.pop((pair_id, PairSeat.GUEST.value), None)
+
+    def pending_count() -> int:
+        # ponytail: bounded global scan; replace with a counter only if relay throughput warrants it.
+        return sum(len(queue) for queue in pending.values())
 
     def token(authorization: str | None) -> str:
         if not authorization or not authorization.startswith("Bearer "):
@@ -63,16 +77,46 @@ def create_app(store: PairStore | None = None) -> FastAPI:
         key = (pair_id, seat.value)
         previous = sockets.get(key)
         if previous is not None:
+            clear_pending(pair_id)
             await previous.close(code=4000)
         sockets[key] = websocket
         await websocket.accept()
         await websocket.send_json({"seat": seat.value})
+        for raw in pending.pop(key, ()):
+            await websocket.send_bytes(raw)
         try:
             while True:
-                await websocket.receive_text()
+                raw = await websocket.receive_bytes()
+                try:
+                    envelope = Envelope.decode(raw)
+                except TransportError:
+                    await websocket.close(code=4400)
+                    return
+                if envelope.source_seat is not seat:
+                    await websocket.close(code=4403)
+                    return
+                peer = PairSeat.GUEST if seat is PairSeat.HOST else PairSeat.HOST
+                peer_key = (pair_id, peer.value)
+                target = sockets.get(peer_key)
+                if target is None:
+                    queue = pending.setdefault(peer_key, deque())
+                    if len(queue) >= 8 or pending_count() >= 64:
+                        await websocket.close(code=4408)
+                        return
+                    queue.append(raw)
+                    continue
+                try:
+                    await asyncio.wait_for(target.send_bytes(raw), timeout=5)
+                except (asyncio.TimeoutError, RuntimeError):
+                    if sockets.get(peer_key) is target:
+                        sockets.pop(peer_key, None)
+                    clear_pending(pair_id)
+                    await websocket.close(code=4408)
+                    return
         except WebSocketDisconnect:
             if sockets.get(key) is websocket:
                 sockets.pop(key, None)
+                clear_pending(pair_id)
 
     return app
 
