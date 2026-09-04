@@ -488,3 +488,33 @@ archive list and regenerate the index.
 - **Correction status:** incident recorded before continuing the A1 commit.
 - **Mandatory prevention gate:** Before every commit, inspect the complete staged name list and
   confirm it contains only the current packet; never rely on the last staging command's intent.
+
+### MTA-OPS-213 — Align contract tests with the implementation's canonical path constant
+
+- **Observed failure:** The first A2 hot-deploy contract test expected the literal
+  `/opt/switchtrade-dev/releases/`, while the implementation correctly derives that path from its
+  `OverlayRoot` constant. Four other contract tests passed; no WSL, runtime, installer, relay,
+  hardware, or external state changed.
+- **Cause certainty:** certain from the assertion and the implementation source.
+- **Disproven alternatives:** The overlay root was not missing or wrong; the failure was confined to
+  a brittle test literal that duplicated an implementation value.
+- **Recovery and residue:** Preserve the implementation, update the test to assert the canonical
+  constant and its release composition, then rerun the focused contract test. No cleanup is required.
+- **Correction status:** correction is pending; A2 remains incomplete until the focused test passes.
+- **Mandatory prevention gate:** Contract tests should assert the named source-of-truth constant and
+  its composition rather than duplicating a derived literal.
+
+### MTA-OPS-214 — Cover every derived overlay path through its source constant
+
+- **Observed failure:** After correcting the release-path assertion, the A2 contract test failed on
+  the same brittle expectation for `/opt/switchtrade-dev/current`. The implementation derives that
+  path from `OverlayRoot`; four other contract tests passed and no WSL, runtime, installer, relay,
+  hardware, or external state changed.
+- **Cause certainty:** certain from the assertion and implementation source.
+- **Disproven alternatives:** The current-link path was not incorrect; the test again duplicated a
+  derived literal instead of checking the canonical composition.
+- **Recovery and residue:** Preserve the implementation, replace the remaining literal assertion
+  with the `OverlayRoot` composition, and rerun the focused contract test. No cleanup is required.
+- **Correction status:** correction is pending; A2 remains incomplete until the focused test passes.
+- **Mandatory prevention gate:** When testing path constants, assert both the root constant and the
+  exact suffix/composition used by the implementation, not repeated absolute literals.
