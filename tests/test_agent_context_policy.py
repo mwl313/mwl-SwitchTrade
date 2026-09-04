@@ -15,6 +15,7 @@ from build_incident_index import render_index  # noqa: E402
 
 
 ARCHIVE = ROOT / "docs/incidents/archive/MISTAKES_TO_AVOID-legacy-20260901.md"
+CURRENT = ROOT / "docs/incidents/current/INCIDENTS.md"
 INDEX = ROOT / "docs/incidents/INDEX.md"
 MANIFEST = ROOT / "docs/incidents/ARCHIVE_MANIFEST.json"
 AGENTS = ROOT / "AGENTS.md"
@@ -31,11 +32,19 @@ class AgentContextPolicyTests(unittest.TestCase):
         )
 
     def test_generated_index_is_current(self) -> None:
-        self.assertEqual(render_index(ARCHIVE), INDEX.read_text(encoding="utf-8"))
+        self.assertEqual(render_index(ARCHIVE, CURRENT), INDEX.read_text(encoding="utf-8"))
         relative_archive = Path(
             "docs/incidents/archive/MISTAKES_TO_AVOID-legacy-20260901.md"
         )
-        self.assertEqual(render_index(relative_archive), render_index(ARCHIVE))
+        relative_current = Path("docs/incidents/current/INCIDENTS.md")
+        self.assertEqual(
+            render_index(relative_archive, relative_current), render_index(ARCHIVE, CURRENT)
+        )
+
+    def test_current_incidents_share_the_primary_index(self) -> None:
+        self.assertTrue(CURRENT.is_file())
+        self.assertFalse((ROOT / "docs/mistakes/INCIDENTS.md").exists())
+        self.assertFalse((ROOT / "docs/mistakes/INCIDENT_INDEX.md").exists())
 
     def test_root_agents_is_bounded(self) -> None:
         agents_text = AGENTS.read_text(encoding="utf-8")

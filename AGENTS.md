@@ -8,7 +8,8 @@ handoff:
 3. Work in one conceptual packet at a time and preserve unrelated changes.
 4. Read only task-relevant context. Do not load the historical incident archive by default.
 5. Search `docs/incidents/INDEX.md` only for an exact subsystem, stable error code, failure path,
-   recovery path, cleanup operation, or explicitly requested historical analysis.
+   recovery path, cleanup operation, or explicitly requested historical analysis; open only the
+   matching current entry or historical archive range.
 6. Keep source, runtime, process, device, release, and evidence identities explicit.
 
 Global invariants are in [`docs/agent/INVARIANTS.md`](docs/agent/INVARIANTS.md); routing is in

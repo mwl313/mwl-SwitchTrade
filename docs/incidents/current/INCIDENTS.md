@@ -1,12 +1,9 @@
 # Active incident ledger
 
-This file receives detailed incidents discovered after the 2026-09-03 documentation compaction.
-Earlier incidents are preserved unchanged in
-[`MISTAKES_TO_AVOID_HISTORY-20260903.md`](../MISTAKES_TO_AVOID_HISTORY-20260903.md).
-
-Before assigning an ID, run `python tools/validate_mistakes_docs.py` and inspect the maximum number
-for the intended category in [`INCIDENT_INDEX.md`](INCIDENT_INDEX.md). Append entries; do not reorder
-or renumber history.
+This file receives current incidents. Earlier history is immutable evidence in
+[`../archive/MISTAKES_TO_AVOID-legacy-20260901.md`](../archive/MISTAKES_TO_AVOID-legacy-20260901.md).
+Search [`../INDEX.md`](../INDEX.md) by the exact subsystem, stable error code, failure path, or
+recovery path; append new entries here without reordering or renumbering existing evidence.
 
 Each incident must use this heading form:
 
@@ -518,3 +515,223 @@ archive list and regenerate the index.
 - **Correction status:** correction is pending; A2 remains incomplete until the focused test passes.
 - **Mandatory prevention gate:** When testing path constants, assert both the root constant and the
   exact suffix/composition used by the implementation, not repeated absolute literals.
+
+### MTA-DEV-021 — Preserve PowerShell module-mock output before trusting a behavior test
+
+- **Observed failure:** The first no-WSL sync behavior test exited zero but produced no JSON outcome
+  for its Python harness. The test therefore could not prove new-release, same-release, changed-release,
+  or repeated-run behavior. No WSL, installed runtime, installer, product, or production path changed.
+- **Cause certainty:** investigating. The module-scope mock or its output boundary did not reach the
+  outer process as expected; the empty stdout is insufficient to identify which boundary owns the loss.
+- **Disproven alternatives:** This result does not prove that sync is idempotent or that the overlay
+  lifecycle is broken; the intended observation never reached the test harness.
+- **Recovery and residue:** Preserve the focused test output, replace the opaque module mock with a
+  directly observable behavior seam, and rerun only after the replacement emits a deterministic result.
+  No runtime cleanup is required.
+- **Correction status:** pending.
+- **Mandatory prevention gate:** A process-layer behavior test must assert its own observable result
+  before using that result to claim a mocked lifecycle transition.
+
+### MTA-DEV-022 — Forwarded child output must target the caller's redirected streams
+
+- **Observed failure:** The first interactive-process test did not receive the child `ready` line from
+  `Invoke-DevInteractiveProcess` before the child exited. No WSL, installed runtime, installer,
+  product, or production path changed.
+- **Cause certainty:** investigating. Disabling .NET stream redirection alone did not establish an
+  observable parent-pipe contract for the PowerShell caller.
+- **Disproven alternatives:** The failure is not evidence that the child did not print or that a WSL
+  runtime is unavailable; it proves only that this helper did not forward output through the tested
+  redirected boundary.
+- **Recovery and residue:** Preserve the first test result and use explicit asynchronous forwarding for
+  stdout and stderr, then rerun the focused output-timing test. No runtime cleanup is required.
+- **Correction status:** pending.
+- **Mandatory prevention gate:** Long-running command helpers must have a timing test that observes
+  stdout before child exit through the same caller boundary used by the CLI.
+
+### MTA-DEV-023 — Resolve module paths before using a PowerShell module session
+
+- **Observed failure:** A focused module-session probe passed the relative module path
+  `scripts\\dev\\DevOverlay.psm1` to `Import-Module -Name` and PowerShell did not load it. The probe
+  therefore could not establish a module-scoped output boundary. No WSL, installed runtime, installer,
+  product, or production path changed.
+- **Cause certainty:** certain. `Import-Module -Name` searched module locations instead of treating the
+  relative string as the observed file path.
+- **Disproven alternatives:** This does not explain the earlier absolute-path behavior-test output loss;
+  the failed probe used a different, invalid import boundary.
+- **Recovery and residue:** Reject the probe and use the already-resolved absolute module path for all
+  module-session tests. No runtime cleanup is required.
+- **Correction status:** recorded before the next focused probe.
+- **Mandatory prevention gate:** A PowerShell module-session test must pass a resolved file path to
+  `Import-Module`; do not infer that `-Name` resolves arbitrary relative module paths.
+
+### MTA-DEV-024 — Anchor same-signature PowerShell helper patches to the exact function
+
+- **Observed failure:** The first interactive-I/O patch matched the shared process-start setup in the
+  captured helper, duplicating its redirection assignments while leaving the interactive helper without
+  the required redirection. No command process, WSL, installed runtime, installer, product, or
+  production path was started or changed.
+- **Cause certainty:** certain from the immediate bounded source inspection after the patch.
+- **Disproven alternatives:** The duplicate lines do not indicate a .NET I/O behavior change; this is
+  a patch-anchor error before any interactive command was executed.
+- **Recovery and residue:** Preserve the incorrect diff, correct only the duplicated captured lines
+  and the interactive helper's explicit redirection, then parse before running the focused test again.
+  No runtime cleanup is required.
+- **Correction status:** pending.
+- **Mandatory prevention gate:** When adjacent helpers share setup statements, patch against the exact
+  function body and inspect that bounded body before invoking a behavioral test.
+
+### MTA-DEV-025 — Preserve collection shape in single-source overlay behavior tests
+
+- **Observed failure:** The no-WSL lifecycle mock returned one source path through an unwrapped
+  PowerShell pipeline. Under strict mode, the resulting scalar lacked an expected `Count` property,
+  so the test never produced its lifecycle result. No WSL, installed runtime, installer, product, or
+  production path changed.
+- **Cause certainty:** certain from the repeated `PropertyNotFoundException` diagnostics and the
+  single-item mock return shape.
+- **Disproven alternatives:** This failure does not prove an overlay transition error; it prevented
+  the test from reaching the mocked release checks.
+- **Recovery and residue:** Preserve the stderr and make the mock's one-path result an explicit array,
+  then rerun the focused lifecycle test. No runtime cleanup is required.
+- **Correction status:** pending.
+- **Mandatory prevention gate:** PowerShell behavior tests must exercise zero, one, and many collection
+  shapes wherever the implementation reads `Count` or indexes a command result.
+
+### MTA-DEV-026 — Do not assume PowerShell event callbacks forward child streams
+
+- **Observed failure:** Replacing inherited handles with `OutputDataReceived` and `ErrorDataReceived`
+  callbacks still left the interactive timing test without the child `ready` line before exit. No WSL,
+  installed runtime, installer, product, or production path changed.
+- **Cause certainty:** certain that this callback implementation failed the caller-pipe contract;
+  investigating which PowerShell callback boundary suppressed the stream.
+- **Disproven alternatives:** The result does not show that the child was silent or that WSL is at
+  fault; the direct Python child remains the only process under test.
+- **Recovery and residue:** Preserve the failed timing result and use explicit asynchronous stream-copy
+  tasks rather than PowerShell event callbacks, then rerun only the focused timing test. No runtime
+  cleanup is required.
+- **Correction status:** pending.
+- **Mandatory prevention gate:** A stream-forwarding implementation must be proven through a redirected
+  caller pipe; callback registration alone is not acceptance evidence.
+
+### MTA-DEV-027 — Console stream copies are not a PowerShell pipeline contract
+
+- **Observed failure:** The second interactive-I/O correction copied the child byte streams to
+  `Console.OpenStandardOutput()` and `Console.OpenStandardError()`, but the redirected-caller timing
+  test still received no `ready` line before exit. No WSL, installed runtime, installer, product, or
+  production path changed.
+- **Cause certainty:** certain that this copy target failed the tested output contract; the exact host
+  mapping between Console streams and PowerShell's pipeline remains irrelevant to the required result.
+- **Disproven alternatives:** The successful mocked sync lifecycle and the direct Python child exclude
+  overlay identity and WSL discovery as causes of this timing failure.
+- **Recovery and residue:** Preserve the timing failure and use a PowerShell pipeline reader that emits
+  each stdout/stderr line to the caller, then rerun the focused timing test. No runtime cleanup is
+  required.
+- **Correction status:** pending.
+- **Mandatory prevention gate:** Interactive process output must be delivered through the same
+  PowerShell output/error channels the CLI caller redirects and observes.
+
+### MTA-DEV-028 — Verify the interactive helper's callable boundary before diagnosing its stream
+
+- **Observed failure:** The pipeline-reader correction still produced no `ready` line in the timing
+  test. The test had not yet separately proven that its imported module exposed and invoked the exact
+  helper body. No WSL, installed runtime, installer, product, or production path changed.
+- **Cause certainty:** investigating. The failed observation proves the timing contract remains unmet,
+  but not whether the loss occurs in module export, helper invocation, or line forwarding.
+- **Disproven alternatives:** The no-WSL sync lifecycle test now passes, so this does not invalidate
+  the release reuse correction.
+- **Recovery and residue:** Preserve the focused failure, probe the module's exported command identity
+  and capture its stderr before changing the stream implementation again. No runtime cleanup is
+  required.
+- **Correction status:** pending.
+- **Mandatory prevention gate:** A subprocess timing test must independently prove the exact helper is
+  callable before attributing an empty stream to the helper's I/O algorithm.
+
+### MTA-DEV-029 — Test private module helpers through the module session
+
+- **Observed failure:** The callable-boundary probe confirmed that `Invoke-DevInteractiveProcess` is
+  private to `DevOverlay.psm1` and is not exported by `Import-Module`. The timing test had invoked an
+  unrecognized command rather than the helper. No WSL, installed runtime, installer, product, or
+  production path changed.
+- **Cause certainty:** certain from `Get-Command` after importing the resolved module path.
+- **Disproven alternatives:** The preceding empty timing observations do not diagnose the helper's
+  stream forwarding because the test never reached it.
+- **Recovery and residue:** Preserve the probe result and invoke the private helper inside the imported
+  module session, then rerun the timing test. No runtime cleanup is required.
+- **Correction status:** pending.
+- **Mandatory prevention gate:** Tests of private PowerShell module functions must use the module's
+  session invocation boundary or test an explicitly exported public command.
+
+### MTA-DEV-030 — Close subprocess pipes after interactive timing assertions
+
+- **Observed failure:** The corrected interactive timing test passed but emitted `ResourceWarning` for
+  its unclosed stdout and stderr pipe wrappers. No WSL, installed runtime, installer, product, or
+  production path changed.
+- **Cause certainty:** certain from Python's warning, which named both unclosed pipe wrappers.
+- **Disproven alternatives:** The warning does not invalidate the passing child output timing result;
+  it identifies missing test-harness cleanup only.
+- **Recovery and residue:** Close both pipes after collecting exit and stderr evidence, then rerun the
+  focused test without warnings. No runtime cleanup is required.
+- **Correction status:** pending.
+- **Mandatory prevention gate:** Subprocess timing tests must close every redirected pipe after the
+  terminal process result is observed.
+
+### MTA-OPS-215 — Keep every multi-file patch hunk syntactically complete
+
+- **Observed failure:** A combined documentation patch omitted a hunk prefix on one continuation line,
+  and `apply_patch` rejected it before any target file changed. No WSL, installed runtime, installer,
+  product, or production path changed.
+- **Cause certainty:** certain from the patch parser's invalid-hunk diagnostic.
+- **Disproven alternatives:** The rejection does not indicate a routing-content conflict or partial
+  documentation update; no hunk was applied.
+- **Recovery and residue:** Preserve the rejected patch result and apply each verified document change
+  in a separate complete hunk. No runtime cleanup is required.
+- **Correction status:** pending.
+- **Mandatory prevention gate:** Before submitting a multi-file patch, ensure every changed or context
+  line has its required patch prefix and split unrelated documents into separate patch operations.
+
+### MTA-OPS-216 — Stage renamed paths by their present index or worktree identity
+
+- **Observed failure:** The first exact-path staging command included the old
+  `docs/mistakes/INCIDENTS.md` name after `git mv` had already removed that worktree path. Git rejected
+  the pathspec, and no successful staging result was inferred. No WSL, installed runtime, installer,
+  product, or production path changed.
+- **Cause certainty:** certain from Git's exact pathspec diagnostic and the already-observed rename
+  status.
+- **Disproven alternatives:** The incident ledger was not lost; its destination exists at
+  `docs/incidents/current/INCIDENTS.md`. This is a staging identity error, not a documentation move
+  failure.
+- **Recovery and residue:** Preserve the rejected command and stage only existing worktree paths while
+  retaining the already-indexed rename. No runtime cleanup is required.
+- **Correction status:** pending.
+- **Mandatory prevention gate:** Before staging a renamed file, use its current destination path or
+  rely on the existing index entry; never include an absent historical source path in a pathspec.
+
+### MTA-OPS-217 — Force-stage verified ignored documentation paths
+
+- **Observed failure:** The corrected exact-path staging command still omitted `-f` for the repository's
+  verified `/docs/**` ignore rule, so Git rejected the active routing and incident paths. No successful
+  staging result was inferred. No WSL, installed runtime, installer, product, or production path
+  changed.
+- **Cause certainty:** certain from Git's ignored-path diagnostic and the earlier exact ignore-state
+  evidence for this documentation tree.
+- **Disproven alternatives:** The paths are intentional current repository documents, not accidental
+  generated artifacts or unrelated ignored files.
+- **Recovery and residue:** Preserve the rejection and force-stage only the enumerated in-scope
+  documentation paths; no broad ignored-tree add is permitted. No runtime cleanup is required.
+- **Correction status:** pending.
+- **Mandatory prevention gate:** Once a required documentation path is known to be ignored, every
+  staging command for that exact path must use `git add -f -- <verified paths>`.
+
+### MTA-OPS-218 — Do not restage an already-indexed deletion by an absent path
+
+- **Observed failure:** A force-staging command included the old ignored index path after an earlier
+  `git add -A` had already placed its deletion in the index. Git rejected the now-absent pathspec.
+  No successful staging result was inferred. No WSL, installed runtime, installer, product, or
+  production path changed.
+- **Cause certainty:** certain from the exact pathspec diagnostic and the prior staged deletion state.
+- **Disproven alternatives:** The old index was not restored or lost; it is intentionally superseded by
+  the generated unified `docs/incidents/INDEX.md`.
+- **Recovery and residue:** Preserve the rejected command, leave the existing deletion index entry
+  intact, and force-stage only present active documentation paths. No runtime cleanup is required.
+- **Correction status:** pending.
+- **Mandatory prevention gate:** For a path already staged as deleted, verify staged state instead of
+  including its absent historical name in another `git add` pathspec.

@@ -18,7 +18,7 @@ function Stop-DevOverlay {
     throw [DevOverlayException]::new($Code, $Message)
 }
 
-function Invoke-DevProcess {
+function Invoke-DevCapturedProcess {
     param(
         [Parameter(Mandatory)][string]$FilePath,
         [Parameter(Mandatory)][string[]]$ArgumentList,
@@ -41,14 +41,67 @@ function Invoke-DevProcess {
         if (-not $process.Start()) {
             Stop-DevOverlay 'DEV_RUN_FAILED' "Could not start $FilePath."
         }
-        $stdout = $process.StandardOutput.ReadToEnd()
-        $stderr = $process.StandardError.ReadToEnd()
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
         $process.WaitForExit()
+        $stdout = $stdoutTask.GetAwaiter().GetResult()
+        $stderr = $stderrTask.GetAwaiter().GetResult()
         return [pscustomobject]@{
             ExitCode = $process.ExitCode
             Stdout = $stdout
             Stderr = $stderr
         }
+    } finally {
+        $process.Dispose()
+    }
+}
+
+function Invoke-DevInteractiveProcess {
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [Parameter(Mandatory)][string[]]$ArgumentList,
+        [string]$WorkingDirectory = $script:RepoRoot
+    )
+
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $FilePath
+    $startInfo.WorkingDirectory = $WorkingDirectory
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in $ArgumentList) {
+        [void]$startInfo.ArgumentList.Add($argument)
+    }
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            Stop-DevOverlay 'DEV_RUN_FAILED' "Could not start $FilePath."
+        }
+        $stdoutTask = $process.StandardOutput.ReadLineAsync()
+        $stderrTask = $process.StandardError.ReadLineAsync()
+        while ($null -ne $stdoutTask -or $null -ne $stderrTask) {
+            $pending = [System.Collections.Generic.List[System.Threading.Tasks.Task]]::new()
+            if ($null -ne $stdoutTask) { [void]$pending.Add($stdoutTask) }
+            if ($null -ne $stderrTask) { [void]$pending.Add($stderrTask) }
+            $completed = [System.Threading.Tasks.Task]::WhenAny($pending.ToArray()).GetAwaiter().GetResult()
+            if ($completed -eq $stdoutTask) {
+                $line = $stdoutTask.GetAwaiter().GetResult()
+                if ($null -eq $line) { $stdoutTask = $null } else {
+                    Write-Output $line
+                    $stdoutTask = $process.StandardOutput.ReadLineAsync()
+                }
+            } else {
+                $line = $stderrTask.GetAwaiter().GetResult()
+                if ($null -eq $line) { $stderrTask = $null } else {
+                    Write-Error $line
+                    $stderrTask = $process.StandardError.ReadLineAsync()
+                }
+            }
+        }
+        $process.WaitForExit()
+        return $process.ExitCode
     } finally {
         $process.Dispose()
     }
@@ -62,7 +115,18 @@ function Invoke-DevWsl {
         [string]$Cwd = '/opt/switchtrade'
     )
     $wslArguments = @('--distribution', $Distro, '--user', 'root', '--cd', $Cwd, '--', $Command) + $Arguments
-    Invoke-DevProcess -FilePath 'wsl.exe' -ArgumentList $wslArguments
+    Invoke-DevCapturedProcess -FilePath 'wsl.exe' -ArgumentList $wslArguments
+}
+
+function Invoke-DevInteractiveWsl {
+    param(
+        [Parameter(Mandatory)][string]$Distro,
+        [Parameter(Mandatory)][string]$Command,
+        [string[]]$Arguments = @(),
+        [string]$Cwd = '/opt/switchtrade'
+    )
+    $wslArguments = @('--distribution', $Distro, '--user', 'root', '--cd', $Cwd, '--', $Command) + $Arguments
+    Invoke-DevInteractiveProcess -FilePath 'wsl.exe' -ArgumentList $wslArguments
 }
 
 function Get-ActiveRuntime {
@@ -100,7 +164,7 @@ function Get-FileDigest {
 }
 
 function Get-SourceFiles {
-    $gitResult = Invoke-DevProcess -FilePath 'git' -ArgumentList @('ls-files', '--cached', '--others', '--exclude-standard')
+    $gitResult = Invoke-DevCapturedProcess -FilePath 'git' -ArgumentList @('ls-files', '--cached', '--others', '--exclude-standard')
     if ($gitResult.ExitCode -ne 0) {
         Stop-DevOverlay 'DEV_SOURCE_ALLOWLIST_EMPTY' 'Could not enumerate the source tree.'
     }
@@ -146,11 +210,11 @@ function Get-SourceManifest {
     }
     $identityBytes = [System.Text.Encoding]::UTF8.GetBytes(($identityLines -join ''))
     $contentId = ([BitConverter]::ToString(([System.Security.Cryptography.SHA256]::Create().ComputeHash($identityBytes))).Replace('-', '')).ToLowerInvariant()
-    $headResult = Invoke-DevProcess -FilePath 'git' -ArgumentList @('rev-parse', 'HEAD')
+    $headResult = Invoke-DevCapturedProcess -FilePath 'git' -ArgumentList @('rev-parse', 'HEAD')
     if ($headResult.ExitCode -ne 0) {
         Stop-DevOverlay 'DEV_SOURCE_ALLOWLIST_EMPTY' 'Could not resolve the source commit.'
     }
-    $dirty = (Invoke-DevProcess -FilePath 'git' -ArgumentList @('status', '--porcelain')).Stdout.Trim().Length -gt 0
+    $dirty = (Invoke-DevCapturedProcess -FilePath 'git' -ArgumentList @('status', '--porcelain')).Stdout.Trim().Length -gt 0
     return [pscustomobject]@{
         Schema = 1
         GitHead = $headResult.Stdout.Trim()
@@ -193,9 +257,56 @@ function Assert-DependencyCompatibility {
     }
 }
 
+function Assert-RemoteManifest {
+    param(
+        [Parameter(Mandatory)][string]$Distro,
+        [Parameter(Mandatory)]$Manifest,
+        [Parameter(Mandatory)][string]$RemoteRoot
+    )
+
+    $verifyArguments = @($Manifest.Files.Keys | ForEach-Object { "$RemoteRoot/$_" })
+    $verifyResult = Invoke-DevWsl -Distro $Distro -Command '/usr/bin/sha256sum' -Arguments $verifyArguments
+    if ($verifyResult.ExitCode -ne 0) {
+        Stop-DevOverlay 'DEV_MANIFEST_MISMATCH' 'The WSL overlay hash check failed.'
+    }
+    $prefix = "$RemoteRoot/"
+    $actualFiles = @{}
+    foreach ($line in ($verifyResult.Stdout -split "`r?`n" | Where-Object { $_ })) {
+        if ($line -notmatch '^(?<hash>[0-9a-fA-F]{64})\s+\*?(?<path>.+)$' -or -not $Matches.path.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+            Stop-DevOverlay 'DEV_MANIFEST_MISMATCH' 'The WSL overlay hash output is invalid.'
+        }
+        $relativePath = $Matches.path.Substring($prefix.Length)
+        if ($actualFiles.ContainsKey($relativePath)) {
+            Stop-DevOverlay 'DEV_MANIFEST_MISMATCH' 'The WSL overlay hash output has duplicate paths.'
+        }
+        $actualFiles[$relativePath] = $Matches.hash.ToLowerInvariant()
+    }
+    if ($actualFiles.Count -ne $Manifest.Files.Count) {
+        Stop-DevOverlay 'DEV_MANIFEST_MISMATCH' 'The copied source does not match the local manifest.'
+    }
+    foreach ($relativePath in $Manifest.Files.Keys) {
+        if (-not $actualFiles.ContainsKey($relativePath) -or $actualFiles[$relativePath] -ne $Manifest.Files[$relativePath]) {
+            Stop-DevOverlay 'DEV_MANIFEST_MISMATCH' 'The copied source does not match the local manifest.'
+        }
+    }
+}
+
+function Set-DevCurrentRelease {
+    param(
+        [Parameter(Mandatory)][string]$Distro,
+        [Parameter(Mandatory)][string]$ContentId,
+        [Parameter(Mandatory)][string]$CurrentTemp
+    )
+
+    $linkResult = Invoke-DevWsl -Distro $Distro -Command '/bin/ln' -Arguments @('-s', "releases/$ContentId", $CurrentTemp)
+    if ($linkResult.ExitCode -ne 0) { Stop-DevOverlay 'DEV_COMMIT_FAILED' 'Could not prepare the atomic current link.' }
+    $switchResult = Invoke-DevWsl -Distro $Distro -Command '/bin/mv' -Arguments @('-Tf', $CurrentTemp, "$script:OverlayRoot/current")
+    if ($switchResult.ExitCode -ne 0) { Stop-DevOverlay 'DEV_COMMIT_FAILED' 'Could not switch the current overlay atomically.' }
+}
+
 function Invoke-DevDoctor {
     $runtime = Get-ActiveRuntime
-    $listResult = Invoke-DevProcess -FilePath 'wsl.exe' -ArgumentList @('--list', '--quiet')
+    $listResult = Invoke-DevCapturedProcess -FilePath 'wsl.exe' -ArgumentList @('--list', '--quiet')
     if ($listResult.ExitCode -ne 0 -or -not (@($listResult.Stdout -split "`r?`n" | ForEach-Object { $_.Trim() }) -contains $runtime.Name)) {
         Stop-DevOverlay 'DEV_WSL_RUNTIME_NOT_REGISTERED' 'The active WSL distro is not registered.'
     }
@@ -229,9 +340,8 @@ function Invoke-DevDoctor {
 }
 
 function Invoke-DevSync {
-    $runtime = Get-ActiveRuntime
     $doctor = Invoke-DevDoctor | ConvertFrom-Json
-    $sourceFiles = Get-SourceFiles
+    $sourceFiles = @(Get-SourceFiles)
     $manifest = Get-SourceManifest -RelativePaths $sourceFiles
     $nonce = [guid]::NewGuid().ToString('N')
     $tempTar = Join-Path ([System.IO.Path]::GetTempPath()) "SwitchTrade-dev-$($manifest.ContentId)-$nonce.tar"
@@ -241,39 +351,33 @@ function Invoke-DevSync {
     $currentTemp = "$script:OverlayRoot/.current-$nonce"
     $lockAcquired = $false
     try {
-        $tarArguments = @('-cf', $tempTar, '-C', $script:RepoRoot, '--') + $sourceFiles
-        $archive = Invoke-DevProcess -FilePath 'tar' -ArgumentList $tarArguments
-        if ($archive.ExitCode -ne 0) {
-            Stop-DevOverlay 'DEV_ARCHIVE_FAILED' 'Could not create the source archive.'
-        }
-        $rootResult = Invoke-DevWsl -Distro $doctor.active_runtime -Command '/bin/mkdir' -Arguments @('-p', $script:OverlayRoot)
+        $rootResult = Invoke-DevWsl -Distro $doctor.active_runtime -Command '/bin/mkdir' -Arguments @('-p', "$script:OverlayRoot/releases")
         if ($rootResult.ExitCode -ne 0) { Stop-DevOverlay 'DEV_EXTRACT_FAILED' 'Could not prepare the overlay root.' }
         $lockResult = Invoke-DevWsl -Distro $doctor.active_runtime -Command '/bin/mkdir' -Arguments @($lockPath)
         if ($lockResult.ExitCode -ne 0) { Stop-DevOverlay 'DEV_DEPLOY_BUSY' 'Another overlay operation owns the lock.' }
         $lockAcquired = $true
+        $releaseCheck = Invoke-DevWsl -Distro $doctor.active_runtime -Command '/usr/bin/test' -Arguments @('-e', $releasePath)
+        if ($releaseCheck.ExitCode -eq 0) {
+            Assert-RemoteManifest -Distro $doctor.active_runtime -Manifest $manifest -RemoteRoot $releasePath
+            Set-DevCurrentRelease -Distro $doctor.active_runtime -ContentId $manifest.ContentId -CurrentTemp $currentTemp
+            [ordered]@{ schema = 1; content_id = $manifest.ContentId; dirty = $manifest.Dirty; file_count = $sourceFiles.Count; reused = $true } | ConvertTo-Json -Compress
+            return
+        }
+        if ($releaseCheck.ExitCode -ne 1) { Stop-DevOverlay 'DEV_COMMIT_FAILED' 'Could not check the immutable overlay release.' }
+        $tarArguments = @('-cf', $tempTar, '-C', $script:RepoRoot, '--') + $sourceFiles
+        $archive = Invoke-DevCapturedProcess -FilePath 'tar' -ArgumentList $tarArguments
+        if ($archive.ExitCode -ne 0) { Stop-DevOverlay 'DEV_ARCHIVE_FAILED' 'Could not create the source archive.' }
         $stageResult = Invoke-DevWsl -Distro $doctor.active_runtime -Command '/bin/mkdir' -Arguments @('-p', $stagingPath)
         if ($stageResult.ExitCode -ne 0) { Stop-DevOverlay 'DEV_EXTRACT_FAILED' 'Could not create the staging directory.' }
         $extractResult = Invoke-DevWsl -Distro $doctor.active_runtime -Command '/usr/bin/tar' -Arguments @('-xf', (ConvertTo-WslPath $tempTar), '-C', $stagingPath)
         if ($extractResult.ExitCode -ne 0) { Stop-DevOverlay 'DEV_EXTRACT_FAILED' 'Could not extract the source archive in WSL.' }
-        $verifyArguments = @()
-        foreach ($sourceFile in $sourceFiles) { $verifyArguments += "$stagingPath/$sourceFile" }
-        $verifyResult = Invoke-DevWsl -Distro $doctor.active_runtime -Command '/usr/bin/sha256sum' -Arguments $verifyArguments
-        if ($verifyResult.ExitCode -ne 0) { Stop-DevOverlay 'DEV_MANIFEST_MISMATCH' 'The WSL overlay hash check failed.' }
-        $expectedHashes = @($manifest.Files.Values)
-        $actualHashes = @($verifyResult.Stdout -split "`r?`n" | Where-Object { $_ } | ForEach-Object { ($_ -split '\s+')[0].ToLowerInvariant() })
-        if ($actualHashes.Count -ne $expectedHashes.Count -or (@(Compare-Object $expectedHashes $actualHashes)).Count -ne 0) {
-            Stop-DevOverlay 'DEV_MANIFEST_MISMATCH' 'The copied source does not match the local manifest.'
-        }
-        $releaseCheck = Invoke-DevWsl -Distro $doctor.active_runtime -Command '/usr/bin/test' -Arguments @('!', '-e', $releasePath)
-        if ($releaseCheck.ExitCode -ne 0) { Stop-DevOverlay 'DEV_COMMIT_FAILED' 'The content release already exists or cannot be checked.' }
+        Assert-RemoteManifest -Distro $doctor.active_runtime -Manifest $manifest -RemoteRoot $stagingPath
         $commitResult = Invoke-DevWsl -Distro $doctor.active_runtime -Command '/bin/mv' -Arguments @($stagingPath, $releasePath)
         if ($commitResult.ExitCode -ne 0) { Stop-DevOverlay 'DEV_COMMIT_FAILED' 'Could not commit the immutable overlay release.' }
-        $linkResult = Invoke-DevWsl -Distro $doctor.active_runtime -Command '/bin/ln' -Arguments @('-s', "releases/$($manifest.ContentId)", $currentTemp)
-        if ($linkResult.ExitCode -ne 0) { Stop-DevOverlay 'DEV_COMMIT_FAILED' 'Could not prepare the atomic current link.' }
-        $switchResult = Invoke-DevWsl -Distro $doctor.active_runtime -Command '/bin/mv' -Arguments @('-Tf', $currentTemp, "$script:OverlayRoot/current")
-        if ($switchResult.ExitCode -ne 0) { Stop-DevOverlay 'DEV_COMMIT_FAILED' 'Could not switch the current overlay atomically.' }
-        [ordered]@{ schema = 1; content_id = $manifest.ContentId; dirty = $manifest.Dirty; file_count = $sourceFiles.Count } | ConvertTo-Json -Compress
+        Set-DevCurrentRelease -Distro $doctor.active_runtime -ContentId $manifest.ContentId -CurrentTemp $currentTemp
+        [ordered]@{ schema = 1; content_id = $manifest.ContentId; dirty = $manifest.Dirty; file_count = $sourceFiles.Count; reused = $false } | ConvertTo-Json -Compress
     } finally {
+        if ($lockAcquired) { [void](Invoke-DevWsl -Distro $doctor.active_runtime -Command '/bin/rm' -Arguments @('-rf', '--', $stagingPath)) }
         if ($lockAcquired) { [void](Invoke-DevWsl -Distro $doctor.active_runtime -Command '/bin/rmdir' -Arguments @($lockPath)) }
         if (Test-Path -LiteralPath $tempTar -PathType Leaf) { Remove-Item -LiteralPath $tempTar -Force }
     }
@@ -285,10 +389,9 @@ function Invoke-DevRun {
     $runtime = Get-ActiveRuntime
     $pythonArguments = if ($Test) { @('-m', 'pytest') + $Arguments } else { $Arguments }
     $envArguments = @('/usr/bin/env', 'PYTHONNOUSERSITE=1', "PYTHONPATH=$script:OverlayRoot/current", "SWITCHTRADE_SOURCE_ROOT=$script:OverlayRoot/current", "SWITCHTRADE_INSTALLED_ROOT=$script:InstalledRoot", $script:PythonPath) + $pythonArguments
-    $result = Invoke-DevWsl -Distro $runtime.Name -Cwd "$script:OverlayRoot/current" -Command $envArguments[0] -Arguments $envArguments[1..($envArguments.Count - 1)]
-    if ($result.Stdout) { [Console]::Out.Write($result.Stdout) }
-    if ($result.Stderr) { [Console]::Error.Write($result.Stderr) }
-    return $result.ExitCode
+    $exitCode = Invoke-DevInteractiveWsl -Distro $runtime.Name -Cwd "$script:OverlayRoot/current" -Command $envArguments[0] -Arguments $envArguments[1..($envArguments.Count - 1)]
+    if ($exitCode -ne 0) { Stop-DevOverlay 'DEV_RUN_FAILED' "The development process exited with code $exitCode." }
+    return 0
 }
 
 function Invoke-DevClean {
