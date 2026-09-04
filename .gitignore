@@ -18,6 +18,8 @@
 !/docs/94-production-wrapper-beta-cutover-20260831.md
 !/docs/installer/
 !/docs/installer/**
+!/docs/core-simplification/
+!/docs/core-simplification/**
 /handoff/
 /archive/
 /logs/

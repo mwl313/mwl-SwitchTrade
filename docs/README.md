@@ -37,6 +37,8 @@ part of the public repository or release package.
   export, immutable package, and final two-PC/two-Switch acceptance.
 - [Future TODO](FUTURE_TODO.md) — definitive implementation and qualification ledger for that
   architecture.
+- [Core simplification planning bundle](core-simplification/README.md) — staged A/B/C planning
+  documents for reducing the core architecture before implementation work begins.
 - [Known Issues](KNOWN_ISSUES.md) — authoritative beta defect register, evidence, workarounds, and
   acceptance checks.
 
