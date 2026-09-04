@@ -853,3 +853,18 @@ archive list and regenerate the index.
 - **Correction status:** focused transport rerun passed after awaiting the failure event.
 - **Mandatory prevention gate:** Async failure tests must await their explicit failure/completion signal
   under a timeout; never infer a state transition from an arbitrary scheduler sleep.
+
+### MTA-CORE-004 — Resync both epochs when reconnect drops a contiguous frame
+
+- **Observed failure:** B3 review found that discarding a reconnect-time pending frame while retaining
+  the live peer's source epoch leaves the returning client expecting a missing sequence before the
+  new probe arrives. No product endpoint, relay listener, or external socket was started.
+- **Cause certainty:** certain from the sequence contract: the sender advances H1 while the receiver
+  never observes the discarded H1 frame, so the next H1 probe is a gap.
+- **Disproven alternatives:** Queue replacement and a no-traffic reconnect do not prove recovery
+  after a dropped frame; they omit the sequence divergence that causes this failure.
+- **Recovery and residue:** On a reconnect, rotate each source epoch exactly once: the reconnecting
+  side expects its peer's resync, and the live side rotates only after accepting that new peer epoch.
+- **Correction status:** dropped-DATA two-sided reconnect, reprobe, and new-generation regression passed.
+- **Mandatory prevention gate:** Reconnect regression must drop at least one live peer frame before
+  the returning socket reprobes, then prove fresh epoch zero ordering and no sequence gap.

@@ -226,3 +226,4 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-CORE-002` | Reconnect must not rotate the peer source epoch | Current ledger | 814 |
 | `MTA-OPS-223` | Patch only against verified local hunk context | Current ledger | 829 |
 | `MTA-CORE-003` | Wait for the transport failure signal, not a scheduler guess | Current ledger | 842 |
+| `MTA-CORE-004` | Resync both epochs when reconnect drops a contiguous frame | Current ledger | 857 |

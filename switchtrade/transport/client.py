@@ -124,6 +124,8 @@ class WireClient:
                 raw = await self._socket.recv()  # type: ignore[union-attr]
                 envelope = Envelope.decode(raw)
                 replies = self.state.accept(envelope)
+                if replies is None:
+                    continue
                 for reply in replies:
                     self._enqueue(reply)
                 if envelope.kind in {FrameKind.GENERATION_OFFER, FrameKind.GENERATION_ACCEPT, FrameKind.GENERATION_CLOSE, FrameKind.DATA, FrameKind.CAPABILITIES, FrameKind.PEER_CLOSE}:

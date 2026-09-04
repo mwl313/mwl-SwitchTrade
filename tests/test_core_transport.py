@@ -157,7 +157,7 @@ class WireClientTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_two_sided_reconnect_reprobes_without_epoch_ping_pong(self) -> None:
+    def test_dropped_frame_reconnect_resyncs_each_epoch_once(self) -> None:
         async def run() -> None:
             host_socket, guest_socket = MemorySocket(), MemorySocket()
             host_socket.peer, guest_socket.peer = guest_socket, host_socket
@@ -166,12 +166,27 @@ class WireClientTests(unittest.TestCase):
             await guest.connect(guest_socket)
             await asyncio.gather(host.wait_ready(), guest.wait_ready())
             host_epoch, guest_epoch = host.state._epoch, guest.state._epoch
+            await host.send(FrameKind.GENERATION_OFFER, "old-generation", b"setup")
+            self.assertEqual((await guest.receive()).kind, FrameKind.GENERATION_OFFER)
+            await guest.send(FrameKind.GENERATION_ACCEPT, "old-generation")
+            self.assertEqual((await host.receive()).kind, FrameKind.GENERATION_ACCEPT)
+            await guest.close()
+            await host.send(FrameKind.DATA, "old-generation", b"stale")
+            dropped = Envelope.decode(await asyncio.wait_for(guest_socket.incoming.get(), timeout=1))
+            self.assertEqual((dropped.kind, dropped.source_epoch, dropped.sequence), (FrameKind.DATA, host_epoch, 4))
             reconnected_guest = MemorySocket()
             host_socket.peer, reconnected_guest.peer = reconnected_guest, host_socket
             await guest.connect(reconnected_guest)
             await asyncio.gather(host.wait_ready(), guest.wait_ready())
-            self.assertEqual(host.state._epoch, host_epoch)
+            self.assertNotEqual(host.state._epoch, host_epoch)
             self.assertNotEqual(guest.state._epoch, guest_epoch)
+            resynced_epochs = (host.state._epoch, guest.state._epoch)
+            await asyncio.sleep(0)
+            self.assertEqual((host.state._epoch, guest.state._epoch), resynced_epochs)
+            await host.send(FrameKind.GENERATION_OFFER, "new-generation", b"setup")
+            self.assertEqual((await guest.receive()).generation_id, "new-generation")
+            await guest.send(FrameKind.GENERATION_ACCEPT, "new-generation")
+            self.assertEqual((await host.receive()).generation_id, "new-generation")
             await asyncio.gather(host.close(), guest.close())
 
         asyncio.run(run())

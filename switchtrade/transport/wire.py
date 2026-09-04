@@ -109,6 +109,7 @@ class WireState:
         self._peer_epoch: int | None = None
         self._peer_next_sequence = 0
         self._retired_epochs: set[int] = set()
+        self._expect_peer_resync = False
         self._challenge = b""
         self._challenge_confirmed = False
         self._responded_to_peer = False
@@ -120,11 +121,12 @@ class WireState:
     def ready(self) -> bool:
         return self._challenge_confirmed and self._responded_to_peer
 
-    def start(self, epoch: int | None = None) -> tuple[Envelope, Envelope]:
+    def start(self, epoch: int | None = None, *, expect_peer_resync: bool | None = None) -> tuple[Envelope, Envelope]:
         candidate = secrets.randbits(64) if epoch is None else epoch
         if not 1 <= candidate <= 0xFFFFFFFFFFFFFFFF:
             raise TransportError("T_EPOCH_INVALID")
         self._epoch, self._next_sequence = candidate, 0
+        self._expect_peer_resync = self._peer_epoch is not None if expect_peer_resync is None else expect_peer_resync
         self._reset_generation_and_probe()
         ready = self.emit(FrameKind.PEER_READY)
         return ready, self._new_probe()
@@ -139,9 +141,11 @@ class WireState:
         self._next_sequence += 1
         return envelope
 
-    def accept(self, envelope: Envelope) -> tuple[Envelope, ...]:
+    def accept(self, envelope: Envelope) -> tuple[Envelope, ...] | None:
         if envelope.source_seat is not self.peer_seat:
             raise TransportError("T_SOURCE_SEAT_MISMATCH")
+        if self._expect_peer_resync and envelope.source_epoch == self._peer_epoch:
+            return None
         is_new_epoch = envelope.source_epoch != self._peer_epoch
         if envelope.source_epoch in self._retired_epochs:
             raise TransportError("T_EPOCH_STALE")
@@ -150,11 +154,13 @@ class WireState:
                 raise TransportError("T_EPOCH_START_INVALID")
             previous = self._peer_epoch
             peer_reconnected = previous is not None
+            peer_resync_expected = self._expect_peer_resync
             if peer_reconnected:
                 if len(self._retired_epochs) >= MAX_RETIRED_EPOCHS:
                     raise TransportError("T_EPOCH_EXHAUSTED")
                 self._retired_epochs.add(previous)
-                self._reset_generation_and_probe()
+                self._reset_generation_and_probe(preserve_local_challenge=peer_resync_expected)
+                self._expect_peer_resync = False
             self._peer_epoch, self._peer_next_sequence = envelope.source_epoch, 0
         if envelope.sequence < self._peer_next_sequence:
             raise TransportError("T_SEQUENCE_DUPLICATE")
@@ -164,8 +170,8 @@ class WireState:
             raise TransportError("T_PEER_READY_INVALID")
         self._peer_next_sequence += 1
         replies: list[Envelope] = []
-        if is_new_epoch and peer_reconnected:
-            replies.append(self._new_probe())
+        if is_new_epoch and peer_reconnected and not peer_resync_expected:
+            replies.extend(self.start(expect_peer_resync=False))
         if envelope.kind is FrameKind.PROBE_CHALLENGE:
             self._responded_to_peer = True
             replies.append(self.emit(FrameKind.PROBE_RESPONSE, payload=envelope.payload))
@@ -217,9 +223,10 @@ class WireState:
         if not self.ready:
             raise TransportError("T_PROBE_REQUIRED")
 
-    def _reset_generation_and_probe(self) -> None:
-        self._challenge = b""
-        self._challenge_confirmed = False
+    def _reset_generation_and_probe(self, *, preserve_local_challenge: bool = False) -> None:
+        if not preserve_local_challenge:
+            self._challenge = b""
+            self._challenge_confirmed = False
         self._responded_to_peer = False
         self._inbound_offer = self._outbound_offer = self.active_generation = None
 
