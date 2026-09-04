@@ -455,3 +455,19 @@ archive list and regenerate the index.
 - **Correction status:** incident recorded before continuing A1 path discovery.
 - **Mandatory prevention gate:** Use bounded `rg --files` calls with explicit `-g` filters and one
   narrow source area; a truncated inventory is unknown and cannot authorize a read or mutation.
+
+### MTA-OPS-211 — Make generated index paths independent of invocation form
+
+- **Observed failure:** The A1 policy test found that `render_index()` emitted an absolute archive
+  path when passed an absolute `Path`, while the generated default index recorded the relative path.
+  The index was therefore not deterministic across equivalent callers. No runtime, installer, relay,
+  hardware, or external state changed.
+- **Cause certainty:** certain from the exact assertion diff and the two path forms.
+- **Disproven alternatives:** The archive bytes, extracted headings, and line numbers were unchanged;
+  only generator metadata formatting varied with the caller's path representation.
+- **Recovery and residue:** Preserve the failing test output, normalize the canonical archive label
+  to the repository-relative path, regenerate the index, and rerun the focused policy test. No cleanup
+  is required.
+- **Correction status:** correction is pending; A1 remains incomplete until the focused test passes.
+- **Mandatory prevention gate:** Deterministic generators must normalize equivalent absolute and
+  relative inputs before rendering metadata, with a test exercising both call forms.

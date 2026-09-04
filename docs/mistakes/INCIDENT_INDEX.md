@@ -335,6 +335,7 @@ component, failure code, or recovery path applies to the current task.
 | `MTA-OPS-208` | Preserve the exact range-read invocation after a wrapper syntax failure | [QA and tooling](QA_AND_TOOLING.md) | [source:411](INCIDENTS.md#L411) |
 | `MTA-OPS-209` | Treat repeated range-read wrapper failures as recurrence | [QA and tooling](QA_AND_TOOLING.md) | [source:428](INCIDENTS.md#L428) |
 | `MTA-OPS-210` | Bound repository inventories before consuming their output | [QA and tooling](QA_AND_TOOLING.md) | [source:443](INCIDENTS.md#L443) |
+| `MTA-OPS-211` | Make generated index paths independent of invocation form | [QA and tooling](QA_AND_TOOLING.md) | [source:459](INCIDENTS.md#L459) |
 | `MTA-QA-001` | Tests depended on ambient developer state | [QA and tooling](QA_AND_TOOLING.md) | [source:997](../MISTAKES_TO_AVOID_HISTORY-20260903.md#L997) |
 | `MTA-QA-002` | Harness tests were launched with an unqualified system interpreter | [QA and tooling](QA_AND_TOOLING.md) | [source:1008](../MISTAKES_TO_AVOID_HISTORY-20260903.md#L1008) |
 | `MTA-QA-003` | New control-contract tests retained obsolete fixture assumptions | [QA and tooling](QA_AND_TOOLING.md) | [source:1031](../MISTAKES_TO_AVOID_HISTORY-20260903.md#L1031) |
