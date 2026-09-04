@@ -27,10 +27,14 @@ class GenerationRole(StrEnum):
 
 class EndpointKind(StrEnum):
     FAKE = "fake"
+    SWITCH_LDN = "switch_ldn"
+    RETROARCH_GPSP = "retroarch_gpsp"
 
 
 class RuntimeKind(StrEnum):
     IN_PROCESS = "in_process"
+    MANAGED_WSL = "managed_wsl"
+    NATIVE = "native"
 
 
 def validate_protocol_id(protocol_id: str) -> str:
@@ -123,3 +127,10 @@ class EndpointDriver(Protocol):
     async def discover(self, cancel: Cancellation) -> LocalGeneration: ...
     async def accept(self, offer: GenerationOffer, cancel: Cancellation) -> LocalGeneration: ...
     async def close(self) -> CleanupReport: ...
+
+
+__all__ = (
+    "Cancellation", "CleanupReport", "EndpointCapabilities", "EndpointDriver", "EndpointKind",
+    "GenerationOffer", "GenerationRole", "LinkPacket", "LocalGeneration", "MAX_PACKET_BYTES",
+    "MAX_SETUP_BYTES", "PairCredentials", "PairSeat", "RuntimeKind", "validate_protocol_id",
+)

@@ -63,10 +63,14 @@ class FakeGeneration:
         await self._outgoing.put(packet)
 
     async def close(self, outcome: str) -> CleanupReport:
+        discarded = 0
         if not self._closed:
             self._closed = True
+            while not self._outgoing.empty():
+                self._outgoing.get_nowait()
+                discarded += 1
             self._outgoing.put_nowait(None)
-        return CleanupReport(True, True, self._outgoing.empty(), {"outcome": outcome})
+        return CleanupReport(True, True, True, {"outcome": outcome, "discarded_packets": discarded})
 
 
 class FakeEndpointDriver:
