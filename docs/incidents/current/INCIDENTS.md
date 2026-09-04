@@ -868,3 +868,125 @@ archive list and regenerate the index.
 - **Correction status:** dropped-DATA two-sided reconnect, reprobe, and new-generation regression passed.
 - **Mandatory prevention gate:** Reconnect regression must drop at least one live peer frame before
   the returning socket reprobes, then prove fresh epoch zero ordering and no sequence gap.
+
+### MTA-OPS-224 — Verify package-root paths before a multi-file patch
+
+- **Observed failure:** The first B4 supervisor patch targeted `core/__init__.py` rather than the
+  observed `switchtrade/core/__init__.py`; `apply_patch` rejected the operation before any file
+  changed.
+- **Cause certainty:** certain from the missing-path diagnostic and the immediately preceding source
+  inventory.
+- **Disproven alternatives:** This rejection does not indicate a Core or transport failure and did
+  not create a supervisor, test, process, or endpoint state.
+- **Recovery and residue:** Preserve the rejection, use the verified package-root path, and split the
+  patch by file. No cleanup is required.
+- **Correction status:** verified-path B4 patch applied.
+- **Mandatory prevention gate:** Before every multi-file package patch, compare each target path with
+  the current bounded inventory rather than reconstructing a shortened package path.
+
+### MTA-CORE-005 — Assert asynchronous packet delivery from its completion signal
+
+- **Observed failure:** The first B4 supervisor pump regression put packets into both local test
+  generations, yielded once with `sleep(0)`, and asserted delivery. One relay pump had not yet run,
+  so the assertion observed an empty mirror send list. No product endpoint, relay listener, or
+  external socket was created.
+- **Cause certainty:** certain from the failed assertion and the queued test packet: the test used a
+  scheduler guess instead of the generation's packet-delivery signal.
+- **Disproven alternatives:** The result does not establish a broken Core pump or an invalid wire
+  frame; it only invalidates the timing-dependent observation.
+- **Recovery and residue:** Preserve the failed assertion and wait under a bounded timeout for the
+  receiving fake generation to record the expected packet. The in-memory queues are disposable.
+- **Correction status:** signal-bound B4 pump regression passed.
+- **Mandatory prevention gate:** Async delivery tests must await a bounded completion signal or
+  state predicate; never use a single event-loop yield as delivery proof.
+
+### MTA-OPS-225 — Search only verified task-document paths
+
+- **Observed failure:** A B4 documentation search included the unobserved path
+  `docs/core-simplification/TODO.md`. Ripgrep reported that operand missing, so the combined result
+  is not valid evidence for the requested task-document check. No product state changed.
+- **Cause certainty:** certain from ripgrep's exact missing-path diagnostic.
+- **Disproven alternatives:** The error does not establish that a TODO document is absent elsewhere
+  or that the already-read B4 design and prompt are invalid.
+- **Recovery and residue:** Preserve the diagnostic and discard the combined search as evidence; use
+  only previously verified paths or discover the exact document path before a future search.
+- **Correction status:** verified B4 prompt/design paths retained; no retry against a guessed path.
+- **Mandatory prevention gate:** Every task-document operand in a scoped search must be observed in a
+  bounded inventory or supplied verbatim by the user before use.
+
+### MTA-OPS-226 — Discover transport module names before direct inspection
+
+- **Observed failure:** A B4 Core review attempted to read the unobserved module path
+  `switchtrade/transport/state.py`; PowerShell reported it missing. The same invocation did read
+  the already-known Core contracts, but no conclusion was drawn from the missing transport operand.
+- **Cause certainty:** certain from the exact missing-path diagnostic.
+- **Disproven alternatives:** This does not prove that transport state is missing or that B4 state
+  transitions are invalid; only the guessed filename was invalid.
+- **Recovery and residue:** Preserve and discard the transport portion of that read, then inventory
+  the narrow transport directory before inspecting its state implementation. No product state changed.
+- **Correction status:** bounded transport module inventory completed before inspection.
+- **Mandatory prevention gate:** Before directly opening an unobserved source module, resolve its
+  exact filename with a bounded `rg --files` inventory.
+
+### MTA-OPS-227 — Do not infer a relay package location from its import name
+
+- **Observed failure:** A B4 dependency inventory included the unobserved directory
+  `switchtrade/relay`; ripgrep reported that operand missing. The result therefore cannot establish
+  the implementation location of the existing relay API or pair service. No product state changed.
+- **Cause certainty:** certain from ripgrep's exact missing-directory diagnostic.
+- **Disproven alternatives:** The error does not show that relay functionality is absent; only the
+  package layout assumption was unsupported.
+- **Recovery and residue:** Preserve and discard that combined inventory, then start from a verified
+  package-wide file list before selecting a relay-related module. No cleanup is required.
+- **Correction status:** package-wide bounded inventory completed before selecting relay files.
+- **Mandatory prevention gate:** Treat an import-domain name as an API boundary, not a filesystem
+  path; resolve its implementation from a verified file inventory before searching it.
+
+### MTA-CORE-006 — Preserve terminal failure state across generation cleanup
+
+- **Observed failure:** The new B4 local-generation failure regression proved that the pump recorded
+  `S_PUMP_FAILED` and closed the generation, but `close_generation()` overwrote `FAILED` with
+  `CLOSING_GENERATION` before returning. No product endpoint, relay listener, or external socket
+  was created.
+- **Cause certainty:** certain from the assertion and the cleanup path: a pre-existing first failure
+  skips the normal `PAIRED` assignment without restoring its terminal state.
+- **Disproven alternatives:** This is not an incomplete cleanup result; the local generation's close
+  completion signal was observed before the state assertion.
+- **Recovery and residue:** Preserve the failed state assertion and assign `FAILED` after a clean
+  close when a first functional failure exists. The in-memory generation is closed.
+- **Correction status:** terminal-state restoration regression passed.
+- **Mandatory prevention gate:** Every cleanup path reachable after a recorded failure must assert
+  both resource closure and the final public `FAILED` state.
+
+### MTA-OPS-228 — Bound the legacy full-suite wait and clean up owned test processes
+
+- **Observed failure:** The B4 final `unittest discover -s tests` run remained live beyond two
+  bounded 30-second waits without a terminal summary. The verified owned parent/child process IDs
+  were 26220 and 20068. B4's focused supervisor and Core suites had already completed successfully.
+- **Cause certainty:** certain that the full-suite invocation exceeded the bound, from the verified
+  live process IDs; uncertain which legacy integration test held the process without an isolated
+  timeout run.
+- **Disproven alternatives:** This does not invalidate the passing B4 tests or prove a B4 failure;
+  no B4 test was identified as the stalled case.
+- **Recovery and residue:** Preserve the incomplete run, terminate only the exact owned test parent
+  and child, then verify no matching discovery process remains. Do not represent the full suite as
+  passing.
+- **Correction status:** verified no matching owned discovery process remains.
+- **Mandatory prevention gate:** Full repository test runs must have a bounded completion check; on
+  timeout, record the exact owned process identity, clean it up, and isolate the holding test before
+  retrying the broad suite.
+
+### MTA-OPS-229 — Force-stage ignored incident documents with the implementation packet
+
+- **Observed failure:** The first B4 staging command named the two incident documents without
+  `-f`. Git staged the Core source and test paths but rejected `docs/incidents` under the repository
+  ignore rule, leaving a partial packet.
+- **Cause certainty:** certain from Git's ignored-path diagnostic and the explicit staging output.
+- **Disproven alternatives:** The source/test staging did not include the required incident ledger or
+  generated index, so the partial index cannot authorize a commit.
+- **Recovery and residue:** Preserve the partial staging, regenerate the index after recording this
+  incident, then force-stage only the two verified ignored incident paths and inspect the complete
+  staged name list before commit.
+- **Correction status:** incident documents force-staged; complete staged name list verified.
+- **Mandatory prevention gate:** When a packet changes ignored incident documents, stage those exact
+  paths with `git add -f --` in a separate mutation before every commit.

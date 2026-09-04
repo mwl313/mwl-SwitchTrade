@@ -227,3 +227,11 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-OPS-223` | Patch only against verified local hunk context | Current ledger | 829 |
 | `MTA-CORE-003` | Wait for the transport failure signal, not a scheduler guess | Current ledger | 842 |
 | `MTA-CORE-004` | Resync both epochs when reconnect drops a contiguous frame | Current ledger | 857 |
+| `MTA-OPS-224` | Verify package-root paths before a multi-file patch | Current ledger | 872 |
+| `MTA-CORE-005` | Assert asynchronous packet delivery from its completion signal | Current ledger | 887 |
+| `MTA-OPS-225` | Search only verified task-document paths | Current ledger | 903 |
+| `MTA-OPS-226` | Discover transport module names before direct inspection | Current ledger | 917 |
+| `MTA-OPS-227` | Do not infer a relay package location from its import name | Current ledger | 931 |
+| `MTA-CORE-006` | Preserve terminal failure state across generation cleanup | Current ledger | 945 |
+| `MTA-OPS-228` | Bound the legacy full-suite wait and clean up owned test processes | Current ledger | 961 |
+| `MTA-OPS-229` | Force-stage ignored incident documents with the implementation packet | Current ledger | 979 |
