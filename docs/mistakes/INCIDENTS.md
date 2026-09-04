@@ -471,3 +471,20 @@ archive list and regenerate the index.
 - **Correction status:** correction is pending; A1 remains incomplete until the focused test passes.
 - **Mandatory prevention gate:** Deterministic generators must normalize equivalent absolute and
   relative inputs before rendering metadata, with a test exercising both call forms.
+
+### MTA-OPS-212 — Isolate staged A1 files before an incident-only commit
+
+- **Observed failure:** The incident-only commit also included the already-staged A1 archive rename
+  because the prior `git mv` remained in the index. The archive move was byte-for-byte correct, but
+  the intended commit boundary was not. No runtime, installer, relay, hardware, or external state
+  changed.
+- **Cause certainty:** certain from the commit summary showing the rename alongside the incident
+  update and the subsequent status showing only remaining A1 files.
+- **Disproven alternatives:** No A1 content was lost or rewritten and no unrelated production path
+  was staged; this was commit-scope contamination, not archive corruption.
+- **Recovery and residue:** Preserve the completed archive rename, record the boundary mistake, and
+  continue without history rewriting. The remaining A1 files will be staged and committed as the A1
+  implementation; later A2/A3 boundaries remain separate.
+- **Correction status:** incident recorded before continuing the A1 commit.
+- **Mandatory prevention gate:** Before every commit, inspect the complete staged name list and
+  confirm it contains only the current packet; never rely on the last staging command's intent.
