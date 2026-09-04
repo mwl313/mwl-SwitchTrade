@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI, Header, HTTPException, WebSocket
+from fastapi import FastAPI, Header, HTTPException, Request, WebSocket
 from fastapi.websockets import WebSocketDisconnect
 
 from relay.core_contracts import CreatePairRequest, JoinPairRequest
@@ -19,25 +19,28 @@ def create_app(store: PairStore | None = None) -> FastAPI:
         return authorization[7:]
 
     def error(error: PairStoreError) -> HTTPException:
-        status = 409 if error.code in {"PAIR_CODE_CONSUMED", "PAIR_CAPACITY"} else 401 if error.code == "PAIR_AUTH_INVALID" else 400
+        status = 429 if error.code == "PAIR_RATE_LIMITED" else 409 if error.code in {"PAIR_CODE_CONSUMED", "PAIR_CAPACITY"} else 401 if error.code == "PAIR_AUTH_INVALID" else 400
         return HTTPException(status, error.code)
+
+    def client_id(request: Request) -> str:
+        return request.client.host if request.client else "anonymous"
 
     @app.get("/core/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
     @app.post("/core/v1/pairs")
-    def create(request: CreatePairRequest) -> dict[str, object]:
+    def create(request: CreatePairRequest, http_request: Request) -> dict[str, object]:
         try:
-            credentials = pairs.create(request.capabilities.as_domain())
+            credentials = pairs.create(request.capabilities.as_domain(), client_id(http_request))
         except PairStoreError as exc:
             raise error(exc) from exc
-        return {"contract_version": "switchtrade-pair.v1", **credentials.__dict__}
+        return {"contract_version": "switchtrade-pair.v1", **credentials.__dict__, "code_expires_at": pairs.code_expires_at(credentials.pair_id, credentials.access_token)}
 
     @app.post("/core/v1/pairs:join")
-    def join(request: JoinPairRequest) -> dict[str, object]:
+    def join(request: JoinPairRequest, http_request: Request) -> dict[str, object]:
         try:
-            credentials = pairs.join(request.code, request.capabilities.as_domain())
+            credentials = pairs.join(request.code, request.capabilities.as_domain(), client_id(http_request))
             status = pairs.status(credentials.pair_id, credentials.access_token)
         except PairStoreError as exc:
             raise error(exc) from exc

@@ -220,3 +220,6 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-OPS-218` | Do not restage an already-indexed deletion by an absent path | Current ledger | 724 |
 | `MTA-OPS-219` | Read dependency locks by the required package entry | Current ledger | 739 |
 | `MTA-OPS-220` | Run package tests through the repository import boundary | Current ledger | 754 |
+| `MTA-OPS-221` | Retry a wrapper syntax failure with the minimal invocation | Current ledger | 769 |
+| `MTA-CORE-001` | Do not expose consumed-code state through concurrent join tests | Current ledger | 783 |
+| `MTA-OPS-222` | Keep staged diff checks to one evidence question | Current ledger | 799 |

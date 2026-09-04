@@ -765,3 +765,48 @@ archive list and regenerate the index.
 - **Correction status:** pending.
 - **Mandatory prevention gate:** Tests importing repository packages must run through the repository
   module import boundary, not as a bare test-file script.
+
+### MTA-OPS-221 — Retry a wrapper syntax failure with the minimal invocation
+
+- **Observed failure:** The first B1 push wrapper contained malformed orchestration JavaScript and
+  failed before PowerShell started Git. No remote branch, source, relay process, WSL, installer, or
+  product state changed.
+- **Cause certainty:** certain from the wrapper `SyntaxError` and absence of Git output.
+- **Disproven alternatives:** The failure does not indicate authentication, remote rejection, or a
+  branch divergence; `git push` was never invoked.
+- **Recovery and residue:** Preserve the wrapper failure and retry the same explicit branch push with
+  a minimal valid wrapper invocation. No runtime cleanup is required.
+- **Correction status:** pending.
+- **Mandatory prevention gate:** After an orchestration syntax error, remove optional session handling
+  and use the smallest known-valid tool call for the exact pending operation.
+
+### MTA-CORE-001 — Do not expose consumed-code state through concurrent join tests
+
+- **Observed failure:** The first B2 concurrent-join test expected the losing request to receive
+  `PAIR_CODE_CONSUMED`, but a successfully joined code is removed from the admission map and correctly
+  returned `PAIR_CODE_INVALID`. No relay listener, source-managed pair state outside the test process,
+  WSL, installer, or product state changed.
+- **Cause certainty:** certain from the atomic join path: it assigns the guest, removes the code, and
+  only then releases the pair-store lock.
+- **Disproven alternatives:** This did not permit a second guest token or indicate a lock failure; the
+  test asserted an unpromised state distinction after successful one-time-code consumption.
+- **Recovery and residue:** Preserve the failed assertion and require exactly one guest outcome with
+  the opaque invalid-code result for the competing request. The in-memory test store is gone.
+- **Correction status:** focused pair-store test passed after the expectation correction.
+- **Mandatory prevention gate:** Concurrent admission tests must prove the one-guest invariant without
+  turning a consumed-code lookup result into an externally observable oracle.
+
+### MTA-OPS-222 — Keep staged diff checks to one evidence question
+
+- **Observed failure:** A B2 staged review combined whitespace, statistics, and status checks in one
+  PowerShell invocation. The results named only the intended six files and reported no whitespace
+  errors, but the invocation broke the repository's one-evidence-question rule. No relay, WSL,
+  installer, product, or external state changed.
+- **Cause certainty:** certain from the literal command composition.
+- **Disproven alternatives:** The staged content was not altered and the combined output does not
+  indicate a source, admission, credential, or Git index defect.
+- **Recovery and residue:** Preserve the staged set and repeat the required whitespace and status
+  observations in separate invocations before commit. No cleanup is required.
+- **Correction status:** pending independent staged review.
+- **Mandatory prevention gate:** Keep each staged-diff, staged-statistics, and status observation in
+  its own shell invocation even when all use the same Git index.
