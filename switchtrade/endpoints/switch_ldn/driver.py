@@ -241,10 +241,16 @@ class SwitchLdnEndpointDriver:
                 raise asyncio.CancelledError
             return ready_task.result()
         finally:
-            for task in (ready_task, cancel_task):
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(ready_task, cancel_task, return_exceptions=True)
+            # ``wait_ready`` runs in a worker because StageSession owns a
+            # different event loop.  Awaiting that worker after cancellation
+            # deadlocks: only the caller's subsequent ``session.stop`` can
+            # make it return.  Cancel its asyncio wrapper and let stop join
+            # the stage before the worker is observed again.
+            if not ready_task.done():
+                ready_task.cancel()
+            if not cancel_task.done():
+                cancel_task.cancel()
+            await asyncio.gather(cancel_task, return_exceptions=True)
 
     async def _stop_session(self, session: StageSession) -> bool:
         try:

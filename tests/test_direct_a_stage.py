@@ -1,7 +1,9 @@
+import asyncio
 import contextlib
 import hashlib
 import json
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 import unittest
 
@@ -10,6 +12,8 @@ import trio
 from switchtrade.connection.a_stage import (
     AStageError, DirectAStage, GATES, room_mismatches, select_room, validate_advertisement,
 )
+from switchtrade.connection.stage_session import StageSession
+from switchtrade.endpoints.switch_ldn.driver import SwitchLdnEndpointDriver, SwitchLdnPolicy
 
 
 def valid_application_data():
@@ -257,6 +261,173 @@ class DirectAContractTests(unittest.TestCase):
         self.assertFalse(schema["additionalProperties"])
         self.assertNotIn("application_data", schema["properties"])
         self.assertNotIn("bssid", schema["properties"])
+
+
+class _NoopSimulation:
+    def tick(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class DirectADriverLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _policy() -> SwitchLdnPolicy:
+        return SwitchLdnPolicy(
+            run_id="00000000-0000-0000-0000-000000000010",
+            release="test-release",
+            usb_id="0bda:818b",
+            hardware_profile="rtl8192eu",
+            phy="phy0",
+            proven_radio_iface="wlan0",
+            ifname="sta-a-driver",
+            keys_path="/runtime/config/prod.keys",
+            ap_ifname="ap-a-driver",
+            monitor_ifname="mon-a-driver",
+            tap_ifname="tap-a-driver",
+            retry_delay=0.5,
+            session_timeout=1,
+            session_stop_timeout=1,
+        )
+
+    @staticmethod
+    def _stage(policy, ldn_module, *, scan_timeout=0.1):
+        return DirectAStage(
+            run_id=policy.run_id,
+            release=policy.release,
+            phy=policy.phy,
+            ifname=policy.ifname,
+            keys_path=policy.keys_path,
+            scan_timeout=scan_timeout,
+            hold_seconds=0.01,
+            ldn_module=ldn_module,
+            trio_module=trio,
+            data_plane_factory=fake_data_plane,
+            version_resolver=lambda: "0.0.17",
+        )
+
+    async def test_actual_direct_a_session_driver_retries_clean_no_room(self):
+        class RetryingLdn(FakeLdn):
+            outcomes = [[], [network()]]
+
+            @classmethod
+            async def scan(cls, *_args, **_kwargs):
+                return cls.outcomes.pop(0)
+
+        stages = []
+
+        def make_stage(value):
+            stage = self._stage(value, RetryingLdn)
+            stages.append(stage)
+            return stage
+
+        driver = SwitchLdnEndpointDriver(
+            self._policy(), stage_factory=make_stage,
+            session_factory=StageSession, simulation_factory=lambda *_args: _NoopSimulation(),
+        )
+        await driver.prepare()
+        generation = await asyncio.wait_for(driver.discover(asyncio.Event()), timeout=2)
+        self.assertEqual(len(stages), 2)
+        self.assertEqual(stages[0].cleanup["ldn_context_state"], "not_acquired")
+        self.assertTrue(stages[0].cleanup["ldn_context_released"])
+        self.assertTrue((await generation.close("test")).local_resources_released)
+
+    async def test_actual_direct_a_session_driver_retries_clean_scan_timeout(self):
+        class RetryingLdn(FakeLdn):
+            calls = 0
+
+            @classmethod
+            async def scan(cls, *_args, **_kwargs):
+                cls.calls += 1
+                if cls.calls == 1:
+                    await trio.sleep_forever()
+                return [network()]
+
+        stages = []
+
+        def make_stage(value):
+            stage = self._stage(value, RetryingLdn, scan_timeout=0.01)
+            stages.append(stage)
+            return stage
+
+        driver = SwitchLdnEndpointDriver(
+            self._policy(), stage_factory=make_stage,
+            session_factory=StageSession, simulation_factory=lambda *_args: _NoopSimulation(),
+        )
+        await driver.prepare()
+        generation = await asyncio.wait_for(driver.discover(asyncio.Event()), timeout=2)
+        self.assertEqual(len(stages), 2)
+        self.assertTrue(stages[0].cleanup["ldn_context_released"])
+        self.assertTrue((await generation.close("test")).local_resources_released)
+
+    async def test_actual_direct_a_scan_cancellation_returns_a_clean_terminal_report(self):
+        started = threading.Event()
+
+        class WaitingLdn(FakeLdn):
+            @classmethod
+            async def scan(cls, *_args, **_kwargs):
+                started.set()
+                await trio.sleep_forever()
+
+        stages = []
+
+        def make_stage(value):
+            stage = self._stage(value, WaitingLdn)
+            stages.append(stage)
+            return stage
+
+        driver = SwitchLdnEndpointDriver(
+            self._policy(), stage_factory=make_stage,
+            session_factory=StageSession, simulation_factory=lambda *_args: _NoopSimulation(),
+        )
+        await driver.prepare()
+        cancel = asyncio.Event()
+        discovery = asyncio.create_task(driver.discover(cancel))
+        await asyncio.wait_for(asyncio.to_thread(started.wait), timeout=1)
+        cancel.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(discovery, timeout=1)
+        self.assertEqual(stages[0].cleanup["ldn_context_state"], "not_acquired")
+        self.assertTrue(stages[0].cleanup["ldn_context_released"])
+        self.assertFalse(any(thread.name == "switchtrade-direct-stage" for thread in threading.enumerate()))
+
+    async def test_actual_direct_a_unverified_context_teardown_blocks_next_attempt(self):
+        class DirtyStation(FakeStation):
+            @contextlib.asynccontextmanager
+            async def connect(self):
+                self._host_address = self.associated_address
+                await self._register_key(b"k" * 16)
+                try:
+                    yield
+                finally:
+                    raise OSError("station teardown was not observed")
+
+        class DirtyWlan(FakeWlan):
+            Station = DirtyStation
+
+        class DirtyLdn(FakeLdn):
+            wlan = DirtyWlan
+
+        stages = []
+
+        def make_stage(value):
+            stage = self._stage(value, DirtyLdn)
+            stages.append(stage)
+            return stage
+
+        driver = SwitchLdnEndpointDriver(
+            self._policy(), stage_factory=make_stage,
+            session_factory=StageSession, simulation_factory=lambda *_args: _NoopSimulation(),
+        )
+        await driver.prepare()
+        generation = await asyncio.wait_for(driver.discover(asyncio.Event()), timeout=1)
+        report = await generation.close("test")
+        self.assertFalse(report.local_resources_released)
+        self.assertEqual(stages[0].cleanup["ldn_context_state"], "unknown")
+        self.assertFalse(stages[0].cleanup["ldn_context_released"])
+        with self.assertRaisesRegex(Exception, "unverified"):
+            await driver.prepare()
 
 
 if __name__ == "__main__":

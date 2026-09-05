@@ -719,6 +719,22 @@ class DirectBStage:
             report["data_plane"] = plane_evidence
             report["association"] = association_evidence
             return report
+        except BaseException as error:
+            cancelled = self.trio is not None and isinstance(
+                error, getattr(self.trio, "Cancelled", ())
+            )
+            if not cancelled:
+                raise
+            if radio_evidence is not None and not self.cleanup["radio_quiescent"]:
+                self._quiesce_owned_radio()
+            report = self._failure(BStageError(
+                "B_CANCELLED", GATES[min(len(self.passed), len(GATES) - 1)],
+                "direct B was cancelled",
+            ))
+            report["radio_reset"] = radio_evidence
+            report["data_plane"] = plane_evidence
+            report["association"] = association_evidence
+            return report
         except (ImportError, metadata.PackageNotFoundError):
             return self._failure(BStageError(
                 "B_RUNTIME_DEPENDENCY_MISSING", GATES[0], "direct B runtime dependency is unavailable"

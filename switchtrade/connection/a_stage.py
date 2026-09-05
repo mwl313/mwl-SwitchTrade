@@ -236,6 +236,16 @@ class DirectAStage:
         self.started = time.monotonic()
         self.passed: list[dict] = []
         self.result_level = None
+        # A does not take ownership of the prepared PHY.  It only owns an LDN
+        # context after STANetwork.start() yields.  Keep that distinction in
+        # the report so a no-room scan is retryable without blessing a partial
+        # join or an unobserved context teardown.
+        self.cleanup = {
+            "ldn_context_released": True,
+            "radio_quiescent": True,
+            "ldn_context_state": "not_acquired",
+            "radio_state": "not_owned",
+        }
 
     def _pass(self, gate: str) -> None:
         if gate not in GATES or any(item["gate"] == gate for item in self.passed):
@@ -273,59 +283,81 @@ class DirectAStage:
         wlan = ldn.wlan
         key_derivation = ldn.KeyDerivation(param.keys, param.network.protocol)
         wlan_key = key_derivation.derive_data_key(param.network.server_random, param.password)
-        async with wlan.create_factory() as factory:
-            async with factory._create_interface(
-                param.phyname, param.ifname, wlan.nl80211.NL80211_IFTYPE_STATION
-            ) as attributes:
-                station = wlan.Station(
-                    factory._wlan,
-                    factory._router,
-                    param.ifname,
-                    attributes[wlan.nl80211.NL80211_ATTR_IFINDEX],
-                    wlan.MACAddress(attributes[wlan.nl80211.NL80211_ATTR_MAC]),
-                    param.network.ssid.hex(),
-                    param.network.channel,
-                    wlan_key,
-                )
-                register_key = station._register_key
+        body_error = None
+        try:
+            async with wlan.create_factory() as factory:
+                async with factory._create_interface(
+                    param.phyname, param.ifname, wlan.nl80211.NL80211_IFTYPE_STATION
+                ) as attributes:
+                    station = wlan.Station(
+                        factory._wlan,
+                        factory._router,
+                        param.ifname,
+                        attributes[wlan.nl80211.NL80211_ATTR_IFINDEX],
+                        wlan.MACAddress(attributes[wlan.nl80211.NL80211_ATTR_MAC]),
+                        param.network.ssid.hex(),
+                        param.network.channel,
+                        wlan_key,
+                    )
+                    register_key = station._register_key
 
-                async def tracked_register_key(key):
-                    try:
-                        associated = bytes(station._host_address)
-                        selected = bytes(param.network.address)
-                    except (AttributeError, TypeError, ValueError) as error:
-                        raise AStageError(
-                            "A_ASSOCIATION_IDENTITY_MISMATCH", GATES[5],
-                            "associated room identity is unavailable",
-                        ) from error
-                    if len(associated) != 6 or associated != selected:
-                        raise AStageError(
-                            "A_ASSOCIATION_IDENTITY_MISMATCH", GATES[5],
-                            "station associated with a different room",
-                        )
-                    self._pass(GATES[5])
-                    await register_key(key)
-                    self._pass(GATES[6])
+                    async def tracked_register_key(key):
+                        try:
+                            associated = bytes(station._host_address)
+                            selected = bytes(param.network.address)
+                        except (AttributeError, TypeError, ValueError) as error:
+                            raise AStageError(
+                                "A_ASSOCIATION_IDENTITY_MISMATCH", GATES[5],
+                                "associated room identity is unavailable",
+                            ) from error
+                        if len(associated) != 6 or associated != selected:
+                            raise AStageError(
+                                "A_ASSOCIATION_IDENTITY_MISMATCH", GATES[5],
+                                "station associated with a different room",
+                            )
+                        self._pass(GATES[5])
+                        await register_key(key)
+                        self._pass(GATES[6])
 
-                station._register_key = tracked_register_key
-                async with station.connect():
-                    sta = ldn.STANetwork(station, param, key_derivation)
-                    authenticate = sta._authenticate
-                    initialize = sta._initialize_network
+                    station._register_key = tracked_register_key
+                    async with station.connect():
+                        self.cleanup["ldn_context_released"] = False
+                        self.cleanup["ldn_context_state"] = "acquiring"
+                        sta = ldn.STANetwork(station, param, key_derivation)
+                        authenticate = sta._authenticate
+                        initialize = sta._initialize_network
 
-                    async def tracked_authenticate():
-                        await authenticate()
-                        self._pass(GATES[7])
+                        async def tracked_authenticate():
+                            await authenticate()
+                            self._pass(GATES[7])
 
-                    async def tracked_initialize():
-                        await initialize()
-                        _validate_participants(sta)
-                        self._pass(GATES[8])
+                        async def tracked_initialize():
+                            await initialize()
+                            _validate_participants(sta)
+                            self._pass(GATES[8])
 
-                    sta._authenticate = tracked_authenticate
-                    sta._initialize_network = tracked_initialize
-                    async with sta.start():
-                        yield sta
+                        sta._authenticate = tracked_authenticate
+                        sta._initialize_network = tracked_initialize
+                        async with sta.start():
+                            self.cleanup["ldn_context_released"] = False
+                            self.cleanup["ldn_context_state"] = "acquired"
+                            try:
+                                yield sta
+                            except BaseException as error:
+                                body_error = error
+                                raise
+        except BaseException as error:
+            if body_error is error:
+                self.cleanup["ldn_context_released"] = True
+                self.cleanup["ldn_context_state"] = "released"
+            elif self.cleanup["ldn_context_state"] in {"acquiring", "acquired"}:
+                self.cleanup["ldn_context_released"] = False
+                self.cleanup["ldn_context_state"] = "unknown"
+            raise
+        else:
+            if self.cleanup["ldn_context_state"] == "acquired":
+                self.cleanup["ldn_context_released"] = True
+                self.cleanup["ldn_context_state"] = "released"
 
     async def _hold(self, network) -> None:
         disconnect_type = getattr(self.ldn, "DisconnectEvent", ())
@@ -349,7 +381,7 @@ class DirectAStage:
             "gates": list(self.passed),
             "advertisement": None,
             "data_plane": None,
-            "cleanup": {"ldn_context_released": False, "radio_quiescent": False},
+            "cleanup": dict(self.cleanup),
             "failure": {"code": error.code, "gate": error.gate, "message": error.message},
             "duration_ms": round((time.monotonic() - self.started) * 1000),
         }
@@ -478,7 +510,7 @@ class DirectAStage:
                     "packet_socket_bound": True,
                     "local_hold_completed": True,
                 },
-                "cleanup": {"ldn_context_released": True, "radio_quiescent": True},
+                "cleanup": dict(self.cleanup),
                 "failure": None,
                 "duration_ms": round((time.monotonic() - self.started) * 1000),
             }
@@ -489,10 +521,15 @@ class DirectAStage:
             return self._failure(AStageError(
                 "A_RUNTIME_DEPENDENCY_MISSING", GATES[0], "direct A runtime dependency is missing"
             )), None
-        except BaseException:
+        except BaseException as error:
             index = min(len(self.passed), len(GATES) - 1)
+            cancelled = self.trio is not None and isinstance(
+                error, getattr(self.trio, "Cancelled", ())
+            )
             return self._failure(AStageError(
-                "A_STAGE_INTERNAL", GATES[index], "direct A failed unexpectedly"
+                "A_CANCELLED" if cancelled else "A_STAGE_INTERNAL",
+                GATES[index],
+                "direct A was cancelled" if cancelled else "direct A failed unexpectedly",
             )), None
 
 

@@ -1,9 +1,11 @@
 import contextlib
+import asyncio
 import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -22,6 +24,9 @@ from switchtrade.connection.b_stage import (
     reset_selected_phy,
 )
 from switchtrade.connection import direct_b_endpoint
+from switchtrade.connection.stage_session import StageSession
+from switchtrade.core.contracts import EndpointKind, GenerationOffer
+from switchtrade.endpoints.switch_ldn.driver import SwitchLdnEndpointDriver, SwitchLdnPolicy
 
 
 class FakeParam:
@@ -560,6 +565,166 @@ class DirectBContractTests(unittest.TestCase):
             "ldn_last_checkpoint": "ap_started",
             "ap_stop_timed_out": True,
         }])
+
+
+class _NoopSimulation:
+    def tick(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class DirectBDriverCancellationTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _policy() -> SwitchLdnPolicy:
+        return SwitchLdnPolicy(
+            run_id="00000000-0000-0000-0000-000000000011",
+            release="test-release",
+            usb_id="0bda:818b",
+            hardware_profile="rtl8192eu",
+            phy="phy0",
+            proven_radio_iface="wlan0",
+            ifname="sta-b-driver",
+            keys_path="/runtime/config/prod.keys",
+            ap_ifname="ap-b-driver",
+            monitor_ifname="mon-b-driver",
+            tap_ifname="tap-b-driver",
+            session_timeout=1,
+            session_stop_timeout=1,
+        )
+
+    @staticmethod
+    def _offer() -> GenerationOffer:
+        return GenerationOffer(
+            "b-cancel", "switchtrade.gba-frame.v1", EndpointKind.SWITCH_LDN, FIXTURE
+        )
+
+    async def _wait_for(self, event: threading.Event) -> None:
+        for _ in range(100):
+            if event.is_set():
+                return
+            await asyncio.sleep(0.01)
+        self.fail("Direct B did not enter its expected wait")
+
+    async def test_actual_direct_b_association_cancellation_reports_verified_cleanup(self):
+        waiting = threading.Event()
+        stages = []
+
+        class WaitingNetwork(FakeNetwork):
+            async def next_event(self):
+                waiting.set()
+                await trio.sleep_forever()
+
+        def make_direct_b_stage(_policy, _offer):
+            stage = make_stage(association_timeout=None)
+
+            @contextlib.asynccontextmanager
+            async def network_factory(_param):
+                stage.compatibility = {
+                    "beacon_head": True, "monitor_ccmp": True, "remote_destroy": True,
+                }
+                yield WaitingNetwork(
+                    (stage.ap_ifname, stage.monitor_ifname, stage.tap_ifname)
+                ), trio.Event()
+
+            stage.network_factory = network_factory
+            stages.append(stage)
+            return stage
+
+        driver = SwitchLdnEndpointDriver(
+            self._policy(), mirror_stage_factory=make_direct_b_stage,
+            session_factory=StageSession, simulation_factory=lambda *_args: _NoopSimulation(),
+        )
+        await driver.prepare()
+        cancel = asyncio.Event()
+        acceptance = asyncio.create_task(driver.accept(self._offer(), cancel))
+        await self._wait_for(waiting)
+        cancel.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(acceptance, timeout=1)
+        cleanup = stages[0].cleanup
+        self.assertTrue(cleanup["ldn_context_released"])
+        self.assertTrue(cleanup["radio_quiescent"])
+        self.assertFalse(any(thread.name == "switchtrade-direct-stage" for thread in threading.enumerate()))
+
+    async def test_actual_direct_b_partial_ap_cancellation_blocks_new_admission(self):
+        starting_ap = threading.Event()
+        stages = []
+
+        def make_direct_b_stage(_policy, _offer):
+            stage = make_stage(association_timeout=None)
+
+            @contextlib.asynccontextmanager
+            async def network_factory(_param):
+                starting_ap.set()
+                await trio.sleep_forever()
+                yield None
+
+            stage.network_factory = network_factory
+            stages.append(stage)
+            return stage
+
+        driver = SwitchLdnEndpointDriver(
+            self._policy(), mirror_stage_factory=make_direct_b_stage,
+            session_factory=StageSession, simulation_factory=lambda *_args: _NoopSimulation(),
+        )
+        await driver.prepare()
+        cancel = asyncio.Event()
+        acceptance = asyncio.create_task(driver.accept(self._offer(), cancel))
+        await self._wait_for(starting_ap)
+        cancel.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(acceptance, timeout=1)
+        self.assertFalse(stages[0].cleanup["ldn_context_released"])
+        self.assertTrue(stages[0].cleanup["radio_quiescent"])
+        report = await driver.close()
+        self.assertFalse(report.local_resources_released)
+        with self.assertRaisesRegex(Exception, "unverified"):
+            await driver.prepare()
+
+    async def test_actual_direct_b_control_cancellation_reports_verified_cleanup(self):
+        waiting = threading.Event()
+        stages = []
+
+        class JoiningNetwork(FakeNetwork):
+            async def next_event(self):
+                if self._first:
+                    self._first = False
+                    waiting.set()
+                    return FakeJoinEvent()
+                await trio.sleep_forever()
+
+        def make_direct_b_stage(_policy, _offer):
+            stage = make_stage(association_timeout=None)
+
+            @contextlib.asynccontextmanager
+            async def network_factory(_param):
+                stage.compatibility = {
+                    "beacon_head": True, "monitor_ccmp": True, "remote_destroy": True,
+                }
+                yield JoiningNetwork(
+                    (stage.ap_ifname, stage.monitor_ifname, stage.tap_ifname)
+                ), trio.Event()
+
+            stage.network_factory = network_factory
+            stages.append(stage)
+            return stage
+
+        driver = SwitchLdnEndpointDriver(
+            self._policy(), mirror_stage_factory=make_direct_b_stage,
+            session_factory=StageSession, simulation_factory=lambda *_args: _NoopSimulation(),
+        )
+        await driver.prepare()
+        cancel = asyncio.Event()
+        acceptance = asyncio.create_task(driver.accept(self._offer(), cancel))
+        await self._wait_for(waiting)
+        cancel.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(acceptance, timeout=1)
+        cleanup = stages[0].cleanup
+        self.assertTrue(cleanup["ldn_context_released"])
+        self.assertTrue(cleanup["radio_quiescent"])
 
 
 if __name__ == "__main__":

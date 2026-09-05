@@ -79,10 +79,12 @@
     "cleanup": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["ldn_context_released", "radio_quiescent"],
+      "required": ["ldn_context_released", "radio_quiescent", "ldn_context_state", "radio_state"],
       "properties": {
         "ldn_context_released": { "type": "boolean" },
-        "radio_quiescent": { "type": "boolean" }
+        "radio_quiescent": { "type": "boolean" },
+        "ldn_context_state": { "enum": ["not_acquired", "acquiring", "acquired", "released", "unknown"] },
+        "radio_state": { "enum": ["not_owned"] }
       }
     }
   }

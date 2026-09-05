@@ -1,0 +1,861 @@
+{
+  "schema": 1,
+  "repository": "mwl313/mwl-SwitchTrade",
+  "branch": "Simple-Architecture",
+  "audit_baseline": "63216cf05908467dcb44665c9d744cf6db46bd21",
+  "final_sha": "",
+  "task_state": "IN_PROGRESS",
+  "verdict": "FAIL",
+  "issues": [
+    {
+      "id": "I01",
+      "status": "PARTIAL",
+      "baseline_status": "OPEN",
+      "resolution": "Actual Direct A now distinguishes not-acquired scan completion from unknown context teardown; remaining T13.",
+      "source_locations": [
+        "switchtrade/connection/a_stage.py",
+        "switchtrade/endpoints/switch_ldn/driver.py",
+        "switchtrade/connection/stage_session.py"
+      ],
+      "required_tests": [
+        "T10",
+        "T11",
+        "T12",
+        "T13"
+      ],
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    },
+    {
+      "id": "I02",
+      "status": "OPEN",
+      "baseline_status": "OPEN",
+      "resolution": "",
+      "source_locations": [],
+      "required_tests": [
+        "T14",
+        "T15",
+        "T16"
+      ],
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    },
+    {
+      "id": "I03",
+      "status": "PARTIAL",
+      "baseline_status": "OPEN",
+      "resolution": "Actual A scan and B association/control cancellation reports are covered; remaining join/AP race coverage.",
+      "source_locations": [
+        "switchtrade/connection/a_stage.py",
+        "switchtrade/connection/b_stage.py",
+        "switchtrade/connection/stage_session.py",
+        "switchtrade/endpoints/switch_ldn/driver.py"
+      ],
+      "required_tests": [
+        "T17",
+        "T18",
+        "T19",
+        "T20",
+        "T21",
+        "T22"
+      ],
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    },
+    {
+      "id": "I04",
+      "status": "PARTIAL",
+      "baseline_status": "PARTIAL",
+      "resolution": "Strict consumer preserves an unverified teardown and blocks the next admission; runner/primary-secondary coverage remains.",
+      "source_locations": [
+        "switchtrade/connection/stage_session.py",
+        "switchtrade/endpoints/switch_ldn/generation.py"
+      ],
+      "required_tests": [
+        "T12",
+        "T23",
+        "T24",
+        "T25",
+        "T39"
+      ],
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    },
+    {
+      "id": "I05",
+      "status": "OPEN",
+      "baseline_status": "CODE_FIXED_REVERIFY",
+      "resolution": "",
+      "source_locations": [],
+      "required_tests": [
+        "T08",
+        "T09"
+      ],
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    },
+    {
+      "id": "I06",
+      "status": "OPEN",
+      "baseline_status": "CODE_FIXED_REVERIFY",
+      "resolution": "",
+      "source_locations": [],
+      "required_tests": [
+        "T05",
+        "T06",
+        "T09",
+        "T23"
+      ],
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    },
+    {
+      "id": "I07",
+      "status": "OPEN",
+      "baseline_status": "OPEN",
+      "resolution": "",
+      "source_locations": [],
+      "required_tests": [
+        "T29",
+        "T30",
+        "T31",
+        "T39"
+      ],
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    },
+    {
+      "id": "I08",
+      "status": "OPEN",
+      "baseline_status": "PARTIAL",
+      "resolution": "",
+      "source_locations": [],
+      "required_tests": [
+        "T30",
+        "T31",
+        "T32",
+        "T33"
+      ],
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    },
+    {
+      "id": "I09",
+      "status": "OPEN",
+      "baseline_status": "PARTIAL",
+      "resolution": "",
+      "source_locations": [],
+      "required_tests": [
+        "T14",
+        "T16",
+        "T32",
+        "T33",
+        "T34"
+      ],
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    },
+    {
+      "id": "I10",
+      "status": "OPEN",
+      "baseline_status": "OPEN",
+      "resolution": "",
+      "source_locations": [],
+      "required_tests": [
+        "T35",
+        "T36",
+        "T37"
+      ],
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    },
+    {
+      "id": "I11",
+      "status": "OPEN",
+      "baseline_status": "CODE_FIXED_REVERIFY",
+      "resolution": "",
+      "source_locations": [],
+      "required_tests": [
+        "T26",
+        "T27",
+        "T28"
+      ],
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    },
+    {
+      "id": "I12",
+      "status": "OPEN",
+      "baseline_status": "CODE_FIXED_REVERIFY",
+      "resolution": "",
+      "source_locations": [],
+      "required_tests": [
+        "T01",
+        "T02",
+        "T03",
+        "T04",
+        "T07"
+      ],
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    },
+    {
+      "id": "I13",
+      "status": "OPEN",
+      "baseline_status": "PRESERVE_REVERIFY",
+      "resolution": "",
+      "source_locations": [],
+      "required_tests": [
+        "T28",
+        "T38",
+        "T40",
+        "T43"
+      ],
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    },
+    {
+      "id": "I14",
+      "status": "OPEN",
+      "baseline_status": "OPEN",
+      "resolution": "",
+      "source_locations": [],
+      "required_tests": [
+        "T14",
+        "T15",
+        "T27",
+        "T29",
+        "T30",
+        "T31",
+        "T32",
+        "T33",
+        "T39",
+        "T44"
+      ],
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    },
+    {
+      "id": "I15",
+      "status": "OPEN",
+      "baseline_status": "CODE_FIXED_REVERIFY",
+      "resolution": "",
+      "source_locations": [],
+      "required_tests": [
+        "T37",
+        "T38"
+      ],
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    },
+    {
+      "id": "I16",
+      "status": "OPEN",
+      "baseline_status": "OPEN",
+      "resolution": "",
+      "source_locations": [],
+      "required_tests": [
+        "T42",
+        "T43"
+      ],
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    },
+    {
+      "id": "I17",
+      "status": "OPEN",
+      "baseline_status": "DOCUMENT_AND_REVERIFY",
+      "resolution": "",
+      "source_locations": [],
+      "required_tests": [
+        "T03",
+        "T04",
+        "T05",
+        "T07",
+        "T41"
+      ],
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    },
+    {
+      "id": "I18",
+      "status": "OPEN",
+      "baseline_status": "CODE_FIXED_REVERIFY",
+      "resolution": "",
+      "source_locations": [],
+      "required_tests": [
+        "T40",
+        "T41"
+      ],
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    }
+  ],
+  "tests": [
+    {
+      "id": "T01",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T02",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T03",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T04",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T05",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T06",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T07",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T08",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T09",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T10",
+      "status": "PASS",
+      "source_revision": "WORKTREE after 63216cf",
+      "test_nodes": [
+        "tests/test_direct_a_stage.py::DirectADriverLifecycleTests::test_actual_direct_a_session_driver_retries_clean_no_room"
+      ],
+      "command": "& .audit-venv\\Scripts\\python.exe -m pytest tests/test_direct_a_stage.py tests/test_direct_b_stage.py tests/test_switch_ldn_driver.py -q",
+      "environment": "Windows local .audit-venv; LDN/radio primitives stubbed only",
+      "exit_code": 0,
+      "observed_result": "PASS",
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    },
+    {
+      "id": "T11",
+      "status": "PASS",
+      "source_revision": "WORKTREE after 63216cf",
+      "test_nodes": [
+        "tests/test_direct_a_stage.py::DirectADriverLifecycleTests::test_actual_direct_a_session_driver_retries_clean_scan_timeout"
+      ],
+      "command": "& .audit-venv\\Scripts\\python.exe -m pytest tests/test_direct_a_stage.py tests/test_direct_b_stage.py tests/test_switch_ldn_driver.py -q",
+      "environment": "Windows local .audit-venv; LDN/radio primitives stubbed only",
+      "exit_code": 0,
+      "observed_result": "PASS",
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    },
+    {
+      "id": "T12",
+      "status": "PASS",
+      "source_revision": "WORKTREE after 63216cf",
+      "test_nodes": [
+        "tests/test_direct_a_stage.py::DirectADriverLifecycleTests::test_actual_direct_a_unverified_context_teardown_blocks_next_attempt"
+      ],
+      "command": "& .audit-venv\\Scripts\\python.exe -m pytest tests/test_direct_a_stage.py tests/test_direct_b_stage.py tests/test_switch_ldn_driver.py -q",
+      "environment": "Windows local .audit-venv; LDN/radio primitives stubbed only",
+      "exit_code": 0,
+      "observed_result": "PASS",
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    },
+    {
+      "id": "T13",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T14",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T15",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T16",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T17",
+      "status": "PASS",
+      "source_revision": "WORKTREE after 63216cf",
+      "test_nodes": [
+        "tests/test_direct_a_stage.py::DirectADriverLifecycleTests::test_actual_direct_a_scan_cancellation_returns_a_clean_terminal_report"
+      ],
+      "command": "& .audit-venv\\Scripts\\python.exe -m pytest tests/test_direct_a_stage.py tests/test_direct_b_stage.py tests/test_switch_ldn_driver.py -q",
+      "environment": "Windows local .audit-venv; LDN/radio primitives stubbed only",
+      "exit_code": 0,
+      "observed_result": "PASS",
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    },
+    {
+      "id": "T18",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T19",
+      "status": "PASS",
+      "source_revision": "WORKTREE after 63216cf",
+      "test_nodes": [
+        "tests/test_direct_b_stage.py::DirectBDriverCancellationTests::test_actual_direct_b_partial_ap_cancellation_blocks_new_admission"
+      ],
+      "command": "& .audit-venv\\Scripts\\python.exe -m pytest tests/test_direct_a_stage.py tests/test_direct_b_stage.py tests/test_switch_ldn_driver.py -q",
+      "environment": "Windows local .audit-venv; LDN/radio primitives stubbed only",
+      "exit_code": 0,
+      "observed_result": "PASS",
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    },
+    {
+      "id": "T20",
+      "status": "PASS",
+      "source_revision": "WORKTREE after 63216cf",
+      "test_nodes": [
+        "tests/test_direct_b_stage.py::DirectBDriverCancellationTests::test_actual_direct_b_association_cancellation_reports_verified_cleanup"
+      ],
+      "command": "& .audit-venv\\Scripts\\python.exe -m pytest tests/test_direct_a_stage.py tests/test_direct_b_stage.py tests/test_switch_ldn_driver.py -q",
+      "environment": "Windows local .audit-venv; LDN/radio primitives stubbed only",
+      "exit_code": 0,
+      "observed_result": "PASS",
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    },
+    {
+      "id": "T21",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T22",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T23",
+      "status": "PASS",
+      "source_revision": "WORKTREE after 63216cf",
+      "test_nodes": [
+        "tests/test_switch_ldn_driver.py::SwitchLdnDriverBoundaryTests::test_stage_session_rejects_failed_or_unknown_cleanup_before_ready"
+      ],
+      "command": "& .audit-venv\\Scripts\\python.exe -m pytest tests/test_direct_a_stage.py tests/test_direct_b_stage.py tests/test_switch_ldn_driver.py -q",
+      "environment": "Windows local .audit-venv; LDN/radio primitives stubbed only",
+      "exit_code": 0,
+      "observed_result": "PASS",
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
+    },
+    {
+      "id": "T24",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T25",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T26",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T27",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T28",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T29",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T30",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T31",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T32",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T33",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T34",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T35",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T36",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T37",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T38",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T39",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T40",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T41",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T42",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T43",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    },
+    {
+      "id": "T44",
+      "status": "NOT_RUN",
+      "source_revision": "",
+      "test_nodes": [],
+      "command": "",
+      "environment": "",
+      "exit_code": null,
+      "observed_result": "",
+      "evidence_refs": []
+    }
+  ],
+  "ci": {
+    "head_sha": "",
+    "run_url": "",
+    "windows": {
+      "status": "not_checked",
+      "conclusion": null,
+      "required_steps_passed": false,
+      "evidence_refs": []
+    },
+    "ubuntu": {
+      "status": "not_checked",
+      "conclusion": null,
+      "required_steps_passed": false,
+      "evidence_refs": []
+    }
+  },
+  "contracts": {
+    "cleanup_evidence_ref": "P1: Direct A records not_acquired/released/unknown; StageSession accepts only verified cleanup booleans and preserves first stop error.",
+    "wait_budget_evidence_ref": "P2 pending: association wait must be independent of StageSession/driver external readiness.",
+    "local_end_evidence_ref": "P3 pending.",
+    "lease_policy_evidence_ref": "P3 pending."
+  },
+  "real_fake_boundary_evidence_ref": "P5 pending; P1 uses actual DirectA/DirectB, StageSession, and driver with only LDN/radio primitives stubbed.",
+  "ci104_diagnosis_evidence_ref": "P6 pending.",
+  "scope_review_evidence_ref": "P0: package source snapshots are evidence only; production changes use this checkout.",
+  "software_gaps": [
+    "P1 T13/T18/T21/T22/T24/T25/T39 and all P2-P6 rows remain."
+  ],
+  "physical_only_risks": [
+    "No physical Switch, USB, WSL installation/reset, or deployment was performed."
+  ],
+  "notes": "P0 tracker created from the Terra High package template. Do not infer overall qualification from partial P1 evidence.",
+  "additional_findings": [
+    "Cancellation initially exposed a circular wait between driver readiness and StageSession.stop; driver now releases cancellation to the stop owner."
+  ]
+}
