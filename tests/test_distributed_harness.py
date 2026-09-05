@@ -348,7 +348,7 @@ class DistributedContractTests(unittest.TestCase):
 
             @staticmethod
             def run():
-                return {"status": "passed"}
+                return {"status": "passed", "cleanup": {"ldn_context_released": True, "radio_quiescent": True}}
 
         with tempfile.TemporaryDirectory() as temporary, patch.multiple(
                 "switchtrade.connection.distributed_endpoint",
@@ -1036,7 +1036,7 @@ class StageSessionTests(unittest.TestCase):
 
             async def run(self):
                 await self.session_handler("network", "transport", b"advertisement")
-                return {"status": "passed"}
+                return {"status": "passed", "cleanup": {"ldn_context_released": True, "radio_quiescent": True}}
 
         session = StageSession(Stage(), timeout=1, stop_timeout=1).start()
         resources = session.wait_ready()

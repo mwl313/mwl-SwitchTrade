@@ -17,7 +17,9 @@ Global invariants are in [`docs/agent/INVARIANTS.md`](docs/agent/INVARIANTS.md);
 [`docs/incidents/archive/MISTAKES_TO_AVOID-legacy-20260901.md`](docs/incidents/archive/MISTAKES_TO_AVOID-legacy-20260901.md)
 and is historical evidence, not default context.
 
-If a new failure or false assumption occurs, stop, preserve the first failure and recovery state,
-use only the identity-bound recovery path, prove residue, and record the incident before retrying or
-handing off. Never bypass source, identity, hardware, privacy, cleanup, or physical gates. Silence,
-an intermediate gate, or successful cleanup is not an overall functional pass.
+For a user-impacting, safety/privacy, destructive, residue-producing, ownership, or recurring
+structural failure, stop, preserve the first failure and recovery state, use only the identity-bound
+recovery path, prove residue, and record the incident before retrying or handing off. Ordinary local
+command or editing mistakes remain in task logs. Never bypass source, identity, hardware, privacy,
+cleanup, or physical gates. Silence, an intermediate gate, or successful cleanup is not an overall
+functional pass.

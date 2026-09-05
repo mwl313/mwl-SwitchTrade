@@ -88,10 +88,11 @@ def _wait_absent(path: Path, timeout: float = 1) -> bool:
 def reset_selected_phy(
     phy: str,
     *,
+    owned_ifnames: tuple[str, ...] = (),
     runner: Runner = _default_runner,
     sys_net: Path = Path("/sys/class/net"),
 ) -> dict:
-    """Delete only vifs on the run-owned PHY plus the exact reserved TAP."""
+    """Delete only explicitly owned stale interfaces on the selected PHY."""
     try:
         result = runner(["iw", "dev"], 3)
     except (OSError, subprocess.TimeoutExpired) as error:
@@ -105,7 +106,9 @@ def reset_selected_phy(
     if phy not in mapping:
         raise BStageError("B_RADIO_IDENTITY_MISSING", GATES[1], "selected PHY is unavailable")
     removed = 0
-    for interface in mapping[phy]:
+    for interface in owned_ifnames:
+        if interface not in mapping[phy]:
+            continue
         try:
             deleted = runner(["iw", "dev", interface, "del"], 3)
         except (OSError, subprocess.TimeoutExpired) as error:
@@ -134,11 +137,12 @@ def quiesce_selected_phy(
     phy: str,
     tap_ifname: str,
     *,
+    owned_ifnames: tuple[str, ...] = (),
     runner: Runner = _default_runner,
     sys_net: Path = Path("/sys/class/net"),
     sys_phy: Path = Path("/sys/class/ieee80211"),
 ) -> dict:
-    """Quiesce every remaining vif on the run-owned PHY and remove its exact TAP."""
+    """Quiesce only this run's interfaces on the selected PHY and exact TAP."""
     if not re.fullmatch(r"phy[0-9]+", phy) or not _LINUX_NAME.fullmatch(tap_ifname):
         raise BStageError("B_RADIO_QUIESCE_FAILED", GATES[-1], "radio cleanup identity is invalid")
     if not (sys_phy / phy).exists():
@@ -150,7 +154,7 @@ def quiesce_selected_phy(
         raise BStageError("B_RADIO_QUIESCE_FAILED", GATES[-1], "radio cleanup inventory failed") from error
     if mapping is None:
         raise BStageError("B_RADIO_QUIESCE_FAILED", GATES[-1], "radio cleanup inventory failed")
-    interfaces = mapping.get(phy, [])
+    interfaces = [name for name in owned_ifnames if name in mapping.get(phy, [])]
     for interface in interfaces:
         try:
             stopped = runner(["ip", "link", "set", "dev", interface, "down"], 3)
@@ -266,6 +270,7 @@ class DirectBStage:
         ldn_module=None,
         trio_module=None,
         radio_reset=None,
+        radio_quiesce=None,
         data_plane_factory=None,
         network_factory=None,
         application_data: bytes = FIXTURE,
@@ -288,7 +293,10 @@ class DirectBStage:
         self.teardown_timeout = float(teardown_timeout)
         self.ldn = ldn_module
         self.trio = trio_module
-        self.radio_reset = radio_reset or (lambda: reset_selected_phy(self.phy))
+        owned = (self.ap_ifname, self.monitor_ifname, self.tap_ifname)
+        self.radio_reset = radio_reset or (lambda: reset_selected_phy(self.phy, owned_ifnames=owned))
+        self.radio_quiesce = radio_quiesce or (lambda: quiesce_selected_phy(
+            self.phy, self.tap_ifname, owned_ifnames=owned))
         self.data_plane_factory = data_plane_factory or _open_data_plane
         self.network_factory = network_factory
         self.application_data = bytes(application_data)
@@ -604,6 +612,9 @@ class DirectBStage:
                                 event = await network.next_event()
                                 if isinstance(event, join_type):
                                     association_evidence = _validate_peer(network)
+                                    bind_peer = getattr(plane, "bind_peer", None)
+                                    if bind_peer is not None:
+                                        bind_peer()
                                     # A successful real association is stronger external evidence
                                     # than interface-up and proves the room was observable first.
                                     self._pass(GATES[5])
@@ -645,6 +656,10 @@ class DirectBStage:
                             codes.get(index, "B_STAGE_TIMEOUT"), GATES[index],
                             "direct B stage deadline expired",
                         )
+                radio_cleanup = self.radio_quiesce()
+                if not isinstance(radio_cleanup, dict) or radio_cleanup.get("selected_phy_only") is not True:
+                    raise BStageError("B_RADIO_QUIESCE_FAILED", GATES[-1], "owned radio cleanup is unverified")
+                self.cleanup["radio_quiescent"] = True
             except BStageError:
                 raise
             except Exception as error:

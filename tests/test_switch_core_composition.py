@@ -86,7 +86,7 @@ class QualifiedDriver:
 
         policy = SwitchLdnPolicy(
             run_id="c5-test", release="test-release", usb_id="0bda:818b",
-            hardware_profile="RTL8192EU", phy="phy7", ifname="wlan7",
+            hardware_profile="RTL8192EU", phy="phy7", proven_radio_iface="wlan7", ifname="sta-c5-test",
             keys_path="/runtime/config/prod.keys",
         )
         self.driver = SwitchLdnEndpointDriver(

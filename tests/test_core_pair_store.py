@@ -80,6 +80,22 @@ class PairStoreTests(unittest.TestCase):
         self.assertFalse(store._pairs)
         store.create(capabilities(GenerationRole.ORIGIN))
 
+    def test_old_code_expiry_does_not_remove_a_reused_code_owner(self) -> None:
+        clock = Clock()
+        store = PairStore(now=clock)
+        with patch("relay.pair_store.secrets.randbelow", side_effect=[381742, 381742]):
+            old = store.create(capabilities(GenerationRole.ORIGIN))
+            store.join(old.code or "", capabilities(GenerationRole.MIRROR))
+            clock.advance(minutes=1)
+            current = store.create(capabilities(GenerationRole.ORIGIN))
+        clock.advance(minutes=9, seconds=1)
+        store.sweep()
+        self.assertEqual(store._codes.get(current.code or ""), current.pair_id)
+        self.assertEqual(
+            store.join(current.code or "", capabilities(GenerationRole.MIRROR)).pair_id,
+            current.pair_id,
+        )
+
     @staticmethod
     def _join(store: PairStore, code: str) -> str:
         try:

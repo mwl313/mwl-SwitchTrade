@@ -96,12 +96,18 @@ class SwitchLdnGeneration:
         self._runner = threading.Thread(
             target=self._drive_simulation, name="switchtrade-tunnelsim", daemon=True
         )
-        self._runner.start()
+        self._started = False
         self._report: CleanupReport | None = None
 
     @property
     def runner_alive(self) -> bool:
         return self._runner.is_alive()
+
+    def activate(self) -> None:
+        """Start local DATA production only after Core admits this generation."""
+        if not self._started:
+            self._started = True
+            self._runner.start()
 
     async def receive(self) -> LinkPacket:
         return await self.tunnel.receive_for_core()
@@ -115,7 +121,8 @@ class SwitchLdnGeneration:
             return self._report
         self.tunnel.seal()
         self._runner_stop.set()
-        await asyncio.to_thread(self._runner.join, _RUNNER_STOP_TIMEOUT)
+        if self._started:
+            await asyncio.to_thread(self._runner.join, _RUNNER_STOP_TIMEOUT)
         failures: list[str] = []
         runner_timed_out = self._runner.is_alive()
         if runner_timed_out:

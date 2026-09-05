@@ -24,7 +24,7 @@ class LdnDataPlane(dict):
         try:
             self._tx.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self._tx.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            self._refresh_identity()
+            self._prepare_local_identity()
             self._tx.bind((self.our_ip, PIA_PORT))
             self._rx.bind((ifname, 0))
             self._rx.setblocking(False)
@@ -32,7 +32,17 @@ class LdnDataPlane(dict):
             self.close()
             raise
 
-    def _refresh_identity(self) -> None:
+    def _prepare_local_identity(self) -> None:
+        info = self.network.info()
+        local = self.network.participant()
+        self.our_ip = str(local.ip_address)
+        self.our_mac = bytes(local.mac_address)
+        self.ssid = bytes(info.ssid)
+        if not self.our_ip.startswith("169.254.") or len(self.our_mac) != 6 or not self.ssid:
+            raise RuntimeError("the physical LDN local data-plane identity is invalid")
+
+    def bind_peer(self) -> None:
+        """Bind the remote identity only after the joining Switch is observed."""
         info = self.network.info()
         local = self.network.participant()
         connected = [
@@ -42,14 +52,10 @@ class LdnDataPlane(dict):
         peer = next((item for item in connected if item is not local), None)
         if peer is None:
             raise RuntimeError("the physical LDN peer is unavailable")
-        self.our_ip = str(local.ip_address)
-        self.our_mac = bytes(local.mac_address)
         self.host_ip = str(peer.ip_address)
         self.host_mac = bytes(peer.mac_address)
-        self.ssid = bytes(info.ssid)
         if (
-            not self.our_ip.startswith("169.254.")
-            or not self.host_ip.startswith("169.254.")
+            not self.host_ip.startswith("169.254.")
             or len(self.our_mac) != 6
             or len(self.host_mac) != 6
             or not self.ssid

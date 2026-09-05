@@ -257,6 +257,9 @@ class CoreSupervisor:
         self.state = SupervisorState.PAIRED
 
     def _activate(self) -> None:
+        activate = getattr(self._generation, "activate", None)
+        if activate is not None:
+            activate()
         self.state = SupervisorState.ACTIVE
         self._pump_tasks = {asyncio.create_task(self._pump_local()), asyncio.create_task(self._pump_remote())}
 

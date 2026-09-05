@@ -349,6 +349,7 @@ class DirectAStage:
             "gates": list(self.passed),
             "advertisement": None,
             "data_plane": None,
+            "cleanup": {"ldn_context_released": False, "radio_quiescent": False},
             "failure": {"code": error.code, "gate": error.gate, "message": error.message},
             "duration_ms": round((time.monotonic() - self.started) * 1000),
         }
@@ -468,6 +469,7 @@ class DirectAStage:
                     "packet_socket_bound": True,
                     "local_hold_completed": True,
                 },
+                "cleanup": {"ldn_context_released": True, "radio_quiescent": True},
                 "failure": None,
                 "duration_ms": round((time.monotonic() - self.started) * 1000),
             }

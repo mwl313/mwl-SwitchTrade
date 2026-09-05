@@ -275,6 +275,9 @@ def make_stage(**changes):
         "radio_reset": lambda: {
             "selected_phy_only": True, "interfaces_removed": 1, "tap_removed": False,
         },
+        "radio_quiesce": lambda: {
+            "selected_phy_only": True, "interfaces_quiescent": 0, "tap_absent": True,
+        },
         "data_plane_factory": fake_data_plane,
         "version_resolver": lambda: "0.0.17",
     }
@@ -332,7 +335,7 @@ class DirectBContractTests(unittest.TestCase):
                 (sys_net / target).rmdir()
                 return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-            result = reset_selected_phy("phy0", runner=runner, sys_net=sys_net)
+            result = reset_selected_phy("phy0", owned_ifnames=("wlan0",), runner=runner, sys_net=sys_net)
             self.assertEqual(result, {
                 "selected_phy_only": True, "interfaces_removed": 1, "tap_removed": True,
             })
@@ -366,7 +369,7 @@ class DirectBContractTests(unittest.TestCase):
                 return SimpleNamespace(returncode=0, stdout="", stderr="")
 
             result = quiesce_selected_phy(
-                "phy0", "tap-b-test", runner=runner, sys_net=sys_net, sys_phy=sys_phy)
+                "phy0", "tap-b-test", owned_ifnames=("ap-b-test",), runner=runner, sys_net=sys_net, sys_phy=sys_phy)
             self.assertEqual(result, {
                 "selected_phy_only": True, "interfaces_quiescent": 1, "tap_absent": True,
             })
@@ -440,7 +443,7 @@ class DirectBContractTests(unittest.TestCase):
         self.assertEqual([item["gate"] for item in report["gates"]], list(GATES))
         self.assertEqual([item["gate"] for item in emitted], list(GATES))
         self.assertTrue(report["cleanup"]["ldn_context_released"])
-        self.assertFalse(report["cleanup"]["radio_quiescent"])
+        self.assertTrue(report["cleanup"]["radio_quiescent"])
         serialized = json.dumps(report, sort_keys=True).casefold()
         self.assertNotIn("mac_address", serialized)
         self.assertNotIn(FIXTURE.hex(), serialized)

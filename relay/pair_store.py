@@ -52,12 +52,14 @@ class PairStore:
             now = self._time()
             for pair_id, record in tuple(self._pairs.items()):
                 if record.code_expires_at <= now:
-                    self._codes.pop(record.code, None)
+                    if self._codes.get(record.code) == pair_id:
+                        self._codes.pop(record.code, None)
                     self._expired_codes.add(record.code)
                 if record.reconnect_expires_at <= now:
                     self._pairs.pop(pair_id)
-                    self._codes.pop(record.code, None)
-                    self._expired_codes.discard(record.code)
+                    if self._codes.get(record.code) == pair_id:
+                        self._codes.pop(record.code, None)
+                        self._expired_codes.discard(record.code)
 
     def create(self, capabilities: EndpointCapabilities, client_id: str = "anonymous") -> PairCredentials:
         with self._lock:

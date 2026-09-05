@@ -89,13 +89,13 @@ function Invoke-DevInteractiveProcess {
             if ($completed -eq $stdoutTask) {
                 $line = $stdoutTask.GetAwaiter().GetResult()
                 if ($null -eq $line) { $stdoutTask = $null } else {
-                    Write-Output $line
+                    [Console]::Out.WriteLine($line)
                     $stdoutTask = $process.StandardOutput.ReadLineAsync()
                 }
             } else {
                 $line = $stderrTask.GetAwaiter().GetResult()
                 if ($null -eq $line) { $stderrTask = $null } else {
-                    Write-Error $line
+                    [Console]::Error.WriteLine($line)
                     $stderrTask = $process.StandardError.ReadLineAsync()
                 }
             }
@@ -384,17 +384,25 @@ function Invoke-DevSync {
 }
 
 function Invoke-DevRun {
-    param([string[]]$Arguments = @(), [switch]$Test, [switch]$CoreCli)
+    param(
+        [string[]]$Arguments = @(),
+        [switch]$Test,
+        [switch]$CoreCli,
+        [ValidateSet('host', 'join')][string]$CoreRole
+    )
     $null = Invoke-DevSync
     $runtime = Get-ActiveRuntime
-    $pythonArguments = if ($Test) { @('-m', 'pytest') + $Arguments } else { $Arguments }
+    $pythonArguments = if ($Test) { @('-m', 'pytest') + $Arguments } elseif ($CoreCli) { @('-u') + $Arguments } else { $Arguments }
     $commandArguments = if ($CoreCli) {
-        $radioRole = if ($Arguments -contains 'host') { 'guest' } else { 'host' }
+        if (-not $CoreRole) { Stop-DevOverlay 'DEV_CORE_ROUTE_INVALID' 'The Core CLI role is missing.' }
+        $radioRole = if ($CoreRole -eq 'host') { 'guest' } else { 'host' }
         $channel = '6'
         $usbId = $null
-        for ($index = 2; $index -lt $Arguments.Count; $index += 1) {
-            if ($Arguments[$index] -eq '--channel') { $index += 1; $channel = $Arguments[$index]; continue }
-            if ($Arguments[$index] -eq '--usb-id') { $index += 1; $usbId = $Arguments[$index] }
+        for ($index = 0; $index -lt $Arguments.Count; $index += 1) {
+            if ($Arguments[$index] -eq '--channel' -and $index + 1 -lt $Arguments.Count) { $index += 1; $channel = $Arguments[$index]; continue }
+            if ($Arguments[$index] -like '--channel=*') { $channel = $Arguments[$index].Substring(10); continue }
+            if ($Arguments[$index] -eq '--usb-id' -and $index + 1 -lt $Arguments.Count) { $index += 1; $usbId = $Arguments[$index]; continue }
+            if ($Arguments[$index] -like '--usb-id=*') { $usbId = $Arguments[$index].Substring(9) }
         }
         $gateArguments = @('./scripts/wsl-radio-prepare.sh', '--role', $radioRole)
         if ($usbId) { $gateArguments += @('--usb-id', $usbId) }
@@ -402,10 +410,9 @@ function Invoke-DevRun {
     } else {
         @($script:PythonPath) + $pythonArguments
     }
-    $envArguments = @('/usr/bin/env', 'PYTHONNOUSERSITE=1', "PYTHONPATH=$script:OverlayRoot/current", "SWITCHTRADE_SOURCE_ROOT=$script:OverlayRoot/current", "SWITCHTRADE_INSTALLED_ROOT=$script:InstalledRoot") + $commandArguments
+    $envArguments = @('/usr/bin/env', 'PYTHONNOUSERSITE=1', 'PYTHONUNBUFFERED=1', "PYTHONPATH=$script:OverlayRoot/current", "SWITCHTRADE_SOURCE_ROOT=$script:OverlayRoot/current", "SWITCHTRADE_INSTALLED_ROOT=$script:InstalledRoot") + $commandArguments
     $exitCode = Invoke-DevInteractiveWsl -Distro $runtime.Name -Cwd "$script:OverlayRoot/current" -Command $envArguments[0] -Arguments $envArguments[1..($envArguments.Count - 1)]
-    if ($exitCode -ne 0) { Stop-DevOverlay 'DEV_RUN_FAILED' "The development process exited with code $exitCode." }
-    return 0
+    return [int]$exitCode
 }
 
 function Invoke-DevClean {

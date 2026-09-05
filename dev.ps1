@@ -18,13 +18,13 @@ try {
         'doctor' { Invoke-DevDoctor; exit 0 }
         'sync' { Invoke-DevSync; exit 0 }
         'run' {
-            $runArguments = Remove-ArgumentMarker $Arguments
+            $runArguments = @(Remove-ArgumentMarker $Arguments)
             if ($runArguments.Count -gt 0 -and $runArguments[0] -in @('host', 'join')) {
                 $mode = $runArguments[0]
                 $code = if ($mode -eq 'join') { $runArguments[1] } else { $null }
                 $options = if ($mode -eq 'join') { @($runArguments | Select-Object -Skip 2) } else { @($runArguments | Select-Object -Skip 1) }
                 $runArguments = @('-m', 'switchtrade.core_cli') + $options + @($mode) + $(if ($code) { @($code) } else { @() })
-                exit (Invoke-DevRun -Arguments $runArguments -CoreCli)
+                exit (Invoke-DevRun -Arguments $runArguments -CoreCli -CoreRole $mode)
             }
             exit (Invoke-DevRun -Arguments $runArguments)
         }

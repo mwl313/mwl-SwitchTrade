@@ -160,13 +160,15 @@ def _policy(args: argparse.Namespace) -> SwitchLdnPolicy:
         )
     except HardwarePolicyError as exc:
         raise CliError(str(exc)) from exc
+    run_id = f"core-{uuid4().hex}"
     return SwitchLdnPolicy(
-        run_id=f"core-{uuid4().hex}",
+        run_id=run_id,
         release=os.environ.get("SWITCHTRADE_CORE_RELEASE", "development"),
         usb_id=profile.usb_id,
         hardware_profile=profile.chipset,
         phy=phy,
-        ifname=ifname,
+        proven_radio_iface=ifname,
+        ifname=f"st-{uuid4().hex[:8]}",
         keys_path=os.environ.get("SWITCHTRADE_KEYS", "/opt/switchtrade/config/prod.keys"),
         channel=args.channel,
     )
@@ -178,45 +180,50 @@ async def _bridge_until_canceled(supervisor: CoreSupervisor) -> None:
 
 async def _run_host(args: argparse.Namespace) -> None:
     driver = create_switch_ldn_driver(_policy(args))
-    print("Starting SwitchTrade...")
-    credentials = _credentials(await _request(args.relay, "/core/v1/pairs", {"capabilities": _capabilities("origin")}), PairSeat.HOST)
-    print(f"Pair code: {credentials.code}")
+    print("Starting SwitchTrade...", flush=True)
+    pair = await _request(args.relay, "/core/v1/pairs", {"capabilities": _capabilities("origin")})
+    credentials = _credentials(pair, PairSeat.HOST)
+    print(f"Pair code: {credentials.code}", flush=True)
+    if expires_at := pair.get("code_expires_at"):
+        print(f"Pair code expires at: {expires_at}", flush=True)
     transport = WireClient(PairSeat.HOST)
     await transport.connect(await _socket(args.relay, credentials))
     supervisor = CoreSupervisor(credentials, driver, transport, connector=lambda: _socket(args.relay, credentials))
     try:
-        print("Waiting for a Group Leader room...")
-        await supervisor.discover_local()
-        print("Group Leader room detected.")
-        print("Waiting for peer...")
-        await supervisor.wait_for_peer()
-        print("Peer connected.")
-        await supervisor.offer_generation()
-        print("Remote mirror ready.")
-        print("Bridge active.")
-        await _bridge_until_canceled(supervisor)
+        while True:
+            print("Waiting for a Group Leader room...", flush=True)
+            await supervisor.discover_local()
+            print("Group Leader room detected.", flush=True)
+            print("Waiting for peer...", flush=True)
+            await supervisor.wait_for_peer()
+            print("Peer connected.", flush=True)
+            await supervisor.offer_generation()
+            print("Remote mirror ready.", flush=True)
+            print("Bridge active.", flush=True)
+            await _bridge_until_canceled(supervisor)
     finally:
         await supervisor.stop()
 
 
 async def _run_guest(args: argparse.Namespace) -> None:
     driver = create_switch_ldn_driver(_policy(args))
-    print("Starting SwitchTrade...")
-    print(f"Connecting with code {args.code}...")
+    print("Starting SwitchTrade...", flush=True)
+    print(f"Connecting with code {args.code}...", flush=True)
     credentials = _credentials(await _request(args.relay, "/core/v1/pairs:join", {"code": args.code, "capabilities": _capabilities("mirror")}), PairSeat.GUEST)
     transport = WireClient(PairSeat.GUEST)
     await transport.connect(await _socket(args.relay, credentials))
     supervisor = CoreSupervisor(credentials, driver, transport, connector=lambda: _socket(args.relay, credentials))
     try:
-        print("Waiting for the host's Switch...")
-        await supervisor.wait_for_peer()
-        print("Peer connected.")
-        print("Preparing the mirror access point...")
-        print("Choose Join Group on the Switch when it appears.")
-        await supervisor.accept_next_offer()
-        print("Mirror access point and Switch ready.")
-        print("Bridge active.")
-        await _bridge_until_canceled(supervisor)
+        while True:
+            print("Waiting for the host's Switch...", flush=True)
+            await supervisor.wait_for_peer()
+            print("Peer connected.", flush=True)
+            print("Preparing the mirror access point...", flush=True)
+            print("Choose Join Group on the Switch when it appears.", flush=True)
+            await supervisor.accept_next_offer()
+            print("Mirror access point and Switch ready.", flush=True)
+            print("Bridge active.", flush=True)
+            await _bridge_until_canceled(supervisor)
     finally:
         await supervisor.stop()
 

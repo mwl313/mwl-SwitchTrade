@@ -42,6 +42,7 @@ class SwitchLdnPolicy:
     phy: str
     ifname: str
     keys_path: str
+    proven_radio_iface: str = ""
     ap_ifname: str = "ap-switchtrade"
     monitor_ifname: str = "mon-switchtrade"
     tap_ifname: str = "tap-switchtrade"
@@ -57,9 +58,9 @@ class SwitchLdnPolicy:
             or not _PHY.fullmatch(self.phy)
             or any(
                 not _IFNAME.fullmatch(name)
-                for name in (self.ifname, self.ap_ifname, self.monitor_ifname, self.tap_ifname)
+                for name in (self.proven_radio_iface, self.ifname, self.ap_ifname, self.monitor_ifname, self.tap_ifname)
             )
-            or len({self.ifname, self.ap_ifname, self.monitor_ifname, self.tap_ifname}) != 4
+            or len({self.proven_radio_iface, self.ifname, self.ap_ifname, self.monitor_ifname, self.tap_ifname}) != 5
             or not PurePosixPath(self.keys_path).is_absolute()
             or self.channel not in {1, 6, 11}
             or not 0.5 <= self.retry_delay <= 2

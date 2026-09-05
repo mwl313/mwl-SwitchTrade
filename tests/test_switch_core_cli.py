@@ -42,7 +42,8 @@ class SwitchCoreCliTests(unittest.IsolatedAsyncioTestCase):
             "SWITCHTRADE_P0_TARGET_CHANNEL": "11", "SWITCHTRADE_P0_RX_PASSED": "1",
         }, clear=True):
             policy = _policy(args)
-        self.assertEqual((policy.channel, policy.usb_id, policy.phy, policy.ifname), (11, "0bda:818b", "phy7", "wlan7"))
+        self.assertEqual((policy.channel, policy.usb_id, policy.phy, policy.proven_radio_iface), (11, "0bda:818b", "phy7", "wlan7"))
+        self.assertNotEqual(policy.ifname, policy.proven_radio_iface)
 
     def test_policy_rejects_identity_channel_or_receive_proof_mismatch(self) -> None:
         args = parser().parse_args(["--usb-id", "0bda:818b", "host"])
@@ -83,8 +84,9 @@ class SwitchCoreCliTests(unittest.IsolatedAsyncioTestCase):
              patch("switchtrade.core_cli._policy", return_value=object()), \
              patch("switchtrade.core_cli.create_switch_ldn_driver", return_value=object()), \
              patch("switchtrade.core_cli.CoreSupervisor", return_value=supervisor), \
-             patch("switchtrade.core_cli._bridge_until_canceled", AsyncMock()):
-            self.assertEqual(await run(args), 0)
+             patch("switchtrade.core_cli._bridge_until_canceled", AsyncMock(side_effect=asyncio.CancelledError)):
+            with self.assertRaises(asyncio.CancelledError):
+                await run(args)
         supervisor.discover_local.assert_awaited_once()
         supervisor.wait_for_peer.assert_awaited_once()
         supervisor.offer_generation.assert_awaited_once()
@@ -104,9 +106,10 @@ class SwitchCoreCliTests(unittest.IsolatedAsyncioTestCase):
              patch("switchtrade.core_cli._policy", return_value=object()), \
              patch("switchtrade.core_cli.create_switch_ldn_driver", return_value=object()), \
              patch("switchtrade.core_cli.CoreSupervisor", return_value=supervisor), \
-             patch("switchtrade.core_cli._bridge_until_canceled", AsyncMock()), \
+             patch("switchtrade.core_cli._bridge_until_canceled", AsyncMock(side_effect=asyncio.CancelledError)), \
              patch("builtins.print") as printed:
-            self.assertEqual(await run(args), 0)
+            with self.assertRaises(asyncio.CancelledError):
+                await run(args)
         supervisor.wait_for_peer.assert_awaited_once()
         supervisor.accept_next_offer.assert_awaited_once()
         supervisor.stop.assert_awaited_once()

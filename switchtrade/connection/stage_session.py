@@ -41,6 +41,9 @@ class StageSession:
         self._done = threading.Event()
         self._thread: threading.Thread | None = None
         self._error: BaseException | None = None
+        self._trio_token = None
+        self._cancel_scope = None
+        self._trio_ready = threading.Event()
         stage.session_handler = self._hold
 
     async def _hold(self, network: object, transport: object, advertisement: bytes) -> None:
@@ -62,11 +65,19 @@ class StageSession:
         try:
             import trio
 
-            result = trio.run(self.stage.run)
+            async def run_stage():
+                self._trio_token = trio.lowlevel.current_trio_token()
+                with trio.CancelScope() as scope:
+                    self._cancel_scope = scope
+                    self._trio_ready.set()
+                    return await self.stage.run()
+
+            result = trio.run(run_stage)
             self.report = result[0] if isinstance(result, tuple) else result
         except BaseException as error:
             self._error = error
         finally:
+            self._trio_ready.set()
             self._done.set()
             self._ready.set()
 
@@ -98,6 +109,12 @@ class StageSession:
         if self._thread is None:
             return
         self._stop.set()
+        if self.resources is None and self._trio_ready.wait(self.stop_timeout) and self._trio_token is not None and self._cancel_scope is not None:
+            try:
+                import trio
+                trio.from_thread.run_sync(self._cancel_scope.cancel, trio_token=self._trio_token)
+            except RuntimeError:
+                pass
         self._thread.join(self.stop_timeout)
         if self._thread.is_alive():
             raise RuntimeError("direct stage did not release its LDN context")
@@ -106,9 +123,13 @@ class StageSession:
             raise RuntimeError("direct stage failed during LDN teardown") from self._error
         if not isinstance(self.report, dict):
             raise RuntimeError("direct stage did not report LDN teardown")
+        if self.resources is None and self.report.get("status") == "failed":
+            return
         cleanup = self.report.get("cleanup")
-        if isinstance(cleanup, dict) and cleanup.get("ldn_context_released") is not True:
-            raise RuntimeError("direct stage did not release its LDN context")
+        if not isinstance(cleanup, dict) or cleanup.get("ldn_context_released") is not True:
+            raise RuntimeError("direct stage did not prove LDN context cleanup")
+        if cleanup.get("ap_stop_timed_out") is True or cleanup.get("radio_quiescent") is False:
+            raise RuntimeError("direct stage did not prove owned radio cleanup")
 
 
 __all__ = ["StageResources", "StageSession", "StageSessionError"]

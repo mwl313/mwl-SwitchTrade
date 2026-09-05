@@ -1,6 +1,8 @@
 import socket
 import struct
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from switchtrade.connection.data_plane import ETH_P_IP, LdnDataPlane, PIA_PORT
 
@@ -18,6 +20,24 @@ def udp_frame(payload=b"pia", *, protocol=17, port=PIA_PORT):
 
 
 class LdnDataPlaneTests(unittest.TestCase):
+    def test_local_plane_opens_before_peer_and_binds_only_after_association(self):
+        local = SimpleNamespace(ip_address="169.254.21.1", mac_address=b"\x02\0\0\0\0\x01", connected=True)
+        peer = SimpleNamespace(ip_address="169.254.21.2", mac_address=b"\x02\0\0\0\0\x02", connected=True)
+        network = SimpleNamespace(
+            participant=lambda: local,
+            info=lambda: SimpleNamespace(ssid=b"switchtrade", participants=[local], num_participants=1),
+        )
+        socket_object = SimpleNamespace(setsockopt=lambda *_: None, bind=lambda *_: None, setblocking=lambda *_: None, close=lambda: None)
+        with patch.object(socket, "AF_PACKET", 17, create=True), patch(
+            "switchtrade.connection.data_plane.socket.socket", side_effect=[socket_object, socket_object]
+        ):
+            plane = LdnDataPlane(network, "tap-test", {"tap_ready": True})
+            with self.assertRaisesRegex(RuntimeError, "peer is unavailable"):
+                plane.bind_peer()
+            network.info = lambda: SimpleNamespace(ssid=b"switchtrade", participants=[local, peer], num_participants=2)
+            plane.bind_peer()
+        self.assertEqual((plane.host_ip, plane.host_mac), ("169.254.21.2", peer.mac_address))
+
     def test_parses_only_ipv4_udp_and_preserves_payload(self):
         parsed = LdnDataPlane._parse_udp(udp_frame(b"opaque-rfu"))
         self.assertEqual(parsed, (

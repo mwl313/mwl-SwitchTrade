@@ -9,7 +9,9 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from switchtrade.connection.stage_session import StageResources, StageSessionError
+import trio
+
+from switchtrade.connection.stage_session import StageResources, StageSession, StageSessionError
 from switchtrade.core.contracts import EndpointKind, GenerationOffer, GenerationRole, LinkPacket, RuntimeKind
 from switchtrade.endpoints.switch_ldn import (
     SWITCH_LDN_PROTOCOL,
@@ -31,6 +33,7 @@ def policy(**changes: object) -> SwitchLdnPolicy:
         "usb_id": "0bda:818b",
         "hardware_profile": "rtl8192eu",
         "phy": "phy7",
+        "proven_radio_iface": "wlan7",
         "ifname": "sta-c2-test",
         "keys_path": "/runtime/config/prod.keys",
     }
@@ -111,6 +114,20 @@ class BlockingSimulation(FakeSimulation):
         self.released.set()
 
 
+class PreReadyStage:
+    def __init__(self) -> None:
+        self.session_handler = None
+        self.cleaned = threading.Event()
+
+    async def run(self) -> dict:
+        try:
+            await trio.sleep_forever()
+        except trio.Cancelled:
+            return {"cleanup": {"ldn_context_released": True, "radio_quiescent": True}}
+        finally:
+            self.cleaned.set()
+
+
 class FakePiaTransport:
     ssid = b"0123456789abcdef"
     our_mac = b"\x01\x02\x03\x04\x05\x06"
@@ -151,6 +168,14 @@ def driver_with_outcomes(*outcomes: StageResources | BaseException) -> tuple[Swi
 
 
 class SwitchLdnDriverBoundaryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_real_stage_session_cancels_a_pre_ready_trio_stage(self) -> None:
+        stage = PreReadyStage()
+        session = StageSession(stage, timeout=1, stop_timeout=1).start()
+        await asyncio.wait_for(asyncio.to_thread(session._trio_ready.wait), timeout=1)
+        await asyncio.to_thread(session.stop)
+        self.assertTrue(stage.cleaned.is_set())
+        self.assertFalse(session._thread)
+
     async def test_driver_exposes_phase_b_capabilities_and_empty_cleanup(self) -> None:
         driver = SwitchLdnEndpointDriver(policy())
         self.assertEqual(driver.capabilities.endpoint_kind, EndpointKind.SWITCH_LDN)
@@ -368,6 +393,7 @@ class SwitchLdnDriverBoundaryTests(unittest.IsolatedAsyncioTestCase):
         )
         await driver.prepare()
         generation = await driver.discover(asyncio.Event())
+        generation.activate()
         simulation = simulations[0]
         self.assertTrue(
             await asyncio.wait_for(asyncio.to_thread(simulation.ticked.wait), timeout=1)
@@ -389,6 +415,7 @@ class SwitchLdnDriverBoundaryTests(unittest.IsolatedAsyncioTestCase):
         )
         await driver.prepare()
         generation = await driver.discover(asyncio.Event())
+        generation.activate()
         with self.assertRaises(SwitchLdnEndpointError) as raised:
             await asyncio.wait_for(generation.receive(), timeout=1)
         self.assertEqual(raised.exception.code, "SWITCH_ENDPOINT_TICK_FAILED")
@@ -408,6 +435,7 @@ class SwitchLdnDriverBoundaryTests(unittest.IsolatedAsyncioTestCase):
         )
         await driver.prepare()
         generation = await driver.discover(asyncio.Event())
+        generation.activate()
         self.assertTrue(
             await asyncio.wait_for(asyncio.to_thread(simulation.blocked.wait), timeout=1)
         )

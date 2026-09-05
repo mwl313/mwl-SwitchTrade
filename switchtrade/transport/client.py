@@ -54,7 +54,7 @@ class WireClient:
         self._reserve_outgoing()
         self._enqueue(self.state.emit(kind, generation_id, payload, flags))
 
-    async def receive(self, timeout: float = 5.0) -> Envelope:
+    async def receive(self, timeout: float | None = None) -> Envelope:
         self._raise_if_failed()
         get = asyncio.create_task(self._incoming.get())
         failed = asyncio.create_task(self._failed.wait())
