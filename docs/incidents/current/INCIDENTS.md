@@ -1110,3 +1110,60 @@ archive list and regenerate the index.
 - **Correction status:** forced document staging and staged-packet inspection passed.
 - **Mandatory prevention gate:** Before committing an incident or index update, use `git add -f --`
   for the exact ignored document paths, separate from ordinary source/test staging.
+
+### MTA-OPS-235 — Read Phase documents in bounded sections
+
+- **Observed failure:** A C1 baseline read combined the master plan with the complete C design and
+  prompt, exceeding the output boundary. The result cannot prove that the later C design sections
+  were read before implementation.
+- **Cause certainty:** certain from the tool truncation notice.
+- **Disproven alternatives:** The visible C1 prompt text is valid, but it does not substitute for the
+  omitted remainder of the normative C documents.
+- **Recovery and residue:** Preserve the incomplete read, regenerate the index, then read the C
+  design and prompt in separate bounded sections before inspecting or changing implementation files.
+- **Correction status:** C design and prompt read in bounded sections before source inspection.
+- **Mandatory prevention gate:** Do not combine complete phase design and prompt documents with the
+  master plan when their combined output can exceed the inspection boundary.
+
+### MTA-OPS-236 — Inventory packaging metadata before reading it
+
+- **Observed failure:** C1 source inspection assumed `pyproject.toml` and `requirements.lock` existed
+  at the repository root; PowerShell reported both paths missing. No package, runtime, endpoint, or
+  hardware state changed.
+- **Cause certainty:** certain from the missing-path diagnostics.
+- **Disproven alternatives:** The absent guessed paths do not show that dependency metadata is absent;
+  only their locations were unverified.
+- **Recovery and residue:** Preserve the failed read, regenerate the index, use `rg --files` to locate
+  actual packaging and lock files, then inspect only those verified paths.
+- **Correction status:** verified packaging inventory completed before metadata inspection.
+- **Mandatory prevention gate:** Before reading package metadata or dependency locks, resolve their
+  exact names with a bounded repository file inventory.
+
+### MTA-OPS-237 — Assert import boundaries from imports, not capability literals
+
+- **Observed failure:** The first C1 import-boundary test rejected every `switch_ldn` string in Core
+  and Relay source. It failed on the endpoint-kind capability literal in Core contracts, although no
+  concrete driver import exists. No endpoint, runtime, or hardware action occurred.
+- **Cause certainty:** certain from the failing source line and the test's substring predicate.
+- **Disproven alternatives:** This does not show a Core-to-driver dependency; the enum value is an
+  endpoint-neutral contract required by Phase B.
+- **Recovery and residue:** Preserve the failed assertion, regenerate the index, replace the raw
+  substring check with an AST inspection of import declarations, then rerun the C1 boundary tests.
+- **Correction status:** AST import-boundary assertion and C1 focused regression passed.
+- **Mandatory prevention gate:** Dependency-boundary tests must inspect actual imports and permit
+  endpoint-neutral identifiers that name a supported endpoint kind.
+
+### MTA-OPS-238 — Run pytest-style dependency tests with pytest
+
+- **Observed failure:** C1 verification used `unittest discover` for `test_dependency_lock.py`, whose
+  tests are pytest-style functions. The command ran zero tests and returned failure without changing
+  package, endpoint, runtime, or hardware state.
+- **Cause certainty:** certain from the test module's function-based definitions and unittest's
+  `NO TESTS RAN` result.
+- **Disproven alternatives:** This does not show a dependency-lock failure; the selected runner did
+  not collect the file's tests.
+- **Recovery and residue:** Preserve the zero-test result, regenerate the index, run the exact file
+  with pytest, and report only the collected result.
+- **Correction status:** pytest dependency-lock verification passed.
+- **Mandatory prevention gate:** Resolve the test framework from the target module before selecting
+  its runner; unittest discovery does not collect plain pytest test functions.

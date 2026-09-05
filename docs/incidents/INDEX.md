@@ -243,3 +243,7 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-OPS-232` | Split mixed-scope source searches before output truncation | Current ledger | 1069 |
 | `MTA-OPS-233` | Normalize archive manifest before asserting canonical Git bytes | Current ledger | 1083 |
 | `MTA-OPS-234` | Force-stage ignored incident documents as a separate mutation | Current ledger | 1100 |
+| `MTA-OPS-235` | Read Phase documents in bounded sections | Current ledger | 1114 |
+| `MTA-OPS-236` | Inventory packaging metadata before reading it | Current ledger | 1128 |
+| `MTA-OPS-237` | Assert import boundaries from imports, not capability literals | Current ledger | 1142 |
+| `MTA-OPS-238` | Run pytest-style dependency tests with pytest | Current ledger | 1156 |
