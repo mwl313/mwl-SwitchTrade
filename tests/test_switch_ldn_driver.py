@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import ast
 from pathlib import Path
+import subprocess
+import sys
 import unittest
 
 from switchtrade.composition import create_switch_ldn_driver
-from switchtrade.core.contracts import EndpointKind, GenerationRole, RuntimeKind
+from switchtrade.core.contracts import EndpointKind, GenerationOffer, GenerationRole, RuntimeKind
 from switchtrade.endpoints.switch_ldn import SWITCH_LDN_PROTOCOL, SwitchLdnEndpointDriver
 
 
@@ -35,6 +37,24 @@ class SwitchLdnDriverBoundaryTests(unittest.IsolatedAsyncioTestCase):
         driver = create_switch_ldn_driver()
         with self.assertRaises(NotImplementedError):
             await driver.discover(asyncio.Event())
+        offer = GenerationOffer("pending", SWITCH_LDN_PROTOCOL, EndpointKind.SWITCH_LDN, b"")
+        with self.assertRaises(NotImplementedError):
+            await driver.accept(offer, asyncio.Event())
+
+    def test_fake_endpoint_import_does_not_load_switch_driver(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; import switchtrade.endpoints.fake; "
+                "assert 'switchtrade.endpoints.switch_ldn' not in sys.modules",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_core_and_relay_do_not_import_the_switch_driver(self) -> None:
         for directory in (ROOT / "switchtrade" / "core", ROOT / "relay"):
