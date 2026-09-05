@@ -5,6 +5,7 @@ import ast
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import unittest
 
 from switchtrade.composition import create_switch_ldn_driver
@@ -58,6 +59,22 @@ class FailingStopSession(FakeSession):
     def stop(self) -> None:
         self.stopped = True
         raise RuntimeError("cleanup failed")
+
+
+class BlockingSession(FakeSession):
+    def __init__(self) -> None:
+        super().__init__(StageResources(object(), object(), b"late"))
+        self.waiting = threading.Event()
+        self.released = threading.Event()
+
+    def wait_ready(self) -> StageResources:
+        self.waiting.set()
+        self.released.wait()
+        return super().wait_ready()
+
+    def stop(self) -> None:
+        self.stopped = True
+        self.released.set()
 
 
 def driver_with_outcomes(*outcomes: StageResources | BaseException) -> tuple[SwitchLdnEndpointDriver, list[object], list[FakeSession]]:
@@ -149,6 +166,23 @@ class SwitchLdnDriverBoundaryTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(SwitchLdnEndpointError, "policy"):
             await invalid.prepare()
 
+    async def test_cancellation_while_waiting_stops_session_without_generation(self) -> None:
+        session = BlockingSession()
+        driver = SwitchLdnEndpointDriver(
+            policy(), stage_factory=lambda _policy: object(), session_factory=lambda *_args, **_kwargs: session
+        )
+        await driver.prepare()
+        cancel = asyncio.Event()
+        discovery = asyncio.create_task(driver.discover(cancel))
+        await asyncio.wait_for(asyncio.to_thread(session.waiting.wait), timeout=1)
+        cancel.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(discovery, timeout=1)
+        self.assertTrue(session.stopped)
+        report = await driver.close()
+        self.assertTrue(report.endpoint_stopped)
+        self.assertTrue(report.local_resources_released)
+
     async def test_cleanup_failure_is_preserved_and_blocks_next_generation(self) -> None:
         resources = StageResources(object(), object(), b"advertisement")
 
@@ -166,6 +200,28 @@ class SwitchLdnDriverBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(first, second)
         with self.assertRaisesRegex(SwitchLdnEndpointError, "unverified"):
             await driver.prepare()
+
+    async def test_failed_attempt_cleanup_blocks_discover_and_empty_close(self) -> None:
+        failure = StageSessionError("A_ROOM_NOT_OBSERVED", "A1_RADIO_SCAN", "no room")
+        stages: list[object] = []
+
+        def stage_factory(_policy: SwitchLdnPolicy) -> object:
+            stage = object()
+            stages.append(stage)
+            return stage
+
+        driver = SwitchLdnEndpointDriver(
+            policy(), stage_factory=stage_factory, session_factory=lambda *_args, **_kwargs: FailingStopSession(failure)
+        )
+        await driver.prepare()
+        with self.assertRaisesRegex(StageSessionError, "no room"):
+            await driver.discover(asyncio.Event())
+        with self.assertRaisesRegex(SwitchLdnEndpointError, "unverified"):
+            await driver.discover(asyncio.Event())
+        self.assertEqual(len(stages), 1)
+        report = await driver.close()
+        self.assertFalse(report.endpoint_stopped)
+        self.assertFalse(report.local_resources_released)
 
     def test_fake_endpoint_import_does_not_load_switch_driver(self) -> None:
         result = subprocess.run(

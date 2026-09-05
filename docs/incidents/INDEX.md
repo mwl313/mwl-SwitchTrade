@@ -248,3 +248,4 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-OPS-237` | Assert import boundaries from imports, not capability literals | Current ledger | 1142 |
 | `MTA-OPS-238` | Run pytest-style dependency tests with pytest | Current ledger | 1156 |
 | `MTA-OPS-239` | Resolve GitHub run IDs from the commit before viewing jobs | Current ledger | 1171 |
+| `MTA-OPS-240` | Assert cancellation cleanup from the report, not annotations | Current ledger | 1185 |

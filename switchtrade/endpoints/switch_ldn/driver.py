@@ -116,6 +116,10 @@ class SwitchLdnEndpointDriver:
             )
         if self._generation is not None:
             raise SwitchLdnEndpointError("SWITCH_ENDPOINT_BUSY", "Switch LDN generation is active")
+        if not self._cleanup_verified:
+            raise SwitchLdnEndpointError(
+                "SWITCH_ENDPOINT_CLEANUP_FAILED", "prior Switch LDN cleanup is unverified"
+            )
         while True:
             if cancel.is_set():
                 raise asyncio.CancelledError
@@ -125,7 +129,10 @@ class SwitchLdnEndpointDriver:
                 stop_timeout=self._policy.session_stop_timeout,
             ).start()
             try:
-                resources = await asyncio.to_thread(session.wait_ready)
+                resources = await self._wait_ready_or_cancel(session, cancel)
+            except asyncio.CancelledError:
+                await self._stop_session(session)
+                raise
             except BaseException as failure:
                 cleanup_ok = await self._stop_session(session)
                 if cancel.is_set():
@@ -144,8 +151,33 @@ class SwitchLdnEndpointDriver:
 
     async def close(self) -> CleanupReport:
         if self._generation is None:
+            if not self._cleanup_verified:
+                return CleanupReport(
+                    False,
+                    False,
+                    False,
+                    {"endpoint_kind": EndpointKind.SWITCH_LDN, "cleanup": "unverified"},
+                )
             return CleanupReport(True, True, True, {"endpoint_kind": EndpointKind.SWITCH_LDN})
         return await self._generation.close("driver_stop")
+
+    async def _wait_ready_or_cancel(
+        self, session: StageSession, cancel: Cancellation
+    ) -> StageResources:
+        ready_task = asyncio.create_task(asyncio.to_thread(session.wait_ready))
+        cancel_task = asyncio.create_task(cancel.wait())
+        try:
+            done, _pending = await asyncio.wait(
+                (ready_task, cancel_task), return_when=asyncio.FIRST_COMPLETED
+            )
+            if cancel_task in done or cancel.is_set():
+                raise asyncio.CancelledError
+            return ready_task.result()
+        finally:
+            for task in (ready_task, cancel_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(ready_task, cancel_task, return_exceptions=True)
 
     async def _stop_session(self, session: StageSession) -> bool:
         try:

@@ -1181,3 +1181,17 @@ archive list and regenerate the index.
 - **Correction status:** commit-bound CI lookup confirmed the C1-fix workflow is in progress.
 - **Mandatory prevention gate:** Do not pass a displayed Actions run number to APIs that require a
   database ID; resolve it from the exact commit first.
+
+### MTA-OPS-240 — Assert cancellation cleanup from the report, not annotations
+
+- **Observed failure:** The first C2 cancellation regression patch compared `driver.close()` to its
+  return annotation rather than inspecting the returned cleanup report. The invalid assertion was
+  caught in source review before a test or endpoint action ran.
+- **Cause certainty:** certain from the incompatible comparison in the unexecuted test body.
+- **Disproven alternatives:** This does not indicate a cancellation or cleanup defect; no test has
+  exercised the new path yet.
+- **Recovery and residue:** Preserve the pre-test patch, regenerate the index, assert the concrete
+  report fields after cancellation, then run the focused regression.
+- **Correction status:** corrected cancellation-report assertion and focused C2 regressions passed.
+- **Mandatory prevention gate:** For async cleanup tests, await the operation and assert its concrete
+  `CleanupReport` fields; never infer result semantics from function annotations.
