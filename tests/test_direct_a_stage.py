@@ -490,6 +490,22 @@ class DirectADriverLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(stages), 1)
         self.assertTrue((await driver.close()).local_resources_released)
 
+    async def test_actual_direct_a_immediate_start_stop_race_has_a_terminal_report(self):
+        class WaitingLdn(FakeLdn):
+            @classmethod
+            async def scan(cls, *_args, **_kwargs):
+                await trio.sleep_forever()
+
+        for _ in range(3):
+            stage = self._stage(self._policy(), WaitingLdn)
+            session = StageSession(stage, timeout=1, stop_timeout=1).start()
+            await asyncio.wait_for(asyncio.to_thread(session.stop), timeout=1)
+            self.assertIsInstance(session.report, dict)
+            self.assertEqual(session.report["failure"]["code"], "A_CANCELLED")
+            self.assertFalse(any(
+                thread.name == "switchtrade-direct-stage" for thread in threading.enumerate()
+            ))
+
 
 if __name__ == "__main__":
     unittest.main()

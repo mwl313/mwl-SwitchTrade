@@ -114,6 +114,12 @@ class BlockingSimulation(FakeSimulation):
         self.released.set()
 
 
+class FailingCloseSimulation(FakeSimulation):
+    def close(self) -> None:
+        super().close()
+        raise RuntimeError("simulation cleanup failed")
+
+
 class PreReadyStage:
     def __init__(self) -> None:
         self.session_handler = None
@@ -462,6 +468,27 @@ class SwitchLdnDriverBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(generation.runner_alive)
         with self.assertRaisesRegex(SwitchLdnEndpointError, "unverified"):
             await driver.prepare()
+
+    async def test_tick_failure_keeps_primary_identity_when_all_cleanup_attempts_fail(self) -> None:
+        resources = StageResources(object(), object(), b"advertisement")
+        session = FailingStopSession(resources)
+        simulation = FailingCloseSimulation(ValueError("tick failed"))
+        driver = SwitchLdnEndpointDriver(
+            policy(), stage_factory=lambda _policy: object(),
+            session_factory=lambda *_args, **_kwargs: session,
+            simulation_factory=lambda *_args: simulation,
+        )
+        await driver.prepare()
+        generation = await driver.discover(asyncio.Event())
+        generation.activate()
+        with self.assertRaises(SwitchLdnEndpointError) as raised:
+            await asyncio.wait_for(generation.receive(), timeout=1)
+        self.assertEqual(raised.exception.code, "SWITCH_ENDPOINT_TICK_FAILED")
+        report = await generation.close("failed")
+        self.assertFalse(report.local_resources_released)
+        self.assertEqual(report.details["primary_failure_code"], "SWITCH_ENDPOINT_TICK_FAILED")
+        self.assertIn("simulation:RuntimeError", report.details["cleanup_errors"])
+        self.assertIn("stage_session:RuntimeError", report.details["cleanup_errors"])
 
     def test_default_tunnelsim_maps_leader_and_mirror_to_the_existing_pia_roles(self) -> None:
         resources = StageResources(object(), FakePiaTransport(), b"opaque-ad")
