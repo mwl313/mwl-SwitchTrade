@@ -1167,3 +1167,17 @@ archive list and regenerate the index.
 - **Correction status:** pytest dependency-lock verification passed.
 - **Mandatory prevention gate:** Resolve the test framework from the target module before selecting
   its runner; unittest discovery does not collect plain pytest test functions.
+
+### MTA-OPS-239 — Resolve GitHub run IDs from the commit before viewing jobs
+
+- **Observed failure:** C1 CI follow-up treated displayed run number 91 as a GitHub Actions database
+  ID. `gh run view` returned 404 before reading any job state; no repository, runtime, or endpoint
+  state changed.
+- **Cause certainty:** certain from the API response and the unverified numeric ID.
+- **Disproven alternatives:** The 404 does not indicate a failed CI workflow or missing commit; it
+  only rejects the guessed database identifier.
+- **Recovery and residue:** Preserve the failed lookup, regenerate the index, list runs by the exact
+  C1-fix commit SHA, then view the returned database ID if job detail is needed.
+- **Correction status:** commit-bound CI lookup confirmed the C1-fix workflow is in progress.
+- **Mandatory prevention gate:** Do not pass a displayed Actions run number to APIs that require a
+  database ID; resolve it from the exact commit first.

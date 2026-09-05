@@ -247,3 +247,4 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-OPS-236` | Inventory packaging metadata before reading it | Current ledger | 1128 |
 | `MTA-OPS-237` | Assert import boundaries from imports, not capability literals | Current ledger | 1142 |
 | `MTA-OPS-238` | Run pytest-style dependency tests with pytest | Current ledger | 1156 |
+| `MTA-OPS-239` | Resolve GitHub run IDs from the commit before viewing jobs | Current ledger | 1171 |
