@@ -17,7 +17,13 @@ try {
     switch ($Command.ToLowerInvariant()) {
         'doctor' { Invoke-DevDoctor; exit 0 }
         'sync' { Invoke-DevSync; exit 0 }
-        'run' { exit (Invoke-DevRun -Arguments (Remove-ArgumentMarker $Arguments)) }
+        'run' {
+            $runArguments = Remove-ArgumentMarker $Arguments
+            if ($runArguments.Count -gt 0 -and $runArguments[0] -in @('host', 'join')) {
+                $runArguments = @('-m', 'switchtrade.core_cli') + $runArguments
+            }
+            exit (Invoke-DevRun -Arguments $runArguments)
+        }
         'test' { exit (Invoke-DevRun -Arguments (Remove-ArgumentMarker $Arguments) -Test) }
         'clean' { Invoke-DevClean; exit 0 }
         default {

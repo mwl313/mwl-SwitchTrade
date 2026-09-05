@@ -257,3 +257,8 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-OPS-246` | Re-read concurrent-boundary source before a multi-hunk patch | Current ledger | 1272 |
 | `MTA-OPS-247` | Remove an outer try when removing its finalizer | Current ledger | 1286 |
 | `MTA-OPS-248` | Use PowerShell-compatible regex syntax in process preflight | Current ledger | 1301 |
+| `MTA-OPS-249` | Do not combine broad source discovery with ledger reads | Current ledger | 1317 |
+| `MTA-OPS-250` | Resolve planned document paths before reading phase sections | Current ledger | 1334 |
+| `MTA-OPS-251` | Enumerate package metadata before dependency inspection | Current ledger | 1351 |
+| `MTA-OPS-252` | Narrow cross-layer option searches before reading defaults | Current ledger | 1366 |
+| `MTA-QA-019` | Snapshot assertions must wait for the runner's stated checkpoint | Current ledger | 1381 |

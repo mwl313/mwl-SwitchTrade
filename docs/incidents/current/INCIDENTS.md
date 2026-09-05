@@ -1313,3 +1313,85 @@ archive list and regenerate the index.
 - **Mandatory prevention gate:** Keep shell-specific option separators out of PowerShell operators;
   validate a process-filter expression with a bounded read-only invocation before using it as a test
   launch gate.
+
+### MTA-OPS-249 — Do not combine broad source discovery with ledger reads
+
+- **Observed failure:** C4 entry inspection first combined a broad mixed source search, and then a
+  complete current-ledger/index read. Both outputs were truncated, so neither result could support
+  implementation decisions. No source, runtime, endpoint, process, or external state changed.
+- **Cause certainty:** certain from the tool truncation notices. The operands exceeded the bounded
+  evidence contract already established for this repository.
+- **Disproven alternatives:** This is not evidence of a missing C4 entry point, an incident-ledger
+  defect, or an application failure; the requested output itself was too broad to inspect.
+- **Recovery and residue:** Discard both truncated results, retain the clean worktree, rebuild the
+  index after recording this entry, and perform one bounded inventory or range read per invocation.
+  No runtime cleanup is required.
+- **Correction status:** process correction recorded before C4 source inspection resumes.
+- **Mandatory prevention gate:** Never combine broad source discovery with documentation reads, and
+  never read a complete ledger or index when a tail, exact search, or bounded range supplies the
+  needed evidence.
+
+### MTA-OPS-250 — Resolve planned document paths before reading phase sections
+
+- **Observed failure:** C4 inspection guessed that the C design and prompt were under
+  `docs/planning`; both operands were absent, so the planned-section search returned an error and
+  yielded no document evidence. No source, runtime, endpoint, process, or external state changed.
+- **Cause certainty:** certain from ripgrep's explicit missing-path diagnostics. The document names
+  were known, but their repository locations had not been resolved.
+- **Disproven alternatives:** The failure does not mean the C plan is absent or that C4 requirements
+  changed; it only rejects the assumed parent directory.
+- **Recovery and residue:** Preserve the failed lookup, regenerate the index, enumerate the exact
+  filenames from the repository, then read only the returned C4 sections. No runtime cleanup is
+  required.
+- **Correction status:** process correction recorded before C4 source implementation.
+- **Mandatory prevention gate:** Before reading any named planning document whose exact path was not
+  observed in this turn, resolve its filename with a bounded `rg --files` query; never infer its
+  parent directory from a conventional layout.
+
+### MTA-OPS-251 — Enumerate package metadata before dependency inspection
+
+- **Observed failure:** C4 dependency inspection assumed a top-level `pyproject.toml` and used a
+  shell glob as a literal Windows ripgrep path. Both operands failed before any dependency evidence
+  was returned. No source, runtime, endpoint, process, or external state changed.
+- **Cause certainty:** certain from the missing-file and invalid-path diagnostics. This was an
+  unverified layout assumption coupled with non-portable glob use.
+- **Disproven alternatives:** The result does not indicate that the WebSocket dependency is absent
+  or that the C4 transport cannot be implemented; no package metadata was actually read.
+- **Recovery and residue:** Preserve the failed query, regenerate the index, list exact repository
+  metadata filenames, then inspect one returned file per invocation. No runtime cleanup is required.
+- **Correction status:** process correction recorded before selecting the CLI socket adapter.
+- **Mandatory prevention gate:** Resolve package metadata with `rg --files` before opening it, and
+  put any ripgrep filename filter before `--` rather than passing a shell glob as an operand.
+
+### MTA-OPS-252 — Narrow cross-layer option searches before reading defaults
+
+- **Observed failure:** C4 policy-default discovery searched endpoint, legacy CLI, control, and test
+  layers together. The result was truncated, so it cannot establish a default or reuse contract.
+  No source, runtime, endpoint, process, or external state changed.
+- **Cause certainty:** certain from the truncation notice. The query crossed unrelated legacy and
+  current implementation layers without a bounded target.
+- **Disproven alternatives:** The truncated result does not prove a compatible default exists, nor
+  does it identify a defect in Direct A/B or the new Core CLI.
+- **Recovery and residue:** Discard the result, regenerate the index, and inspect the C4 driver
+  policy and the specific existing CLI parser separately. No runtime cleanup is required.
+- **Correction status:** process correction recorded before constructing the C4 CLI policy.
+- **Mandatory prevention gate:** Search one implementation layer at a time and cap contextual output;
+  do not combine legacy orchestration, endpoint policy, and tests in a single discovery query.
+
+### MTA-QA-019 — Snapshot assertions must wait for the runner's stated checkpoint
+
+- **Observed failure:** The C4 full suite reached `680 passed, 3 skipped` but
+  `ConnectionRunServiceTests.test_one_start_idempotent_commands_pure_get_and_verified_terminal`
+  observed a legitimate background transition from `preflight` to `running` between two snapshots.
+  The test's runner had signalled its own `running` event, but the persisted snapshot had not yet
+  reflected that phase. No endpoint, radio, process, or external state was created by C4.
+- **Cause certainty:** certain from the preserved assertion diff: the only changed fields were the
+  service's concurrent run phase/revision projection, not data mutated by a GET call.
+- **Disproven alternatives:** This does not implicate the C4 CLI, Pair relay, Switch LDN endpoint,
+  or Core cleanup; their focused tests passed before the full suite.
+- **Recovery and residue:** Preserve the full-suite output, run this one test alone to distinguish
+  an intermittent scheduling race from a reproducible service defect, and do not claim C4 full-suite
+  green until the test has a reliable checkpoint. No runtime cleanup is required.
+- **Correction status:** isolated reproduction pending.
+- **Mandatory prevention gate:** Concurrent snapshot tests must wait for the persisted phase they
+  compare, not merely for an event emitted before that phase is committed.
