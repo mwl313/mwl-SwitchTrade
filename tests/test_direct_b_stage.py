@@ -691,8 +691,12 @@ class DirectBDriverCancellationTests(unittest.IsolatedAsyncioTestCase):
             async def next_event(self):
                 if self._first:
                     self._first = False
-                    waiting.set()
                     return FakeJoinEvent()
+                await trio.sleep_forever()
+
+        class WaitingControl:
+            async def wait(self):
+                waiting.set()
                 await trio.sleep_forever()
 
         def make_direct_b_stage(_policy, _offer):
@@ -705,7 +709,7 @@ class DirectBDriverCancellationTests(unittest.IsolatedAsyncioTestCase):
                 }
                 yield JoiningNetwork(
                     (stage.ap_ifname, stage.monitor_ifname, stage.tap_ifname)
-                ), trio.Event()
+                ), WaitingControl()
 
             stage.network_factory = network_factory
             stages.append(stage)

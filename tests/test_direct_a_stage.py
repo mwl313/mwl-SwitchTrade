@@ -12,7 +12,7 @@ import trio
 from switchtrade.connection.a_stage import (
     AStageError, DirectAStage, GATES, room_mismatches, select_room, validate_advertisement,
 )
-from switchtrade.connection.stage_session import StageSession
+from switchtrade.connection.stage_session import StageSession, StageSessionError
 from switchtrade.endpoints.switch_ldn.driver import SwitchLdnEndpointDriver, SwitchLdnPolicy
 
 
@@ -392,6 +392,43 @@ class DirectADriverLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(stages[0].cleanup["ldn_context_released"])
         self.assertFalse(any(thread.name == "switchtrade-direct-stage" for thread in threading.enumerate()))
 
+    async def test_actual_direct_a_join_cancellation_returns_a_clean_terminal_report(self):
+        started = threading.Event()
+
+        class WaitingStation(FakeStation):
+            @contextlib.asynccontextmanager
+            async def connect(self):
+                started.set()
+                await trio.sleep_forever()
+                yield
+
+        class WaitingWlan(FakeWlan):
+            Station = WaitingStation
+
+        class WaitingLdn(FakeLdn):
+            wlan = WaitingWlan
+
+        stages = []
+
+        def make_stage(value):
+            stage = self._stage(value, WaitingLdn)
+            stages.append(stage)
+            return stage
+
+        driver = SwitchLdnEndpointDriver(
+            self._policy(), stage_factory=make_stage,
+            session_factory=StageSession, simulation_factory=lambda *_args: _NoopSimulation(),
+        )
+        await driver.prepare()
+        cancel = asyncio.Event()
+        discovery = asyncio.create_task(driver.discover(cancel))
+        await asyncio.wait_for(asyncio.to_thread(started.wait), timeout=1)
+        cancel.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(discovery, timeout=1)
+        self.assertEqual(stages[0].cleanup["ldn_context_state"], "not_acquired")
+        self.assertTrue(stages[0].cleanup["ldn_context_released"])
+
     async def test_actual_direct_a_unverified_context_teardown_blocks_next_attempt(self):
         class DirtyStation(FakeStation):
             @contextlib.asynccontextmanager
@@ -428,6 +465,30 @@ class DirectADriverLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(stages[0].cleanup["ldn_context_released"])
         with self.assertRaisesRegex(Exception, "unverified"):
             await driver.prepare()
+
+    async def test_actual_direct_a_ambiguous_room_is_not_retried(self):
+        class AmbiguousLdn(FakeLdn):
+            @classmethod
+            async def scan(cls, *_args, **_kwargs):
+                return [network(), network()]
+
+        stages = []
+
+        def make_stage(value):
+            stage = self._stage(value, AmbiguousLdn)
+            stages.append(stage)
+            return stage
+
+        driver = SwitchLdnEndpointDriver(
+            self._policy(), stage_factory=make_stage,
+            session_factory=StageSession, simulation_factory=lambda *_args: _NoopSimulation(),
+        )
+        await driver.prepare()
+        with self.assertRaises(StageSessionError) as raised:
+            await asyncio.wait_for(driver.discover(asyncio.Event()), timeout=1)
+        self.assertEqual(raised.exception.code, "A_ROOM_AMBIGUOUS")
+        self.assertEqual(len(stages), 1)
+        self.assertTrue((await driver.close()).local_resources_released)
 
 
 if __name__ == "__main__":

@@ -9,9 +9,9 @@
   "issues": [
     {
       "id": "I01",
-      "status": "PARTIAL",
+      "status": "VERIFIED",
       "baseline_status": "OPEN",
-      "resolution": "Actual Direct A now distinguishes not-acquired scan completion from unknown context teardown; remaining T13.",
+      "resolution": "Actual Direct A now distinguishes not-acquired scan completion from unknown context teardown; no-room, scan-timeout, dirty teardown, and ambiguous-room admission are covered through driver and StageSession.",
       "source_locations": [
         "switchtrade/connection/a_stage.py",
         "switchtrade/endpoints/switch_ldn/driver.py",
@@ -46,7 +46,7 @@
       "id": "I03",
       "status": "PARTIAL",
       "baseline_status": "OPEN",
-      "resolution": "Actual A scan and B association/control cancellation reports are covered; remaining join/AP race coverage.",
+      "resolution": "Actual A scan/join and B AP/association/control cancellation reports are covered; start/ready cancellation race remains.",
       "source_locations": [
         "switchtrade/connection/a_stage.py",
         "switchtrade/connection/b_stage.py",
@@ -456,14 +456,18 @@
     },
     {
       "id": "T13",
-      "status": "NOT_RUN",
-      "source_revision": "",
-      "test_nodes": [],
-      "command": "",
-      "environment": "",
-      "exit_code": null,
-      "observed_result": "",
-      "evidence_refs": []
+      "status": "PASS",
+      "source_revision": "649e107 plus worktree",
+      "test_nodes": [
+        "tests/test_direct_a_stage.py::DirectADriverLifecycleTests::test_actual_direct_a_ambiguous_room_is_not_retried"
+      ],
+      "command": "& .audit-venv\\Scripts\\python.exe -m pytest tests/test_direct_a_stage.py tests/test_direct_b_stage.py tests/test_switch_ldn_driver.py -q",
+      "environment": "Windows local .audit-venv; LDN/radio primitives stubbed only",
+      "exit_code": 0,
+      "observed_result": "PASS",
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
     },
     {
       "id": "T14",
@@ -515,14 +519,18 @@
     },
     {
       "id": "T18",
-      "status": "NOT_RUN",
-      "source_revision": "",
-      "test_nodes": [],
-      "command": "",
-      "environment": "",
-      "exit_code": null,
-      "observed_result": "",
-      "evidence_refs": []
+      "status": "PASS",
+      "source_revision": "649e107 plus worktree",
+      "test_nodes": [
+        "tests/test_direct_a_stage.py::DirectADriverLifecycleTests::test_actual_direct_a_join_cancellation_returns_a_clean_terminal_report"
+      ],
+      "command": "& .audit-venv\\Scripts\\python.exe -m pytest tests/test_direct_a_stage.py tests/test_direct_b_stage.py tests/test_switch_ldn_driver.py -q",
+      "environment": "Windows local .audit-venv; LDN/radio primitives stubbed only",
+      "exit_code": 0,
+      "observed_result": "PASS",
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
     },
     {
       "id": "T19",
@@ -556,14 +564,18 @@
     },
     {
       "id": "T21",
-      "status": "NOT_RUN",
-      "source_revision": "",
-      "test_nodes": [],
-      "command": "",
-      "environment": "",
-      "exit_code": null,
-      "observed_result": "",
-      "evidence_refs": []
+      "status": "PASS",
+      "source_revision": "649e107 plus worktree",
+      "test_nodes": [
+        "tests/test_direct_b_stage.py::DirectBDriverCancellationTests::test_actual_direct_b_control_cancellation_reports_verified_cleanup"
+      ],
+      "command": "& .audit-venv\\Scripts\\python.exe -m pytest tests/test_direct_a_stage.py tests/test_direct_b_stage.py tests/test_switch_ldn_driver.py -q",
+      "environment": "Windows local .audit-venv; LDN/radio primitives stubbed only",
+      "exit_code": 0,
+      "observed_result": "PASS",
+      "evidence_refs": [
+        "docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"
+      ]
     },
     {
       "id": "T22",
