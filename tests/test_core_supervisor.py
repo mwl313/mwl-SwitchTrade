@@ -62,14 +62,17 @@ class TestGeneration:
 class TestDriver:
     capabilities = EndpointCapabilities(EndpointKind.FAKE, RuntimeKind.IN_PROCESS, (FAKE_PROTOCOL,), (GenerationRole.ORIGIN, GenerationRole.MIRROR))
 
-    def __init__(self, generation: TestGeneration, *, fail_prepare: bool = False, fail_close: bool = False) -> None:
+    def __init__(self, generation: TestGeneration, *, discoveries: list[TestGeneration] | None = None, fail_prepare: bool = False, fail_close: bool = False) -> None:
         self.generation, self.fail_prepare, self.fail_close, self.closed = generation, fail_prepare, fail_close, 0
+        self.discoveries = list(discoveries or ())
 
     async def prepare(self) -> None:
         if self.fail_prepare:
             raise RuntimeError("prepare failed")
 
     async def discover(self, cancel: asyncio.Event) -> TestGeneration:
+        if self.discoveries:
+            self.generation = self.discoveries.pop(0)
         return self.generation
 
     async def accept(self, offer: GenerationOffer, cancel: asyncio.Event) -> TestGeneration:
@@ -280,6 +283,49 @@ class CoreSupervisorTests(unittest.IsolatedAsyncioTestCase):
         host_driver.generation = TestGeneration(GenerationOffer("generation-2", FAKE_PROTOCOL, EndpointKind.FAKE, b"setup"))
         guest_driver.generation = TestGeneration(GenerationOffer("placeholder", FAKE_PROTOCOL, EndpointKind.FAKE, b""))
         await asyncio.gather(host.offer_generation(), guest.accept_next_offer())
+        await asyncio.gather(host.stop(), guest.stop(), return_exceptions=True)
+
+    async def test_host_waits_for_peer_without_failing(self) -> None:
+        factory = SocketFactory()
+        host_socket = await factory.connect(PairSeat.HOST)
+        host_wire = WireClient(PairSeat.HOST)
+        await host_wire.connect(host_socket)
+        host_driver = TestDriver(TestGeneration(GenerationOffer("generation-1", FAKE_PROTOCOL, EndpointKind.FAKE, b"setup")))
+        host = CoreSupervisor(credentials(PairSeat.HOST), host_driver, host_wire)
+        offer_task = asyncio.create_task(host.offer_generation())
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(asyncio.shield(offer_task), timeout=0.25)
+        self.assertEqual(host.state, SupervisorState.WAITING_FOR_PEER)
+        self.assertIsNone(host.failure)
+        guest_socket = await factory.connect(PairSeat.GUEST)
+        guest_wire = WireClient(PairSeat.GUEST)
+        await guest_wire.connect(guest_socket)
+        guest = CoreSupervisor(credentials(PairSeat.GUEST), TestDriver(TestGeneration(GenerationOffer("placeholder", FAKE_PROTOCOL, EndpointKind.FAKE, b""))), guest_wire)
+        await asyncio.gather(offer_task, guest.accept_next_offer())
+        self.assertEqual((host.state, guest.state), (SupervisorState.ACTIVE, SupervisorState.ACTIVE))
+        await asyncio.gather(host.stop(), guest.stop(), return_exceptions=True)
+
+    async def test_local_before_peer_transport_loss_rediscoveries_before_offer(self) -> None:
+        factory = SocketFactory()
+        host_socket = await factory.connect(PairSeat.HOST)
+        host_wire = WireClient(PairSeat.HOST)
+        await host_wire.connect(host_socket)
+        first = TestGeneration(GenerationOffer("generation-1", FAKE_PROTOCOL, EndpointKind.FAKE, b"setup"))
+        second = TestGeneration(GenerationOffer("generation-2", FAKE_PROTOCOL, EndpointKind.FAKE, b"setup"))
+        host_driver = TestDriver(first, discoveries=[first, second])
+        host = CoreSupervisor(credentials(PairSeat.HOST), host_driver, host_wire, connector=lambda: factory.connect(PairSeat.HOST), reconnect_timeout=0.1)
+        offer_task = asyncio.create_task(host.offer_generation())
+        await self._wait_for_state(host, SupervisorState.WAITING_FOR_PEER)
+        await host_socket.incoming.put(ConnectionError("relay lost"))
+        await self._wait_for_close(first)
+        await self._wait_for_state(host, SupervisorState.WAITING_FOR_PEER)
+        guest_socket = await factory.connect(PairSeat.GUEST)
+        guest_wire = WireClient(PairSeat.GUEST)
+        await guest_wire.connect(guest_socket)
+        guest = CoreSupervisor(credentials(PairSeat.GUEST), TestDriver(TestGeneration(GenerationOffer("placeholder", FAKE_PROTOCOL, EndpointKind.FAKE, b""))), guest_wire)
+        await asyncio.gather(offer_task, guest.accept_next_offer())
+        self.assertEqual(host.generation_id, "generation-2")
+        self.assertEqual((first.closed, host.state, guest.state), (1, SupervisorState.ACTIVE, SupervisorState.ACTIVE))
         await asyncio.gather(host.stop(), guest.stop(), return_exceptions=True)
 
     async def test_stop_is_idempotent_and_prepare_failure_is_preserved(self) -> None:

@@ -92,14 +92,19 @@ class CoreSupervisor:
     async def wait_for_peer(self) -> None:
         await self.prepare()
         self.state = SupervisorState.WAITING_FOR_PEER
-        try:
-            await self.transport.wait_ready()
-        except TransportError as exc:
-            if self._connector is not None:
-                await self.recover_pair()
-                return
-            raise await self._record_failure("S_TRANSPORT_FAILED") from exc
-        self.state = SupervisorState.PAIRED
+        while True:
+            self._admit()
+            try:
+                await self.transport.wait_ready(timeout=0.1)
+            except TransportError as exc:
+                if exc.code == "T_READY_TIMEOUT":
+                    continue
+                if self._connector is not None:
+                    await self.recover_pair()
+                    continue
+                raise await self._record_failure("S_TRANSPORT_FAILED") from exc
+            self.state = SupervisorState.PAIRED
+            return
 
     async def discover_local(self) -> GenerationOffer:
         if self.credentials.seat is not PairSeat.HOST:
@@ -117,9 +122,12 @@ class CoreSupervisor:
     async def offer_generation(self) -> None:
         if self.credentials.seat is not PairSeat.HOST:
             raise SupervisorError("S_ROLE_INVALID")
-        if self._generation is None:
-            await self.discover_local()
-        await self.wait_for_peer()
+        while True:
+            if self._generation is None:
+                await self.discover_local()
+            await self.wait_for_peer()
+            if self._generation is not None:
+                break
         generation = self._generation
         self.state = SupervisorState.GENERATION_NEGOTIATING
         try:
@@ -226,7 +234,13 @@ class CoreSupervisor:
             await self.transport.close()
             socket = await asyncio.wait_for(self._connector(), self._reconnect_timeout)
             await self.transport.connect(socket)
-            await self.transport.wait_ready(self._reconnect_timeout)
+            try:
+                await self.transport.wait_ready(self._reconnect_timeout)
+            except TransportError as exc:
+                if exc.code != "T_READY_TIMEOUT":
+                    raise
+                self.state = SupervisorState.WAITING_FOR_PEER
+                return
         except SupervisorError:
             raise
         except Exception as exc:
