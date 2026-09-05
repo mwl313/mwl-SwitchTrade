@@ -140,8 +140,16 @@ async def _socket(relay: str, credentials: PairCredentials) -> _WebSocketSocket:
 
 
 def _policy(args: argparse.Namespace) -> SwitchLdnPolicy:
+    proven_usb = os.environ.get("SWITCHTRADE_USB_ID", "")
     phy = os.environ.get("SWITCHTRADE_PHY", "")
     ifname = os.environ.get("SWITCHTRADE_IFACE", "")
+    proven_channel = os.environ.get("SWITCHTRADE_P0_TARGET_CHANNEL", "")
+    if not proven_usb or args.usb_id.lower() != proven_usb.lower():
+        raise CliError("RADIO_IDENTITY_MISMATCH: CLI USB ID differs from radio gate evidence")
+    if proven_channel != str(args.channel):
+        raise CliError("RADIO_CHANNEL_MISMATCH: CLI channel differs from radio gate evidence")
+    if os.environ.get("SWITCHTRADE_P0_RX_PASSED") != "1":
+        raise CliError("RADIO_RX_UNPROVEN: radio health gate did not prove receive")
     if not phy:
         raise CliError("PHY_UNRESOLVED: run through the radio health gate")
     if not ifname:

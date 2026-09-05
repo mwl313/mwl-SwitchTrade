@@ -389,8 +389,16 @@ function Invoke-DevRun {
     $runtime = Get-ActiveRuntime
     $pythonArguments = if ($Test) { @('-m', 'pytest') + $Arguments } else { $Arguments }
     $commandArguments = if ($CoreCli) {
-        $radioRole = if ($Arguments[2] -eq 'host') { 'guest' } else { 'host' }
-        @('./scripts/wsl-radio-prepare.sh', '--role', $radioRole, '--target-channel', '6', '--', $script:PythonPath) + $pythonArguments
+        $radioRole = if ($Arguments -contains 'host') { 'guest' } else { 'host' }
+        $channel = '6'
+        $usbId = $null
+        for ($index = 2; $index -lt $Arguments.Count; $index += 1) {
+            if ($Arguments[$index] -eq '--channel') { $index += 1; $channel = $Arguments[$index]; continue }
+            if ($Arguments[$index] -eq '--usb-id') { $index += 1; $usbId = $Arguments[$index] }
+        }
+        $gateArguments = @('./scripts/wsl-radio-prepare.sh', '--role', $radioRole)
+        if ($usbId) { $gateArguments += @('--usb-id', $usbId) }
+        $gateArguments + @('--target-channel', $channel, '--', $script:PythonPath) + $pythonArguments
     } else {
         @($script:PythonPath) + $pythonArguments
     }

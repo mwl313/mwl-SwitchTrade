@@ -16,7 +16,8 @@ class SwitchCoreCliTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Invoke-DevRun -Arguments $runArguments -CoreCli", (root / "dev.ps1").read_text(encoding="utf-8"))
         overlay = (root / "scripts" / "dev" / "DevOverlay.psm1").read_text(encoding="utf-8")
         self.assertIn("./scripts/wsl-radio-prepare.sh", overlay)
-        self.assertIn("'--target-channel', '6'", overlay)
+        self.assertIn("'--usb-id', $usbId", overlay)
+        self.assertIn("'--target-channel', $channel", overlay)
 
     def test_parser_accepts_automatic_host_and_join_commands(self) -> None:
         host = parser().parse_args(["--usb-id", "0bda:818b", "host"])
@@ -36,17 +37,35 @@ class SwitchCoreCliTests(unittest.IsolatedAsyncioTestCase):
 
     def test_policy_uses_only_proven_channel_values(self) -> None:
         args = parser().parse_args(["--usb-id", "0bda:818b", "--channel", "11", "host"])
-        with patch.dict("switchtrade.core_cli.os.environ", {"SWITCHTRADE_PHY": "phy7", "SWITCHTRADE_IFACE": "wlan7"}, clear=True):
+        with patch.dict("switchtrade.core_cli.os.environ", {
+            "SWITCHTRADE_USB_ID": "0bda:818b", "SWITCHTRADE_PHY": "phy7", "SWITCHTRADE_IFACE": "wlan7",
+            "SWITCHTRADE_P0_TARGET_CHANNEL": "11", "SWITCHTRADE_P0_RX_PASSED": "1",
+        }, clear=True):
             policy = _policy(args)
         self.assertEqual((policy.channel, policy.usb_id, policy.phy, policy.ifname), (11, "0bda:818b", "phy7", "wlan7"))
 
+    def test_policy_rejects_identity_channel_or_receive_proof_mismatch(self) -> None:
+        args = parser().parse_args(["--usb-id", "0bda:818b", "host"])
+        proven = {
+            "SWITCHTRADE_USB_ID": "0bda:818b", "SWITCHTRADE_PHY": "phy7", "SWITCHTRADE_IFACE": "wlan7",
+            "SWITCHTRADE_P0_TARGET_CHANNEL": "6", "SWITCHTRADE_P0_RX_PASSED": "1",
+        }
+        for key, value, code in (
+            ("SWITCHTRADE_USB_ID", "0e8d:7610", "RADIO_IDENTITY_MISMATCH"),
+            ("SWITCHTRADE_P0_TARGET_CHANNEL", "11", "RADIO_CHANNEL_MISMATCH"),
+            ("SWITCHTRADE_P0_RX_PASSED", "0", "RADIO_RX_UNPROVEN"),
+        ):
+            with self.subTest(code=code), patch.dict("switchtrade.core_cli.os.environ", {**proven, key: value}, clear=True):
+                with self.assertRaisesRegex(CliError, code):
+                    _policy(args)
+
     def test_policy_rejects_missing_proven_phy_or_unsupported_usb(self) -> None:
         args = parser().parse_args(["--usb-id", "0bda:818b", "host"])
-        with patch.dict("switchtrade.core_cli.os.environ", {"SWITCHTRADE_IFACE": "wlan7"}, clear=True):
+        with patch.dict("switchtrade.core_cli.os.environ", {"SWITCHTRADE_USB_ID": "0bda:818b", "SWITCHTRADE_IFACE": "wlan7", "SWITCHTRADE_P0_TARGET_CHANNEL": "6", "SWITCHTRADE_P0_RX_PASSED": "1"}, clear=True):
             with self.assertRaisesRegex(CliError, "PHY_UNRESOLVED"):
                 _policy(args)
         unsupported = parser().parse_args(["--usb-id", "ffff:ffff", "host"])
-        with patch.dict("switchtrade.core_cli.os.environ", {"SWITCHTRADE_PHY": "phy7", "SWITCHTRADE_IFACE": "wlan7"}, clear=True):
+        with patch.dict("switchtrade.core_cli.os.environ", {"SWITCHTRADE_USB_ID": "ffff:ffff", "SWITCHTRADE_PHY": "phy7", "SWITCHTRADE_IFACE": "wlan7", "SWITCHTRADE_P0_TARGET_CHANNEL": "6", "SWITCHTRADE_P0_RX_PASSED": "1"}, clear=True):
             with self.assertRaisesRegex(CliError, "HARDWARE_UNSUPPORTED"):
                 _policy(unsupported)
 
