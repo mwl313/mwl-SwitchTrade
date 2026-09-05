@@ -7,19 +7,25 @@ import os
 from pathlib import Path
 import sys
 from collections.abc import Callable
+import threading
+import time
 from typing import Protocol
 
 from switchtrade.connection.stage_session import StageResources, StageSession
 from switchtrade.core.contracts import CleanupReport, GenerationOffer, LinkPacket
 
+from .errors import SwitchLdnEndpointError
 from .tunnel_adapter import CoreTunnelAdapter
 
 
 class Simulation(Protocol):
+    def tick(self) -> None: ...
     def close(self) -> None: ...
 
 
 SimulationFactory = Callable[[StageResources, CoreTunnelAdapter, bool], Simulation]
+_VBLANK_SECONDS = 1 / 59.727
+_RUNNER_STOP_TIMEOUT = 5
 
 
 def build_tunnelsim(
@@ -85,7 +91,17 @@ class SwitchLdnGeneration:
             offer.generation_id, offer.protocol_id, capacity=tunnel_capacity
         )
         self.simulation = simulation_factory(resources, self.tunnel, parent)
+        self._runner_stop = threading.Event()
+        self._tick_failure: SwitchLdnEndpointError | None = None
+        self._runner = threading.Thread(
+            target=self._drive_simulation, name="switchtrade-tunnelsim", daemon=True
+        )
+        self._runner.start()
         self._report: CleanupReport | None = None
+
+    @property
+    def runner_alive(self) -> bool:
+        return self._runner.is_alive()
 
     async def receive(self) -> LinkPacket:
         return await self.tunnel.receive_for_core()
@@ -97,16 +113,22 @@ class SwitchLdnGeneration:
         del outcome
         if self._report is not None:
             return self._report
-        self.tunnel.close()
+        self.tunnel.seal()
+        self._runner_stop.set()
+        await asyncio.to_thread(self._runner.join, _RUNNER_STOP_TIMEOUT)
         failures: list[str] = []
-        try:
-            self.simulation.close()
-        except BaseException as error:
-            failures.append(f"simulation:{type(error).__name__}")
-        try:
-            await asyncio.to_thread(self._session.stop)
-        except BaseException as error:
-            failures.append(f"stage_session:{type(error).__name__}")
+        if self._runner.is_alive():
+            failures.append("runner:timeout")
+        self.tunnel.close()
+        if not failures:
+            try:
+                self.simulation.close()
+            except BaseException as error:
+                failures.append(f"simulation:{type(error).__name__}")
+            try:
+                await asyncio.to_thread(self._session.stop)
+            except BaseException as error:
+                failures.append(f"stage_session:{type(error).__name__}")
         cleaned = not failures
         self._on_closed(cleaned)
         self._report = CleanupReport(
@@ -116,10 +138,31 @@ class SwitchLdnGeneration:
             {
                 "endpoint_kind": "switch_ldn",
                 "tunnel_parent": self.parent,
+                "primary_failure_code": self._tick_failure.code if self._tick_failure else None,
                 "cleanup_errors": tuple(failures),
             },
         )
         return self._report
+
+    def _drive_simulation(self) -> None:
+        deadline = time.monotonic()
+        while not self._runner_stop.is_set():
+            try:
+                self.simulation.tick()
+            except BaseException as error:
+                failure = SwitchLdnEndpointError(
+                    "SWITCH_ENDPOINT_TICK_FAILED", "Switch LDN simulation tick failed"
+                )
+                failure.__cause__ = error
+                self._tick_failure = failure
+                self.tunnel.fail(failure)
+                return
+            deadline += _VBLANK_SECONDS
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                deadline = time.monotonic() + _VBLANK_SECONDS
+                remaining = _VBLANK_SECONDS
+            self._runner_stop.wait(remaining)
 
 
 LeaderGeneration = SwitchLdnGeneration

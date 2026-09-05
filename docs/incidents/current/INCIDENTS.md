@@ -1268,3 +1268,32 @@ archive list and regenerate the index.
 - **Correction status:** live-process and lock revalidation pending.
 - **Mandatory prevention gate:** Immediately before any identity-bound process termination, perform a
   fresh exact PID and command-line read; an already-exited PID requires no destructive recovery.
+
+### MTA-OPS-246 — Re-read concurrent-boundary source before a multi-hunk patch
+
+- **Observed failure:** The first C3 lifecycle repair patch used a reconstructed `receive_for_core`
+  hunk that did not match the current CoreTunnelAdapter ordering. `apply_patch` rejected it before
+  changing source or runtime state.
+- **Cause certainty:** certain from the verifier's missing-context diagnostic.
+- **Disproven alternatives:** The rejection does not indicate an adapter lifecycle or flag-bound
+  defect; no code hunk was applied.
+- **Recovery and residue:** Preserve the rejected patch, regenerate the index, read the exact bounded
+  adapter source, then apply each lifecycle change against that observed context.
+- **Correction status:** exact source re-read pending.
+- **Mandatory prevention gate:** Before patching a concurrent boundary with multiple hunks, re-read
+  every target method from the current worktree rather than relying on a prior truncated aggregate read.
+
+### MTA-OPS-247 — Remove an outer try when removing its finalizer
+
+- **Observed failure:** C3 runner cleanup simplification removed an unused `finally` body but left its
+  outer `try`, producing a generation-module SyntaxError during test collection. No test body,
+  endpoint, runtime, or hardware action ran.
+- **Cause certainty:** certain from the Python parser diagnostic at the alias following
+  `_drive_simulation`.
+- **Disproven alternatives:** This does not indicate a tick-runner, adapter, or Direct-stage failure;
+  import failed before those paths existed.
+- **Recovery and residue:** Preserve the collection error, regenerate the index, remove the redundant
+  outer `try` while retaining the inner tick-failure handler, then rerun the focused tests.
+- **Correction status:** runner syntax repair pending.
+- **Mandatory prevention gate:** When deleting a `finally` clause, remove or replace its matching
+  `try` in the same source review before executing imports or tests.

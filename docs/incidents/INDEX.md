@@ -254,3 +254,5 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-OPS-243` | Review new test imports before execution | Current ledger | 1227 |
 | `MTA-OPS-244` | Do not overlap full pytest runs that own the relay writer lock | Current ledger | 1241 |
 | `MTA-OPS-245` | Revalidate a recorded recovery PID immediately before termination | Current ledger | 1257 |
+| `MTA-OPS-246` | Re-read concurrent-boundary source before a multi-hunk patch | Current ledger | 1272 |
+| `MTA-OPS-247` | Remove an outer try when removing its finalizer | Current ledger | 1286 |

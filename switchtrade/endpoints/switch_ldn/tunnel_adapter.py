@@ -37,6 +37,8 @@ class CoreTunnelAdapter:
         self._core_to_local: Deque[CoreRfuFrame] = deque()
         self._local_ready = asyncio.Event()
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._sealed = False
+        self._failure: BaseException | None = None
         self._closed = False
         self._connection_generation = 1
         self.connected = threading.Event()
@@ -73,7 +75,9 @@ class CoreTunnelAdapter:
                     raise RuntimeError("Core tunnel was bound to another event loop")
                 if self._local_to_core:
                     return self._local_to_core.popleft()
-                if self._closed:
+                if self._failure is not None:
+                    raise self._failure
+                if self._sealed or self._closed:
                     raise RuntimeError("Switch LDN generation is closed")
                 self._local_ready.clear()
             await self._local_ready.wait()
@@ -92,7 +96,7 @@ class CoreTunnelAdapter:
     def poll(self) -> list[CoreRfuFrame]:
         """Return the current Core DATA batch to TunnelSim in insertion order."""
         with self._lock:
-            if self._closed or not self.connected.is_set():
+            if self._sealed or self._closed or not self.connected.is_set():
                 self._core_to_local.clear()
                 return []
             frames = list(self._core_to_local)
@@ -106,11 +110,16 @@ class CoreTunnelAdapter:
                 "SWITCH_ENDPOINT_GENERATION_INVALID", "Core generation identity is required"
             )
         with self._lock:
+            if self._failure is not None:
+                raise self._failure
+            if self._sealed or self._closed:
+                raise SwitchLdnEndpointError(
+                    "SWITCH_ENDPOINT_TUNNEL_CLOSED", "Core tunnel is not connected"
+                )
             self._generation_id = generation_id
             self._local_to_core.clear()
             self._core_to_local.clear()
             self._connection_generation += 1
-            self._closed = False
             self.connected.set()
         self._signal_local_ready()
 
@@ -118,11 +127,30 @@ class CoreTunnelAdapter:
         with self._lock:
             if self._closed:
                 return
+            self._sealed = True
             self._closed = True
             self._local_to_core.clear()
             self._core_to_local.clear()
             self._connection_generation += 1
             self.connected.clear()
+        self._signal_local_ready()
+
+    def seal(self) -> None:
+        """Stop DATA admission before local simulation teardown."""
+        with self._lock:
+            self._sealed = True
+            self._local_to_core.clear()
+            self._core_to_local.clear()
+        self._signal_local_ready()
+
+    def fail(self, error: BaseException) -> None:
+        """Wake Core receive with the first local simulation failure."""
+        with self._lock:
+            if self._failure is None:
+                self._failure = error
+            self._sealed = True
+            self._local_to_core.clear()
+            self._core_to_local.clear()
         self._signal_local_ready()
 
     def _validate_packet(self, packet: LinkPacket) -> None:
@@ -152,13 +180,15 @@ class CoreTunnelAdapter:
 
     @staticmethod
     def _validated_flags(flags: int) -> None:
-        if isinstance(flags, bool) or not isinstance(flags, int) or not 0 <= flags <= 0xFFFF:
+        if isinstance(flags, bool) or not isinstance(flags, int) or not 0 <= flags <= 0xFF:
             raise SwitchLdnEndpointError(
-                "SWITCH_ENDPOINT_FLAGS_INVALID", "RFU flags are outside the Core wire bound"
+                "SWITCH_ENDPOINT_FLAGS_INVALID", "RFU flags are outside the Reliable wire bound"
             )
 
     def _admit_open(self) -> None:
-        if self._closed or not self.connected.is_set():
+        if self._failure is not None:
+            raise self._failure
+        if self._sealed or self._closed or not self.connected.is_set():
             raise SwitchLdnEndpointError(
                 "SWITCH_ENDPOINT_TUNNEL_CLOSED", "Core tunnel is not connected"
             )

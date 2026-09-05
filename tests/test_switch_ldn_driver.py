@@ -79,8 +79,17 @@ class BlockingSession(FakeSession):
 
 
 class FakeSimulation:
-    def __init__(self) -> None:
+    def __init__(self, failure: BaseException | None = None) -> None:
         self.closed = False
+        self.failure = failure
+        self.tick_count = 0
+        self.ticked = threading.Event()
+
+    def tick(self) -> None:
+        self.tick_count += 1
+        self.ticked.set()
+        if self.failure is not None:
+            raise self.failure
 
     def close(self) -> None:
         self.closed = True
@@ -279,15 +288,15 @@ class SwitchLdnDriverBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(generation.parent)
         self.assertTrue(simulations[0][1])
 
-        generation.tunnel.send_rfu(b"local-rfu", flags=0x0100)
+        generation.tunnel.send_rfu(b"local-rfu", flags=0xFF)
         self.assertEqual(
             await generation.receive(),
-            LinkPacket("mirror-1", SWITCH_LDN_PROTOCOL, b"local-rfu", 0x0100),
+            LinkPacket("mirror-1", SWITCH_LDN_PROTOCOL, b"local-rfu", 0xFF),
         )
-        await generation.send(LinkPacket("mirror-1", SWITCH_LDN_PROTOCOL, b"remote-rfu", 0xFFFF))
+        await generation.send(LinkPacket("mirror-1", SWITCH_LDN_PROTOCOL, b"remote-rfu", 0xFF))
         self.assertEqual(
             [(frame.payload, frame.flags) for frame in generation.tunnel.poll()],
-            [(b"remote-rfu", 0xFFFF)],
+            [(b"remote-rfu", 0xFF)],
         )
         report = await generation.close("done")
         self.assertTrue(report.local_resources_released)
@@ -324,6 +333,52 @@ class SwitchLdnDriverBoundaryTests(unittest.IsolatedAsyncioTestCase):
         offer = GenerationOffer("mirror-sim-error", SWITCH_LDN_PROTOCOL, EndpointKind.SWITCH_LDN, b"opaque-ad")
         with self.assertRaisesRegex(RuntimeError, "TunnelSim unavailable"):
             await driver.accept(offer, asyncio.Event())
+        self.assertTrue(session.stopped)
+
+    async def test_generation_drives_and_stops_its_simulation_runner(self) -> None:
+        resources = StageResources(object(), object(), b"advertisement")
+        session = FakeSession(resources)
+        simulations: list[FakeSimulation] = []
+
+        def make_simulation(*_args: object) -> FakeSimulation:
+            simulation = FakeSimulation()
+            simulations.append(simulation)
+            return simulation
+
+        driver = SwitchLdnEndpointDriver(
+            policy(), stage_factory=lambda _policy: object(),
+            session_factory=lambda *_args, **_kwargs: session,
+            simulation_factory=make_simulation,
+        )
+        await driver.prepare()
+        generation = await driver.discover(asyncio.Event())
+        simulation = simulations[0]
+        self.assertTrue(
+            await asyncio.wait_for(asyncio.to_thread(simulation.ticked.wait), timeout=1)
+        )
+        self.assertGreater(simulation.tick_count, 0)
+        report = await generation.close("done")
+        self.assertTrue(report.local_resources_released)
+        self.assertFalse(generation.runner_alive)
+        self.assertTrue(simulation.closed)
+        self.assertTrue(session.stopped)
+
+    async def test_tick_failure_wakes_core_receive_and_cleans_up_on_close(self) -> None:
+        resources = StageResources(object(), object(), b"advertisement")
+        session = FakeSession(resources)
+        driver = SwitchLdnEndpointDriver(
+            policy(), stage_factory=lambda _policy: object(),
+            session_factory=lambda *_args, **_kwargs: session,
+            simulation_factory=lambda *_args: FakeSimulation(RuntimeError("Pia socket failed")),
+        )
+        await driver.prepare()
+        generation = await driver.discover(asyncio.Event())
+        with self.assertRaises(SwitchLdnEndpointError) as raised:
+            await asyncio.wait_for(generation.receive(), timeout=1)
+        self.assertEqual(raised.exception.code, "SWITCH_ENDPOINT_TICK_FAILED")
+        report = await generation.close("failed")
+        self.assertTrue(report.local_resources_released)
+        self.assertEqual(report.details["primary_failure_code"], "SWITCH_ENDPOINT_TICK_FAILED")
         self.assertTrue(session.stopped)
 
     def test_default_tunnelsim_maps_leader_and_mirror_to_the_existing_pia_roles(self) -> None:
