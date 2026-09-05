@@ -384,11 +384,17 @@ function Invoke-DevSync {
 }
 
 function Invoke-DevRun {
-    param([string[]]$Arguments = @(), [switch]$Test)
+    param([string[]]$Arguments = @(), [switch]$Test, [switch]$CoreCli)
     $null = Invoke-DevSync
     $runtime = Get-ActiveRuntime
     $pythonArguments = if ($Test) { @('-m', 'pytest') + $Arguments } else { $Arguments }
-    $envArguments = @('/usr/bin/env', 'PYTHONNOUSERSITE=1', "PYTHONPATH=$script:OverlayRoot/current", "SWITCHTRADE_SOURCE_ROOT=$script:OverlayRoot/current", "SWITCHTRADE_INSTALLED_ROOT=$script:InstalledRoot", $script:PythonPath) + $pythonArguments
+    $commandArguments = if ($CoreCli) {
+        $radioRole = if ($Arguments[2] -eq 'host') { 'guest' } else { 'host' }
+        @('./scripts/wsl-radio-prepare.sh', '--role', $radioRole, '--target-channel', '6', '--', $script:PythonPath) + $pythonArguments
+    } else {
+        @($script:PythonPath) + $pythonArguments
+    }
+    $envArguments = @('/usr/bin/env', 'PYTHONNOUSERSITE=1', "PYTHONPATH=$script:OverlayRoot/current", "SWITCHTRADE_SOURCE_ROOT=$script:OverlayRoot/current", "SWITCHTRADE_INSTALLED_ROOT=$script:InstalledRoot") + $commandArguments
     $exitCode = Invoke-DevInteractiveWsl -Distro $runtime.Name -Cwd "$script:OverlayRoot/current" -Command $envArguments[0] -Arguments $envArguments[1..($envArguments.Count - 1)]
     if ($exitCode -ne 0) { Stop-DevOverlay 'DEV_RUN_FAILED' "The development process exited with code $exitCode." }
     return 0

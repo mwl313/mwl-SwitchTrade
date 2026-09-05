@@ -1412,3 +1412,18 @@ archive list and regenerate the index.
 - **Correction status:** process correction recorded before final handoff.
 - **Mandatory prevention gate:** Query current branch, local revision, remote revision, and status in
   separate shell invocations whenever each fact is used as final handoff evidence.
+
+### MTA-OPS-254 — Protect leading-dash ripgrep patterns with the option separator
+
+- **Observed failure:** C4 radio-gate discovery searched for a pattern beginning with `--usb-id`
+  without ripgrep's option separator. Ripgrep parsed it as an unknown option and returned no source
+  evidence. No source, runtime, endpoint, process, or external state changed.
+- **Cause certainty:** certain from ripgrep's explicit option diagnostic. The script path was valid;
+  only the pattern was parsed incorrectly.
+- **Disproven alternatives:** The failed search does not indicate that the radio gate lacks USB,
+  command, or execution handling.
+- **Recovery and residue:** Preserve the failed query, regenerate the index, then use fixed-string
+  search with `--` before the leading-dash pattern. No runtime cleanup is required.
+- **Correction status:** process correction recorded before C4 identity routing is changed.
+- **Mandatory prevention gate:** Any search pattern that begins with `-` must be placed after
+  ripgrep's `--` option separator; do not rely on the pattern's surrounding alternation to protect it.

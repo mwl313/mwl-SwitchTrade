@@ -1,15 +1,23 @@
 from __future__ import annotations
 
-import argparse
 import asyncio
+from pathlib import Path
 import unittest
 from unittest.mock import AsyncMock, patch
 
 from switchtrade.core import PairCredentials, PairSeat
-from switchtrade.core_cli import _credentials, _policy, _websocket_url, parser, run
+from switchtrade.core.supervisor import SupervisorError
+from switchtrade.core_cli import CliError, _credentials, _policy, _websocket_url, main, parser, run
 
 
 class SwitchCoreCliTests(unittest.IsolatedAsyncioTestCase):
+    def test_dev_core_route_runs_through_the_proven_radio_gate(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        self.assertIn("Invoke-DevRun -Arguments $runArguments -CoreCli", (root / "dev.ps1").read_text(encoding="utf-8"))
+        overlay = (root / "scripts" / "dev" / "DevOverlay.psm1").read_text(encoding="utf-8")
+        self.assertIn("./scripts/wsl-radio-prepare.sh", overlay)
+        self.assertIn("'--target-channel', '6'", overlay)
+
     def test_parser_accepts_automatic_host_and_join_commands(self) -> None:
         host = parser().parse_args(["--usb-id", "0bda:818b", "host"])
         guest = parser().parse_args(["--usb-id", "0bda:818b", "join", "381742"])
@@ -28,7 +36,19 @@ class SwitchCoreCliTests(unittest.IsolatedAsyncioTestCase):
 
     def test_policy_uses_only_proven_channel_values(self) -> None:
         args = parser().parse_args(["--usb-id", "0bda:818b", "--channel", "11", "host"])
-        self.assertEqual(_policy(args).channel, 11)
+        with patch.dict("switchtrade.core_cli.os.environ", {"SWITCHTRADE_PHY": "phy7", "SWITCHTRADE_IFACE": "wlan7"}, clear=True):
+            policy = _policy(args)
+        self.assertEqual((policy.channel, policy.usb_id, policy.phy, policy.ifname), (11, "0bda:818b", "phy7", "wlan7"))
+
+    def test_policy_rejects_missing_proven_phy_or_unsupported_usb(self) -> None:
+        args = parser().parse_args(["--usb-id", "0bda:818b", "host"])
+        with patch.dict("switchtrade.core_cli.os.environ", {"SWITCHTRADE_IFACE": "wlan7"}, clear=True):
+            with self.assertRaisesRegex(CliError, "PHY_UNRESOLVED"):
+                _policy(args)
+        unsupported = parser().parse_args(["--usb-id", "ffff:ffff", "host"])
+        with patch.dict("switchtrade.core_cli.os.environ", {"SWITCHTRADE_PHY": "phy7", "SWITCHTRADE_IFACE": "wlan7"}, clear=True):
+            with self.assertRaisesRegex(CliError, "HARDWARE_UNSUPPORTED"):
+                _policy(unsupported)
 
     async def test_host_uses_discovery_before_waiting_for_peer_and_stops(self) -> None:
         args = parser().parse_args(["--usb-id", "0bda:818b", "host"])
@@ -41,6 +61,7 @@ class SwitchCoreCliTests(unittest.IsolatedAsyncioTestCase):
         with patch("switchtrade.core_cli._request", AsyncMock(return_value=response)), \
              patch("switchtrade.core_cli._socket", AsyncMock(return_value=object())), \
              patch("switchtrade.core_cli.WireClient.connect", AsyncMock()), \
+             patch("switchtrade.core_cli._policy", return_value=object()), \
              patch("switchtrade.core_cli.create_switch_ldn_driver", return_value=object()), \
              patch("switchtrade.core_cli.CoreSupervisor", return_value=supervisor), \
              patch("switchtrade.core_cli._bridge_until_canceled", AsyncMock()):
@@ -61,13 +82,57 @@ class SwitchCoreCliTests(unittest.IsolatedAsyncioTestCase):
         with patch("switchtrade.core_cli._request", AsyncMock(return_value=response)), \
              patch("switchtrade.core_cli._socket", AsyncMock(return_value=object())), \
              patch("switchtrade.core_cli.WireClient.connect", AsyncMock()), \
+             patch("switchtrade.core_cli._policy", return_value=object()), \
              patch("switchtrade.core_cli.create_switch_ldn_driver", return_value=object()), \
              patch("switchtrade.core_cli.CoreSupervisor", return_value=supervisor), \
-             patch("switchtrade.core_cli._bridge_until_canceled", AsyncMock()):
+             patch("switchtrade.core_cli._bridge_until_canceled", AsyncMock()), \
+             patch("builtins.print") as printed:
             self.assertEqual(await run(args), 0)
         supervisor.wait_for_peer.assert_awaited_once()
         supervisor.accept_next_offer.assert_awaited_once()
         supervisor.stop.assert_awaited_once()
+        events = [call.args[0] for call in printed.call_args_list]
+        self.assertLess(events.index("Choose Join Group on the Switch when it appears."), events.index("Mirror access point and Switch ready."))
+
+    async def test_active_failure_exits_run_and_stops_once(self) -> None:
+        args = parser().parse_args(["--usb-id", "0bda:818b", "host"])
+        response = {"pair_id": "pair-1", "access_token": "token", "reconnect_expires_at": "2099-01-01T00:00:00+00:00", "code": "381742"}
+        supervisor = type("Supervisor", (), {
+            "discover_local": AsyncMock(), "wait_for_peer": AsyncMock(), "offer_generation": AsyncMock(),
+            "wait_generation_end": AsyncMock(side_effect=SupervisorError("S_PUMP_FAILED")), "stop": AsyncMock(),
+        })()
+        with patch("switchtrade.core_cli._request", AsyncMock(return_value=response)), \
+             patch("switchtrade.core_cli._socket", AsyncMock(return_value=object())), \
+             patch("switchtrade.core_cli.WireClient.connect", AsyncMock()), \
+             patch("switchtrade.core_cli._policy", return_value=object()), \
+             patch("switchtrade.core_cli.create_switch_ldn_driver", return_value=object()), \
+             patch("switchtrade.core_cli.CoreSupervisor", return_value=supervisor):
+            with self.assertRaisesRegex(SupervisorError, "S_PUMP_FAILED"):
+                await run(args)
+        supervisor.stop.assert_awaited_once()
+
+    async def test_cancellation_stops_once_without_turning_into_a_failure(self) -> None:
+        args = parser().parse_args(["--usb-id", "0bda:818b", "host"])
+        response = {"pair_id": "pair-1", "access_token": "token", "reconnect_expires_at": "2099-01-01T00:00:00+00:00", "code": "381742"}
+        supervisor = type("Supervisor", (), {
+            "discover_local": AsyncMock(), "wait_for_peer": AsyncMock(), "offer_generation": AsyncMock(), "stop": AsyncMock(),
+        })()
+        with patch("switchtrade.core_cli._request", AsyncMock(return_value=response)), \
+             patch("switchtrade.core_cli._socket", AsyncMock(return_value=object())), \
+             patch("switchtrade.core_cli.WireClient.connect", AsyncMock()), \
+             patch("switchtrade.core_cli._policy", return_value=object()), \
+             patch("switchtrade.core_cli.create_switch_ldn_driver", return_value=object()), \
+             patch("switchtrade.core_cli.CoreSupervisor", return_value=supervisor), \
+             patch("switchtrade.core_cli._bridge_until_canceled", AsyncMock(side_effect=asyncio.CancelledError)):
+            with self.assertRaises(asyncio.CancelledError):
+                await run(args)
+        supervisor.stop.assert_awaited_once()
+
+    def test_main_maps_unexpected_failure_to_a_clean_nonzero_exit(self) -> None:
+        with patch("switchtrade.core_cli.run", AsyncMock(side_effect=SupervisorError("S_PUMP_FAILED"))), \
+             patch("builtins.print") as printed:
+            self.assertEqual(main(["--usb-id", "0bda:818b", "host"]), 1)
+        self.assertEqual(printed.call_args.args[0], "CORE_CLI_FAILED: S_PUMP_FAILED")
 
 
 if __name__ == "__main__":

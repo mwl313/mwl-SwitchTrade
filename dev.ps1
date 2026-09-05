@@ -21,6 +21,7 @@ try {
             $runArguments = Remove-ArgumentMarker $Arguments
             if ($runArguments.Count -gt 0 -and $runArguments[0] -in @('host', 'join')) {
                 $runArguments = @('-m', 'switchtrade.core_cli') + $runArguments
+                exit (Invoke-DevRun -Arguments $runArguments -CoreCli)
             }
             exit (Invoke-DevRun -Arguments $runArguments)
         }

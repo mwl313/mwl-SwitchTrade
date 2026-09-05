@@ -200,6 +200,18 @@ class CoreSupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.host.generation_id)
         self.assertEqual(self.host.state, SupervisorState.FAILED)
 
+    async def test_wait_generation_end_surfaces_pump_failure(self) -> None:
+        await asyncio.gather(self.host.offer_generation(), self.guest.accept_next_offer())
+        await self.host_generation.incoming.put(RuntimeError("local failed"))
+        with self.assertRaisesRegex(SupervisorError, "S_PUMP_FAILED"):
+            await self.host.wait_generation_end()
+
+    async def test_wait_generation_end_returns_after_clean_peer_close(self) -> None:
+        await asyncio.gather(self.host.offer_generation(), self.guest.accept_next_offer())
+        await self.host.close_generation()
+        await self.guest.wait_generation_end()
+        self.assertEqual(self.guest.state, SupervisorState.PAIRED)
+
     async def test_failure_stop_preserves_failed_terminal_state(self) -> None:
         failed = CoreSupervisor(credentials(PairSeat.HOST), TestDriver(self.host_generation, fail_prepare=True), self.host_wire)
         with self.assertRaisesRegex(SupervisorError, "S_ENDPOINT_FAILED"):

@@ -18,6 +18,7 @@ import websockets
 from switchtrade.composition import create_switch_ldn_driver
 from switchtrade.core import CoreSupervisor, PairCredentials, PairSeat
 from switchtrade.endpoints.switch_ldn import SwitchLdnPolicy
+from switchtrade.hardware import HardwarePolicyError, require_hardware, select_profile
 from switchtrade.transport import WireClient
 
 
@@ -60,13 +61,18 @@ def parser() -> argparse.ArgumentParser:
 
 
 def _configure_logging(args: argparse.Namespace) -> None:
+    logger = logging.getLogger(__name__)
+    logger.handlers.clear()
+    logger.propagate = False
+    logger.setLevel(logging.DEBUG)
     handlers: list[logging.Handler] = []
     if args.verbose:
         handlers.append(logging.StreamHandler())
     if args.log_dir is not None:
         args.log_dir.mkdir(parents=True, exist_ok=True)
         handlers.append(logging.FileHandler(args.log_dir / "switchtrade-core.log", encoding="utf-8"))
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, handlers=handlers or None)
+    for handler in handlers:
+        logger.addHandler(handler)
 
 
 def _capabilities(role: str) -> dict[str, object]:
@@ -134,29 +140,42 @@ async def _socket(relay: str, credentials: PairCredentials) -> _WebSocketSocket:
 
 
 def _policy(args: argparse.Namespace) -> SwitchLdnPolicy:
+    phy = os.environ.get("SWITCHTRADE_PHY", "")
+    ifname = os.environ.get("SWITCHTRADE_IFACE", "")
+    if not phy:
+        raise CliError("PHY_UNRESOLVED: run through the radio health gate")
+    if not ifname:
+        raise CliError("IFACE_UNRESOLVED: run through the radio health gate")
+    try:
+        profile = require_hardware(
+            select_profile(args.usb_id), "guest" if args.command == "host" else "host"
+        )
+    except HardwarePolicyError as exc:
+        raise CliError(str(exc)) from exc
     return SwitchLdnPolicy(
         run_id=f"core-{uuid4().hex}",
         release=os.environ.get("SWITCHTRADE_CORE_RELEASE", "development"),
-        usb_id=args.usb_id,
-        hardware_profile=os.environ.get("SWITCHTRADE_CORE_HARDWARE_PROFILE", "rtl8192eu"),
-        phy=os.environ.get("SWITCHTRADE_CORE_PHY", "phy0"),
-        ifname=os.environ.get("SWITCHTRADE_CORE_IFNAME", "wlan0"),
-        keys_path=os.environ.get("SWITCHTRADE_CORE_KEYS", "/opt/switchtrade/config/prod.keys"),
+        usb_id=profile.usb_id,
+        hardware_profile=profile.chipset,
+        phy=phy,
+        ifname=ifname,
+        keys_path=os.environ.get("SWITCHTRADE_KEYS", "/opt/switchtrade/config/prod.keys"),
         channel=args.channel,
     )
 
 
 async def _bridge_until_canceled(supervisor: CoreSupervisor) -> None:
-    await asyncio.Event().wait()
+    await supervisor.wait_generation_end()
 
 
 async def _run_host(args: argparse.Namespace) -> None:
+    driver = create_switch_ldn_driver(_policy(args))
     print("Starting SwitchTrade...")
     credentials = _credentials(await _request(args.relay, "/core/v1/pairs", {"capabilities": _capabilities("origin")}), PairSeat.HOST)
     print(f"Pair code: {credentials.code}")
     transport = WireClient(PairSeat.HOST)
     await transport.connect(await _socket(args.relay, credentials))
-    supervisor = CoreSupervisor(credentials, create_switch_ldn_driver(_policy(args)), transport, connector=lambda: _socket(args.relay, credentials))
+    supervisor = CoreSupervisor(credentials, driver, transport, connector=lambda: _socket(args.relay, credentials))
     try:
         print("Waiting for a Group Leader room...")
         await supervisor.discover_local()
@@ -173,19 +192,21 @@ async def _run_host(args: argparse.Namespace) -> None:
 
 
 async def _run_guest(args: argparse.Namespace) -> None:
+    driver = create_switch_ldn_driver(_policy(args))
     print("Starting SwitchTrade...")
     print(f"Connecting with code {args.code}...")
     credentials = _credentials(await _request(args.relay, "/core/v1/pairs:join", {"code": args.code, "capabilities": _capabilities("mirror")}), PairSeat.GUEST)
     transport = WireClient(PairSeat.GUEST)
     await transport.connect(await _socket(args.relay, credentials))
-    supervisor = CoreSupervisor(credentials, create_switch_ldn_driver(_policy(args)), transport, connector=lambda: _socket(args.relay, credentials))
+    supervisor = CoreSupervisor(credentials, driver, transport, connector=lambda: _socket(args.relay, credentials))
     try:
         print("Waiting for the host's Switch...")
         await supervisor.wait_for_peer()
         print("Peer connected.")
+        print("Preparing the mirror access point...")
+        print("Choose Join Group on the Switch when it appears.")
         await supervisor.accept_next_offer()
-        print("Mirror access point ready.")
-        print("Choose Join Group on the Switch at any time.")
+        print("Mirror access point and Switch ready.")
         print("Bridge active.")
         await _bridge_until_canceled(supervisor)
     finally:
@@ -210,7 +231,8 @@ def main(argv: list[str] | None = None) -> int:
     except CliError as exc:
         print(f"CORE_CLI_FAILED: {exc}")
     except Exception as exc:
-        logging.getLogger(__name__).exception("Core CLI failed")
+        if args.verbose or args.log_dir is not None:
+            logging.getLogger(__name__).exception("Core CLI failed")
         print(f"CORE_CLI_FAILED: {exc}")
     return 1
 

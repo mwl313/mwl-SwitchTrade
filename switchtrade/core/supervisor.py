@@ -200,6 +200,14 @@ class CoreSupervisor:
             self._generation = None
             self.state = SupervisorState.FAILED if self.failure else SupervisorState.PAIRED
 
+    async def wait_generation_end(self) -> None:
+        """Wait for the active data-plane pumps and surface their terminal failure."""
+        tasks = tuple(self._pump_tasks)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        if self.failure is not None:
+            raise self.failure
+
     async def stop(self) -> None:
         if self._stop_started:
             return
