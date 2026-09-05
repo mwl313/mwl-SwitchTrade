@@ -577,8 +577,8 @@ class _NoopSimulation:
 
 class DirectBDriverCancellationTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
-    def _policy() -> SwitchLdnPolicy:
-        return SwitchLdnPolicy(
+    def _policy(**changes) -> SwitchLdnPolicy:
+        values = dict(
             run_id="00000000-0000-0000-0000-000000000011",
             release="test-release",
             usb_id="0bda:818b",
@@ -593,6 +593,8 @@ class DirectBDriverCancellationTests(unittest.IsolatedAsyncioTestCase):
             session_timeout=1,
             session_stop_timeout=1,
         )
+        values.update(changes)
+        return SwitchLdnPolicy(**values)
 
     @staticmethod
     def _offer() -> GenerationOffer:
@@ -633,13 +635,15 @@ class DirectBDriverCancellationTests(unittest.IsolatedAsyncioTestCase):
             return stage
 
         driver = SwitchLdnEndpointDriver(
-            self._policy(), mirror_stage_factory=make_direct_b_stage,
+            self._policy(session_timeout=None), mirror_stage_factory=make_direct_b_stage,
             session_factory=StageSession, simulation_factory=lambda *_args: _NoopSimulation(),
         )
         await driver.prepare()
         cancel = asyncio.Event()
         acceptance = asyncio.create_task(driver.accept(self._offer(), cancel))
         await self._wait_for(waiting)
+        await asyncio.sleep(0.05)
+        self.assertFalse(acceptance.done())
         cancel.set()
         with self.assertRaises(asyncio.CancelledError):
             await asyncio.wait_for(acceptance, timeout=1)

@@ -28,8 +28,8 @@ class StageSessionError(RuntimeError):
 class StageSession:
     """Run one Direct stage once; ``stop`` is the sole LDN-context exit owner."""
 
-    def __init__(self, stage: object, *, timeout: float = 180, stop_timeout: float = 15):
-        if timeout <= 0 or stop_timeout <= 0:
+    def __init__(self, stage: object, *, timeout: float | None = None, stop_timeout: float = 15):
+        if (timeout is not None and timeout <= 0) or stop_timeout <= 0:
             raise ValueError("stage session timeout must be positive")
         self.stage = stage
         self.timeout = timeout

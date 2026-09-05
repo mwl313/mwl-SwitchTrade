@@ -48,7 +48,10 @@ class SwitchLdnPolicy:
     tap_ifname: str = "tap-switchtrade"
     channel: int = 6
     retry_delay: float = 0.5
-    session_timeout: float = 180
+    # A human choosing Join Group is not an operation deadline.  ``None``
+    # deliberately leaves readiness under cancellation, transport, and stage
+    # failure ownership rather than imposing a second wall-clock cutoff.
+    session_timeout: float | None = None
     session_stop_timeout: float = 15
 
     def validate(self) -> None:
@@ -64,7 +67,7 @@ class SwitchLdnPolicy:
             or not PurePosixPath(self.keys_path).is_absolute()
             or self.channel not in {1, 6, 11}
             or not 0.5 <= self.retry_delay <= 2
-            or self.session_timeout <= 0
+            or (self.session_timeout is not None and self.session_timeout <= 0)
             or self.session_stop_timeout <= 0
         ):
             raise SwitchLdnEndpointError(
