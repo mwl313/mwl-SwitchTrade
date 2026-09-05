@@ -117,18 +117,20 @@ class SwitchLdnGeneration:
         self._runner_stop.set()
         await asyncio.to_thread(self._runner.join, _RUNNER_STOP_TIMEOUT)
         failures: list[str] = []
-        if self._runner.is_alive():
+        runner_timed_out = self._runner.is_alive()
+        if runner_timed_out:
             failures.append("runner:timeout")
+        try:
+            self.simulation.close()
+        except BaseException as error:
+            failures.append(f"simulation:{type(error).__name__}")
+        try:
+            await asyncio.to_thread(self._session.stop)
+        except BaseException as error:
+            failures.append(f"stage_session:{type(error).__name__}")
+        if runner_timed_out:
+            await asyncio.to_thread(self._runner.join, _RUNNER_STOP_TIMEOUT)
         self.tunnel.close()
-        if not failures:
-            try:
-                self.simulation.close()
-            except BaseException as error:
-                failures.append(f"simulation:{type(error).__name__}")
-            try:
-                await asyncio.to_thread(self._session.stop)
-            except BaseException as error:
-                failures.append(f"stage_session:{type(error).__name__}")
         cleaned = not failures
         self._on_closed(cleaned)
         self._report = CleanupReport(

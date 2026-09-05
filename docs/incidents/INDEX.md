@@ -256,3 +256,4 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-OPS-245` | Revalidate a recorded recovery PID immediately before termination | Current ledger | 1257 |
 | `MTA-OPS-246` | Re-read concurrent-boundary source before a multi-hunk patch | Current ledger | 1272 |
 | `MTA-OPS-247` | Remove an outer try when removing its finalizer | Current ledger | 1286 |
+| `MTA-OPS-248` | Use PowerShell-compatible regex syntax in process preflight | Current ledger | 1301 |

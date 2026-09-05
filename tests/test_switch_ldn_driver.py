@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import unittest
+from unittest.mock import patch
 
 from switchtrade.connection.stage_session import StageResources, StageSessionError
 from switchtrade.core.contracts import EndpointKind, GenerationOffer, GenerationRole, LinkPacket, RuntimeKind
@@ -93,6 +94,21 @@ class FakeSimulation:
 
     def close(self) -> None:
         self.closed = True
+
+
+class BlockingSimulation(FakeSimulation):
+    def __init__(self) -> None:
+        super().__init__()
+        self.blocked = threading.Event()
+        self.released = threading.Event()
+
+    def tick(self) -> None:
+        self.blocked.set()
+        self.released.wait()
+
+    def close(self) -> None:
+        super().close()
+        self.released.set()
 
 
 class FakePiaTransport:
@@ -380,6 +396,30 @@ class SwitchLdnDriverBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(report.local_resources_released)
         self.assertEqual(report.details["primary_failure_code"], "SWITCH_ENDPOINT_TICK_FAILED")
         self.assertTrue(session.stopped)
+
+    async def test_runner_timeout_still_closes_simulation_and_stage_session(self) -> None:
+        resources = StageResources(object(), object(), b"advertisement")
+        session = FakeSession(resources)
+        simulation = BlockingSimulation()
+        driver = SwitchLdnEndpointDriver(
+            policy(), stage_factory=lambda _policy: object(),
+            session_factory=lambda *_args, **_kwargs: session,
+            simulation_factory=lambda *_args: simulation,
+        )
+        await driver.prepare()
+        generation = await driver.discover(asyncio.Event())
+        self.assertTrue(
+            await asyncio.wait_for(asyncio.to_thread(simulation.blocked.wait), timeout=1)
+        )
+        with patch("switchtrade.endpoints.switch_ldn.generation._RUNNER_STOP_TIMEOUT", 0.01):
+            report = await generation.close("failed")
+        self.assertFalse(report.local_resources_released)
+        self.assertIn("runner:timeout", report.details["cleanup_errors"])
+        self.assertTrue(simulation.closed)
+        self.assertTrue(session.stopped)
+        self.assertFalse(generation.runner_alive)
+        with self.assertRaisesRegex(SwitchLdnEndpointError, "unverified"):
+            await driver.prepare()
 
     def test_default_tunnelsim_maps_leader_and_mirror_to_the_existing_pia_roles(self) -> None:
         resources = StageResources(object(), FakePiaTransport(), b"opaque-ad")

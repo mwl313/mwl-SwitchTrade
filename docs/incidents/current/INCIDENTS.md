@@ -1297,3 +1297,19 @@ archive list and regenerate the index.
 - **Correction status:** runner syntax repair pending.
 - **Mandatory prevention gate:** When deleting a `finally` clause, remove or replace its matching
   `try` in the same source review before executing imports or tests.
+
+### MTA-OPS-248 — Use PowerShell-compatible regex syntax in process preflight
+
+- **Observed failure:** C3's full-suite preflight used shell-style `--` before PowerShell's `-match`,
+  so parsing failed before the pytest-process query or diff check ran. No source, process, endpoint,
+  runtime, or hardware state changed.
+- **Cause certainty:** certain from PowerShell's parser diagnostic identifying `--` as invalid in that
+  expression.
+- **Disproven alternatives:** This does not indicate an active pytest process, relay writer lock, or
+  test failure; the preflight never executed.
+- **Recovery and residue:** Preserve the parser error, regenerate the index, use a parenthesized
+  regex expression without shell-only option syntax, then rerun the read-only preflight.
+- **Correction status:** corrected preflight pending.
+- **Mandatory prevention gate:** Keep shell-specific option separators out of PowerShell operators;
+  validate a process-filter expression with a bounded read-only invocation before using it as a test
+  launch gate.
