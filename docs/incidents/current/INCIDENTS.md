@@ -1049,3 +1049,19 @@ archive list and regenerate the index.
 - **Correction status:** WireClient helper-task cleanup regression passed.
 - **Mandatory prevention gate:** Any coroutine that creates helper tasks must cancel and await them
   in a `finally` block when its owning coroutine is canceled.
+
+### MTA-CORE-009 — Let supervisor control the peer's fake-generation close
+
+- **Observed failure:** The first B5 real FastAPI/WebSocket E2E closed the host fake generation and
+  waited for the guest supervisor to become `PAIRED`. `FakeGeneration.close()` inserted a sentinel
+  into the peer generation's receive queue before the relay `GENERATION_CLOSE` arrived, so the guest
+  local pump failed instead of following its control-plane close path.
+- **Cause certainty:** certain from the E2E timeout at guest `PAIRED` and the fake endpoint's
+  cross-peer sentinel write during local close.
+- **Disproven alternatives:** Relay authentication, probe, direct WireClient packet exchange, and
+  the first fake offer/accept completed before this cleanup ordering failure.
+- **Recovery and residue:** Preserve the failed E2E, make fake close release only its local receive
+  wait, and let the supervisor's generation-close frame initiate the peer's local cleanup.
+- **Correction status:** real FastAPI/WebSocket E2E clean-close regression passed.
+- **Mandatory prevention gate:** Endpoint `close()` must not preempt the peer's supervisor-owned
+  control-plane close; E2E close tests must prove the peer returns to `PAIRED` cleanly.

@@ -239,3 +239,4 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-OPS-231` | Apply one patch operation per target file | Current ledger | 1009 |
 | `MTA-CORE-007` | Inject teardown-window DATA only after remote admission stops | Current ledger | 1023 |
 | `MTA-CORE-008` | Cancel WireClient helper waits with their owning receive | Current ledger | 1038 |
+| `MTA-CORE-009` | Let supervisor control the peer's fake-generation close | Current ledger | 1053 |

@@ -52,6 +52,8 @@ class FakeGeneration:
         self._closed = False
 
     async def receive(self) -> LinkPacket:
+        if self._closed:
+            raise RuntimeError("fake generation closed")
         packet = await self._incoming.get()
         if packet is None:
             raise RuntimeError("fake generation closed")
@@ -69,7 +71,10 @@ class FakeGeneration:
             while not self._outgoing.empty():
                 self._outgoing.get_nowait()
                 discarded += 1
-            self._outgoing.put_nowait(None)
+            while not self._incoming.empty():
+                self._incoming.get_nowait()
+                discarded += 1
+            self._incoming.put_nowait(None)
         return CleanupReport(True, True, True, {"outcome": outcome, "discarded_packets": discarded})
 
 

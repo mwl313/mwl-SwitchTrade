@@ -56,7 +56,8 @@ class FakeEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first.details["discarded_packets"], 32)
         self.assertEqual(second.details["discarded_packets"], 0)
         with self.assertRaises(RuntimeError):
-            await local_mirror.receive()
+            await local_origin.receive()
+        await local_mirror.close("peer_done")
 
     async def test_discover_and_accept_failures(self) -> None:
         hub = FakeEndpointHub()
