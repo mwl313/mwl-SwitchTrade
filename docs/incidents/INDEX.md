@@ -240,3 +240,6 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-CORE-007` | Inject teardown-window DATA only after remote admission stops | Current ledger | 1023 |
 | `MTA-CORE-008` | Cancel WireClient helper waits with their owning receive | Current ledger | 1038 |
 | `MTA-CORE-009` | Let supervisor control the peer's fake-generation close | Current ledger | 1053 |
+| `MTA-OPS-232` | Split mixed-scope source searches before output truncation | Current ledger | 1069 |
+| `MTA-OPS-233` | Normalize archive manifest before asserting canonical Git bytes | Current ledger | 1083 |
+| `MTA-OPS-234` | Force-stage ignored incident documents as a separate mutation | Current ledger | 1100 |

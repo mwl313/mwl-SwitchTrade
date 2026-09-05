@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -25,7 +26,13 @@ STUB = ROOT / "docs/MISTAKES_TO_AVOID.md"
 class AgentContextPolicyTests(unittest.TestCase):
     def test_archive_matches_manifest(self) -> None:
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-        archive_bytes = ARCHIVE.read_bytes()
+        archive_path = ARCHIVE.relative_to(ROOT).as_posix()
+        archive_bytes = subprocess.run(
+            ["git", "show", f"HEAD:{archive_path}"],
+            cwd=ROOT,
+            capture_output=True,
+            check=True,
+        ).stdout
         self.assertEqual(manifest["byte_size"], len(archive_bytes))
         self.assertEqual(
             manifest["sha256"], hashlib.sha256(archive_bytes).hexdigest()

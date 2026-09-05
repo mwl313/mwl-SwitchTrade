@@ -1065,3 +1065,48 @@ archive list and regenerate the index.
 - **Correction status:** real FastAPI/WebSocket E2E clean-close regression passed.
 - **Mandatory prevention gate:** Endpoint `close()` must not preempt the peer's supervisor-owned
   control-plane close; E2E close tests must prove the peer returns to `PAIRED` cleanly.
+
+### MTA-OPS-232 — Split mixed-scope source searches before output truncation
+
+- **Observed failure:** A B5 follow-up search combined fake endpoint, archive manifest, and
+  DevOverlay terms across tests, source, and the dispatcher. Its output exceeded the boundary and
+  was truncated, so the portability-file portion is not valid inspection evidence.
+- **Cause certainty:** certain from the tool's truncation notice.
+- **Disproven alternatives:** The visible fake endpoint matches are not invalidated, but the
+  truncated result cannot establish the complete manifest or DevOverlay test scope.
+- **Recovery and residue:** Preserve the incomplete search and use exact, separately bounded file
+  reads for the fake endpoint and each named portability test. No product state changed.
+- **Correction status:** split fake endpoint and exact portability inspections completed.
+- **Mandatory prevention gate:** Do not combine independent subsystem searches when their aggregate
+  output can exceed the boundary; inspect each verified source area in a separate bounded call.
+
+### MTA-OPS-233 — Normalize archive manifest before asserting canonical Git bytes
+
+- **Observed failure:** The B5 portability test was changed to inspect the archive's canonical Git
+  blob, but the existing manifest still recorded the Windows checkout representation: 190147 bytes
+  instead of the blob's 187541 bytes. The focused test failed before any product or release state
+  changed.
+- **Cause certainty:** certain from the manifest, the focused assertion, and `git show` of the
+  named archive blob.
+- **Disproven alternatives:** The archive was not missing and Git did not alter the checked-in blob;
+  the mismatch is the manifest's former working-tree-byte basis.
+- **Recovery and residue:** Preserve the failed focused result, update the manifest to the canonical
+  blob byte size and SHA-256, regenerate the incident index, and rerun the focused policy test.
+  No cleanup is required.
+- **Correction status:** canonical manifest normalization and focused policy rerun passed.
+- **Mandatory prevention gate:** When an immutable archive manifest is intended to be cross-platform,
+  derive and verify it from the Git blob rather than from a platform checkout.
+
+### MTA-OPS-234 — Force-stage ignored incident documents as a separate mutation
+
+- **Observed failure:** The B5 portability packet used ordinary `git add` for files under
+  `docs/incidents`, and Git rejected the ignored document paths. No commit was created from that
+  failed staging attempt and no product state changed.
+- **Cause certainty:** certain from Git's ignored-path diagnostic and the repository staging rule.
+- **Disproven alternatives:** The policy and manifest changes are not absent; ordinary staging is the
+  incorrect mutation for these intentionally ignored records.
+- **Recovery and residue:** Preserve the rejected staging attempt, force-stage only the named incident
+  documents in a separate Git mutation, inspect the staged result, then commit the packet.
+- **Correction status:** forced document staging and staged-packet inspection passed.
+- **Mandatory prevention gate:** Before committing an incident or index update, use `git add -f --`
+  for the exact ignored document paths, separate from ordinary source/test staging.

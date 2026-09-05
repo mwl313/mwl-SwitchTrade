@@ -79,6 +79,7 @@ class DevHotDeployContractTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    @unittest.skipUnless(sys.platform == "win32", "requires Windows path semantics")
     def test_sync_reuses_verified_release_and_run_repeats_without_wsl(self) -> None:
         powershell = shutil.which("pwsh") or shutil.which("powershell")
         if powershell is None:
