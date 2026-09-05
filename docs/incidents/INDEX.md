@@ -249,3 +249,8 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-OPS-238` | Run pytest-style dependency tests with pytest | Current ledger | 1156 |
 | `MTA-OPS-239` | Resolve GitHub run IDs from the commit before viewing jobs | Current ledger | 1171 |
 | `MTA-OPS-240` | Assert cancellation cleanup from the report, not annotations | Current ledger | 1185 |
+| `MTA-OPS-241` | Resolve phase-document locations before searching | Current ledger | 1199 |
+| `MTA-OPS-242` | Split same-file replacement patches into separate operations | Current ledger | 1213 |
+| `MTA-OPS-243` | Review new test imports before execution | Current ledger | 1227 |
+| `MTA-OPS-244` | Do not overlap full pytest runs that own the relay writer lock | Current ledger | 1241 |
+| `MTA-OPS-245` | Revalidate a recorded recovery PID immediately before termination | Current ledger | 1257 |

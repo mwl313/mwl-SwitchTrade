@@ -1195,3 +1195,76 @@ archive list and regenerate the index.
 - **Correction status:** corrected cancellation-report assertion and focused C2 regressions passed.
 - **Mandatory prevention gate:** For async cleanup tests, await the operation and assert its concrete
   `CleanupReport` fields; never infer result semantics from function annotations.
+
+### MTA-OPS-241 — Resolve phase-document locations before searching
+
+- **Observed failure:** C3 inspection assumed the planning documents lived under `docs/planning`; the
+  bounded search reported both paths missing. No source, endpoint, runtime, or hardware state changed.
+- **Cause certainty:** certain from the missing-path diagnostics and the subsequent verified document
+  inventory.
+- **Disproven alternatives:** The rejected paths do not indicate a missing Phase C design or prompt;
+  the documents are stored under `docs/core-simplification`.
+- **Recovery and residue:** Preserve the failed lookup, regenerate the index, and use only the verified
+  `docs/core-simplification/C_SWITCH_CORE_{DESIGN,PROMPT}.md` paths for C3 work.
+- **Correction status:** verified C3 design and prompt sections were read from their actual paths.
+- **Mandatory prevention gate:** Before reading a named planning artifact, resolve its exact repository
+  location with a bounded file inventory when its directory has not been observed in the current task.
+
+### MTA-OPS-242 — Split same-file replacement patches into separate operations
+
+- **Observed failure:** The first C3 generation-module replacement attempted a delete and add for the
+  same path in one `apply_patch` operation; the patch verifier rejected the duplicate target. No
+  source file or endpoint state changed.
+- **Cause certainty:** certain from the patch verifier's duplicate-target diagnostic.
+- **Disproven alternatives:** The rejection does not indicate an implementation or cleanup failure;
+  no hunk was applied.
+- **Recovery and residue:** Preserve the rejected patch, regenerate the index, then replace the file
+  with separate delete and add operations.
+- **Correction status:** pending split patch application.
+- **Mandatory prevention gate:** When replacing a complete file, use one update operation or separate
+  delete and add patch calls; never target the same path twice in one patch.
+
+### MTA-OPS-243 — Review new test imports before execution
+
+- **Observed failure:** A C3 thread-safety regression used `asyncio.to_thread` without importing
+  `asyncio`; source review caught the undefined name before test execution. No endpoint, runtime, or
+  hardware state changed.
+- **Cause certainty:** certain from the added test body and missing module import.
+- **Disproven alternatives:** This does not indicate a CoreTunnelAdapter threading defect; the test
+  had not run.
+- **Recovery and residue:** Preserve the pre-test finding, regenerate the index, add the explicit
+  import, then run the focused adapter regression.
+- **Correction status:** import added; focused verification pending.
+- **Mandatory prevention gate:** Before running a newly added test module, compare every module
+  reference in its new test body against its explicit imports.
+
+### MTA-OPS-244 — Do not overlap full pytest runs that own the relay writer lock
+
+- **Observed failure:** A second C3 full-suite invocation reached relay test collection while the
+  first verified `.audit-venv` pytest process, PID 1996 with its child PID 35376, still owned the
+  identity-bound relay writer lock. Collection raised `AlreadyRunningError` before executing a test.
+- **Cause certainty:** certain from both exact process command lines (`python -m pytest -q`) and the
+  lock's `switchtrade-relay-writer-f7314b28fe5cc39a` identity in the collection traceback.
+- **Disproven alternatives:** This does not indicate a relay, CoreTunnelAdapter, or test assertion
+  defect; the overlapping local test processes conflicted on the deliberate single-writer guard.
+- **Recovery and residue:** Preserve the collection traceback and process identities, terminate only
+  the exact recorded pytest parent/child if they remain live, prove both are absent, then run one
+  full suite and wait for its recorded completion before any retry.
+- **Correction status:** identity-bound process cleanup and one-suite retry pending.
+- **Mandatory prevention gate:** Capture and retain the terminal session identifier for a full pytest
+  run; never launch a second full suite until that exact process has exited and released its relay lock.
+
+### MTA-OPS-245 — Revalidate a recorded recovery PID immediately before termination
+
+- **Observed failure:** The identity-bound C3 recovery attempted to stop recorded pytest PID 1996,
+  but it had exited naturally between the identity read and the termination command. PowerShell
+  rejected the absent PID; no process was terminated.
+- **Cause certainty:** certain from the `Cannot find a process` response after the prior exact process
+  observation.
+- **Disproven alternatives:** This does not show PID reuse, an incorrect test process identity, or a
+  failed cleanup action; it records an ordinary process-exit race.
+- **Recovery and residue:** Preserve the absent-PID response, regenerate the index, re-read the exact
+  PID set and lock availability, and terminate only a still-live identity match before retrying.
+- **Correction status:** live-process and lock revalidation pending.
+- **Mandatory prevention gate:** Immediately before any identity-bound process termination, perform a
+  fresh exact PID and command-line read; an already-exited PID requires no destructive recovery.

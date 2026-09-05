@@ -8,15 +8,16 @@ import sys
 import threading
 import unittest
 
-from switchtrade.composition import create_switch_ldn_driver
 from switchtrade.connection.stage_session import StageResources, StageSessionError
-from switchtrade.core.contracts import EndpointKind, GenerationOffer, GenerationRole, RuntimeKind
+from switchtrade.core.contracts import EndpointKind, GenerationOffer, GenerationRole, LinkPacket, RuntimeKind
 from switchtrade.endpoints.switch_ldn import (
     SWITCH_LDN_PROTOCOL,
     SwitchLdnEndpointDriver,
     SwitchLdnEndpointError,
     SwitchLdnPolicy,
 )
+from switchtrade.endpoints.switch_ldn.generation import build_tunnelsim
+from switchtrade.endpoints.switch_ldn.tunnel_adapter import CoreTunnelAdapter
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -77,6 +78,28 @@ class BlockingSession(FakeSession):
         self.released.set()
 
 
+class FakeSimulation:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakePiaTransport:
+    ssid = b"0123456789abcdef"
+    our_mac = b"\x01\x02\x03\x04\x05\x06"
+    host_mac = b"\x06\x05\x04\x03\x02\x01"
+    our_ip = "169.254.1.2"
+    host_ip = "169.254.1.1"
+
+
+def simulation_factory(
+    _resources: StageResources, _tunnel: object, _parent: bool
+) -> FakeSimulation:
+    return FakeSimulation()
+
+
 def driver_with_outcomes(*outcomes: StageResources | BaseException) -> tuple[SwitchLdnEndpointDriver, list[object], list[FakeSession]]:
     stages: list[object] = []
     sessions: list[FakeSession] = []
@@ -94,7 +117,8 @@ def driver_with_outcomes(*outcomes: StageResources | BaseException) -> tuple[Swi
 
     return (
         SwitchLdnEndpointDriver(
-            policy(), stage_factory=stage_factory, session_factory=session_factory
+            policy(), stage_factory=stage_factory, session_factory=session_factory,
+            simulation_factory=simulation_factory,
         ),
         stages,
         sessions,
@@ -118,15 +142,6 @@ class SwitchLdnDriverBoundaryTests(unittest.IsolatedAsyncioTestCase):
             and report.local_resources_released
             and report.transport_drained
         )
-
-    async def test_generation_methods_are_reserved_for_later_phase_packets(self) -> None:
-        driver = create_switch_ldn_driver(policy())
-        await driver.prepare()
-        with self.assertRaises(NotImplementedError):
-            await driver.accept(
-                GenerationOffer("pending", SWITCH_LDN_PROTOCOL, EndpointKind.SWITCH_LDN, b""),
-                asyncio.Event(),
-            )
 
     async def test_leader_retries_with_fresh_stage_after_no_room(self) -> None:
         resources = StageResources(object(), object(), b"advertisement")
@@ -169,7 +184,8 @@ class SwitchLdnDriverBoundaryTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancellation_while_waiting_stops_session_without_generation(self) -> None:
         session = BlockingSession()
         driver = SwitchLdnEndpointDriver(
-            policy(), stage_factory=lambda _policy: object(), session_factory=lambda *_args, **_kwargs: session
+            policy(), stage_factory=lambda _policy: object(), session_factory=lambda *_args, **_kwargs: session,
+            simulation_factory=simulation_factory,
         )
         await driver.prepare()
         cancel = asyncio.Event()
@@ -190,7 +206,8 @@ class SwitchLdnDriverBoundaryTests(unittest.IsolatedAsyncioTestCase):
             return FailingStopSession(resources)
 
         driver = SwitchLdnEndpointDriver(
-            policy(), stage_factory=lambda _policy: object(), session_factory=session_factory
+            policy(), stage_factory=lambda _policy: object(), session_factory=session_factory,
+            simulation_factory=simulation_factory,
         )
         await driver.prepare()
         generation = await driver.discover(asyncio.Event())
@@ -211,7 +228,8 @@ class SwitchLdnDriverBoundaryTests(unittest.IsolatedAsyncioTestCase):
             return stage
 
         driver = SwitchLdnEndpointDriver(
-            policy(), stage_factory=stage_factory, session_factory=lambda *_args, **_kwargs: FailingStopSession(failure)
+            policy(), stage_factory=stage_factory, session_factory=lambda *_args, **_kwargs: FailingStopSession(failure),
+            simulation_factory=simulation_factory,
         )
         await driver.prepare()
         with self.assertRaisesRegex(StageSessionError, "no room"):
@@ -222,6 +240,106 @@ class SwitchLdnDriverBoundaryTests(unittest.IsolatedAsyncioTestCase):
         report = await driver.close()
         self.assertFalse(report.endpoint_stopped)
         self.assertFalse(report.local_resources_released)
+
+    async def test_mirror_starts_direct_b_only_after_a_supported_offer(self) -> None:
+        resources = StageResources(object(), object(), b"ignored")
+        stages: list[tuple[SwitchLdnPolicy, GenerationOffer]] = []
+        sessions: list[FakeSession] = []
+        simulations: list[tuple[object, bool, FakeSimulation]] = []
+
+        def mirror_factory(value: SwitchLdnPolicy, offer: GenerationOffer) -> object:
+            stages.append((value, offer))
+            return object()
+
+        def session_factory(_stage: object, **_kwargs: object) -> FakeSession:
+            session = FakeSession(resources)
+            sessions.append(session)
+            return session
+
+        def make_simulation(_resources: StageResources, tunnel: object, parent: bool) -> FakeSimulation:
+            simulation = FakeSimulation()
+            simulations.append((tunnel, parent, simulation))
+            return simulation
+
+        driver = SwitchLdnEndpointDriver(
+            policy(), mirror_stage_factory=mirror_factory, session_factory=session_factory,
+            simulation_factory=make_simulation,
+        )
+        await driver.prepare()
+        unsupported = GenerationOffer("bad", "switchtrade.fake.v1", EndpointKind.FAKE, b"no-ap")
+        with self.assertRaises(SwitchLdnEndpointError) as raised:
+            await driver.accept(unsupported, asyncio.Event())
+        self.assertEqual(raised.exception.code, "SWITCH_ENDPOINT_PROTOCOL_MISMATCH")
+        self.assertEqual(stages, [])
+
+        offer = GenerationOffer("mirror-1", SWITCH_LDN_PROTOCOL, EndpointKind.SWITCH_LDN, b"opaque-ad")
+        generation = await driver.accept(offer, asyncio.Event())
+        self.assertEqual(stages, [(driver._policy, offer)])
+        self.assertEqual(len(sessions), 1)
+        self.assertTrue(generation.parent)
+        self.assertTrue(simulations[0][1])
+
+        generation.tunnel.send_rfu(b"local-rfu", flags=0x0100)
+        self.assertEqual(
+            await generation.receive(),
+            LinkPacket("mirror-1", SWITCH_LDN_PROTOCOL, b"local-rfu", 0x0100),
+        )
+        await generation.send(LinkPacket("mirror-1", SWITCH_LDN_PROTOCOL, b"remote-rfu", 0xFFFF))
+        self.assertEqual(
+            [(frame.payload, frame.flags) for frame in generation.tunnel.poll()],
+            [(b"remote-rfu", 0xFFFF)],
+        )
+        report = await generation.close("done")
+        self.assertTrue(report.local_resources_released)
+        self.assertTrue(sessions[0].stopped)
+        self.assertTrue(simulations[0][2].closed)
+
+    async def test_mirror_preserves_direct_b_failure_after_cleanup(self) -> None:
+        failure = StageSessionError("B_SWITCH_ASSOCIATION_TIMEOUT", "B6_SWITCH_ASSOCIATION", "join timed out")
+        session = FakeSession(failure)
+        driver = SwitchLdnEndpointDriver(
+            policy(), mirror_stage_factory=lambda *_args: object(),
+            session_factory=lambda *_args, **_kwargs: session,
+            simulation_factory=simulation_factory,
+        )
+        await driver.prepare()
+        offer = GenerationOffer("mirror-error", SWITCH_LDN_PROTOCOL, EndpointKind.SWITCH_LDN, b"opaque-ad")
+        with self.assertRaisesRegex(StageSessionError, "join timed out") as raised:
+            await driver.accept(offer, asyncio.Event())
+        self.assertIs(raised.exception, failure)
+        self.assertTrue(session.stopped)
+
+    async def test_mirror_simulation_setup_failure_releases_ready_direct_b_session(self) -> None:
+        session = FakeSession(StageResources(object(), object(), b"ignored"))
+
+        def fail_simulation(*_args: object) -> FakeSimulation:
+            raise RuntimeError("TunnelSim unavailable")
+
+        driver = SwitchLdnEndpointDriver(
+            policy(), mirror_stage_factory=lambda *_args: object(),
+            session_factory=lambda *_args, **_kwargs: session,
+            simulation_factory=fail_simulation,
+        )
+        await driver.prepare()
+        offer = GenerationOffer("mirror-sim-error", SWITCH_LDN_PROTOCOL, EndpointKind.SWITCH_LDN, b"opaque-ad")
+        with self.assertRaisesRegex(RuntimeError, "TunnelSim unavailable"):
+            await driver.accept(offer, asyncio.Event())
+        self.assertTrue(session.stopped)
+
+    def test_default_tunnelsim_maps_leader_and_mirror_to_the_existing_pia_roles(self) -> None:
+        resources = StageResources(object(), FakePiaTransport(), b"opaque-ad")
+        leader = build_tunnelsim(
+            resources, CoreTunnelAdapter("leader", SWITCH_LDN_PROTOCOL), parent=False
+        )
+        mirror = build_tunnelsim(
+            resources, CoreTunnelAdapter("mirror", SWITCH_LDN_PROTOCOL), parent=True
+        )
+        self.assertFalse(leader.parent)
+        self.assertTrue(mirror.parent)
+        self.assertEqual(type(leader.conn).__name__, "ConnectionManager")
+        self.assertEqual(type(mirror.conn).__name__, "HostConnectionManager")
+        leader.close()
+        mirror.close()
 
     def test_fake_endpoint_import_does_not_load_switch_driver(self) -> None:
         result = subprocess.run(

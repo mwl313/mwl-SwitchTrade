@@ -10,6 +10,7 @@ from typing import Callable
 from uuid import uuid4
 
 from switchtrade.connection.a_stage import DirectAStage
+from switchtrade.connection.b_stage import DirectBStage
 from switchtrade.connection.stage_session import StageResources, StageSession
 from switchtrade.core.contracts import (
     Cancellation,
@@ -23,7 +24,7 @@ from switchtrade.core.contracts import (
 )
 
 from .errors import SwitchLdnEndpointError
-from .generation import LeaderGeneration
+from .generation import LeaderGeneration, MirrorGeneration, SimulationFactory, build_tunnelsim
 
 
 SWITCH_LDN_PROTOCOL = "switchtrade.gba-frame.v1"
@@ -41,6 +42,10 @@ class SwitchLdnPolicy:
     phy: str
     ifname: str
     keys_path: str
+    ap_ifname: str = "ap-switchtrade"
+    monitor_ifname: str = "mon-switchtrade"
+    tap_ifname: str = "tap-switchtrade"
+    channel: int = 6
     retry_delay: float = 0.5
     session_timeout: float = 180
     session_stop_timeout: float = 15
@@ -50,8 +55,13 @@ class SwitchLdnPolicy:
             not all((self.run_id, self.release, self.usb_id, self.hardware_profile))
             or not re.fullmatch(r"[0-9a-fA-F]{4}:[0-9a-fA-F]{4}", self.usb_id)
             or not _PHY.fullmatch(self.phy)
-            or not _IFNAME.fullmatch(self.ifname)
+            or any(
+                not _IFNAME.fullmatch(name)
+                for name in (self.ifname, self.ap_ifname, self.monitor_ifname, self.tap_ifname)
+            )
+            or len({self.ifname, self.ap_ifname, self.monitor_ifname, self.tap_ifname}) != 4
             or not PurePosixPath(self.keys_path).is_absolute()
+            or self.channel not in {1, 6, 11}
             or not 0.5 <= self.retry_delay <= 2
             or self.session_timeout <= 0
             or self.session_stop_timeout <= 0
@@ -71,6 +81,20 @@ def _direct_a_stage(policy: SwitchLdnPolicy) -> DirectAStage:
     )
 
 
+def _direct_b_stage(policy: SwitchLdnPolicy, offer: GenerationOffer) -> DirectBStage:
+    return DirectBStage(
+        run_id=policy.run_id,
+        release=policy.release,
+        phy=policy.phy,
+        keys_path=policy.keys_path,
+        ap_ifname=policy.ap_ifname,
+        monitor_ifname=policy.monitor_ifname,
+        tap_ifname=policy.tap_ifname,
+        channel=policy.channel,
+        application_data=offer.setup_payload,
+    )
+
+
 class SwitchLdnEndpointDriver:
     """Phase-B-compatible boundary for the managed-WSL Switch LDN endpoint."""
 
@@ -86,13 +110,19 @@ class SwitchLdnEndpointDriver:
         policy: SwitchLdnPolicy | None = None,
         *,
         stage_factory: Callable[[SwitchLdnPolicy], object] = _direct_a_stage,
+        mirror_stage_factory: Callable[[SwitchLdnPolicy, GenerationOffer], object] = _direct_b_stage,
         session_factory: Callable[..., StageSession] = StageSession,
+        simulation_factory: SimulationFactory = build_tunnelsim,
+        tunnel_capacity: int = 256,
     ) -> None:
         self._policy = policy
         self._stage_factory = stage_factory
+        self._mirror_stage_factory = mirror_stage_factory
         self._session_factory = session_factory
+        self._simulation_factory = simulation_factory
+        self._tunnel_capacity = tunnel_capacity
         self._prepared = False
-        self._generation: LeaderGeneration | None = None
+        self._generation: LeaderGeneration | MirrorGeneration | None = None
         self._cleanup_verified = True
 
     async def prepare(self) -> None:
@@ -141,13 +171,49 @@ class SwitchLdnEndpointDriver:
                     raise
                 await self._backoff(cancel)
                 continue
-            return self._leader_generation(session, resources)
+            try:
+                return self._leader_generation(session, resources)
+            except BaseException:
+                await self._stop_session(session)
+                raise
 
     async def accept(
         self, offer: GenerationOffer, cancel: Cancellation
     ) -> LocalGeneration:
-        del offer, cancel
-        raise NotImplementedError("Switch LDN acceptance is implemented in C3")
+        if not self._prepared or self._policy is None:
+            raise SwitchLdnEndpointError(
+                "SWITCH_ENDPOINT_POLICY_INVALID", "Switch LDN driver is not prepared"
+            )
+        if offer.protocol_id != SWITCH_LDN_PROTOCOL:
+            raise SwitchLdnEndpointError(
+                "SWITCH_ENDPOINT_PROTOCOL_MISMATCH", "Switch LDN offer protocol is unsupported"
+            )
+        if self._generation is not None:
+            raise SwitchLdnEndpointError("SWITCH_ENDPOINT_BUSY", "Switch LDN generation is active")
+        if not self._cleanup_verified:
+            raise SwitchLdnEndpointError(
+                "SWITCH_ENDPOINT_CLEANUP_FAILED", "prior Switch LDN cleanup is unverified"
+            )
+        if cancel.is_set():
+            raise asyncio.CancelledError
+        session = self._session_factory(
+            self._mirror_stage_factory(self._policy, offer),
+            timeout=self._policy.session_timeout,
+            stop_timeout=self._policy.session_stop_timeout,
+        ).start()
+        try:
+            resources = await self._wait_ready_or_cancel(session, cancel)
+        except asyncio.CancelledError:
+            await self._stop_session(session)
+            raise
+        except BaseException:
+            await self._stop_session(session)
+            raise
+        try:
+            return self._mirror_generation(offer, session, resources)
+        except BaseException:
+            await self._stop_session(session)
+            raise
 
     async def close(self) -> CleanupReport:
         if self._generation is None:
@@ -204,7 +270,30 @@ class SwitchLdnEndpointDriver:
             EndpointKind.SWITCH_LDN,
             resources.advertisement,
         )
-        generation = LeaderGeneration(offer, session, self._generation_closed)
+        generation = LeaderGeneration(
+            offer,
+            session,
+            resources,
+            self._generation_closed,
+            parent=False,
+            simulation_factory=self._simulation_factory,
+            tunnel_capacity=self._tunnel_capacity,
+        )
+        self._generation = generation
+        return generation
+
+    def _mirror_generation(
+        self, offer: GenerationOffer, session: StageSession, resources: StageResources
+    ) -> MirrorGeneration:
+        generation = MirrorGeneration(
+            offer,
+            session,
+            resources,
+            self._generation_closed,
+            parent=True,
+            simulation_factory=self._simulation_factory,
+            tunnel_capacity=self._tunnel_capacity,
+        )
         self._generation = generation
         return generation
 
