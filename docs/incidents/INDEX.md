@@ -262,3 +262,4 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-OPS-251` | Enumerate package metadata before dependency inspection | Current ledger | 1351 |
 | `MTA-OPS-252` | Narrow cross-layer option searches before reading defaults | Current ledger | 1366 |
 | `MTA-QA-019` | Snapshot assertions must wait for the runner's stated checkpoint | Current ledger | 1381 |
+| `MTA-OPS-253` | Verify Git branch, revision, and remote identity separately | Current ledger | 1399 |

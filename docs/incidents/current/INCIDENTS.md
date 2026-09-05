@@ -1395,3 +1395,20 @@ archive list and regenerate the index.
 - **Correction status:** isolated reproduction pending.
 - **Mandatory prevention gate:** Concurrent snapshot tests must wait for the persisted phase they
   compare, not merely for an event emitted before that phase is committed.
+
+### MTA-OPS-253 — Verify Git branch, revision, and remote identity separately
+
+- **Observed failure:** After the C4 push, one read-only shell invocation combined local HEAD,
+  remote-tracking HEAD, and current-branch queries. All values agreed on `Simple-Architecture`, but
+  the invocation violated the repository's one-evidence-question rule. No source, runtime, endpoint,
+  process, or external state changed.
+- **Cause certainty:** certain from the literal combined command. This was a procedural grouping
+  error, not an ambiguous push result.
+- **Disproven alternatives:** The matching hashes do not indicate a main-branch mutation or remote
+  divergence; the defect is solely in evidence isolation.
+- **Recovery and residue:** Preserve the successful push, regenerate the index, make the
+  documentation-only correction commit, then verify final worktree cleanliness in one independent
+  invocation. No runtime cleanup is required.
+- **Correction status:** process correction recorded before final handoff.
+- **Mandatory prevention gate:** Query current branch, local revision, remote revision, and status in
+  separate shell invocations whenever each fact is used as final handoff evidence.
