@@ -116,6 +116,7 @@ class WireState:
         self._inbound_offer: str | None = None
         self._outbound_offer: str | None = None
         self.active_generation: str | None = None
+        self._retiring_generation: str | None = None
 
     @property
     def ready(self) -> bool:
@@ -197,6 +198,7 @@ class WireState:
         elif kind is FrameKind.GENERATION_CLOSE:
             if generation_id != self.active_generation:
                 raise TransportError("T_GENERATION_STALE")
+            self._retiring_generation = generation_id
             self.active_generation = None
         elif kind is FrameKind.DATA:
             if generation_id != self.active_generation:
@@ -215,9 +217,14 @@ class WireState:
         elif envelope.kind is FrameKind.GENERATION_CLOSE:
             if envelope.generation_id != self.active_generation:
                 raise TransportError("T_GENERATION_STALE")
+            self._retiring_generation = envelope.generation_id
             self.active_generation = None
-        elif envelope.kind is FrameKind.DATA and envelope.generation_id != self.active_generation:
-            raise TransportError("T_GENERATION_INACTIVE")
+        elif envelope.kind is FrameKind.DATA:
+            if envelope.generation_id not in {self.active_generation, self._retiring_generation}:
+                raise TransportError("T_GENERATION_INACTIVE")
+
+    def is_retiring_generation(self, generation_id: str) -> bool:
+        return generation_id == self._retiring_generation
 
     def _require_ready(self) -> None:
         if not self.ready:
@@ -228,7 +235,7 @@ class WireState:
             self._challenge = b""
             self._challenge_confirmed = False
         self._responded_to_peer = False
-        self._inbound_offer = self._outbound_offer = self.active_generation = None
+        self._inbound_offer = self._outbound_offer = self.active_generation = self._retiring_generation = None
 
     def _new_probe(self) -> Envelope:
         self._challenge = secrets.token_bytes(PROBE_BYTES)

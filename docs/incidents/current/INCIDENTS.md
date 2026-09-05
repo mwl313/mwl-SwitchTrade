@@ -990,3 +990,62 @@ archive list and regenerate the index.
 - **Correction status:** incident documents force-staged; complete staged name list verified.
 - **Mandatory prevention gate:** When a packet changes ignored incident documents, stage those exact
   paths with `git add -f --` in a separate mutation before every commit.
+
+### MTA-OPS-230 — Resolve transport regression test filenames before reading
+
+- **Observed failure:** A B4 recovery review attempted to open the unobserved test path
+  `tests/test_transport_client.py`; PowerShell reported it missing. The same invocation did read
+  the known B4 supervisor test, but no conclusion was drawn from the missing transport operand.
+- **Cause certainty:** certain from the exact missing-path diagnostic.
+- **Disproven alternatives:** This does not show that the B3 WireClient regressions are absent or
+  that reconnect behavior lacks coverage; only the guessed test filename was invalid.
+- **Recovery and residue:** Preserve and discard the transport-test portion of the read, then use a
+  bounded test-file inventory to resolve the exact B3 test path before inspection. No product state
+  changed.
+- **Correction status:** bounded transport test inventory completed before inspection.
+- **Mandatory prevention gate:** Before reading an unobserved test module, resolve its exact filename
+  with a bounded `rg --files tests` inventory.
+
+### MTA-OPS-231 — Apply one patch operation per target file
+
+- **Observed failure:** The first B4 recovery patch contained two separate update operations for
+  `switchtrade/transport/wire.py`; `apply_patch` rejected the entire patch before any source file
+  changed.
+- **Cause certainty:** certain from the patch verifier's duplicate-target diagnostic.
+- **Disproven alternatives:** The rejection does not indicate a WireState or supervisor defect and
+  did not alter transport, Core, test, or runtime state.
+- **Recovery and residue:** Preserve the rejection and split each target into one complete file
+  operation based on the already-read source. No cleanup is required.
+- **Correction status:** file-separated recovery patch applied.
+- **Mandatory prevention gate:** Every `apply_patch` submission must contain at most one update
+  operation for a given file; merge its hunks under that one operation before dispatch.
+
+### MTA-CORE-007 — Inject teardown-window DATA only after remote admission stops
+
+- **Observed failure:** The first B4 stale-generation barrier regression inserted a DATA envelope
+  immediately before `close_generation()`. The live remote pump sometimes consumed it before close
+  canceled that pump, so discard accounting observed zero frames.
+- **Cause certainty:** certain from the zero discard count and task scheduling: the test did not
+  synchronize insertion with the cleanup window it intended to prove.
+- **Disproven alternatives:** This does not show the retirement barrier is absent or that the frame
+  reached a subsequent generation; it invalidates the unsynchronized injection point.
+- **Recovery and residue:** Preserve the assertion and block `LocalGeneration.close()` after pump
+  cancellation, inject DATA into the WireClient queue in that window, then release cleanup.
+- **Correction status:** cleanup-window synchronized regression passed.
+- **Mandatory prevention gate:** Tests for teardown admission barriers must synchronize against the
+  post-cancellation cleanup phase, not merely enqueue a frame before teardown starts.
+
+### MTA-CORE-008 — Cancel WireClient helper waits with their owning receive
+
+- **Observed failure:** The synchronized B4 teardown-window regression still observed zero discard
+  count. Canceling the remote pump canceled its outer `WireClient.receive()` coroutine but left that
+  method's internal queue-get task live; the orphan consumed the injected old-generation DATA.
+- **Cause certainty:** certain from the receive implementation's missing cancellation-finally path
+  and the frame disappearing before supervisor drain accounting.
+- **Disproven alternatives:** The synchronized result is not a scheduler guess or a missing
+  supervisor discard call; the lingering child task bypassed the intended barrier.
+- **Recovery and residue:** Preserve the failed assertion, cancel and await all helper wait tasks in
+  `receive()` and related wait helpers, then rerun the same synchronized barrier regression.
+- **Correction status:** WireClient helper-task cleanup regression passed.
+- **Mandatory prevention gate:** Any coroutine that creates helper tasks must cancel and await them
+  in a `finally` block when its owning coroutine is canceled.

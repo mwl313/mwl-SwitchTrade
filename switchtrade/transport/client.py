@@ -30,11 +30,17 @@ class WireClient:
         self._failed = asyncio.Event()
         self._ready = asyncio.Event()
         self._failure: TransportError | None = None
+        self._discarded_generation_frames = 0
+
+    @property
+    def discarded_generation_frames(self) -> int:
+        return self._discarded_generation_frames
 
     async def connect(self, socket: BinarySocket) -> None:
         await self.close()
         self._outgoing, self._incoming = asyncio.Queue(self._queue_limit), asyncio.Queue(self._queue_limit)
         self._failed, self._ready, self._failure, self._socket = asyncio.Event(), asyncio.Event(), None, socket
+        self._discarded_generation_frames = 0
         self._writer = asyncio.create_task(self._write_loop())
         self._reader = asyncio.create_task(self._read_loop())
         for envelope in self.state.start():
@@ -52,15 +58,17 @@ class WireClient:
         self._raise_if_failed()
         get = asyncio.create_task(self._incoming.get())
         failed = asyncio.create_task(self._failed.wait())
-        done, pending = await asyncio.wait((get, failed), timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
-        for task in pending:
-            task.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
-        if not done:
-            get.cancel()
-            raise TransportError("T_RECEIVE_TIMEOUT")
-        self._raise_if_failed()
-        return get.result()
+        try:
+            done, _ = await asyncio.wait((get, failed), timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+            if not done:
+                raise TransportError("T_RECEIVE_TIMEOUT")
+            self._raise_if_failed()
+            return get.result()
+        finally:
+            for task in (get, failed):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(get, failed, return_exceptions=True)
 
     async def close(self) -> None:
         socket, self._socket = self._socket, None
@@ -72,6 +80,23 @@ class WireClient:
         self._writer = self._reader = None
         if socket is not None:
             await socket.close()
+
+    def discard_generation(self, generation_id: str) -> int:
+        kept: list[Envelope] = []
+        discarded = 0
+        while True:
+            try:
+                envelope = self._incoming.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if envelope.kind is FrameKind.DATA and envelope.generation_id == generation_id:
+                discarded += 1
+            else:
+                kept.append(envelope)
+        for envelope in kept:
+            self._incoming.put_nowait(envelope)
+        self._discarded_generation_frames += discarded
+        return discarded
 
     async def run(self, connector: Callable[[], Awaitable[BinarySocket]], cancel: asyncio.Event, *, backoff_base: float = 0.1, backoff_cap: float = 1.0) -> None:
         if not 0 < backoff_base <= backoff_cap:
@@ -128,7 +153,9 @@ class WireClient:
                     continue
                 for reply in replies:
                     self._enqueue(reply)
-                if envelope.kind in {FrameKind.GENERATION_OFFER, FrameKind.GENERATION_ACCEPT, FrameKind.GENERATION_CLOSE, FrameKind.DATA, FrameKind.CAPABILITIES, FrameKind.PEER_CLOSE}:
+                if envelope.kind is FrameKind.DATA and self.state.is_retiring_generation(envelope.generation_id):
+                    self._discarded_generation_frames += 1
+                elif envelope.kind in {FrameKind.GENERATION_OFFER, FrameKind.GENERATION_ACCEPT, FrameKind.GENERATION_CLOSE, FrameKind.DATA, FrameKind.CAPABILITIES, FrameKind.PEER_CLOSE}:
                     try:
                         self._incoming.put_nowait(envelope)
                     except asyncio.QueueFull as exc:
@@ -143,22 +170,28 @@ class WireClient:
     async def _wait(self, ready: asyncio.Event, timeout: float) -> None:
         wait_ready = asyncio.create_task(ready.wait())
         wait_failed = asyncio.create_task(self._failed.wait())
-        done, pending = await asyncio.wait((wait_ready, wait_failed), timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
-        for task in pending:
-            task.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
-        if not done:
-            raise TransportError("T_READY_TIMEOUT")
-        self._raise_if_failed()
+        try:
+            done, _ = await asyncio.wait((wait_ready, wait_failed), timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+            if not done:
+                raise TransportError("T_READY_TIMEOUT")
+            self._raise_if_failed()
+        finally:
+            for task in (wait_ready, wait_failed):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(wait_ready, wait_failed, return_exceptions=True)
 
     async def _wait_for_cancel_or_failure(self, cancel: asyncio.Event) -> None:
         wait_cancel = asyncio.create_task(cancel.wait())
         wait_failure = asyncio.create_task(self._failed.wait())
-        done, pending = await asyncio.wait((wait_cancel, wait_failure), return_when=asyncio.FIRST_COMPLETED)
-        for task in pending:
-            task.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
-        self._raise_if_failed()
+        try:
+            await asyncio.wait((wait_cancel, wait_failure), return_when=asyncio.FIRST_COMPLETED)
+            self._raise_if_failed()
+        finally:
+            for task in (wait_cancel, wait_failure):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(wait_cancel, wait_failure, return_exceptions=True)
 
     def _fail(self, exc: Exception) -> None:
         if self._failure is None:

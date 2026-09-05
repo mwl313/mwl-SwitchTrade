@@ -235,3 +235,7 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-CORE-006` | Preserve terminal failure state across generation cleanup | Current ledger | 945 |
 | `MTA-OPS-228` | Bound the legacy full-suite wait and clean up owned test processes | Current ledger | 961 |
 | `MTA-OPS-229` | Force-stage ignored incident documents with the implementation packet | Current ledger | 979 |
+| `MTA-OPS-230` | Resolve transport regression test filenames before reading | Current ledger | 994 |
+| `MTA-OPS-231` | Apply one patch operation per target file | Current ledger | 1009 |
+| `MTA-CORE-007` | Inject teardown-window DATA only after remote admission stops | Current ledger | 1023 |
+| `MTA-CORE-008` | Cancel WireClient helper waits with their owning receive | Current ledger | 1038 |

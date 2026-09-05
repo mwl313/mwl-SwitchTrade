@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+from collections.abc import Awaitable, Callable
 from enum import StrEnum
 
 from switchtrade.core.contracts import EndpointDriver, EndpointKind, GenerationOffer, LinkPacket, LocalGeneration, PairCredentials, PairSeat
 from switchtrade.transport import FrameKind, TransportError, WireClient
+from switchtrade.transport.client import BinarySocket
 
 
 class SupervisorState(StrEnum):
@@ -47,10 +49,13 @@ def _parse_offer(generation_id: str, payload: bytes) -> GenerationOffer:
 
 
 class CoreSupervisor:
-    def __init__(self, credentials: PairCredentials, driver: EndpointDriver, transport: WireClient) -> None:
+    def __init__(self, credentials: PairCredentials, driver: EndpointDriver, transport: WireClient, *, connector: Callable[[], Awaitable[BinarySocket]] | None = None, reconnect_timeout: float = 5.0) -> None:
         if credentials.seat is not transport.state.seat:
             raise SupervisorError("S_SEAT_MISMATCH")
+        if reconnect_timeout <= 0:
+            raise ValueError("invalid reconnect timeout")
         self.credentials, self.driver, self.transport = credentials, driver, transport
+        self._connector, self._reconnect_timeout = connector, reconnect_timeout
         self.state = SupervisorState.STARTING
         self.failure: SupervisorError | None = None
         self._cancel = asyncio.Event()
@@ -59,6 +64,8 @@ class CoreSupervisor:
         self._lock = asyncio.Lock()
         self._prepared = False
         self._blocked = False
+        self._stop_started = False
+        self._discarded_remote_packets = 0
 
     @property
     def pair_code(self) -> str | None:
@@ -67,6 +74,10 @@ class CoreSupervisor:
     @property
     def generation_id(self) -> str | None:
         return self._generation.offer.generation_id if self._generation else None
+
+    @property
+    def discarded_remote_packets(self) -> int:
+        return self._discarded_remote_packets
 
     async def prepare(self) -> None:
         if self._prepared:
@@ -83,7 +94,10 @@ class CoreSupervisor:
         self.state = SupervisorState.WAITING_FOR_PEER
         try:
             await self.transport.wait_ready()
-        except Exception as exc:
+        except TransportError as exc:
+            if self._connector is not None:
+                await self.recover_pair()
+                return
             raise await self._record_failure("S_TRANSPORT_FAILED") from exc
         self.state = SupervisorState.PAIRED
 
@@ -111,10 +125,10 @@ class CoreSupervisor:
         try:
             await self.transport.send(FrameKind.GENERATION_OFFER, generation.offer.generation_id, _offer_payload(generation.offer))
             accepted = await self.transport.receive()
-            if accepted.kind is not FrameKind.GENERATION_ACCEPT or accepted.generation_id != generation.offer.generation_id:
-                raise SupervisorError("S_GENERATION_STALE")
-        except Exception as exc:
-            raise await self._record_failure("S_TRANSPORT_FAILED") from exc
+        except TransportError as exc:
+            raise await self._fail_and_cleanup("S_TRANSPORT_FAILED") from exc
+        if accepted.kind is not FrameKind.GENERATION_ACCEPT or accepted.generation_id != generation.offer.generation_id:
+            raise await self._fail_and_cleanup("S_GENERATION_STALE")
         self._activate()
 
     async def accept_next_offer(self) -> GenerationOffer:
@@ -125,14 +139,23 @@ class CoreSupervisor:
         self.state = SupervisorState.WAITING_FOR_OFFER
         try:
             frame = await self.transport.receive()
-            if frame.kind is not FrameKind.GENERATION_OFFER:
-                raise SupervisorError("S_OFFER_INVALID")
+        except TransportError as exc:
+            raise await self._fail_and_cleanup("S_TRANSPORT_FAILED") from exc
+        if frame.kind is not FrameKind.GENERATION_OFFER:
+            raise await self._fail_and_cleanup("S_OFFER_INVALID")
+        try:
             offer = _parse_offer(frame.generation_id, frame.payload)
-            self.state = SupervisorState.OPENING_LOCAL
+        except SupervisorError as exc:
+            raise await self._fail_and_cleanup(exc.code) from exc
+        self.state = SupervisorState.OPENING_LOCAL
+        try:
             self._generation = await self.driver.accept(offer, self._cancel)
-            await self.transport.send(FrameKind.GENERATION_ACCEPT, offer.generation_id)
         except Exception as exc:
-            raise await self._record_failure("S_ENDPOINT_FAILED") from exc
+            raise await self._fail_and_cleanup("S_ENDPOINT_FAILED") from exc
+        try:
+            await self.transport.send(FrameKind.GENERATION_ACCEPT, offer.generation_id)
+        except TransportError as exc:
+            raise await self._fail_and_cleanup("S_TRANSPORT_FAILED") from exc
         self._activate()
         return offer
 
@@ -149,35 +172,66 @@ class CoreSupervisor:
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
             self._pump_tasks.clear()
-            report = await generation.close(outcome)
-            if not (report.endpoint_stopped and report.local_resources_released and report.transport_drained):
-                self._blocked = True
-                raise await self._record_failure("S_CLEANUP_FAILED")
+            self._discarded_remote_packets += self.transport.discard_generation(generation.offer.generation_id)
+            failure_code: str | None = None
+            try:
+                report = await generation.close(outcome)
+                if not (report.endpoint_stopped and report.local_resources_released and report.transport_drained):
+                    failure_code = "S_CLEANUP_FAILED"
+            except Exception:
+                failure_code = "S_CLEANUP_FAILED"
             if notify_peer and self.transport.state.active_generation == generation.offer.generation_id:
                 try:
                     await self.transport.send(FrameKind.GENERATION_CLOSE, generation.offer.generation_id)
-                except TransportError as exc:
-                    raise await self._record_failure("S_TRANSPORT_FAILED") from exc
+                except TransportError:
+                    failure_code = failure_code or "S_TRANSPORT_FAILED"
+            self._discarded_remote_packets += self.transport.discard_generation(generation.offer.generation_id)
+            if failure_code:
+                self._blocked = True
+                raise await self._record_failure(failure_code)
             self._generation = None
             self.state = SupervisorState.FAILED if self.failure else SupervisorState.PAIRED
 
     async def stop(self) -> None:
-        if self.state is SupervisorState.STOPPED:
+        if self._stop_started:
             return
+        self._stop_started = True
+        prior_failure = self.failure
         self._cancel.set()
         self.state = SupervisorState.STOPPING
         try:
             await self.close_generation("stopped")
+        except SupervisorError:
+            pass
+        try:
             report = await self.driver.close()
             if not (report.endpoint_stopped and report.local_resources_released and report.transport_drained):
-                raise SupervisorError("S_CLEANUP_FAILED")
+                await self._cleanup_failed()
+        except Exception:
+            await self._cleanup_failed()
+        try:
             await self.transport.close()
-        except SupervisorError as exc:
-            self._blocked = True
-            self.failure = self.failure or exc
-            self.state = SupervisorState.FAILED
+        except Exception:
+            await self._cleanup_failed()
+        self.state = SupervisorState.FAILED if self.failure else SupervisorState.STOPPED
+        if self.failure and prior_failure is None:
+            raise self.failure
+
+    async def recover_pair(self) -> None:
+        if self._connector is None:
+            raise await self._record_failure("S_TRANSPORT_FAILED")
+        self.state = SupervisorState.RECOVERING_PAIR
+        try:
+            await self.close_generation("transport_lost", notify_peer=False)
+            await self.transport.close()
+            socket = await asyncio.wait_for(self._connector(), self._reconnect_timeout)
+            await self.transport.connect(socket)
+            await self.transport.wait_ready(self._reconnect_timeout)
+        except SupervisorError:
             raise
-        self.state = SupervisorState.STOPPED
+        except Exception as exc:
+            raise await self._record_failure("S_TRANSPORT_FAILED") from exc
+        self.state = SupervisorState.PAIRED
 
     def _activate(self) -> None:
         self.state = SupervisorState.ACTIVE
@@ -190,6 +244,8 @@ class CoreSupervisor:
                 await self.transport.send(FrameKind.DATA, packet.generation_id, packet.payload, packet.flags)
         except asyncio.CancelledError:
             raise
+        except TransportError:
+            await self._recover_after_transport_loss()
         except Exception:
             await self._fail_and_cleanup("S_PUMP_FAILED")
 
@@ -205,6 +261,8 @@ class CoreSupervisor:
                 await self._generation.send(LinkPacket(frame.generation_id, self._generation.offer.protocol_id, frame.payload, frame.flags))  # type: ignore[union-attr]
         except asyncio.CancelledError:
             raise
+        except TransportError:
+            await self._recover_after_transport_loss()
         except Exception:
             await self._fail_and_cleanup("S_PUMP_FAILED")
 
@@ -226,9 +284,20 @@ class CoreSupervisor:
             self._cancel.set()
         return self.failure
 
-    async def _fail_and_cleanup(self, code: str) -> None:
-        await self._record_failure(code)
+    async def _cleanup_failed(self) -> SupervisorError:
+        self._blocked = True
+        return await self._record_failure("S_CLEANUP_FAILED")
+
+    async def _fail_and_cleanup(self, code: str) -> SupervisorError:
+        failure = await self._record_failure(code)
         try:
             await self.close_generation("failed")
+        except SupervisorError:
+            pass
+        return failure
+
+    async def _recover_after_transport_loss(self) -> None:
+        try:
+            await self.recover_pair()
         except SupervisorError:
             pass

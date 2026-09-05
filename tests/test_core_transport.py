@@ -67,6 +67,22 @@ class WireStateTests(unittest.TestCase):
         self.assertEqual(state._next_sequence, sequence)
         self.assertIsNone(state._outbound_offer)
 
+    def test_retiring_generation_discards_inflight_peer_data(self) -> None:
+        host, guest = WireState(PairSeat.HOST), WireState(PairSeat.GUEST)
+        host_ready, host_challenge = host.start(11)
+        guest_ready, guest_challenge = guest.start(12)
+        guest.accept(host_ready)
+        host.accept(guest_ready)
+        host_response, = host.accept(guest_challenge)
+        guest_response, = guest.accept(host_challenge)
+        host.accept(guest_response)
+        guest.accept(host_response)
+        guest.accept(host.emit(FrameKind.GENERATION_OFFER, "generation-1", b"setup"))
+        host.accept(guest.emit(FrameKind.GENERATION_ACCEPT, "generation-1"))
+        host.emit(FrameKind.GENERATION_CLOSE, "generation-1")
+        host.accept(guest.emit(FrameKind.DATA, "generation-1", b"late"))
+        self.assertTrue(host.is_retiring_generation("generation-1"))
+
 
 class MemorySocket:
     def __init__(self) -> None:
