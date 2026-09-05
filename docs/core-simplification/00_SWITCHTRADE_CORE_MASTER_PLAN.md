@@ -6,7 +6,9 @@
 - 작성 시점 확인 기준: `main` commit `950aa778d9b1cc7a26168ea7b1e2348848cb45ee`
 - 문서 성격: 의사결정·범위·진행 순서를 보존하는 기록 문서
 - 구현 에이전트용 프롬프트: 별도 A/B/C Prompt 문서 참조
-- 현재 상태: 계획 확정 전
+- 현재 상태: Phase A·B 완료, C1 시작 가능
+- 실행 브랜치: `Simple-Architecture` (main 변경 금지)
+- Phase B 종료 근거: `09f4eb0f3b59e2e40a040ae8e35aa5283a055f41`, CI run #33941204541 (Windows·Ubuntu green)
 - 실행 원칙: **A → B → C → D → E 순차 진행**
 
 > 이 문서의 commit 정보는 작성 시점의 기준점이다. 실제 작업을 시작할 때는 반드시
@@ -668,14 +670,12 @@ C5 test: qualify Switch Core composition
 
 # 16. Immediate Next Action
 
-현재 실행할 것은 **Phase A뿐**이다.
+다음 실행은 **Phase C1뿐**이다.
 
-1. A Design을 승인 기준으로 사용
-2. A Prompt를 Terra/Luna에 전달
-3. 첫 모델이 구현
-4. 다른 모델이 diff/test 리뷰
-5. GitHub commit
-6. ChatGPT가 diff와 acceptance 검토
-7. A Exit Gate 이후에만 B Prompt 실행
+1. C Design을 승인 기준으로 사용
+2. C Prompt의 C1만 실행
+3. Switch LDN boundary와 import isolation을 검증
+4. C1 commit을 검토·푸시
+5. C2로 진행하기 전에 C1 acceptance를 별도 검수
 
-B와 C 문서는 미리 준비하지만 실제 실행 직전에 path와 base commit을 다시 확인한다.
+C2 이후 작업은 각 선행 packet의 acceptance를 통과한 뒤에만 시작한다.

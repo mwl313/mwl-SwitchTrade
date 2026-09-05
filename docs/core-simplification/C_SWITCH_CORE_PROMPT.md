@@ -7,7 +7,7 @@ Prerequisites:
 
 - Phase A passed.
 - Phase B passed.
-- Branch is `core-simplification`.
+- Branch is `Simple-Architecture`; never modify `main`.
 - Endpoint-neutral fake end-to-end is green.
 
 Do not begin Phase D or E.
