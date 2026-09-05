@@ -413,6 +413,15 @@ class DirectAStage:
                                         "A_DATA_PLANE_FAILED", GATES[9],
                                         "Pia data-plane evidence is incomplete",
                                     )
+                                bind_peer = getattr(plane, "bind_peer", None)
+                                if bind_peer is not None:
+                                    try:
+                                        bind_peer()
+                                    except RuntimeError as error:
+                                        raise AStageError(
+                                            "A_PARTICIPANT_STATE_FAILED", GATES[8],
+                                            "LDN peer identity is unavailable",
+                                        ) from error
                                 self._pass(GATES[9])
                                 self.result_level = "A_CONTROL_READY"
                                 # A0 fixes separate join and hold budgets. Once A9 passes, extend

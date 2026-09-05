@@ -168,6 +168,20 @@ def driver_with_outcomes(*outcomes: StageResources | BaseException) -> tuple[Swi
 
 
 class SwitchLdnDriverBoundaryTests(unittest.IsolatedAsyncioTestCase):
+    def test_stage_session_rejects_failed_or_unknown_cleanup_before_ready(self) -> None:
+        for cleanup in (None, {"ldn_context_released": False, "radio_quiescent": False}):
+            with self.subTest(cleanup=cleanup):
+                session = StageSession(type("Stage", (), {})(), timeout=0.01, stop_timeout=0.01)
+                session.report = {"status": "failed"}
+                if cleanup is not None:
+                    session.report["cleanup"] = cleanup
+                session._trio_ready.set()
+                session._thread = threading.Thread(target=lambda: None)
+                session._thread.start()
+                session._thread.join()
+                with self.assertRaisesRegex(RuntimeError, "did not prove LDN context cleanup"):
+                    session.stop()
+
     async def test_real_stage_session_cancels_a_pre_ready_trio_stage(self) -> None:
         stage = PreReadyStage()
         session = StageSession(stage, timeout=1, stop_timeout=1).start()

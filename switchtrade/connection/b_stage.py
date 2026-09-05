@@ -89,6 +89,7 @@ def reset_selected_phy(
     phy: str,
     *,
     owned_ifnames: tuple[str, ...] = (),
+    tap_ifname: str | None = None,
     runner: Runner = _default_runner,
     sys_net: Path = Path("/sys/class/net"),
 ) -> dict:
@@ -117,10 +118,10 @@ def reset_selected_phy(
             raise BStageError("B_RADIO_RESET_FAILED", GATES[1], "selected PHY reset was not verified")
         removed += 1
     tap_removed = False
-    tap = sys_net / "ldn-tap"
-    if tap.exists():
+    tap = sys_net / tap_ifname if tap_ifname in owned_ifnames else None
+    if tap is not None and tap.exists():
         try:
-            deleted = runner(["ip", "link", "del", "dev", "ldn-tap"], 3)
+            deleted = runner(["ip", "link", "del", "dev", tap_ifname], 3)
         except (OSError, subprocess.TimeoutExpired) as error:
             raise BStageError("B_RADIO_RESET_FAILED", GATES[1], "stale TAP reset failed") from error
         if deleted.returncode != 0 or not _wait_absent(tap):
@@ -263,7 +264,7 @@ class DirectBStage:
         gate_sink: GateSink | None = None,
         channel: int = 6,
         ap_timeout: float = 45,
-        association_timeout: float = 120,
+        association_timeout: float | None = None,
         control_timeout: float = 10,
         hold_seconds: float = 5,
         teardown_timeout: float = 10,
@@ -287,14 +288,15 @@ class DirectBStage:
         self.gate_sink = gate_sink or (lambda _event: None)
         self.channel = int(channel)
         self.ap_timeout = float(ap_timeout)
-        self.association_timeout = float(association_timeout)
+        self.association_timeout = None if association_timeout is None else float(association_timeout)
         self.control_timeout = float(control_timeout)
         self.hold_seconds = float(hold_seconds)
         self.teardown_timeout = float(teardown_timeout)
         self.ldn = ldn_module
         self.trio = trio_module
         owned = (self.ap_ifname, self.monitor_ifname, self.tap_ifname)
-        self.radio_reset = radio_reset or (lambda: reset_selected_phy(self.phy, owned_ifnames=owned))
+        self.radio_reset = radio_reset or (lambda: reset_selected_phy(
+            self.phy, owned_ifnames=owned, tap_ifname=self.tap_ifname))
         self.radio_quiesce = radio_quiesce or (lambda: quiesce_selected_phy(
             self.phy, self.tap_ifname, owned_ifnames=owned))
         self.data_plane_factory = data_plane_factory or _open_data_plane
@@ -340,10 +342,10 @@ class DirectBStage:
             or len(set(names)) != 3
             or self.channel not in {1, 6, 11}
             or min(
-                self.ap_timeout, self.association_timeout,
-                self.control_timeout, self.hold_seconds,
+                self.ap_timeout, self.control_timeout, self.hold_seconds,
                 self.teardown_timeout,
             ) <= 0
+            or self.association_timeout is not None and self.association_timeout <= 0
         ):
             raise BStageError("B_POLICY_INVALID", GATES[0], "direct B policy is invalid")
 
@@ -546,6 +548,16 @@ class DirectBStage:
             "cleanup": dict(self.cleanup),
         }
 
+    def _quiesce_owned_radio(self) -> None:
+        try:
+            evidence = self.radio_quiesce()
+        except Exception:
+            self.cleanup["radio_quiescent"] = False
+            return
+        self.cleanup["radio_quiescent"] = (
+            isinstance(evidence, dict) and evidence.get("selected_phy_only") is True
+        )
+
     async def run(self) -> dict:
         radio_evidence = None
         plane_evidence = None
@@ -606,7 +618,10 @@ class DirectBStage:
                             plane_evidence = dict(plane)
                             self._pass(GATES[4])
 
-                            stage_scope.deadline = self.trio.current_time() + self.association_timeout
+                            stage_scope.deadline = (
+                                float("inf") if self.association_timeout is None
+                                else self.trio.current_time() + self.association_timeout
+                            )
                             join_type = getattr(self.ldn, "JoinEvent", ())
                             while True:
                                 event = await network.next_event()
@@ -656,10 +671,9 @@ class DirectBStage:
                             codes.get(index, "B_STAGE_TIMEOUT"), GATES[index],
                             "direct B stage deadline expired",
                         )
-                radio_cleanup = self.radio_quiesce()
-                if not isinstance(radio_cleanup, dict) or radio_cleanup.get("selected_phy_only") is not True:
+                self._quiesce_owned_radio()
+                if not self.cleanup["radio_quiescent"]:
                     raise BStageError("B_RADIO_QUIESCE_FAILED", GATES[-1], "owned radio cleanup is unverified")
-                self.cleanup["radio_quiescent"] = True
             except BStageError:
                 raise
             except Exception as error:
@@ -698,6 +712,8 @@ class DirectBStage:
                 "cleanup": dict(self.cleanup),
             }
         except BStageError as error:
+            if radio_evidence is not None and not self.cleanup["radio_quiescent"]:
+                self._quiesce_owned_radio()
             report = self._failure(error)
             report["radio_reset"] = radio_evidence
             report["data_plane"] = plane_evidence

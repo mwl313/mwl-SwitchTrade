@@ -337,10 +337,11 @@ class DirectBContractTests(unittest.TestCase):
 
             result = reset_selected_phy("phy0", owned_ifnames=("wlan0",), runner=runner, sys_net=sys_net)
             self.assertEqual(result, {
-                "selected_phy_only": True, "interfaces_removed": 1, "tap_removed": True,
+                "selected_phy_only": True, "interfaces_removed": 1, "tap_removed": False,
             })
             self.assertFalse((sys_net / "wlan0").exists())
             self.assertTrue((sys_net / "builtin0").exists())
+            self.assertTrue((sys_net / "ldn-tap").exists())
             self.assertNotIn(["iw", "dev", "builtin0", "del"], commands)
 
     def test_cleanup_verifies_every_interface_on_selected_phy(self):

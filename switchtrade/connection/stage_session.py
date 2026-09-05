@@ -123,13 +123,14 @@ class StageSession:
             raise RuntimeError("direct stage failed during LDN teardown") from self._error
         if not isinstance(self.report, dict):
             raise RuntimeError("direct stage did not report LDN teardown")
-        if self.resources is None and self.report.get("status") == "failed":
-            return
         cleanup = self.report.get("cleanup")
-        if not isinstance(cleanup, dict) or cleanup.get("ldn_context_released") is not True:
+        if (
+            not isinstance(cleanup, dict)
+            or cleanup.get("ldn_context_released") is not True
+            or cleanup.get("radio_quiescent") is not True
+            or cleanup.get("ap_stop_timed_out", False) is not False
+        ):
             raise RuntimeError("direct stage did not prove LDN context cleanup")
-        if cleanup.get("ap_stop_timed_out") is True or cleanup.get("radio_quiescent") is False:
-            raise RuntimeError("direct stage did not prove owned radio cleanup")
 
 
 __all__ = ["StageResources", "StageSession", "StageSessionError"]

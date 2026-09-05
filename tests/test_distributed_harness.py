@@ -1053,6 +1053,7 @@ class StageSessionTests(unittest.TestCase):
             async def run():
                 return ({
                     "status": "failed",
+                    "cleanup": {"ldn_context_released": True, "radio_quiescent": True},
                     "failure": {
                         "code": "A_ROOM_NOT_OBSERVED",
                         "gate": "A1_ROOM_DETECTION",
