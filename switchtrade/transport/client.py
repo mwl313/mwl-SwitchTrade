@@ -70,6 +70,21 @@ class WireClient:
                     task.cancel()
             await asyncio.gather(get, failed, return_exceptions=True)
 
+    async def drain(self, timeout: float = 5.0) -> None:
+        self._raise_if_failed()
+        drained = asyncio.create_task(self._outgoing.join())
+        failed = asyncio.create_task(self._failed.wait())
+        try:
+            done, _ = await asyncio.wait((drained, failed), timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+            if not done:
+                raise TransportError("T_DRAIN_TIMEOUT")
+            self._raise_if_failed()
+        finally:
+            for task in (drained, failed):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(drained, failed, return_exceptions=True)
+
     async def close(self) -> None:
         socket, self._socket = self._socket, None
         tasks = tuple(task for task in (self._writer, self._reader) if task is not None)
@@ -137,7 +152,10 @@ class WireClient:
         try:
             while True:
                 envelope = await self._outgoing.get()
-                await asyncio.wait_for(self._socket.send(envelope.encode()), self._send_timeout)  # type: ignore[union-attr]
+                try:
+                    await asyncio.wait_for(self._socket.send(envelope.encode()), self._send_timeout)  # type: ignore[union-attr]
+                finally:
+                    self._outgoing.task_done()
         except asyncio.CancelledError:
             raise
         except (Exception, asyncio.TimeoutError) as exc:

@@ -1427,3 +1427,56 @@ archive list and regenerate the index.
 - **Correction status:** process correction recorded before C4 identity routing is changed.
 - **Mandatory prevention gate:** Any search pattern that begins with `-` must be placed after
   ripgrep's `--` option separator; do not rely on the pattern's surrounding alternation to protect it.
+
+### MTA-QA-020 — Do not await a peer-close notification without a bounded contract
+
+- **Observed failure:** The first C5 qualification revision called `guest.wait_generation_end()`
+  immediately after `host.stop()` on a second real-relay generation. The run printed one passed test
+  then remained live for three bounded waits because the test had no timeout or confirmed peer-close
+  receipt. It was interrupted before any production endpoint, radio, or external resource existed.
+- **Cause certainty:** certain from the test sequence and absent timeout: the assertion waited for a
+  remote asynchronous event without a completion bound. This is a qualification-test race, not proof
+  of a Core or cleanup defect.
+- **Disproven alternatives:** The same test's first generation had already completed its relay close
+  and local cleanup; no Switch hardware, real Direct stage, or production Room API was invoked.
+- **Recovery and residue:** Preserve the interrupted run, regenerate the index, replace the
+  unbounded peer-close wait with the existing bounded supervisor state helper, and retry only the
+  C5 qualification. No runtime cleanup is required.
+- **Correction status:** bounded test correction pending.
+- **Mandatory prevention gate:** Every assertion that waits for an asynchronous peer transition must
+  use a bounded completion signal or explicit timeout; never await an open-ended lifecycle wait in a
+  qualification test.
+
+### MTA-CORE-010 — Drain a queued generation close before stopping transport
+
+- **Observed failure:** The bounded C5 retry proved that `host.stop()` could leave the active guest
+  in `ACTIVE`: `close_generation()` queued `GENERATION_CLOSE`, then `transport.close()` immediately
+  canceled the writer before the frame was necessarily sent. The guest's bounded `PAIRED` wait timed
+  out. This occurred only in the real relay qualification with injected local resources.
+- **Cause certainty:** certain from the supervisor order and WireClient writer ownership. A normal
+  `host.close_generation()` passed because transport remained live; only the stop path canceled the
+  outbound queue immediately after enqueueing the close frame.
+- **Disproven alternatives:** This is not a Direct A/B, TunnelSim, relay authentication, or physical
+  radio failure. The first generation's data/flags path and local cleanup had already passed.
+- **Recovery and residue:** Preserve the bounded timeout, add a bounded WireClient outbound drain
+  after `GENERATION_CLOSE`, and retry the C5 qualification. No external endpoint or radio was owned.
+- **Correction status:** transport-drain repair pending.
+- **Mandatory prevention gate:** A terminal peer-notification frame must be drained through its
+  owned writer before a caller cancels that writer; test stop-driven peer closure over a real relay.
+
+### MTA-QA-021 — Assert generation clear after terminal cleanup, not local close entry
+
+- **Observed failure:** After adding the required outbound close drain, an existing supervisor test
+  waited only for the test generation's `close()` entry event, then asserted `generation_id is None`.
+  The new drain correctly kept the supervisor cleanup in progress, so the assertion observed the
+  still-owned generation and failed. No endpoint, radio, or external resource was created.
+- **Cause certainty:** certain from the close order: local generation close begins before terminal
+  peer notification drain and only then clears the supervisor generation field.
+- **Disproven alternatives:** This is not a regression in first-failure preservation, generation
+  cleanup, or WireClient drain; the test observed an intermediate state as if it were terminal.
+- **Recovery and residue:** Preserve the failure, regenerate the index, await the supervisor's
+  terminal failure signal before asserting final generation state, then rerun focused regressions.
+  No runtime cleanup is required.
+- **Correction status:** terminal-signal test correction pending.
+- **Mandatory prevention gate:** Tests asserting generation clear after asynchronous cleanup must
+  await a terminal supervisor completion signal, never an instrumented local-resource entry event.

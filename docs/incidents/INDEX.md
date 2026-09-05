@@ -264,3 +264,6 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-QA-019` | Snapshot assertions must wait for the runner's stated checkpoint | Current ledger | 1381 |
 | `MTA-OPS-253` | Verify Git branch, revision, and remote identity separately | Current ledger | 1399 |
 | `MTA-OPS-254` | Protect leading-dash ripgrep patterns with the option separator | Current ledger | 1416 |
+| `MTA-QA-020` | Do not await a peer-close notification without a bounded contract | Current ledger | 1431 |
+| `MTA-CORE-010` | Drain a queued generation close before stopping transport | Current ledger | 1450 |
+| `MTA-QA-021` | Assert generation clear after terminal cleanup, not local close entry | Current ledger | 1467 |

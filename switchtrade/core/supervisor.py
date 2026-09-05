@@ -191,6 +191,7 @@ class CoreSupervisor:
             if notify_peer and self.transport.state.active_generation == generation.offer.generation_id:
                 try:
                     await self.transport.send(FrameKind.GENERATION_CLOSE, generation.offer.generation_id)
+                    await self.transport.drain()
                 except TransportError:
                     failure_code = failure_code or "S_TRANSPORT_FAILED"
             self._discarded_remote_packets += self.transport.discard_generation(generation.offer.generation_id)

@@ -195,7 +195,8 @@ class CoreSupervisorTests(unittest.IsolatedAsyncioTestCase):
     async def test_local_failure_cleans_generation_and_preserves_first_failure(self) -> None:
         await asyncio.gather(self.host.offer_generation(), self.guest.accept_next_offer())
         await self.host_generation.incoming.put(RuntimeError("local failed"))
-        await self._wait_for_close(self.host_generation)
+        with self.assertRaisesRegex(SupervisorError, "S_PUMP_FAILED"):
+            await self.host.wait_generation_end()
         self.assertEqual(self.host.failure.code, "S_PUMP_FAILED")  # type: ignore[union-attr]
         self.assertIsNone(self.host.generation_id)
         self.assertEqual(self.host.state, SupervisorState.FAILED)
