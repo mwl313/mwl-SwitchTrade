@@ -8,7 +8,7 @@ from switchtrade.endpoints.fake import FAKE_PROTOCOL, FakeEndpointDriver, FakeEn
 
 
 class FakeEndpointTests(unittest.IsolatedAsyncioTestCase):
-    async def test_discover_accept_and_opaque_exchange(self) -> None:
+    async def test_discover_accept_and_local_boundary_exchange(self) -> None:
         hub = FakeEndpointHub()
         origin = FakeEndpointDriver(hub)
         mirror = FakeEndpointDriver(hub)
@@ -17,11 +17,11 @@ class FakeEndpointTests(unittest.IsolatedAsyncioTestCase):
         local_origin = await origin.discover(asyncio.Event())
         local_mirror = await mirror.accept(local_origin.offer, asyncio.Event())
         packet = LinkPacket(local_origin.offer.generation_id, FAKE_PROTOCOL, b"hello")
-        await local_origin.send(packet)
-        self.assertEqual(await local_mirror.receive(), packet)
+        await local_origin.inject_local(packet)
+        self.assertEqual(await local_origin.receive(), packet)
         reply = LinkPacket(local_origin.offer.generation_id, FAKE_PROTOCOL, b"world")
         await local_mirror.send(reply)
-        self.assertEqual(await local_origin.receive(), reply)
+        self.assertEqual(await local_mirror.receive_delivered(), reply)
         self.assertTrue((await local_origin.close("done")).endpoint_stopped)
         self.assertTrue((await local_mirror.close("done")).local_resources_released)
 

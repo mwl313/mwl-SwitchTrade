@@ -11,9 +11,9 @@ import uvicorn
 import websockets
 
 from relay.core_server import create_app
-from switchtrade.core.contracts import PairCredentials, PairSeat
+from switchtrade.core.contracts import LinkPacket, PairCredentials, PairSeat
 from switchtrade.core.supervisor import CoreSupervisor, SupervisorState
-from switchtrade.endpoints.fake import FakeEndpointDriver, FakeEndpointHub
+from switchtrade.endpoints.fake import FAKE_PROTOCOL, FakeEndpointDriver, FakeEndpointHub
 from switchtrade.transport import FrameKind, WireClient
 
 
@@ -102,16 +102,29 @@ class CoreEndToEndTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await guest_wire.receive()).kind, FrameKind.GENERATION_CLOSE)
 
         hub = FakeEndpointHub()
-        host_supervisor = CoreSupervisor(host, FakeEndpointDriver(hub), host_wire)
-        guest_supervisor = CoreSupervisor(guest, FakeEndpointDriver(hub), guest_wire)
+        host_driver, guest_driver = FakeEndpointDriver(hub), FakeEndpointDriver(hub)
+        host_supervisor = CoreSupervisor(host, host_driver, host_wire)
+        guest_supervisor = CoreSupervisor(guest, guest_driver, guest_wire)
         await asyncio.gather(host_supervisor.offer_generation(), guest_supervisor.accept_next_offer())
         self.assertEqual((host_supervisor.state, guest_supervisor.state), (SupervisorState.ACTIVE, SupervisorState.ACTIVE))
+        host_generation, guest_generation = host_driver.generation, guest_driver.generation
+        self.assertIsNotNone(host_generation)
+        self.assertIsNotNone(guest_generation)
+        host_packet = LinkPacket(host_supervisor.generation_id, FAKE_PROTOCOL, b"host", 0x0100)
+        await host_generation.inject_local(host_packet)  # type: ignore[union-attr]
+        self.assertEqual(await guest_generation.receive_delivered(), host_packet)  # type: ignore[union-attr]
+        guest_packet = LinkPacket(guest_supervisor.generation_id, FAKE_PROTOCOL, b"guest")
+        await guest_generation.inject_local(guest_packet)  # type: ignore[union-attr]
+        self.assertEqual(await host_generation.receive_delivered(), guest_packet)  # type: ignore[union-attr]
         await host_supervisor.close_generation()
         await self._wait_for_state(guest_supervisor, SupervisorState.PAIRED)
         self.assertIsNone(host_supervisor.failure)
         self.assertIsNone(guest_supervisor.failure)
         await asyncio.gather(host_supervisor.offer_generation(), guest_supervisor.accept_next_offer())
         self.assertEqual((host_supervisor.state, guest_supervisor.state), (SupervisorState.ACTIVE, SupervisorState.ACTIVE))
+        second_packet = LinkPacket(host_supervisor.generation_id, FAKE_PROTOCOL, b"second")
+        await host_driver.generation.inject_local(second_packet)  # type: ignore[union-attr]
+        self.assertEqual(await guest_driver.generation.receive_delivered(), second_packet)  # type: ignore[union-attr]
         await host_supervisor.stop()
         await guest_supervisor.stop()
         self.assertEqual((host_supervisor.state, guest_supervisor.state), (SupervisorState.STOPPED, SupervisorState.STOPPED))

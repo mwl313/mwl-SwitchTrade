@@ -21,8 +21,10 @@ FAKE_PROTOCOL = "switchtrade.fake.v1"
 
 @dataclass
 class _Channel:
-    origin_to_mirror: asyncio.Queue[LinkPacket | None]
-    mirror_to_origin: asyncio.Queue[LinkPacket | None]
+    origin_to_core: asyncio.Queue[LinkPacket | None]
+    origin_delivered: asyncio.Queue[LinkPacket]
+    mirror_to_core: asyncio.Queue[LinkPacket | None]
+    mirror_delivered: asyncio.Queue[LinkPacket]
 
 
 class FakeEndpointHub:
@@ -33,7 +35,7 @@ class FakeEndpointHub:
     def offer(self) -> tuple[str, _Channel]:
         self._next_id += 1
         generation_id = f"fake-{self._next_id}"
-        channel = _Channel(asyncio.Queue(maxsize=32), asyncio.Queue(maxsize=32))
+        channel = _Channel(*(asyncio.Queue(maxsize=32) for _ in range(4)))
         self._channels[generation_id] = channel
         return generation_id, channel
 
@@ -64,6 +66,18 @@ class FakeGeneration:
             raise ValueError("packet does not belong to this generation")
         await self._outgoing.put(packet)
 
+    async def inject_local(self, packet: LinkPacket) -> None:
+        if (
+            self._closed
+            or packet.generation_id != self.offer.generation_id
+            or packet.protocol_id != self.offer.protocol_id
+        ):
+            raise ValueError("packet does not belong to this generation")
+        await self._incoming.put(packet)
+
+    async def receive_delivered(self) -> LinkPacket:
+        return await self._outgoing.get()
+
     async def close(self, outcome: str) -> CleanupReport:
         discarded = 0
         if not self._closed:
@@ -87,6 +101,7 @@ class FakeEndpointDriver:
         self._fail_discover = fail_discover
         self._fail_accept = fail_accept
         self._prepared = False
+        self.generation: FakeGeneration | None = None
 
     async def prepare(self) -> None:
         if self._fail_prepare:
@@ -100,7 +115,8 @@ class FakeEndpointDriver:
             raise RuntimeError("fake discover failure")
         generation_id, channel = self._hub.offer()
         offer = GenerationOffer(generation_id, FAKE_PROTOCOL, EndpointKind.FAKE, generation_id.encode())
-        return FakeGeneration(offer, channel.mirror_to_origin, channel.origin_to_mirror)
+        self.generation = FakeGeneration(offer, channel.origin_to_core, channel.origin_delivered)
+        return self.generation
 
     async def accept(self, offer: GenerationOffer, cancel: asyncio.Event) -> FakeGeneration:
         if cancel.is_set():
@@ -108,7 +124,8 @@ class FakeEndpointDriver:
         if not self._prepared or self._fail_accept or offer.protocol_id != FAKE_PROTOCOL:
             raise RuntimeError("fake accept failure")
         channel = self._hub.accept(offer.generation_id)
-        return FakeGeneration(offer, channel.origin_to_mirror, channel.mirror_to_origin)
+        self.generation = FakeGeneration(offer, channel.mirror_to_core, channel.mirror_delivered)
+        return self.generation
 
     async def close(self) -> CleanupReport:
         self._prepared = False
