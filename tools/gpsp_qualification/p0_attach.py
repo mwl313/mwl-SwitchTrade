@@ -15,10 +15,13 @@ import shutil
 import socket
 import struct
 import subprocess
+import sys
 import time
 
 from stock_reference import StockNetplayLaunch, write_isolated_retroarch_config
 from window_input import OwnedProcess, PrivateDesktop, WindowInput
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 RA_HASH = "81c11b6f24932bf7918f05eee8928035bff3887335fd2a081507c75e9d94d06a"
 CORE_HASH = "c84f619c1077a7fbae84c385df752fbeb867d301880400add7cce6a380dbd516"
@@ -74,7 +77,7 @@ def exchange(connection, round_number):
     return {"round": round_number, "rfu": "bidirectional", "in_ram_counter": round_number}
 
 
-def run(root: Path, fixture: Path, output: Path):
+def run(root: Path, fixture: Path, output: Path, production_local: bool = False):
     root, fixture = root.resolve(strict=True), fixture.resolve(strict=True)
     executable, core = root / "retroarch.exe", root / "cores/gpsp_libretro.dll"
     assert digest(executable) == RA_HASH and digest(core) == CORE_HASH, "P0_BINARY_IDENTITY_MISMATCH"
@@ -93,7 +96,11 @@ def run(root: Path, fixture: Path, output: Path):
     assert digest(executable) == RA_HASH and digest(core) == CORE_HASH
     config = output / "retroarch.cfg"
     write_isolated_retroarch_config(config)
-    launch = StockNetplayLaunch(content_path=fixture, handshake_timeout=20)
+    launch_type = StockNetplayLaunch
+    if production_local:
+        from production_probe import ProductionProbe
+        launch_type = ProductionProbe
+    launch = launch_type(content_path=fixture, handshake_timeout=20)
     # Test profile only: leave Quick Menu and Netplay as the first two main items.
     isolated_config = config.read_text().replace('video_driver = "null"', 'video_driver = "sdl2"')
     isolated_config = isolated_config.replace('input_driver = "null"', 'input_driver = "sdl2"')
@@ -121,6 +128,7 @@ def run(root: Path, fixture: Path, output: Path):
     report = {"scope": "P0 stock attach only; not Core/physical qualification",
               "retroarch_sha256": RA_HASH, "gpsp_sha256": CORE_HASH,
               "fixture_sha256": digest(fixture), "passed": False}
+    report["production_local"] = production_local
     def command(value):
         transcript.append(value)
         controls.command(value)
@@ -145,7 +153,7 @@ def run(root: Path, fixture: Path, output: Path):
             report["input_method"] = "owned SDL window public key messages"
             with ThreadPoolExecutor(max_workers=1) as pool:
                 for number in (1, 2):
-                    opening = pool.submit(launch.open, process=None)
+                    opening = pool.submit(launch.open, process=process)
                     connect_menu(number)
                     connection = opening.result(timeout=25)
                     launch = None
@@ -158,7 +166,7 @@ def run(root: Path, fixture: Path, output: Path):
                     time.sleep(1)
                     assert process.poll() is None
                     if number == 1:
-                        launch = StockNetplayLaunch(content_path=fixture, handshake_timeout=20)
+                        launch = launch_type(content_path=fixture, handshake_timeout=20)
                         # Must retain the original configured endpoint without rewriting settings.
                         launch.listener.close()
                         launch.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -217,4 +225,5 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("root", "fixture", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--production-local", action="store_true")
     run(**vars(parser.parse_args()))

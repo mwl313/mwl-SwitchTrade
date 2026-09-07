@@ -1,0 +1,51 @@
+{
+  "scope": "P1 native process observer + local Netplay only; no Core/Relay or full endpoint qualification",
+  "retroarch_sha256": "81c11b6f24932bf7918f05eee8928035bff3887335fd2a081507c75e9d94d06a",
+  "gpsp_sha256": "c84f619c1077a7fbae84c385df752fbeb867d301880400add7cce6a380dbd516",
+  "fixture_sha256": "cfb0a21e1504931d7589a30b125ff3bbdf9211116a7bea690cfecadf031a2720",
+  "passed": true,
+  "production_local": true,
+  "started_before_netplay": true,
+  "input_method": "owned SDL window public key messages",
+  "same_process_two_rounds": true,
+  "rounds": [
+    {
+      "round": 1,
+      "rfu": "bidirectional",
+      "in_ram_counter": 1
+    },
+    {
+      "round": 2,
+      "rfu": "bidirectional",
+      "in_ram_counter": 2
+    }
+  ],
+  "test_process_exit": 0,
+  "process_handle_cleanup": true,
+  "desktop_cleanup": true,
+  "socket_cleanup": [
+    true,
+    true
+  ],
+  "stock_tree_unchanged": true,
+  "stock_tree_delta": [],
+  "commands": [
+    "MENU_TOGGLE",
+    "MENU_B",
+    "MENU_DOWN",
+    "MENU_A",
+    "MENU_DOWN",
+    "MENU_A",
+    "MENU_TOGGLE",
+    "MENU_A",
+    "QUIT"
+  ],
+  "base_sha": "be49ecc44eac96a886c9a52a6a373baf064c4dcf",
+  "native_tcp_owner_verified": true,
+  "ordered_netplay_barrier": true,
+  "focused_tests": {
+    "passed": 52,
+    "failed": 0,
+    "skipped": 0
+  }
+}

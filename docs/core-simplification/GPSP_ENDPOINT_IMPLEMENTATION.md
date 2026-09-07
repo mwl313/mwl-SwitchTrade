@@ -45,7 +45,7 @@ unsupported capabilities or placeholder implementations. Relay remains opaque.
 | Packet | Scope | State |
 | --- | --- | --- |
 | P0 | Stock runtime identity; attach/exchange/detach/reattach without game reload/reset | PASS (local Windows; not full integration) |
-| P1 | Borrowed-process probe, local listener, hardened Netplay and RFU translator | NOT_STARTED |
+| P1 | Borrowed-process probe, local listener, hardened Netplay and RFU translator | PASS (packet scope; local Windows) |
 | P2 | Real Core endpoint, lifecycle, reconnect and next Generation | NOT_STARTED |
 | P3 | Native dev/CLI routing, diagnostics and user messages | NOT_STARTED |
 | P4 | Full integration, two Generations, long waits/soak, CI and VMware runbook | NOT_STARTED |
@@ -82,6 +82,41 @@ run. The test-owned process exits only after the full continuity assertion.
 This proves attach-only feasibility, not real Core integration, a 30-minute
 soak, Windows/Ubuntu final-SHA CI, VMware or a physical Pokemon trade. P1-P4
 remain open. New stock versions require another binary-bound qualification.
+
+### P1 evidence (2026-09-08)
+
+The selected RFU converter and stock wire layout are ported under
+`switchtrade/endpoints/retroarch_gpsp/`. No legacy Room/C2, launcher, settings
+writer or installer is imported. Product observation uses only standard-library
+Windows read-only APIs: PID/executable/start FILETIME, loaded gpSP module/hash,
+and the accepted loopback socket's TCP owner tuple. No process termination or
+emulator control API exists on the observer. Query failure is never absence.
+
+`LocalNetplay` keeps a cancellable unbounded human accept wait, a separate bounded
+technical handshake, bounded incremental reads/queues, observation of process
+exit/core unload, and one sticky close result. It supports an ordered Netplay
+PING/PONG barrier; this is explicitly not proof of game RFU readiness. The RFU
+converter validates all flags before duplicate lookup, retains its first error,
+rejects reserved header bits, and cannot partially reset itself for a new
+Generation. A fresh converter is required for new ACK/timestamp/queue state.
+
+- 52 focused fixture/process/socket/converter/agent-context tests pass, no skips.
+- Actual stock process + production observer/TCP owner check/Netplay handshake
+  and barrier + two RFU exchanges across local detach/reattach pass.
+  Sanitized result: `GPSP_P1_EVIDENCE.json`; local raw evidence:
+  `.qualification/gpsp-p1-local-05/`.
+- Stock v7 details verified against the pinned RetroArch 1.22.2 source and actual
+  process: client header word 3 is the highest supported protocol, word 4 the
+  lowest; fixed INFO strings are NUL-terminated, not necessarily zero-padded.
+- Only the test-owned fixture/runtime is launched/configured/closed by the
+  separate qualification harness. Original runtime metadata is unchanged in
+  passing runs, and reader/observer/connection/process/desktop resources close.
+
+Remaining P2-P4 gates include generation retirement on a retained local Netplay
+session, stale RFU rejection and game-versus-frontend lifetime separation;
+actual Core/Relay/Switch stack integration; CLI/native routing and truthful RFU
+mode/readiness diagnostics; >180-second waits, 30-minute process soak, full tests,
+same-SHA Windows/Ubuntu CI and the VMware runbook. No final qualification claim.
 
 ## Required final evidence
 
