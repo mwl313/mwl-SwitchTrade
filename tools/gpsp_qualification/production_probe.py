@@ -61,6 +61,9 @@ class ProbeConnection:
     def send(self, payload):
         self.call(self.session.send(payload))
 
+    def barrier(self):
+        self.call(self.session.barrier())
+
     def close(self):
         if self.result is not None:
             return self.result

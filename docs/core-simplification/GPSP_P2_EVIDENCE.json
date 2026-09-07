@@ -1,0 +1,21 @@
+{
+  "packet": "P2",
+  "status": "PASS_PACKET_SCOPE_ONLY",
+  "source_base_sha": "ffe727748b2aa066080d8de72c2530caeefdfd49",
+  "scope": "Real CoreSupervisor/WireClient/WebSocket relay/native gpSP endpoint/stock process; modeled opposite Switch boundary",
+  "retroarch_sha256": "81c11b6f24932bf7918f05eee8928035bff3887335fd2a081507c75e9d94d06a",
+  "gpsp_sha256": "c84f619c1077a7fbae84c385df752fbeb867d301880400add7cce6a380dbd516",
+  "fixture_sha256": "cfb0a21e1504931d7589a30b125ff3bbdf9211116a7bea690cfecadf031a2720",
+  "focused_passed": 101,
+  "focused_skipped": 0,
+  "manual_netplay_connections": 1,
+  "same_pair_process_and_local_connection": true,
+  "bidirectional_round_counters": [1, 2],
+  "owned_socket_thread_process_handle_desktop_cleanup": true,
+  "source_runtime_metadata_unchanged": true,
+  "rfu_disabled_negative": "Netplay and barrier succeeded; RFU response absent; not ready",
+  "wrong_role_actual_slot_retirement": true,
+  "wrong_role_fixture_sha256": "48bfc8c0d31a06f80644632739d65897a1263dff9f634d5610fc8e084ef5da0c",
+  "raw_evidence": [".qualification/gpsp-p2-core-03/report.json", ".qualification/gpsp-host-role-01/report.json", ".qualification/gpsp-p1-mode-probe-disabled-01/report.json"],
+  "not_proven": ["P3 native CLI", "P4 full Switch stack integration", "long wait and soak", "full pytest", "same-SHA final Windows and Ubuntu CI", "physical Switch interoperability"]
+}

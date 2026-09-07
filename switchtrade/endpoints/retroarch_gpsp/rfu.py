@@ -143,18 +143,22 @@ class RfuTranslator:
     """One attempt-bound Nintendo Switch Creator to stock gpSP Finder translator."""
 
     def __init__(self, *, attempt_id: str, tunnel_epoch: int,
-                 child_connection_id: bytes, gpsp_device_id: int, gpsp_slot: int = 0):
+                 child_connection_id: bytes, gpsp_device_id: int, gpsp_slot: int = 0,
+                 gpsp_host_id: int | None = None):
         if not attempt_id or not 0 < tunnel_epoch <= 0x7FFFFFFF:
             raise ValueError("attempt and tunnel epoch are required")
         if len(child_connection_id) != 2 or child_connection_id == b"\0\0":
             raise ValueError("child connection ID must be two non-zero bytes")
         if not 0 < gpsp_device_id <= 0xFFFF or not 0 <= gpsp_slot <= 3:
             raise ValueError("gpSP device mapping is invalid")
+        if gpsp_host_id is not None and not 0 < gpsp_host_id <= 0xFFFF:
+            raise ValueError("gpSP host mapping is invalid")
         self.attempt_id = attempt_id
         self.tunnel_epoch = tunnel_epoch
         self.child_connection_id = bytes(child_connection_id)
         self.gpsp_device_id = gpsp_device_id
         self.gpsp_slot = gpsp_slot
+        self.gpsp_host_id = gpsp_host_id
         self.state = "waiting_advertisement"
         self._failure: TranslatorError | None = None
         self._started = False
@@ -251,7 +255,7 @@ class RfuTranslator:
             struct.pack("!I", int.from_bytes(record[offset:offset + 4], "little"))
             for offset in range(0, 24, 4))
         return (TranslatorAction(
-            "core", _rfu1(RFU1_BROADCAST, host_session_id, network_words),
+            "core", _rfu1(RFU1_BROADCAST, self.gpsp_host_id or host_session_id, network_words),
             "broadcast", peer_id=0),)
 
     def from_core(self, payload: bytes, *, peer_id: int, sequence: int) -> tuple[TranslatorAction, ...]:
@@ -267,7 +271,7 @@ class RfuTranslator:
             self._fail("TRANSLATOR_CORE_PEER", "gpSP peer identity is invalid")
         packet_type, header, body = _parse_rfu1(payload)
         if packet_type == RFU1_CONNECT_REQ:
-            if self.state not in ("searching", "connecting") or header != self._host_session_id:
+            if self.state not in ("searching", "connecting") or header != (self.gpsp_host_id or self._host_session_id):
                 self._fail("TRANSLATOR_CONNECT_STATE", "gpSP connect request is invalid")
             self.state = "connecting"
             return (TranslatorAction(

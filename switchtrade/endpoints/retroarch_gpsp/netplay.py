@@ -60,6 +60,7 @@ class LocalNetplay:
         self._watch = self._pump = self._opening = self._closing = None
         self._failure: BaseException | None = None
         self._ended = asyncio.Event()
+        self.listening = asyncio.Event()
         self._packets = asyncio.Queue(MAX_QUEUE)
         self._send_lock, self._barrier_lock = asyncio.Lock(), asyncio.Lock()
         self._pongs = deque()
@@ -129,6 +130,7 @@ class LocalNetplay:
                 raise GpspError("EMULATOR_PORT_UNAVAILABLE", "로컬 Netplay 포트가 사용 중입니다. 다른 프로그램을 확인하거나 --emulator-port를 지정하세요.") from error
             self._listener.listen(1)
             self._listener.setblocking(False)
+            self.listening.set()
             self._opening = asyncio.create_task(self._establish(), name="gpsp-netplay-handshake")
             await self._race(self._opening, cancel)
             self.connected = True
@@ -165,8 +167,13 @@ class LocalNetplay:
         async with self._send_lock:
             self._check()
             try:
-                self._writer.write(value)
-                await self._writer.drain()
+                async with asyncio.timeout(self.handshake_timeout):
+                    self._writer.write(value)
+                    await self._writer.drain()
+            except TimeoutError as error:
+                failure = GpspError("EMULATOR_SEND_TIMEOUT", "로컬 Netplay 전송이 멈췄습니다. RetroArch 연결 상태를 확인하세요.")
+                self._failed(failure)
+                raise failure from error
             except (OSError, ConnectionError) as error:
                 failure = GpspError("EMULATOR_SEND_FAILED", "RetroArch로 데이터를 전달하지 못했습니다.")
                 self._failed(failure)

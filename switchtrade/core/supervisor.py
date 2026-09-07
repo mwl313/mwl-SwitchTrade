@@ -117,6 +117,11 @@ class CoreSupervisor:
             guards.append(asyncio.create_task(self._invite_end()))
         if self._generation is not None:
             guards.append(asyncio.create_task(self._local_end()))
+        # Long-lived endpoint transports may fail while no Generation exists.
+        # This optional observation hook neither opens nor recovers resources.
+        driver_failure = getattr(self.driver, "wait_failed", None)
+        if driver_failure is not None:
+            guards.append(asyncio.create_task(driver_failure()))
         peer = None
         if opening_id is not None:
             peer = asyncio.create_task(self.transport.receive())
@@ -189,6 +194,8 @@ class CoreSupervisor:
                 raise await self._transport_failed(exc) from exc
             except SupervisorError as exc:
                 raise await self._fail_and_cleanup(exc.code, exc) from exc
+            except Exception as exc:
+                raise await self._fail_and_cleanup(getattr(exc, "code", "S_ENDPOINT_FAILED"), exc) from exc
             self.state = SupervisorState.PAIRED
             return
 
@@ -259,11 +266,12 @@ class CoreSupervisor:
                 opening_id=offer.generation_id)
         except GenerationEnded:
             await self.close_generation("peer_ended_before_active", notify_peer=False)
-            report = await self.driver.close()
+            abort_opening = getattr(self.driver, "abort_opening", None)
+            report = await (abort_opening() if abort_opening is not None else self.driver.close())
             if not (report.endpoint_stopped and report.local_resources_released and report.transport_drained):
                 self.cleanup_failures.append(dict(report.details))
                 raise await self._cleanup_failed()
-            self._prepared = False
+            self._prepared = abort_opening is not None
             self.state = SupervisorState.PAIRED
             raise
         except TransportError as exc:
@@ -435,6 +443,8 @@ class CoreSupervisor:
             while True:
                 packet = await self._generation.receive()  # type: ignore[union-attr]
                 await self.transport.send(FrameKind.DATA, packet.generation_id, packet.payload, packet.flags)
+        except GenerationEnded:
+            await self.close_generation("local_ended")
         except asyncio.CancelledError:
             raise
         except TransportError as exc:

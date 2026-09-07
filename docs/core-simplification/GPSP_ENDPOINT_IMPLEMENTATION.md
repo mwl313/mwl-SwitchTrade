@@ -46,7 +46,7 @@ unsupported capabilities or placeholder implementations. Relay remains opaque.
 | --- | --- | --- |
 | P0 | Stock runtime identity; attach/exchange/detach/reattach without game reload/reset | PASS (local Windows; not full integration) |
 | P1 | Borrowed-process probe, local listener, hardened Netplay and RFU translator | PASS (packet scope; local Windows) |
-| P2 | Real Core endpoint, lifecycle, reconnect and next Generation | NOT_STARTED |
+| P2 | Real Core endpoint, lifecycle, reconnect and next Generation | PASS (packet scope; local Windows) |
 | P3 | Native dev/CLI routing, diagnostics and user messages | NOT_STARTED |
 | P4 | Full integration, two Generations, long waits/soak, CI and VMware runbook | NOT_STARTED |
 
@@ -80,8 +80,8 @@ run. The test-owned process exits only after the full continuity assertion.
   will only observe the user's independently configured frontend.
 
 This proves attach-only feasibility, not real Core integration, a 30-minute
-soak, Windows/Ubuntu final-SHA CI, VMware or a physical Pokemon trade. P1-P4
-remain open. New stock versions require another binary-bound qualification.
+soak, Windows/Ubuntu final-SHA CI, VMware or a physical Pokemon trade.
+New stock versions require another binary-bound qualification.
 
 ### P1 evidence (2026-09-08)
 
@@ -117,6 +117,55 @@ session, stale RFU rejection and game-versus-frontend lifetime separation;
 actual Core/Relay/Switch stack integration; CLI/native routing and truthful RFU
 mode/readiness diagnostics; >180-second waits, 30-minute process soak, full tests,
 same-SHA Windows/Ubuntu CI and the VMware runbook. No final qualification claim.
+
+### P2 evidence (2026-09-08)
+
+`RetroArchGpspEndpointDriver` now owns the retained local connection; each
+`GpspGeneration` owns a fresh converter, queues, ACK/timestamp state and RFU IDs.
+Accept returns before game RFU ACK; the normal Core activation starts metadata
+and advertisements. `wait_link_ready()` is separate and requires actual gpSP
+child data. A normal RFU disconnect drains its final Core frame before the
+Generation closes. Cleanup sends CONNECT_NACK/DISCONNECT and requires the stock
+ordered PING/PONG barrier. Unknown/failed cleanup stays dirty on repeated close.
+Retired device IDs are not reused on that frontend connection; old requests are
+rejected, old data is discarded, and contradictory new/old connection order fails.
+
+Core has only generic optional lifecycle hooks: observe a retained driver's
+`wait_failed()` even without a Generation, and `abort_opening()` without closing
+its healthy local connection. Existing drivers retain their close/prepare fallback.
+`GenerationEnded` from the local receive pump now means normal ordered completion.
+No gpSP/RetroArch imports or protocol parsing were added to Core/Relay.
+
+- Real stock RetroArch/gpSP + native identity/TCP observation + new driver and
+  converter + both CoreSupervisors/WireClients + real Uvicorn/WebSocket relay:
+  two bidirectional homebrew exchanges passed on the same Pair/process/local
+  Netplay session, with one manual Netplay connection and RAM counters 1 then 2.
+  Local raw evidence: `.qualification/gpsp-p2-core-03/report.json`.
+  The opposite Switch local packet boundary is **modeled in this P2 test**;
+  this is not the required P4 Direct A/StageSession/TunnelSim proof.
+- 101 focused endpoint/process/wire/converter/Core/lifecycle/context tests pass.
+  Coverage includes opening transport loss, peer close while local Netplay is
+  pending, observation during peer wait, repeated cleanup cancellation, stale
+  RFU IDs and two Generations through the actual relay with a modeled gpSP peer.
+- The disabled-setting negative stock probe connected Netplay and answered its
+  barrier but emitted no RFU response. Silence is not labeled game readiness.
+  A live non-host RFU dispatcher answers a connection probe with NACK before
+  human game input is needed. No RFU response is reported as mode **unproven**,
+  not a timeout on the user's game action; ambiguous cleanup remains blocked.
+- Wrong in-game Host role is rejected after retiring only the probe-created RFU
+  slot. The actual stock host fixture accepted a second request on the same
+  local connection after DISCONNECT/barrier; it would ignore that request if
+  the old slot remained. `.qualification/gpsp-host-role-01/report.json` passed.
+  Host probe fixture SHA256:
+  `48bfc8c0d31a06f80644632739d65897a1263dff9f634d5610fc8e084ef5da0c`.
+- Source runtime metadata remained unchanged; owned sockets, harness thread,
+  test process handle and private desktop closed. Product code never launched,
+  reset or terminated the frontend or wrote its configuration/content/saves.
+
+P3/P4 remain open: lazy composition/native dev/CLI, final actual Switch-side path,
+long human waits/30-minute process soak, complete acceptance and full pytest,
+same-final-SHA Windows/Ubuntu CI, and the VMware physical test runbook.
+No final software-ready or physical-success claim is made at P2.
 
 ## Required final evidence
 

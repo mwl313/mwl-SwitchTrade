@@ -126,6 +126,10 @@ class LocalGeneration(Protocol):
 
 
 class EndpointDriver(Protocol):
+    # Optional lifecycle hooks, detected by the supervisor for drivers with a
+    # retained local connection: wait_failed() only observes fatal failure;
+    # abort_opening() cleans provisional Generation resources while preserving
+    # the prepared driver. Drivers without that hook use close()+prepare().
     capabilities: EndpointCapabilities
 
     async def prepare(self) -> None: ...

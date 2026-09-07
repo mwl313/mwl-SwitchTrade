@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DEPENDENCY = "c61bf351f68ad2d6e1c9d72d70e21bec19adfc0b"
 
 
-def build(toolchain: Path, dependency: Path, output: Path):
+def build(toolchain: Path, dependency: Path, output: Path, source_name: str = "main.cpp"):
     dependency = dependency.resolve(strict=True)
     git = ["git", "-c", f"safe.directory={dependency.as_posix()}", "-C", str(dependency)]
     if subprocess.check_output(git + ["rev-parse", "HEAD"], text=True).strip() != DEPENDENCY:
@@ -26,7 +26,7 @@ def build(toolchain: Path, dependency: Path, output: Path):
     def run(args):
         subprocess.run([str(a) for a in args], check=True)
     run([toolchain / "bin/arm-none-eabi-gcc.exe", "-c", source / "crt0.s", "-o", output / "crt0.o", *flags])
-    run([compiler, "-c", source / "main.cpp", "-o", output / "main.o", "-I", dependency / "lib", *flags,
+    run([compiler, "-c", source / source_name, "-o", output / "main.o", "-I", dependency / "lib", *flags,
          "-std=gnu++17", "-O2", "-fno-builtin", "-fno-exceptions", "-fno-rtti", "-fno-use-cxa-atexit",
          "-fno-unwind-tables", "-fno-asynchronous-unwind-tables", "-ffunction-sections", "-fdata-sections",
          "-frandom-seed=gpsp-attach", "-DLINK_DEVELOPMENT"])
@@ -45,4 +45,5 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("toolchain", "dependency", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--source-name", choices=("main.cpp", "host_probe.cpp"), default="main.cpp")
     build(**vars(parser.parse_args()))

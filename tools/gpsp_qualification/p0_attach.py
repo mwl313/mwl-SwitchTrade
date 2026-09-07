@@ -77,7 +77,30 @@ def exchange(connection, round_number):
     return {"round": round_number, "rfu": "bidirectional", "in_ram_counter": round_number}
 
 
-def run(root: Path, fixture: Path, output: Path, production_local: bool = False):
+def host_probe(connection, round_number):
+    # A second ACK proves the prior peer slot was really removed: pinned gpSP
+    # ignores a duplicate request from a still-connected Netplay client ID.
+    connection.send(packet(1, 0))
+    deadline = time.monotonic() + 5
+    while True:
+        kind, assignment, _ = receive(connection, deadline)
+        if kind == 0:  # Unsolicited host beacon, not a readiness response.
+            continue
+        assert kind == 2 and 0 < assignment & 0xFFFF and not assignment & 0xFFFC0000
+        break
+    connection.send(packet(4, assignment))
+    connection.barrier()
+    return {"round": round_number, "rfu_slot_created_and_retired": True}
+
+
+def run(root: Path, fixture: Path, output: Path, production_local: bool = False,
+        rfu_mode: str = "rfu", rfu_probe: bool = False, core_endpoint: bool = False,
+        host_role_probe: bool = False):
+    if core_endpoint and (rfu_probe or not production_local):
+        raise ValueError("core-endpoint needs production-local and owns its own RFU handshake")
+    if host_role_probe and (not production_local or core_endpoint or rfu_probe):
+        raise ValueError("host-role-probe needs only production-local")
+    retained = core_endpoint or host_role_probe
     root, fixture = root.resolve(strict=True), fixture.resolve(strict=True)
     executable, core = root / "retroarch.exe", root / "cores/gpsp_libretro.dll"
     assert digest(executable) == RA_HASH and digest(core) == CORE_HASH, "P0_BINARY_IDENTITY_MISMATCH"
@@ -96,10 +119,15 @@ def run(root: Path, fixture: Path, output: Path, production_local: bool = False)
     assert digest(executable) == RA_HASH and digest(core) == CORE_HASH
     config = output / "retroarch.cfg"
     write_isolated_retroarch_config(config)
+    if rfu_mode != "rfu":
+        (output / "core-options.cfg").write_text(f'gpsp_serial = "{rfu_mode}"\n', encoding="utf-8")
     launch_type = StockNetplayLaunch
     if production_local:
         from production_probe import ProductionProbe
         launch_type = ProductionProbe
+    if core_endpoint:
+        from core_probe import CoreProbeLaunch
+        launch_type = CoreProbeLaunch
     launch = launch_type(content_path=fixture, handshake_timeout=20)
     # Test profile only: leave Quick Menu and Netplay as the first two main items.
     isolated_config = config.read_text().replace('video_driver = "null"', 'video_driver = "sdl2"')
@@ -129,6 +157,14 @@ def run(root: Path, fixture: Path, output: Path, production_local: bool = False)
               "retroarch_sha256": RA_HASH, "gpsp_sha256": CORE_HASH,
               "fixture_sha256": digest(fixture), "passed": False}
     report["production_local"] = production_local
+    report["core_endpoint"] = core_endpoint
+    report["host_role_probe"] = host_role_probe
+    if host_role_probe:
+        report["scope"] = "Wrong-role RFU slot retirement probe only; not game data or Core qualification"
+    if core_endpoint:
+        report["scope"] = "P2 real Core/relay/gpSP; modeled Switch boundary, not P4 or physical qualification"
+    report["test_rfu_mode"] = rfu_mode
+    report["netplay_handshakes"] = 0
     def command(value):
         transcript.append(value)
         controls.command(value)
@@ -153,12 +189,29 @@ def run(root: Path, fixture: Path, output: Path, production_local: bool = False)
             report["input_method"] = "owned SDL window public key messages"
             with ThreadPoolExecutor(max_workers=1) as pool:
                 for number in (1, 2):
-                    opening = pool.submit(launch.open, process=process)
-                    connect_menu(number)
-                    connection = opening.result(timeout=25)
-                    launch = None
-                    rounds.append(exchange(connection, number))
+                    if not retained or number == 1:
+                        opening = pool.submit(launch.open, process=process)
+                        connect_menu(number)
+                        connection = opening.result(timeout=25)
+                        report["netplay_handshakes"] += 1
+                        launch = None
+                    if rfu_probe:
+                        # Test-only investigation: an RFU connection request to
+                        # a non-host should NACK without changing game state.
+                        # Do not make this a product readiness probe until wrong
+                        # role/cleanup side effects are qualified as well.
+                        connection.send(packet(1, 0))
+                        if production_local:
+                            connection.barrier()
+                            report["rfu_probe_barrier"] = True
+                        response = receive(connection, time.monotonic() + 5)
+                        report.setdefault("rfu_probe_responses", []).append(response[:2])
+                        assert response[:2] == (3, 0), response[:2]
+                    rounds.append(connection.exchange(number) if core_endpoint else
+                        host_probe(connection, number) if host_role_probe else exchange(connection, number))
                     assert process.poll() is None
+                    if retained and number == 1:
+                        continue
                     socket_cleanup.append(connection.close())
                     if not socket_cleanup[-1]:
                         raise RuntimeError("P0_LOCAL_SOCKET_CLEANUP_FAILED")
@@ -204,7 +257,7 @@ def run(root: Path, fixture: Path, output: Path, production_local: bool = False)
             report["desktop_cleanup"] = desktop.close()
             report["passed"] = report["passed"] and report["desktop_cleanup"]
         report["socket_cleanup"] = socket_cleanup
-        report["passed"] = report["passed"] and socket_cleanup == [True, True] and all(
+        report["passed"] = report["passed"] and socket_cleanup == ([True] if retained else [True, True]) and all(
             value for key, value in report.items() if key.endswith("_cleanup"))
         after = sorted((str(p.relative_to(root)), p.stat().st_size, p.stat().st_mtime_ns)
                        for p in root.rglob("*") if p.is_file())
@@ -226,4 +279,8 @@ if __name__ == "__main__":
     for name in ("root", "fixture", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--production-local", action="store_true")
+    parser.add_argument("--rfu-mode", choices=("rfu", "disabled"), default="rfu")
+    parser.add_argument("--rfu-probe", action="store_true")
+    parser.add_argument("--core-endpoint", action="store_true")
+    parser.add_argument("--host-role-probe", action="store_true")
     run(**vars(parser.parse_args()))

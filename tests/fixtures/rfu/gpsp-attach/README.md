@@ -30,3 +30,15 @@ Retain raw diagnostics locally: they contain paths and may include frontend
 environment details. Do not commit screenshots or frontend logs. A P0 pass only
 proves this stock attach/exchange/detach/reattach flow; it does not qualify the
 new Core endpoint, full integration, soak or physical interoperability.
+
+`host_probe.cpp` reuses these runtime helpers for a test-only RFU Host. Build it
+with `--source-name host_probe.cpp`. The `--production-local --host-role-probe`
+harness scenario creates/removes one RFU slot twice on a retained connection.
+A second ACK proves that the prior slot was removed; a still-connected client
+gets no second ACK in stock gpSP. This only qualifies wrong-role probe cleanup,
+not emulator-origin support, game payloads or a physical trade.
+
+`--production-local --core-endpoint` uses the new endpoint and real Core/relay
+with a modeled opposite Switch packet boundary. It retains local Netplay across
+both homebrew Generations; P4 must replace that modeled boundary with the real
+Direct A/StageSession/LDN/TunnelSim path and exercise the dev/CLI entrypoint.
