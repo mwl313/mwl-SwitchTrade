@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from pathlib import Path
 import sys
@@ -178,6 +179,9 @@ class SwitchLdnGeneration:
         self.tunnel.close()
         cleaned = not failures
         self._on_closed(cleaned)
+        stage_report = getattr(self._session, "report", None) or {}
+        stage_failure = stage_report.get("failure") or {}
+        primary_code = self._tick_failure.code if self._tick_failure else stage_failure.get("code")
         self._report = CleanupReport(
             cleaned,
             cleaned,
@@ -185,10 +189,14 @@ class SwitchLdnGeneration:
             {
                 "endpoint_kind": "switch_ldn",
                 "tunnel_parent": self.parent,
-                "primary_failure_code": self._tick_failure.code if self._tick_failure else None,
+                "primary_failure_code": primary_code,
                 "cleanup_errors": tuple(failures),
             },
         )
+        logging.getLogger(__name__).info(
+            "generation_exit id=%s primary=%s cleanup_ok=%s cleanup_errors=%s pia_rx=%s pia_rx_failed=%s",
+            self.offer.generation_id, primary_code, cleaned, tuple(failures),
+            getattr(self.simulation, "rx_count", None), getattr(self.simulation, "rx_fail", None))
         return self._report
 
     def _drive_simulation(self) -> None:

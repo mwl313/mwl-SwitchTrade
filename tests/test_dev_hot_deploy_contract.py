@@ -100,7 +100,7 @@ $module = Import-Module -Name '{module_path}' -Force -PassThru
     function Get-SourceManifest {{
         param([string[]]$RelativePaths)
         $files = [ordered]@{{ 'switchtrade/example.py' = $script:fileHash }}
-        [pscustomobject]@{{ ContentId = $script:contentId; Dirty = $false; Files = $files }}
+        [pscustomobject]@{{ GitHead = ('0' * 40); ContentId = $script:contentId; Dirty = $false; Files = $files }}
     }}
     function Invoke-DevCapturedProcess {{
         param([string]$FilePath, [string[]]$ArgumentList, [string]$WorkingDirectory)

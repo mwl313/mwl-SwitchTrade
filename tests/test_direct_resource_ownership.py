@@ -229,3 +229,25 @@ def test_cancelled_nursery_requires_independent_leaf_release(leaf, exit_fails):
         assert resources.states["group"] == ("unknown" if exit_fails else "release_delegated")
         assert bool(resources.failures) is exit_fails
     trio.run(exercise)
+
+
+def test_borrowing_group_keeps_functional_failure_and_uses_leaf_release_proof():
+    async def exercise():
+        resources = ResourceScope()
+        resources.states["owned"] = "released"
+        first = ValueError("functional error")
+
+        @contextlib.asynccontextmanager
+        async def group():
+            try:
+                yield
+            except BaseException as error:
+                raise ExceptionGroup("nursery propagation", [error])
+
+        with pytest.raises(ValueError) as caught:
+            async with resources.context(group(), "borrower", entry_owns_resource=False,
+                                         release_dependencies=("owned",)):
+                raise first
+        assert caught.value is first
+        assert resources.clean
+    trio.run(exercise)

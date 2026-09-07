@@ -71,6 +71,17 @@ def cancelled(error: BaseException) -> bool:
     return isinstance(error, trio.Cancelled)
 
 
+def propagates(error: BaseException, primary: BaseException) -> bool:
+    """Exit contains only the body's failure, not a new cleanup failure."""
+    if error is primary or cancelled(error) and cancelled(primary):
+        return True
+    if isinstance(error, BaseExceptionGroup):
+        return all(propagates(item, primary) for item in error.exceptions)
+    if isinstance(primary, BaseExceptionGroup):
+        return any(propagates(error, item) for item in primary.exceptions)
+    return False
+
+
 class ResourceScope:
     def __init__(self):
         self.states: dict[str, str] = {}
@@ -135,9 +146,9 @@ class ResourceScope:
                 self.states[label] = "released"
             except BaseException as error:
                 if (not entry_owns_resource and release_dependencies
-                        and primary is not None and cancelled(primary) and cancelled(error)):
-                    # Trio nursery exit may wrap the body's cancellation in a
-                    # pure-Cancelled group. This is NOT itself release evidence:
+                        and primary is not None and (cancelled(error) or propagates(error, primary))):
+                    # Trio nursery exit may wrap the body's failure/cancellation.
+                    # Mere propagation is NOT itself release evidence:
                     # only the explicitly named leaf owners can prove release.
                     self.release_dependencies[label] = tuple(release_dependencies)
                     self.states[label] = "release_delegated"

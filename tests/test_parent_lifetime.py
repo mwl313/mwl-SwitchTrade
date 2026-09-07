@@ -61,6 +61,28 @@ def test_linux_parent_exit_interrupts_the_owned_gate_before_cli(stalled, tmp_pat
     asyncio.run(exercise())
 
 
+@pytest.mark.skipif(os.name != "posix", reason="actual Linux group -> real CLI/StageSession")
+def test_linux_guardian_eof_cleans_actual_cli_and_stage(tmp_path):
+    async def exercise():
+        ready, stopped = tmp_path / "ready", tmp_path / "stopped"
+        eof = asyncio.Event()
+        with patch.object(parent_lifetime, "wait_parent_exit", eof.wait):
+            guarding = asyncio.create_task(parent_lifetime.guard_command([
+                sys.executable, "-m", "tests.cli_signal_child", str(ready), str(stopped)]))
+            async with asyncio.timeout(10):
+                while not ready.exists():
+                    if guarding.done():
+                        pytest.fail(f"CLI exited early: {guarding.result()}")
+                    await asyncio.sleep(.01)
+            pid = int(ready.read_text())
+            eof.set()
+            assert await asyncio.wait_for(guarding, 10) == 0
+        assert stopped.read_text() == "CTRL_C_CLI_CLEAN"
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
+    asyncio.run(exercise())
+
+
 @pytest.mark.parametrize("external_cancel", [False, True])
 def test_cleanup_failure_is_not_a_successful_parent_cancellation(external_cancel):
     async def exercise():

@@ -28,6 +28,8 @@ from .a_stage import (
 from .b_fixture import FIXTURE, FIXTURE_ID, FIXTURE_NAME, FIXTURE_SHA256
 from .data_plane import open_ldn_data_plane
 from .resource_scope import ResourceScope, cancelled, run_with_owned_sockets
+from .ldn_keys import valid_keys
+import logging
 
 
 PIA_PORT = 12345
@@ -335,6 +337,8 @@ class DirectBStage:
         item = {"gate": gate, "elapsed_ms": round((time.monotonic() - self.started) * 1000)}
         self.passed.append(item)
         self.gate_sink({"event": "b_gate_passed", **item})
+        logging.getLogger(__name__).info("stage_gate run=%s gate=%s elapsed_ms=%s",
+                                        self.run_id, gate, item["elapsed_ms"])
 
     def _policy(self) -> None:
         names = (self.ap_ifname, self.monitor_ifname, self.tap_ifname)
@@ -603,7 +607,7 @@ class DirectBStage:
                 keys = self.ldn.load_keys(self.keys_path)
             except (OSError, ValueError, TypeError) as error:
                 raise BStageError("B_KEYS_INVALID", GATES[2], "production LDN keys are unavailable") from error
-            if not isinstance(keys, dict) or not keys:
+            if not valid_keys(keys):
                 raise BStageError("B_KEYS_INVALID", GATES[2], "production LDN keys are invalid")
             param = self._build_param(keys)
             self._pass(GATES[2])

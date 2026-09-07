@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+from ipaddress import IPv4Address
 import socket
 import struct
 
@@ -44,24 +45,24 @@ class LdnDataPlane(dict):
         self.our_ip = str(local.ip_address)
         self.our_mac = bytes(local.mac_address)
         self.ssid = bytes(info.ssid)
-        if not self.our_ip.startswith("169.254.") or len(self.our_mac) != 6 or not self.ssid:
+        if not IPv4Address(self.our_ip).is_link_local or len(self.our_mac) != 6 or not self.ssid:
             raise RuntimeError("the physical LDN local data-plane identity is invalid")
 
     def bind_peer(self) -> None:
         """Bind the remote identity only after the joining Switch is observed."""
         info = self.network.info()
-        local = self.network.participant()
         connected = [
             item for item in (getattr(info, "participants", ()) or ())
             if getattr(item, "connected", False)
         ]
-        peer = next((item for item in connected if item is not local), None)
-        if peer is None:
+        peers = [item for item in connected if bytes(item.mac_address) != self.our_mac]
+        if len(peers) != 1:
             raise RuntimeError("the physical LDN peer is unavailable")
+        peer = peers[0]
         self.host_ip = str(peer.ip_address)
         self.host_mac = bytes(peer.mac_address)
         if (
-            not self.host_ip.startswith("169.254.")
+            not IPv4Address(self.host_ip).is_link_local or self.host_ip == self.our_ip
             or len(self.our_mac) != 6
             or len(self.host_mac) != 6
             or not self.ssid
@@ -70,6 +71,8 @@ class LdnDataPlane(dict):
         self.broadcast = self.our_ip.rsplit(".", 1)[0] + ".255"
 
     def send(self, datagram: bytes, dst_ip: str) -> None:
+        if dst_ip not in {self.host_ip, self.broadcast, "255.255.255.255"}:
+            raise RuntimeError("LDN_DATA_PLANE_DESTINATION_INVALID")
         destination = self.broadcast if dst_ip in {self.broadcast, "255.255.255.255"} else dst_ip
         self._tx.sendto(bytes(datagram), (destination, PIA_PORT))
 
@@ -86,10 +89,10 @@ class LdnDataPlane(dict):
             src_ip, dst_ip, dst_port, payload = parsed
             accepted = (
                 dst_ip == self.our_ip
-                or (dst_ip.startswith("169.254.") and dst_ip.endswith(".255"))
+                or dst_ip == self.broadcast
                 or dst_ip == "255.255.255.255"
             )
-            if src_ip != self.our_ip and dst_port == PIA_PORT and accepted:
+            if src_ip == self.host_ip and dst_port == PIA_PORT and accepted:
                 packets.append((payload, src_ip))
         return packets
 
@@ -101,13 +104,17 @@ class LdnDataPlane(dict):
         if ip[0] >> 4 != 4 or ip[9] != PROTO_UDP:
             return None
         ihl = (ip[0] & 0x0F) * 4
-        if len(ip) < ihl + 8:
+        total = struct.unpack_from("!H", ip, 2)[0]
+        fragments = struct.unpack_from("!H", ip, 6)[0]
+        if ihl < 20 or not ihl + 8 <= total <= len(ip) or fragments & 0x3FFF:
             return None
         src_ip = socket.inet_ntoa(ip[12:16])
         dst_ip = socket.inet_ntoa(ip[16:20])
-        udp = ip[ihl:]
-        _src_port, dst_port, length = struct.unpack_from("!HHH", udp, 0)
-        payload = udp[8:][:max(0, length - 8)] if length >= 8 else udp[8:]
+        udp = ip[ihl:total]
+        src_port, dst_port, length = struct.unpack_from("!HHH", udp, 0)
+        if src_port != PIA_PORT or not 8 <= length <= len(udp):
+            return None
+        payload = udp[8:length]
         return src_ip, dst_ip, dst_port, payload
 
     def close(self) -> None:

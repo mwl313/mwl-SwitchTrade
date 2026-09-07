@@ -13,6 +13,8 @@ from typing import Awaitable, Callable
 
 from .data_plane import open_ldn_data_plane
 from .resource_scope import ResourceScope, cancelled, run_with_owned_sockets
+from .ldn_keys import valid_keys
+import logging
 
 
 COMMUNICATION_ID = 0x01006FA0233F8000
@@ -254,6 +256,8 @@ class DirectAStage:
         item = {"gate": gate, "elapsed_ms": round((time.monotonic() - self.started) * 1000)}
         self.passed.append(item)
         self.gate_sink({"event": "a_gate_passed", **item})
+        logging.getLogger(__name__).info("stage_gate run=%s gate=%s elapsed_ms=%s",
+                                        self.run_id, gate, item["elapsed_ms"])
 
     def _preflight(self):
         if self.version_resolver() != "0.0.17":
@@ -269,7 +273,7 @@ class DirectAStage:
             keys = self.ldn.load_keys(self.keys_path)
         except (OSError, ValueError, TypeError) as error:
             raise AStageError("A_KEYS_INVALID", GATES[0], "production LDN keys are unavailable") from error
-        if not isinstance(keys, dict) or not keys:
+        if not valid_keys(keys):
             raise AStageError("A_KEYS_INVALID", GATES[0], "production LDN keys are invalid")
         self._pass(GATES[0])
         return keys

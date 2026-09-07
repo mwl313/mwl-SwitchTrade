@@ -55,7 +55,8 @@ class FakeLdn:
 
     @staticmethod
     def load_keys(_path):
-        return {"key": b"value"}
+        return {name: bytes(16) for name in (
+            "master_key_12", "aes_kek_generation_source", "aes_key_generation_source")}
 
 
 class FakeKeyDerivation:

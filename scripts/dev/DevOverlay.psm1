@@ -18,6 +18,57 @@ function Stop-DevOverlay {
     throw [DevOverlayException]::new($Code, $Message)
 }
 
+function Resolve-DevCoreArguments {
+    param([string[]]$Arguments)
+    $mode = $Arguments[0]
+    $code = $null
+    $start = 1
+    if ($mode -eq 'join') {
+        if ($Arguments.Count -lt 2 -or $Arguments[1] -cnotmatch '^[0-9]{6}$') {
+            Stop-DevOverlay 'DEV_CORE_ARGUMENT_INVALID' 'join requires a six-digit Pair code.'
+        }
+        $code = $Arguments[1]
+        $start = 2
+    }
+    $options = @($Arguments | Select-Object -Skip $start)
+    if ($env:SWITCHTRADE_CORE_RELAY -and -not ($options | Where-Object { $_ -eq '--relay' -or $_ -like '--relay=*' })) {
+        # Windows environment variables are not automatically inherited by WSL.
+        $options = @('--relay', $env:SWITCHTRADE_CORE_RELAY) + $options
+    }
+    for ($index = 0; $index -lt $options.Count; $index++) {
+        $option = $options[$index]
+        if ($option -eq '--verbose') { continue }
+        $parts = $option -split '=', 2
+        $name = $parts[0]
+        if ($name -notin @('--relay', '--usb-id', '--channel', '--log-dir')) {
+            Stop-DevOverlay 'DEV_CORE_ARGUMENT_INVALID' 'Unknown Core CLI option.'
+        }
+        if ($parts.Count -eq 2) { $value = $parts[1] } else {
+            $index++
+            if ($index -ge $options.Count) { Stop-DevOverlay 'DEV_CORE_ARGUMENT_INVALID' 'Core CLI option value is missing.' }
+            $value = $options[$index]
+        }
+        if ([string]::IsNullOrWhiteSpace($value) -or $value.StartsWith('--')) {
+            Stop-DevOverlay 'DEV_CORE_ARGUMENT_INVALID' 'Core CLI option value is missing.'
+        }
+        if ($name -eq '--channel' -and $value -notin @('1', '6', '11')) {
+            Stop-DevOverlay 'DEV_CORE_ARGUMENT_INVALID' 'channel must be 1, 6 or 11.'
+        }
+        if ($name -eq '--usb-id' -and $value -notmatch '^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$') {
+            Stop-DevOverlay 'DEV_CORE_ARGUMENT_INVALID' 'usb-id must be VID:PID.'
+        }
+        if ($name -eq '--relay') {
+            $uri = $null
+            if (-not [Uri]::TryCreate($value, [UriKind]::Absolute, [ref]$uri) -or
+                $uri.Scheme -notin @('http', 'https', 'ws', 'wss') -or -not $uri.Host -or
+                $uri.UserInfo -or $uri.Query -or $uri.Fragment) {
+                Stop-DevOverlay 'DEV_CORE_ARGUMENT_INVALID' 'relay must be an HTTP(S)/WS(S) base URL without credentials or query.'
+            }
+        }
+    }
+    return @('-m', 'switchtrade.core_cli') + $options + @($mode) + $(if ($code) { @($code) } else { @() })
+}
+
 function Invoke-DevCapturedProcess {
     param(
         [Parameter(Mandatory)][string]$FilePath,
@@ -220,15 +271,12 @@ function Get-SourceFiles {
     }
     $allPaths = @($gitResult.Stdout -split "`r?`n" | Where-Object { $_ })
     $denyPattern = '(^|/)(\.git|\.venv|__pycache__|artifacts|runs|captures|support-bundles?)(/|$)|\.(pcap|pcapng|zip)$|(^|/)config/prod\.keys$|(^|/)(token|credential)[^/]*$'
-    if ($allPaths | Where-Object { $_ -match $denyPattern }) {
-        Stop-DevOverlay 'DEV_SOURCE_FORBIDDEN' 'A forbidden source path is present in the checkout.'
-    }
     $allowlistPath = Join-Path $PSScriptRoot 'dev-source-allowlist.txt'
     if (-not (Test-Path -LiteralPath $allowlistPath -PathType Leaf)) {
         Stop-DevOverlay 'DEV_SOURCE_ALLOWLIST_EMPTY' 'The source allowlist is missing.'
     }
     $allowPatterns = @(Get-Content -LiteralPath $allowlistPath | Where-Object { $_ -and $_ -notmatch '^\s*#' })
-    $sourceFiles = @(
+    $sourceFiles = @(@(
         foreach ($candidatePath in $allPaths) {
             $normalizedPath = $candidatePath -replace '\\', '/'
             $allowed = $false
@@ -238,9 +286,12 @@ function Get-SourceFiles {
             }
             if ($allowed) { $normalizedPath }
         }
-    ) | Sort-Object -Unique
+    ) | Sort-Object -Unique)
     if ($sourceFiles.Count -eq 0) {
         Stop-DevOverlay 'DEV_SOURCE_ALLOWLIST_EMPTY' 'The source allowlist produced no files.'
+    }
+    if ($sourceFiles | Where-Object { $_ -match $denyPattern }) {
+        Stop-DevOverlay 'DEV_SOURCE_FORBIDDEN' 'A forbidden path was selected for the overlay.'
     }
     return $sourceFiles
 }
@@ -410,7 +461,7 @@ function Invoke-DevSync {
         if ($releaseCheck.ExitCode -eq 0) {
             Assert-RemoteManifest -Distro $doctor.active_runtime -Manifest $manifest -RemoteRoot $releasePath
             Set-DevCurrentRelease -Distro $doctor.active_runtime -ContentId $manifest.ContentId -CurrentTemp $currentTemp
-            [ordered]@{ schema = 1; content_id = $manifest.ContentId; dirty = $manifest.Dirty; file_count = $sourceFiles.Count; reused = $true } | ConvertTo-Json -Compress
+            [ordered]@{ schema = 1; git_head = $manifest.GitHead; content_id = $manifest.ContentId; dirty = $manifest.Dirty; file_count = $sourceFiles.Count; reused = $true } | ConvertTo-Json -Compress
             return
         }
         if ($releaseCheck.ExitCode -ne 1) { Stop-DevOverlay 'DEV_COMMIT_FAILED' 'Could not check the immutable overlay release.' }
@@ -425,7 +476,7 @@ function Invoke-DevSync {
         $commitResult = Invoke-DevWsl -Distro $doctor.active_runtime -Command '/bin/mv' -Arguments @($stagingPath, $releasePath)
         if ($commitResult.ExitCode -ne 0) { Stop-DevOverlay 'DEV_COMMIT_FAILED' 'Could not commit the immutable overlay release.' }
         Set-DevCurrentRelease -Distro $doctor.active_runtime -ContentId $manifest.ContentId -CurrentTemp $currentTemp
-        [ordered]@{ schema = 1; content_id = $manifest.ContentId; dirty = $manifest.Dirty; file_count = $sourceFiles.Count; reused = $false } | ConvertTo-Json -Compress
+        [ordered]@{ schema = 1; git_head = $manifest.GitHead; content_id = $manifest.ContentId; dirty = $manifest.Dirty; file_count = $sourceFiles.Count; reused = $false } | ConvertTo-Json -Compress
     } finally {
         if ($lockAcquired) { [void](Invoke-DevWsl -Distro $doctor.active_runtime -Command '/bin/rm' -Arguments @('-rf', '--', $stagingPath)) }
         if ($lockAcquired) { [void](Invoke-DevWsl -Distro $doctor.active_runtime -Command '/bin/rmdir' -Arguments @($lockPath)) }
@@ -440,7 +491,7 @@ function Invoke-DevRun {
         [switch]$CoreCli,
         [ValidateSet('host', 'join')][string]$CoreRole
     )
-    $null = Invoke-DevSync
+    $synced = Invoke-DevSync | ConvertFrom-Json
     $runtime = Get-ActiveRuntime
     $pythonArguments = if ($Test) { @('-m', 'pytest') + $Arguments } elseif ($CoreCli) { @('-u') + $Arguments } else { $Arguments }
     $commandArguments = if ($CoreCli) {
@@ -460,7 +511,9 @@ function Invoke-DevRun {
     } else {
         @($script:PythonPath) + $pythonArguments
     }
-    $parentEnvironment = if ($CoreCli) { @('SWITCHTRADE_PARENT_STDIN=1') } else { @() }
+    $parentEnvironment = if ($CoreCli) {
+        @('SWITCHTRADE_PARENT_STDIN=1', "SWITCHTRADE_CORE_RELEASE=$($synced.git_head):$($synced.content_id)")
+    } else { @() }
     $envArguments = @('/usr/bin/env', 'PYTHONNOUSERSITE=1', 'PYTHONUNBUFFERED=1', "PYTHONPATH=$script:OverlayRoot/current", "SWITCHTRADE_SOURCE_ROOT=$script:OverlayRoot/current", "SWITCHTRADE_INSTALLED_ROOT=$script:InstalledRoot") + $parentEnvironment + $commandArguments
     $interactiveOptions = @{}
     if ($CoreCli) { $interactiveOptions.ParentLifetime = $true }
@@ -476,4 +529,4 @@ function Invoke-DevClean {
     [ordered]@{ schema = 1; cleaned = $script:OverlayRoot } | ConvertTo-Json -Compress
 }
 
-Export-ModuleMember -Function Invoke-DevDoctor, Invoke-DevSync, Invoke-DevRun, Invoke-DevClean
+Export-ModuleMember -Function Invoke-DevDoctor, Invoke-DevSync, Invoke-DevRun, Invoke-DevClean, Resolve-DevCoreArguments

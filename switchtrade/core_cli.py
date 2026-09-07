@@ -65,7 +65,7 @@ def parser() -> argparse.ArgumentParser:
 
 
 def _configure_logging(args: argparse.Namespace) -> None:
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger("switchtrade")
     for handler in logger.handlers:
         handler.close()
     logger.handlers.clear()
@@ -78,6 +78,7 @@ def _configure_logging(args: argparse.Namespace) -> None:
         args.log_dir.mkdir(parents=True, exist_ok=True)
         handlers.append(logging.FileHandler(args.log_dir / "switchtrade-core.log", encoding="utf-8"))
     for handler in handlers:
+        handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
         logger.addHandler(handler)
 
 
@@ -203,7 +204,7 @@ def _policy(args: argparse.Namespace) -> SwitchLdnPolicy:
         raise CliError(str(exc)) from exc
     run_id = str(uuid4())
     suffix = uuid4().hex[:7]
-    return SwitchLdnPolicy(
+    policy = SwitchLdnPolicy(
         run_id=run_id,
         release=os.environ.get("SWITCHTRADE_CORE_RELEASE", "development"),
         usb_id=profile.usb_id,
@@ -217,6 +218,11 @@ def _policy(args: argparse.Namespace) -> SwitchLdnPolicy:
         keys_path=os.environ.get("SWITCHTRADE_KEYS", "/opt/switchtrade/config/prod.keys"),
         channel=args.channel,
     )
+    logging.getLogger(__name__).info(
+        "radio_binding run=%s release=%s usb=%s phy=%s proven_iface=%s channel=%s owned=%s",
+        policy.run_id, policy.release, policy.usb_id, policy.phy, policy.proven_radio_iface,
+        policy.channel, (policy.ifname, policy.ap_ifname, policy.monitor_ifname, policy.tap_ifname))
+    return policy
 
 
 async def _bridge_until_canceled(supervisor: CoreSupervisor) -> None:
@@ -231,6 +237,10 @@ async def _stop_preserving_failure(supervisor, primary: BaseException | None) ->
             raise
         primary.add_note("cleanup failed: " + str(getattr(cleanup, "code", type(cleanup).__name__)))
         logging.getLogger(__name__).error("Additional cleanup failure: %s", getattr(cleanup, "code", type(cleanup).__name__))
+    finally:
+        logging.getLogger(__name__).info("supervisor_exit state=%s primary=%s cleanup_failure_count=%s",
+            getattr(supervisor, "state", None), getattr(primary, "code", type(primary).__name__ if primary else None),
+            len(getattr(supervisor, "cleanup_failures", ())))
 
 
 async def _run_host(args: argparse.Namespace) -> None:
@@ -327,7 +337,9 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         if args.verbose or args.log_dir is not None:
             logging.getLogger(__name__).exception("Core CLI failed")
-        print(f"CORE_CLI_FAILED: {exc}")
+        code = getattr(exc, "code", None)
+        label = f"{code}: {exc}" if code and str(exc) != code else str(exc)
+        print(f"CORE_CLI_FAILED: {label}")
     return 1
 
 

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+import logging
 import threading
 
 
@@ -108,9 +110,29 @@ class StageSession:
         except BaseException as error:
             self._error = error
         finally:
+            self._log_report()
             self._trio_ready.set()
             self._done.set()
             self._ready.set()
+
+    def _log_report(self) -> None:
+        # Explicit allowlist: never serialize advertisement, keys, packet bytes,
+        # MACs, exception text or the complete Direct report into the CLI log.
+        report = self.report if isinstance(self.report, dict) else {}
+        failure = report.get("failure") or {}
+        cleanup = report.get("cleanup") or {}
+        evidence = {
+            "run_id": getattr(self.stage, "run_id", None),
+            "stage": type(self.stage).__name__,
+            "failure_code": failure.get("code"), "failure_gate": failure.get("gate"),
+            "last_passed_gate": report.get("last_passed_gate"),
+            "runtime_error_type": type(self._error).__name__ if self._error else None,
+            "end_reason": self.end_reason,
+            "cleanup": {key: cleanup[key] for key in (
+                "ldn_context_released", "radio_quiescent", "ap_stop_timed_out", "resources", "errors"
+            ) if key in cleanup},
+        }
+        logging.getLogger(__name__).info("stage_exit %s", json.dumps(evidence, sort_keys=True))
 
     def wait_ready(self) -> StageResources:
         if not self._ready.wait(self.timeout):

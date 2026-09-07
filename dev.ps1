@@ -21,9 +21,7 @@ try {
             $runArguments = @(Remove-ArgumentMarker $Arguments)
             if ($runArguments.Count -gt 0 -and $runArguments[0] -in @('host', 'join')) {
                 $mode = $runArguments[0]
-                $code = if ($mode -eq 'join') { $runArguments[1] } else { $null }
-                $options = if ($mode -eq 'join') { @($runArguments | Select-Object -Skip 2) } else { @($runArguments | Select-Object -Skip 1) }
-                $runArguments = @('-m', 'switchtrade.core_cli') + $options + @($mode) + $(if ($code) { @($code) } else { @() })
+                $runArguments = @(Resolve-DevCoreArguments -Arguments $runArguments)
                 exit (Invoke-DevRun -Arguments $runArguments -CoreCli -CoreRole $mode)
             }
             exit (Invoke-DevRun -Arguments $runArguments)
@@ -35,10 +33,12 @@ try {
             exit 0
         }
     }
-} catch [DevOverlayException] {
-    [Console]::Error.WriteLine("$($_.Exception.Code): $($_.Exception.Message)")
-    exit 1
 } catch {
-    [Console]::Error.WriteLine("DEV_RUN_FAILED: $($_.Exception.Message)")
+    # Import-Module does not export PowerShell class names into this script's
+    # type scope. A typed catch would mask the original failure on this route.
+    $errorCode = if ($_.Exception.GetType().Name -eq 'DevOverlayException') {
+        $_.Exception.Code
+    } else { 'DEV_RUN_FAILED' }
+    [Console]::Error.WriteLine("${errorCode}: $($_.Exception.Message)")
     exit 1
 }

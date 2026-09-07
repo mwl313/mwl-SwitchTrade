@@ -59,7 +59,10 @@ def test_actual_windows_ctrl_c_reaches_cli_and_cleans_real_stage(tmp_path):
         env={**os.environ, "SWITCHTRADE_PARENT_STDIN": "1"},
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
-        deadline = time.monotonic() + 10
+        # CI #114: Core started 11.7s after this test began (PowerShell/Add-Type
+        # cold startup), beyond the old 10s launch budget. This is not a product
+        # readiness timeout; once the marker arrives, cleanup still has 10s.
+        deadline = time.monotonic() + 30
         while not ready.exists() and time.monotonic() < deadline and process.poll() is None:
             time.sleep(.02)
         assert ready.exists(), process.communicate(timeout=25)

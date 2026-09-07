@@ -1575,13 +1575,55 @@ archive list and regenerate the index.
 - **Cause certainty:** confirmed: Trio nursery exits wrap cancellation propagation
   in BaseExceptionGroup; a blanket exit-exception rule counted propagation as a
   second teardown failure.
-- **Correction:** only pure cancellation from an explicitly borrowing grouping
-  context may delegate release proof to named leaf owners. Every named owner must
-  exist and be released. Missing/unknown leaf state or a non-cancellation exit
-  error remains failed; the original cancellation is never suppressed.
+- **Correction:** only propagated body failure or pure cancellation from an
+  explicitly borrowing grouping context may delegate release proof to named leaf
+  owners. Every named owner must exist and be released. Missing/unknown leaf state
+  or a new non-cancellation exit error remains failed; the original failure is
+  never suppressed. This also handles cancellation arriving while a functional
+  control-port failure is already unwinding after its physical peer departed.
 - **Recovery/residue:** failed virtual tests closed their tracked kernel/socket
   objects. An injected failed station deletion is recovered only by the fixture
   using its observed object; production admission remains blocked.
 - **Mandatory prevention gate:** actual-library cancellation at scan, association,
   AP start, association wait and control await, plus mixed-error/missing-leaf
   negative tests. Context propagation alone must never count as resource proof.
+
+### MTA-DEV-032 — Entrypoint source selection and error handling were not executable
+
+- **Observed:** invoking actual dev.ps1 with an isolated missing-runtime state
+  reported an unresolved DevOverlayException type, masking the original error.
+  Actual dispatcher/module/source-manifest tests then exposed a second failure:
+  the deny check inspected the entire checkout, including files outside the
+  overlay allowlist, so a normal checkout could never run.
+- **Cause certainty:** confirmed. Import-Module does not import class names into
+  the calling script's type scope; source selection must precede the overlay
+  deny check, as required by the A design.
+- **Correction:** one untyped catch retains the stable exception code. Select
+  allowlisted paths first, then reject forbidden paths before hashing/archiving.
+  No key file was read, copied, changed or removed. Existing installed keys remain
+  outside the development overlay.
+- **Recovery/residue:** only temporary runtime-state JSON and modeled WSL process
+  boundaries were used; no installed runtime or physical radio was accessed.
+- **Prevention:** actual dev.ps1 host/join/generic invocation with real source
+  selection/hash checks and only external WSL primitives replaced; selected
+  forbidden files must still be rejected. Source-string assertions are insufficient.
+- **Additional boundary fixes:** preserve the source array with only one selected
+  file; reject malformed/missing Core options and non-ASCII/short Pair codes before
+  runtime, sync or radio access. Valid options still reach the actual Python parser.
+- **Configuration:** the Windows common-relay environment setting is normalized
+  into an explicit CLI argument; WSL does not implicitly inherit it. Sync source
+  SHA/content-id now travels into diagnostic release identity.
+
+### MTA-CORE-014 — Local datagram and key-file shapes needed explicit admission
+
+- **Observed by source audit:** a nonempty key dictionary could lack required v3
+  AES sources and fail later as an internal stage error. Raw IPv4/UDP parsing did
+  not validate total/header/UDP lengths or fragments, and peer selection relied
+  on Python object identity instead of the admitted LDN identity.
+- **Correction:** required 16-byte key fields fail as A_KEYS_INVALID/B_KEYS_INVALID
+  before local admission. Reject malformed/fragments and unexpected local peers;
+  compare actual participant MAC identities and bind outbound destinations.
+- **Evidence:** real installed LDN key loader + default driver/Direct/StageSession
+  tests, parser/identity negative tests and complete real RFU path regression.
+- **Privacy:** no real key material or local packet was read for this investigation.
+  Diagnostic logging allowlists gates, resource states and counters, not payloads.

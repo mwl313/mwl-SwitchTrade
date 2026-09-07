@@ -45,6 +45,7 @@ def main():
                 while not kernel.links:
                     await asyncio.sleep(.01)
                 ready.write_text(str(os.getpid()), encoding="ascii")
+                print("CLI_SIGNAL_TEST_READY", flush=True)
 
             announcing = asyncio.create_task(announce())
             try:

@@ -3,11 +3,13 @@
 import asyncio
 from contextlib import ExitStack
 import threading
+import io
+from unittest.mock import patch
 
 import pytest
 import trio
 
-from tests.virtual_ldn_os import VirtualLdnOS, N
+from tests.virtual_ldn_os import VirtualLdnOS, N, ldn
 from tests.test_switch_physical_boundary import stage_b, stage_a, eventually
 from switchtrade.connection.b_fixture import FIXTURE
 from switchtrade.connection.stage_session import StageSession
@@ -120,7 +122,35 @@ def test_actual_direct_cancel_at_kernel_await_releases_every_owned_resource(boun
                 await asyncio.gather(pending, return_exceptions=True)
                 await driver.close()
                 for session in sessions:
-                    await asyncio.to_thread(session.stop)
+                    try:
+                        await asyncio.to_thread(session.stop)
+                    except BaseException as error:
+                        error.add_note(repr(session.report))
+                        raise
             os.assert_clean()
             assert not any(t.name.startswith("switchtrade-") for t in threading.enumerate())
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("origin", [True, False])
+@pytest.mark.parametrize("text", ["unrelated_key = 00", "master_key_12 = zz",
+    "master_key_12 = 00\naes_kek_generation_source = 00\naes_key_generation_source = 00"])
+def test_actual_key_loader_rejects_missing_malformed_and_short_keys_before_radio_admission(origin, text):
+    async def exercise():
+        os = VirtualLdnOS()
+        with ExitStack() as stack:
+            os.install(stack)
+            opened = stack.enter_context(patch.object(ldn, "open", side_effect=lambda *_: io.StringIO(text)))
+            driver = SwitchLdnEndpointDriver(policy())
+            await driver.prepare()
+            offer = GenerationOffer("invalid-keys", SWITCH_LDN_PROTOCOL, "switch_ldn", FIXTURE)
+            try:
+                with pytest.raises(Exception) as caught:
+                    await (driver.discover(asyncio.Event()) if origin else driver.accept(offer, asyncio.Event()))
+                assert caught.value.code == ("A_KEYS_INVALID" if origin else "B_KEYS_INVALID")
+                assert opened.call_count == 1  # Fatal, never the no-room retry path.
+            finally:
+                report = await driver.close()
+                assert report.local_resources_released
+            os.assert_clean()
     asyncio.run(exercise())
