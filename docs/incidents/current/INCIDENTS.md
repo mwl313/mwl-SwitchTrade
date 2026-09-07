@@ -1826,3 +1826,26 @@ archive list and regenerate the index.
 - **Prevention:** qualification launch/configuration code is test-only. Product
   attach-only code must not write frontend settings or own its process. Check
   every output boundary and retain the first isolation failure when retrying.
+### MTA-QA-026 — Physical-input ticker outlived its test-owned radio
+
+- Date: 2026-09-08. Branch `codex/gpsp-endpoint`, base
+  `e2b84b91dc6df4cce3186d44c89214921ca86321`, uncommitted P4 harness.
+- First failure: `.qualification/gpsp-p4-full-01/report.json` retains
+  `OSError: closed` from the physical-game substitute's `TunnelSim.tick()` after
+  its own `StageSession.stop()` released the virtual radio. The actual native
+  CLI had exchanged RFU data and reported normal Generation end; this is not
+  an overall functional PASS. Raw logs stay ignored/local.
+- Cause: harness tick ownership ordering, not a product retry or radio issue.
+  Cancel and join that exact ticker before closing its owned radio; keep the
+  actual Direct A/LDN-driven product room-end path unchanged.
+- Recovery/residue: the retained report proves connection cleanup, owned
+  frontend exit 0, process-handle and private-desktop cleanup, and unchanged
+  stock tree. Full-probe cleanup required native dev/CLI exit 0 with its stop
+  message, all virtual links/TAP/raw sockets released, and the harness thread
+  joined. A read-only process inventory found no RetroArch; unrelated older
+  Python processes were left untouched. An exclusive bind to the exact retired
+  listener port 57474 succeeds and is immediately released.
+- Retry gate: record this failure and ownership correction before creating a
+  fresh isolated output/process. Never reuse a failed report as acceptance or
+  kill by process name. No user game/save/config, WSL, VM, or physical device
+  was touched. This supersedes no prior incident.

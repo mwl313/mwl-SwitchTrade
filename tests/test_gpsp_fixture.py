@@ -14,6 +14,10 @@ def test_gpsp_attach_fixture_provenance():
         canonical = (FIXTURE / name).read_text(encoding="utf-8").replace("\r\n", "\n").encode()
         assert hashlib.sha256(canonical).hexdigest() == expected, name
     assert "MIT License" in (FIXTURE / "LICENSE.gba-link-connection.txt").read_text()
+    qualification = provenance["qualification"]
+    assert hashlib.sha256((FIXTURE / "qualification.gba").read_bytes()).hexdigest() == qualification["binary_sha256"]
+    source = (FIXTURE / "qualification.cpp").read_text(encoding="utf-8").encode()
+    assert hashlib.sha256(source).hexdigest() == qualification["source_sha256"]
 
 
 def test_test_process_launcher_is_not_in_the_product():

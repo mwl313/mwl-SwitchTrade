@@ -45,5 +45,5 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("toolchain", "dependency", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
-    parser.add_argument("--source-name", choices=("main.cpp", "host_probe.cpp"), default="main.cpp")
+    parser.add_argument("--source-name", choices=("main.cpp", "host_probe.cpp", "qualification.cpp"), default="main.cpp")
     build(**vars(parser.parse_args()))

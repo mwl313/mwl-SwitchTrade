@@ -151,7 +151,7 @@ class WindowInput:
             self.post(0x10)  # WM_CLOSE, same normal close path as the title bar.
             return
         key = {"MENU_TOGGLE": 0x70, "MENU_B": 0x08,
-               "MENU_DOWN": 0x28, "MENU_UP": 0x26, "MENU_A": 0x0D}[value]
+               "MENU_DOWN": 0x28, "MENU_UP": 0x26, "MENU_A": 0x0D, "GAME_START": 0x0D}[value]
         scan = self.user32.MapVirtualKeyW(key, 0)
         bits = 1 | (scan << 16) | ((key in (0x26, 0x28)) << 24)
         self.post(0x100, key, bits)

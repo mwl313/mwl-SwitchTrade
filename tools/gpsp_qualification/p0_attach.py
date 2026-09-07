@@ -96,14 +96,17 @@ def host_probe(connection, round_number):
 
 def run(root: Path, fixture: Path, output: Path, production_local: bool = False,
         rfu_mode: str = "rfu", rfu_probe: bool = False, core_endpoint: bool = False,
-        host_role_probe: bool = False, native_doctor: bool = False):
+        host_role_probe: bool = False, native_doctor: bool = False,
+        full_stack: bool = False, wait_seconds: float = 181, soak_seconds: float = 1800):
+    if full_stack and (core_endpoint or host_role_probe or rfu_probe or native_doctor):
+        raise ValueError("full-stack is a separate qualification mode")
     if core_endpoint and (rfu_probe or not production_local):
         raise ValueError("core-endpoint needs production-local and owns its own RFU handshake")
     if host_role_probe and (not production_local or core_endpoint or rfu_probe):
         raise ValueError("host-role-probe needs only production-local")
     if native_doctor and not production_local:
         raise ValueError("native-doctor requires the production listener to rebind after diagnosis")
-    retained = core_endpoint or host_role_probe
+    retained = core_endpoint or host_role_probe or full_stack
     root, fixture = root.resolve(strict=True), fixture.resolve(strict=True)
     executable, core = root / "retroarch.exe", root / "cores/gpsp_libretro.dll"
     assert digest(executable) == RA_HASH and digest(core) == CORE_HASH, "P0_BINARY_IDENTITY_MISMATCH"
@@ -131,6 +134,9 @@ def run(root: Path, fixture: Path, output: Path, production_local: bool = False,
     if core_endpoint:
         from core_probe import CoreProbeLaunch
         launch_type = CoreProbeLaunch
+    if full_stack:
+        from full_probe import FullStackLaunch
+        launch_type = FullStackLaunch
     launch = launch_type(content_path=fixture, handshake_timeout=20)
     # Test profile only: leave Quick Menu and Netplay as the first two main items.
     isolated_config = config.read_text().replace('video_driver = "null"', 'video_driver = "sdl2"')
@@ -159,6 +165,9 @@ def run(root: Path, fixture: Path, output: Path, production_local: bool = False,
     report = {"scope": "P0 stock attach only; not Core/physical qualification",
               "retroarch_sha256": RA_HASH, "gpsp_sha256": CORE_HASH,
               "fixture_sha256": digest(fixture), "passed": False}
+    repo = Path(__file__).resolve().parents[2]
+    report["source_sha"] = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    report["source_clean"] = not subprocess.check_output(["git", "status", "--porcelain"], cwd=repo, text=True).strip()
     report["production_local"] = production_local
     report["core_endpoint"] = core_endpoint
     report["host_role_probe"] = host_role_probe
@@ -166,6 +175,9 @@ def run(root: Path, fixture: Path, output: Path, production_local: bool = False,
         report["scope"] = "Wrong-role RFU slot retirement probe only; not game data or Core qualification"
     if core_endpoint:
         report["scope"] = "P2 real Core/relay/gpSP; modeled Switch boundary, not P4 or physical qualification"
+    report["full_stack"] = full_stack
+    if full_stack:
+        report["scope"] = "P4 native dev/CLI + real Core/relay/DirectA/StageSession/LDN/TunnelSim + stock gpSP; only OS/physical game input substituted"
     report["test_rfu_mode"] = rfu_mode
     report["netplay_handshakes"] = 0
     def command(value):
@@ -186,6 +198,8 @@ def run(root: Path, fixture: Path, output: Path, production_local: bool = False,
                 desktop=desktop, log=log)
             time.sleep(2)
             controls = WindowInput(process, desktop)
+            if full_stack:
+                launch.configure(controls, output.resolve(), wait_seconds, soak_seconds)
             status = (output / "frontend.log").read_text(encoding="utf-8")
             assert "SET_NETPACKET_INTERFACE" in status and "Geometry: 240x160" in status
             report["started_before_netplay"] = True
@@ -208,8 +222,10 @@ def run(root: Path, fixture: Path, output: Path, production_local: bool = False,
                 for number in (1, 2):
                     if not retained or number == 1:
                         opening = pool.submit(launch.open, process=process)
+                        if full_stack:
+                            launch.wait_listener(opening)
                         connect_menu(number)
-                        connection = opening.result(timeout=25)
+                        connection = opening.result(timeout=60 if full_stack else 25)
                         report["netplay_handshakes"] += 1
                         launch = None
                     if rfu_probe:
@@ -224,7 +240,7 @@ def run(root: Path, fixture: Path, output: Path, production_local: bool = False,
                         response = receive(connection, time.monotonic() + 5)
                         report.setdefault("rfu_probe_responses", []).append(response[:2])
                         assert response[:2] == (3, 0), response[:2]
-                    rounds.append(connection.exchange(number) if core_endpoint else
+                    rounds.append(connection.exchange(number) if core_endpoint or full_stack else
                         host_probe(connection, number) if host_role_probe else exchange(connection, number))
                     assert process.poll() is None
                     if retained and number == 1:
@@ -280,6 +296,9 @@ def run(root: Path, fixture: Path, output: Path, production_local: bool = False,
                        for p in root.rglob("*") if p.is_file())
         report["stock_tree_unchanged"] = before == after
         report["stock_tree_delta"] = sorted(set(before) ^ set(after))
+        report["source_unchanged"] = (
+            subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip() == report["source_sha"]
+            and not subprocess.check_output(["git", "status", "--porcelain"], cwd=repo, text=True).strip())
         report["commands"] = transcript
         report["rounds"] = rounds
         report["passed"] = report["passed"] and before == after
@@ -301,4 +320,7 @@ if __name__ == "__main__":
     parser.add_argument("--core-endpoint", action="store_true")
     parser.add_argument("--host-role-probe", action="store_true")
     parser.add_argument("--native-doctor", action="store_true")
+    parser.add_argument("--full-stack", action="store_true")
+    parser.add_argument("--wait-seconds", type=float, default=181)
+    parser.add_argument("--soak-seconds", type=float, default=1800)
     run(**vars(parser.parse_args()))

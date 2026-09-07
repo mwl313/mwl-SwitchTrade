@@ -282,3 +282,4 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-CORE-018` | Relay ownership publication preceded its seat hello | Current ledger | 1744 |
 | `MTA-QA-024` | Stop-owner test inherited an unrelated readiness deadline | Current ledger | 1782 |
 | `MTA-QA-025` | Stock frontend test profile did not isolate per-core options | Current ledger | 1807 |
+| `MTA-QA-026` | Physical-input ticker outlived its test-owned radio | Current ledger | 1829 |

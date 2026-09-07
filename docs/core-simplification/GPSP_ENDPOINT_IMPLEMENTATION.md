@@ -48,7 +48,7 @@ unsupported capabilities or placeholder implementations. Relay remains opaque.
 | P1 | Borrowed-process probe, local listener, hardened Netplay and RFU translator | PASS (packet scope; local Windows) |
 | P2 | Real Core endpoint, lifecycle, reconnect and next Generation | PASS (packet scope; local Windows) |
 | P3 | Native dev/CLI routing, diagnostics and user messages | PASS (packet scope; local Windows) |
-| P4 | Full integration, two Generations, long waits/soak, CI and VMware runbook | NOT_STARTED |
+| P4 | Full integration, two Generations, long waits/soak, CI and VMware runbook | IN_PROGRESS; final mandatory real-process CI not yet attested |
 
 P0 is a hard gate: a stock compatibility failure must be recorded and reported,
 not replaced with automatic launch/reset or an unqualified implementation.
@@ -215,6 +215,43 @@ verbose/file logs. The product never manages the user's emulator/content/save.
 - P4 remains required: actual **join** CLI and real Direct A/StageSession/LDN/
   TunnelSim on the opposite side, long waits/soak, full tests and final-SHA CI.
   The P3 doctor result does not stand in for that final full-path qualification.
+
+### P4 qualification implementation
+
+The short full-path local probe (`.qualification/gpsp-p4-full-02`) passes two
+Generations through actual native `dev.ps1 run join`, CLI, WireClient/Core/relay,
+Switch driver/Direct A/StageSession/LDN/Pia/Reliable/TunnelSim and stock gpSP.
+Only Linux radio/kernel primitives, synthetic keys and physical game input are
+substituted. The physical-console substitute itself uses real Direct B and
+TunnelSim. No production CoreTunnelAdapter send/poll shortcut is used.
+The native process uses only the dedicated minimal Python environment.
+
+The separate qualification homebrew waits for a public Start input, exchanges
+round/sequence-tagged RFU payloads until the physical-input radio is closed,
+then accepts a second room in the same RAM. It independently rebuilds to
+`91168322aa3b7d1f73784c3b1c152bd064b02001f5460d46d6b0466f3f745ad4`.
+It contains no commercial content. The user-owned product cannot load it.
+
+First failed full probe retained `OSError: closed` from a test-owned ticker
+outliving its virtual radio; MTA-QA-026 records the first failure, verified
+residue and corrected cancel/join-before-radio-stop ordering. It is not a
+product or physical qualification pass. MTA-QA-025's earlier options-file
+residue remains retained; all passing subsequent original-tree checks are clean.
+
+Final Windows CI runs both real attach/detach continuity and full-path two-room
+qualification, including two >180s waits and >=1800s sustained traffic. Resource
+counters are read-only process statistics, not emulator memory inspection:
+post-warmup handle growth <=8 and private-memory growth <=16MiB are explicit
+finite-soak bounds, not a proof of unlimited operation. No required actual
+process test can be skipped into a passing closure. Ubuntu runs the shared
+Core/protocol/Switch regression. See `GPSP_ACCEPTANCE.json` G01–G24 and
+[the VMware test runbook](GPSP_VMWARE_RUNBOOK.md). Existing ABC I01–I18/T01–T44
+remain required and generate a separate exact-SHA artifact after both jobs.
+
+This tracked document does not claim final completion. Only the generated
+`GPSP_ACCEPTANCE.final.json` after validated real-process reports and both
+exact-SHA CI jobs can close P4. Raw frontend/native logs and private paths stay
+local/ignored; CI uploads only sanitized successful report JSON.
 
 ## Required final evidence
 

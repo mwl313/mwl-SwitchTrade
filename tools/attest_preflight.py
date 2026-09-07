@@ -62,7 +62,7 @@ def main():
     args = parser.parse_args()
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     if (os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("GITHUB_SHA") != sha
-            or os.environ.get("GITHUB_REF") != "refs/heads/Simple-Architecture"
+            or os.environ.get("GITHUB_REF") not in {"refs/heads/Simple-Architecture", "refs/heads/codex/gpsp-endpoint"}
             or os.environ.get("GITHUB_REPOSITORY") != "mwl313/mwl-SwitchTrade"):
         raise RuntimeError("attestation requires the exact repository/branch/CI checkout identity")
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -75,6 +75,7 @@ def main():
     url = f"https://github.com/mwl313/mwl-SwitchTrade/actions/runs/{os.environ['GITHUB_RUN_ID']}"
     result = attest(manifest, sha, {
         "windows": os.environ.get("WINDOWS_RESULT"), "ubuntu": os.environ.get("UBUNTU_RESULT")}, url)
+    result["branch"] = os.environ["GITHUB_REF"].removeprefix("refs/heads/")
     args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(result["verdict"], sha)
 

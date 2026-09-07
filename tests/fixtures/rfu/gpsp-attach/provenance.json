@@ -11,5 +11,11 @@
     "linker.ld": "0ee52490f3c65045f2685df958d27a0dd8366cb35ccbfc1d6445439cacd8dd87"
   },
   "binary_sha256": "cfb0a21e1504931d7589a30b125ff3bbdf9211116a7bea690cfecadf031a2720",
-  "independent_builds_equal": true
+  "independent_builds_equal": true,
+  "qualification": {
+    "source_sha256": "14d00be97f3206f757c7aad5e0f08544c3e085b4ddd4ae049a87b4e672df5ff8",
+    "binary_sha256": "91168322aa3b7d1f73784c3b1c152bd064b02001f5460d46d6b0466f3f745ad4",
+    "independent_builds_equal": true,
+    "purpose": "Manual Start input gate, sustained bidirectional RFU, radio-driven room end, two in-RAM generations"
+  }
 }
