@@ -1565,3 +1565,23 @@ archive list and regenerate the index.
   real concurrent publisher/reader and the original failing test.
 - **Mandatory prevention gate:** diagnose the original call site and distinguish
   successful atomic publication from a consumer's ability to open that file.
+
+### MTA-CORE-013 — Pure Trio cancellation groups obscured proven leaf cleanup
+
+- **Observed failure:** actual LDN 0.0.17 DirectB cancellation during association
+  returned B_CANCELLED with AP/network cleanup unknown, although individually
+  tracked VIFs, TAP and sockets were released. The same shape occurs in DirectA
+  during control authentication. No physical resource was involved.
+- **Cause certainty:** confirmed: Trio nursery exits wrap cancellation propagation
+  in BaseExceptionGroup; a blanket exit-exception rule counted propagation as a
+  second teardown failure.
+- **Correction:** only pure cancellation from an explicitly borrowing grouping
+  context may delegate release proof to named leaf owners. Every named owner must
+  exist and be released. Missing/unknown leaf state or a non-cancellation exit
+  error remains failed; the original cancellation is never suppressed.
+- **Recovery/residue:** failed virtual tests closed their tracked kernel/socket
+  objects. An injected failed station deletion is recovered only by the fixture
+  using its observed object; production admission remains blocked.
+- **Mandatory prevention gate:** actual-library cancellation at scan, association,
+  AP start, association wait and control await, plus mixed-error/missing-leaf
+  negative tests. Context propagation alone must never count as resource proof.

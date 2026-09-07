@@ -199,3 +199,33 @@ def test_stop_before_trio_token_publication_has_no_synchronous_ack_wait():
     with pytest.raises(RuntimeError) as second:
         session.stop()
     assert first.value is second.value
+
+
+@pytest.mark.parametrize("leaf", ["released", "unknown", None])
+@pytest.mark.parametrize("exit_fails", [False, True])
+def test_cancelled_nursery_requires_independent_leaf_release(leaf, exit_fails):
+    async def exercise():
+        resources = ResourceScope()
+        if leaf is not None:
+            resources.states["owned"] = leaf
+
+        @contextlib.asynccontextmanager
+        async def nursery():
+            try:
+                yield
+            except BaseException as error:
+                errors = [error]
+                if exit_fails:
+                    errors.append(OSError("real teardown failure"))
+                raise BaseExceptionGroup("nursery exit", errors)
+
+        with trio.CancelScope() as cancellation:
+            async with resources.context(nursery(), "group", entry_owns_resource=False,
+                                         release_dependencies=("owned",)):
+                cancellation.cancel()
+                await trio.lowlevel.checkpoint()
+        assert cancellation.cancelled_caught  # Cleanup never suppresses the primary.
+        assert resources.clean is (leaf == "released" and not exit_fails)
+        assert resources.states["group"] == ("unknown" if exit_fails else "release_delegated")
+        assert bool(resources.failures) is exit_fails
+    trio.run(exercise)

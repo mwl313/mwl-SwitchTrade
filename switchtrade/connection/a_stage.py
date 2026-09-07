@@ -319,7 +319,9 @@ class DirectAStage:
 
                     station._register_key = tracked_register_key
                     async with self.resources.context(
-                        station.connect(), "join.station", entry_owns_resource=False
+                        station.connect(), "join.station", entry_owns_resource=False,
+                        release_dependencies=("join.vif." + str(wlan.nl80211.NL80211_IFTYPE_STATION),
+                                              "runtime.sockets")
                     ):
                         self.cleanup["ldn_context_released"] = False
                         self.cleanup["ldn_context_state"] = "acquiring"
@@ -339,7 +341,9 @@ class DirectAStage:
                         sta._authenticate = tracked_authenticate
                         sta._initialize_network = tracked_initialize
                         async with self.resources.context(
-                            sta.start(), "join.network", entry_owns_resource=False
+                            sta.start(), "join.network", entry_owns_resource=False,
+                            release_dependencies=("join.vif." + str(wlan.nl80211.NL80211_IFTYPE_STATION),
+                                                  "runtime.sockets")
                         ):
                             self.cleanup["ldn_context_released"] = False
                             self.cleanup["ldn_context_state"] = "acquired"

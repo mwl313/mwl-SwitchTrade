@@ -2,6 +2,24 @@
 
 Task remains IN_PROGRESS / FAIL, not a handoff or completion claim.
 
+## Latest checkpoint (2026-09-07; supersedes progress bullets below)
+
+- Five packets pushed on Simple-Architecture through
+  `74a0c326b28801c4316852cf2dd90266fec26c4a`; CI #113 success on both platforms.
+- Actual CLI/relay/LDN/DirectA+B/StageSession/TunnelSim/Pia/Reliable qualification
+  exchanges opaque RFU both ways over two automatically repeated generations.
+- Real 181-second mirror human wait followed by physical-boundary join passes.
+- Current uncommitted packet: pure cancellation groups with independently proven
+  resource release; actual Direct fault tests; Linux gate-to-CLI parent guardian;
+  real WebSocket interruption scenarios. No physical WSL/device operation.
+- Remaining: close actual interruption tests; audit input/dependency failures and
+  diagnostic evidence; runbook; complete all I01–I18/T01–T44; full pytest and CI for
+  the same final SHA. Current closure JSON is intentionally not a PASS.
+- Full local pytest must set SWITCHTRADE_AUTH_DB to a fresh workspace-owned
+  `.qualification/pytest-<unique>/authority.sqlite3`, never the user's runtime DB.
+
+## Initial checkpoint (historical progress, not current status)
+
 - Specification: `SWITCH_TO_SWITCH_FINAL_MASTER_PROMPT_20260907.md` (saved from the attachment).
 - Branch: `Simple-Architecture`; remote handoff `207537e28a66207fd7aad970e34b6487dfef1608` was fetched and matched the clean local checkout.
 - Completed/pushed packet: `f2ca6b75ccd3b9f7588b7feedf7df458900989f7`, early resource ownership, bounded cancellation, dependency classification, socket cleanup.

@@ -60,6 +60,8 @@ class Kernel:
         attrs = attrs or {}
         os = self.os
         os.commands.append(cmd)
+        if hook := os.before_request.get(cmd):
+            await hook(self, attrs)
         if cmd == N.NL80211_CMD_GET_WIPHY:
             return [SimpleNamespace(attributes={N.NL80211_ATTR_WIPHY_NAME: f"phy{i}",
                      N.NL80211_ATTR_WIPHY: i}) for i in range(4)]
@@ -248,6 +250,7 @@ class VirtualLdnOS:
     def __init__(self):
         self.links, self.frequencies = {}, {i: 2437 for i in range(4)}
         self.sockets, self.files, self.commands = [], [], []
+        self.before_request = {}
         self.counter = 100
         self.udp_sent = self.radio_frames = self.decrypted_frames = 0
 

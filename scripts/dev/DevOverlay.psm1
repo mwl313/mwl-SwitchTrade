@@ -143,9 +143,13 @@ public sealed class DevChildLifetime : IDisposable {
             # Wait for CLI cleanup, never mistake disposing Windows handles
             # for release of Linux AP/TAP/PHY resources.
             if ($null -ne $lifetime) { $lifetime.Dispose() } else { $process.StandardInput.Close() }
-            if (-not $process.WaitForExit(20000)) {
+            if (-not $process.WaitForExit(30000)) {
                 $process.Dispose()
                 Stop-DevOverlay 'DEV_CHILD_CLEANUP_UNVERIFIED' 'CLI did not finish cleanup after parent cancellation. Do not retry.'
+            }
+            if ($null -ne $lifetime -and $null -ne $lifetime.Failure) {
+                $process.Dispose()
+                Stop-DevOverlay 'DEV_PARENT_CONTROL_FAILED' 'Owned child cancellation pipe could not be closed.'
             }
         }
         $process.Dispose()
@@ -452,7 +456,7 @@ function Invoke-DevRun {
         }
         $gateArguments = @('./scripts/wsl-radio-prepare.sh', '--role', $radioRole)
         if ($usbId) { $gateArguments += @('--usb-id', $usbId) }
-        $gateArguments + @('--target-channel', $channel, '--', $script:PythonPath) + $pythonArguments
+        @($script:PythonPath, '-u', '-m', 'switchtrade.parent_lifetime', '--') + $gateArguments + @('--target-channel', $channel, '--', $script:PythonPath) + $pythonArguments
     } else {
         @($script:PythonPath) + $pythonArguments
     }

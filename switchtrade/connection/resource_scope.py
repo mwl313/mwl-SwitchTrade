@@ -75,11 +75,16 @@ class ResourceScope:
     def __init__(self):
         self.states: dict[str, str] = {}
         self.failures: list[str] = []
+        self.release_dependencies: dict[str, tuple[str, ...]] = {}
 
     @property
     def clean(self) -> bool:
         return not self.failures and all(
-            state in {"not_acquired", "released"} for state in self.states.values())
+            state in {"not_acquired", "released"} or (
+                state == "release_delegated"
+                and all(self.states.get(owner) == "released"
+                        for owner in self.release_dependencies[label]))
+            for label, state in self.states.items())
 
     @staticmethod
     def absent(name: str) -> bool:
@@ -87,7 +92,7 @@ class ResourceScope:
 
     @contextlib.asynccontextmanager
     async def context(self, manager, label, *, ifname=None, shield_exit=False,
-                      entry_owns_resource=True):
+                      entry_owns_resource=True, release_dependencies=()):
         import trio
 
         if ifname is not None and not self.absent(ifname):
@@ -129,12 +134,20 @@ class ResourceScope:
                     raise RuntimeError("DIRECT_RESOURCE_RELEASE_UNPROVEN")
                 self.states[label] = "released"
             except BaseException as error:
-                self.states[label] = "unknown"
-                self.failures.append(label + ":" + type(error).__name__)
-                if primary is None:
-                    raise
-                # Keep the original exception (including cancellation) primary.
-                primary.add_note("cleanup failed: " + label + ":" + type(error).__name__)
+                if (not entry_owns_resource and release_dependencies
+                        and primary is not None and cancelled(primary) and cancelled(error)):
+                    # Trio nursery exit may wrap the body's cancellation in a
+                    # pure-Cancelled group. This is NOT itself release evidence:
+                    # only the explicitly named leaf owners can prove release.
+                    self.release_dependencies[label] = tuple(release_dependencies)
+                    self.states[label] = "release_delegated"
+                else:
+                    self.states[label] = "unknown"
+                    self.failures.append(label + ":" + type(error).__name__)
+                    if primary is None:
+                        raise
+                    # Keep the original exception (including cancellation) primary.
+                    primary.add_note("cleanup failed: " + label + ":" + type(error).__name__)
 
     @contextlib.contextmanager
     def sync_context(self, manager, label):

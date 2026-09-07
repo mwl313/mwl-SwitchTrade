@@ -54,7 +54,24 @@ native parent bootstrap gold tests remain in the focused regression suite.
 
 ## Remaining before final closure
 
-Actual dev/PowerShell interruption and WSL boundary qualification; real-library
-failure/cancellation/reconnect matrix and historical 120/180-second equivalent
-waiting; complete I/T evidence; CI #104 diagnosis; physical runbook; full pytest
-and exact-final-SHA Windows/Ubuntu CI.
+Actual Windows console Ctrl+C with the real CLI and StageSession now passes;
+`CI104_STATE_READ_DIAGNOSIS.md` records the original CI reader failure and its
+bounded correction. Commit 74a0c326 has successful Windows/Ubuntu CI #113.
+
+The actual mirror driver/DirectB/StageSession remains pending for 181 real
+seconds, then a real DirectA physical-boundary actor joins successfully (189.40s
+test duration). No readiness deadline or clock is substituted. Actual LDN kernel
+faults cover early association failure, failed VIF deletion, and cancellation
+at scan/join/AP/association/control waits. See MTA-CORE-013 for cancellation-group
+release evidence; true unknown/partial teardown is still fail-closed.
+
+Still pending: Linux parent-group guardian CI, final actual reconnect/pre-active
+loss final-source rerun, complete I/T evidence, physical runbook, full pytest and
+exact-final-SHA Windows/Ubuntu CI. These are not final qualification claims.
+
+Actual WebSocket interruption variants now pass: OPENING_LOCAL cancels the real
+DirectB nursery and both CLI owners fail cleanly; ACTIVE replaces both socket
+instances in the same Pair and the second generation transfers RFU. A physical
+local room end while Host awaits its Internet peer returns to discovery, then
+two further generations succeed. The full-source run will also cover >5 seconds
+without application data in ACTIVE before transmitting again.

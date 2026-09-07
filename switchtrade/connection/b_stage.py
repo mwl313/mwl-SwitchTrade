@@ -436,7 +436,8 @@ class DirectBStage:
                 )
                 self.compatibility["beacon_head"] = True
                 async with self.resources.context(
-                    ap.create(), "mirror.ap", entry_owns_resource=False
+                    ap.create(), "mirror.ap", entry_owns_resource=False,
+                    release_dependencies=("mirror.vif.3", "runtime.sockets")
                 ):
                     self.cleanup["ldn_last_checkpoint"] = "ap_started"
                     async with factory.create_monitor(
@@ -498,7 +499,9 @@ class DirectBStage:
                             network._destroy_network = destroy_remote_only
                             self.compatibility["remote_destroy"] = True
                             async with self.resources.context(
-                                network.start(), "mirror.network", entry_owns_resource=False
+                                network.start(), "mirror.network", entry_owns_resource=False,
+                                release_dependencies=("mirror.vif.3", "mirror.vif.6",
+                                                      "mirror.tap", "runtime.sockets")
                             ):
                                 self.cleanup["ldn_last_checkpoint"] = "network_started"
                                 yield network, control_done

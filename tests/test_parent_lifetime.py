@@ -1,5 +1,6 @@
 import asyncio
 import os
+import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -26,6 +27,36 @@ def test_actual_pipe_eof_cancels_and_awaits_child_cleanup_without_helpers():
                 os.close(write_fd)
                 await asyncio.wait_for(task, 1)
         assert released.is_set()
+        assert asyncio.all_tasks() == {asyncio.current_task()}
+    asyncio.run(exercise())
+
+
+@pytest.mark.skipif(os.name != "posix", reason="actual Linux process-group/WSL boundary primitive")
+@pytest.mark.parametrize("stalled", [False, True])
+def test_linux_parent_exit_interrupts_the_owned_gate_before_cli(stalled, tmp_path):
+    async def exercise():
+        ready, clean = tmp_path / "ready", tmp_path / "clean"
+        script = tmp_path / "gate.py"
+        script.write_text(
+            "import os,signal,time\nfrom pathlib import Path\n"
+            + ("signal.signal(signal.SIGINT, signal.SIG_IGN)\n" if stalled else "")
+            + f"Path({str(ready)!r}).write_text(str(os.getpid()))\n"
+            + "try:\n time.sleep(20)\nexcept KeyboardInterrupt:\n"
+            + f" Path({str(clean)!r}).write_text('owned gate cleaned')\n", encoding="utf-8")
+        eof = asyncio.Event()
+        with patch.object(parent_lifetime, "wait_parent_exit", eof.wait):
+            guarding = asyncio.create_task(parent_lifetime.guard_command(
+                [sys.executable, str(script)], stop_timeout=.1 if stalled else 2))
+            async with asyncio.timeout(3):
+                while not ready.exists():
+                    await asyncio.sleep(.005)
+            pid = int(ready.read_text())
+            eof.set()
+            result = await asyncio.wait_for(guarding, 3)
+        assert result == (1 if stalled else 0)
+        assert clean.exists() is not stalled
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
         assert asyncio.all_tasks() == {asyncio.current_task()}
     asyncio.run(exercise())
 

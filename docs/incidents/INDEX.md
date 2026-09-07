@@ -271,3 +271,4 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-CORE-012` | Bridge active did not prove local Pia completion | Current ledger | 1508 |
 | `MTA-DEV-031` | Native PowerShell launch alone did not propagate Ctrl+C | Current ledger | 1528 |
 | `MTA-CI-001` | Writer retry did not cover the Windows state reader | Current ledger | 1553 |
+| `MTA-CORE-013` | Pure Trio cancellation groups obscured proven leaf cleanup | Current ledger | 1569 |
