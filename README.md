@@ -1,5 +1,21 @@
 # SwitchTrade
 
+## Simple-Architecture development path
+
+This branch uses the new automatic **Host / Join + six-digit Pair code** CLI,
+not the legacy desktop Room/Ready flow described below. Software qualification
+does not establish that two physical Switch consoles have passed a trade.
+
+- [Switch-to-Switch test runbook](docs/core-simplification/SWITCH_TO_SWITCH_PHYSICAL_RUNBOOK.md)
+- [Actual software path and test boundary evidence](docs/core-simplification/SWITCH_TO_SWITCH_SOFTWARE_EVIDENCE.md)
+- [Acceptance manifest and final CI artifact procedure](docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_RESUME.md)
+
+Use the exact qualified SHA and common relay from the closure artifact before
+starting a physical test. The managed runtime, keys and selected adapter must
+already satisfy the runbook's prerequisites; no setup or radio gate is bypassed.
+
+## Legacy desktop product overview
+
 SwitchTrade lets two people trade Pokémon online between FireRed or LeafGreen running on Nintendo
 Switch consoles.
 

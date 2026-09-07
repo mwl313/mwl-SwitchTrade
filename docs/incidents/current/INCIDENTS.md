@@ -1627,3 +1627,26 @@ archive list and regenerate the index.
   tests, parser/identity negative tests and complete real RFU path regression.
 - **Privacy:** no real key material or local packet was read for this investigation.
   Diagnostic logging allowlists gates, resource states and counters, not payloads.
+
+### MTA-QA-022 — Process-wide soak metrics lacked a scenario-owned process
+
+- **Observed:** CI #115 / 34100189105 at 3f0a172 failed only the Windows legacy
+  RFU resource-soak assertion: native thread count 5 -> 7 exceeded its +1 bound.
+  Ubuntu passed; local full pytest had 783 passed. The original CI captured no
+  thread identities, so the exact new native workers cannot be attributed.
+- **Diagnosis:** the test measured the entire pytest process after other tests
+  and plugins, not an isolated client owner. A local trace showed 7 native
+  threads but only one Python MainThread before clients, 9 / three while active,
+  and 7 / one after both real clients stopped. Native and Python ownership must
+  not be conflated; this is not proof that the original two workers were a leak.
+- **Correction:** run the same real legacy relay/client 4096-frame-per-direction
+  soak in a dedicated interpreter. Keep all native thread/RSS/handle/socket,
+  queue, exact-byte and privacy bounds; additionally capture Python identities
+  and require only MainThread after both transport threads join.
+- **Recovery/residue:** the original CI used only temporary state and a
+  test-owned relay process with finally cleanup. No device or user runtime was
+  touched. Local traced clients joined and relay exited. No blanket process
+  termination, retry or relaxed threshold was used.
+- **Prevention:** process-wide resource measurements need process-wide ownership.
+  Keep a failing count with ownership evidence rather than labeling it flaky or
+  increasing the budget. New Core real-path tests remain separately mandatory.

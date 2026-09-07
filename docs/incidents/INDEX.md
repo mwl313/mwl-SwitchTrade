@@ -274,3 +274,4 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-CORE-013` | Pure Trio cancellation groups obscured proven leaf cleanup | Current ledger | 1569 |
 | `MTA-DEV-032` | Entrypoint source selection and error handling were not executable | Current ledger | 1591 |
 | `MTA-CORE-014` | Local datagram and key-file shapes needed explicit admission | Current ledger | 1617 |
+| `MTA-QA-022` | Process-wide soak metrics lacked a scenario-owned process | Current ledger | 1631 |

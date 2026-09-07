@@ -14,6 +14,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from urllib.error import HTTPError
@@ -42,6 +43,7 @@ class ProcessSample:
     threads: int | None
     descriptors: int | None
     sockets: int | None
+    python_threads: tuple[str, ...] = ()
 
 
 def _linux_sample(pid: int) -> ProcessSample:
@@ -141,10 +143,15 @@ def _windows_sample(pid: int) -> ProcessSample:
 
 def _sample(pid: int) -> ProcessSample:
     if sys.platform.startswith("linux"):
-        return _linux_sample(pid)
-    if os.name == "nt":
-        return _windows_sample(pid)
-    return ProcessSample(None, None, None, None)
+        sample = _linux_sample(pid)
+    elif os.name == "nt":
+        sample = _windows_sample(pid)
+    else:
+        sample = ProcessSample(None, None, None, None)
+    # Native runtime workers aren't Python threads. Preserve both observations
+    # so a failed native-thread bound can be diagnosed without guessing ownership.
+    return ProcessSample(sample.rss, sample.threads, sample.descriptors, sample.sockets,
+                         tuple(t.name for t in threading.enumerate()) if pid == os.getpid() else ())
 
 
 def _port() -> int:
@@ -167,6 +174,15 @@ def _metric_max(samples: list[ProcessSample], field: str) -> int | None:
 
 class ProductionTransportSoakTest(unittest.TestCase):
     def test_bidirectional_opaque_rfu_soak_has_bounded_resources_and_logs(self):
+        # Process metrics must belong to this scenario, not earlier pytest tests,
+        # plugin workers or their lazily created native runtime threads.
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), "--isolated-soak"],
+            cwd=ROOT, capture_output=True, text=True, timeout=90,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def _run_soak(self):
         port = _port()
         base = f"http://127.0.0.1:{port}"
         relay_logs: Path | None = None
@@ -327,6 +343,9 @@ class ProductionTransportSoakTest(unittest.TestCase):
                                      (relay_active_baseline.threads or 0) + 1, relay_samples)
                 self.assertLessEqual(_metric_max(client_samples, "threads") or 0,
                                      (client_active_baseline.threads or 0) + 1, client_samples)
+                self.assertTrue(all(sorted(s.python_threads) ==
+                                    ["MainThread", "switchtrade-rfu", "switchtrade-rfu"]
+                                    for s in client_samples), client_samples)
                 self.assertLessEqual(_metric_max(relay_samples, "descriptors") or 0,
                                      (relay_active_baseline.descriptors or 0) + 4, relay_samples)
                 self.assertLessEqual(_metric_max(client_samples, "descriptors") or 0,
@@ -350,6 +369,7 @@ class ProductionTransportSoakTest(unittest.TestCase):
                     self.fail("relay retained the RFU session after both clients stopped")
                 self.assertFalse(host._thread.is_alive())
                 self.assertFalse(guest._thread.is_alive())
+                self.assertEqual([t.name for t in threading.enumerate()], ["MainThread"])
                 gc.collect()
                 time.sleep(0.05)
                 relay_final = _sample(proc.pid)
@@ -374,12 +394,12 @@ class ProductionTransportSoakTest(unittest.TestCase):
                     "relay_startup_baseline": relay_startup_baseline.__dict__,
                     "relay_active_baseline": relay_active_baseline.__dict__,
                     "relay_peak": {name: _metric_max(relay_samples, name)
-                                   for name in relay_active_baseline.__dict__},
+                                   for name in ("rss", "threads", "descriptors", "sockets")},
                     "relay_final": relay_final.__dict__,
                     "client_startup_baseline": client_startup_baseline.__dict__,
                     "client_active_baseline": client_active_baseline.__dict__,
                     "client_peak": {name: _metric_max(client_samples, name)
-                                    for name in client_active_baseline.__dict__},
+                                    for name in ("rss", "threads", "descriptors", "sockets")},
                     "client_final": client_final.__dict__,
                 }, sort_keys=True)
             finally:
@@ -414,4 +434,8 @@ class ProductionTransportSoakTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--isolated-soak"]:
+        result = unittest.TextTestRunner(verbosity=2).run(
+            unittest.TestSuite([ProductionTransportSoakTest("_run_soak")]))
+        raise SystemExit(not result.wasSuccessful())
     unittest.main()

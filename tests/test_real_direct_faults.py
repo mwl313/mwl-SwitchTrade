@@ -15,6 +15,7 @@ from switchtrade.connection.b_fixture import FIXTURE
 from switchtrade.connection.stage_session import StageSession
 from switchtrade.core.contracts import GenerationOffer
 from switchtrade.endpoints.switch_ldn.driver import SwitchLdnEndpointDriver, SwitchLdnPolicy, SWITCH_LDN_PROTOCOL
+from switchtrade.endpoints.switch_ldn.driver import _direct_b_stage
 
 
 def policy(phy=0):
@@ -152,5 +153,66 @@ def test_actual_key_loader_rejects_missing_malformed_and_short_keys_before_radio
             finally:
                 report = await driver.close()
                 assert report.local_resources_released
+            os.assert_clean()
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("boundary", ["ap", "control", "stop"])
+def test_actual_mirror_technical_deadlines_remain_bounded(boundary):
+    async def exercise():
+        os = VirtualLdnOS()
+        stages, peers = [], []
+        with ExitStack() as stack:
+            os.install(stack)
+
+            async def blocked(kernel, attrs):
+                index = attrs[N.NL80211_ATTR_IFINDEX]
+                if os.links[index].phy == 2:
+                    await trio.sleep_forever()
+
+            command = {"ap": N.NL80211_CMD_START_AP, "control": N.NL80211_CMD_CONTROL_PORT_FRAME,
+                       "stop": N.NL80211_CMD_STOP_AP}[boundary]
+            os.before_request[command] = blocked
+
+            def factory(selected, offer):
+                stage = _direct_b_stage(selected, offer)
+                # Shorten only technical deadlines, not human association or
+                # StageSession readiness; fault location is an actual OS await.
+                stage.ap_timeout = .1 if boundary == "ap" else 10
+                stage.control_timeout = .1
+                stage.teardown_timeout = .1
+                stages.append(stage)
+                return stage
+
+            driver = SwitchLdnEndpointDriver(policy(2), mirror_stage_factory=factory)
+            await driver.prepare()
+            cancel = asyncio.Event()
+            offer = GenerationOffer("deadline-real", SWITCH_LDN_PROTOCOL, "switch_ldn", FIXTURE)
+            pending = asyncio.create_task(driver.accept(offer, cancel))
+            try:
+                if boundary != "ap":
+                    await eventually(lambda: any(link.type == "tap" for link in os.links.values()), tasks=(pending,))
+                    if boundary == "control":
+                        peers.append(StageSession(stage_a(3), timeout=20).start())
+                    else:
+                        cancel.set()
+                expected = asyncio.CancelledError if boundary == "stop" else Exception
+                with pytest.raises(expected) as caught:
+                    await asyncio.wait_for(pending, 15)
+                report = await driver.close()
+                if boundary == "stop":
+                    assert stages[0].cleanup["ap_stop_timed_out"] is True
+                    assert not report.local_resources_released
+                    with pytest.raises(Exception, match="prior Switch LDN cleanup is unverified"):
+                        await driver.prepare()
+                else:
+                    assert caught.value.code == {"ap": "B_AP_CREATION_TIMEOUT", "control": "B_CONTROL_PORT_TIMEOUT"}[boundary]
+                    assert report.local_resources_released
+            finally:
+                pending.cancel()
+                await asyncio.gather(pending, return_exceptions=True)
+                await driver.close()
+                for peer in peers:
+                    await asyncio.to_thread(peer.stop)
             os.assert_clean()
     asyncio.run(exercise())
