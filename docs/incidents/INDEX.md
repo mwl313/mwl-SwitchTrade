@@ -269,3 +269,5 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-QA-021` | Assert generation clear after terminal cleanup, not local close entry | Current ledger | 1467 |
 | `MTA-CORE-011` | Readiness is not early VIF ownership or cleanup evidence | Current ledger | 1484 |
 | `MTA-CORE-012` | Bridge active did not prove local Pia completion | Current ledger | 1508 |
+| `MTA-DEV-031` | Native PowerShell launch alone did not propagate Ctrl+C | Current ledger | 1528 |
+| `MTA-CI-001` | Writer retry did not cover the Windows state reader | Current ledger | 1553 |

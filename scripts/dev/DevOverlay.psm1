@@ -60,9 +60,37 @@ function Invoke-DevInteractiveProcess {
     param(
         [Parameter(Mandatory)][string]$FilePath,
         [Parameter(Mandatory)][string[]]$ArgumentList,
-        [string]$WorkingDirectory = $script:RepoRoot
+        [string]$WorkingDirectory = $script:RepoRoot,
+        [switch]$ParentLifetime
     )
 
+    if ($ParentLifetime -and -not ('DevChildLifetime' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Diagnostics;
+using System.Threading;
+public sealed class DevChildLifetime : IDisposable {
+    private readonly Process child;
+    private int closed;
+    public Exception Failure;
+    public DevChildLifetime(Process process) {
+        child = process;
+        Console.CancelKeyPress += Cancel;
+    }
+    private void Cancel(object sender, ConsoleCancelEventArgs e) {
+        e.Cancel = true;
+        CloseInput();
+    }
+    public void CloseInput() {
+        if (Interlocked.Exchange(ref closed, 1) == 0) {
+            try { child.StandardInput.Close(); }
+            catch (Exception error) { Failure = error; }
+        }
+    }
+    public void Dispose() { Console.CancelKeyPress -= Cancel; CloseInput(); }
+}
+'@
+    }
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $FilePath
     $startInfo.WorkingDirectory = $WorkingDirectory
@@ -70,22 +98,29 @@ function Invoke-DevInteractiveProcess {
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
+    $startInfo.RedirectStandardInput = [bool]$ParentLifetime
     foreach ($argument in $ArgumentList) {
         [void]$startInfo.ArgumentList.Add($argument)
     }
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
+    $lifetime = $null
+    $started = $false
     try {
-        if (-not $process.Start()) {
+        $started = $process.Start()
+        if (-not $started) {
             Stop-DevOverlay 'DEV_RUN_FAILED' "Could not start $FilePath."
         }
+        if ($ParentLifetime) { $lifetime = [DevChildLifetime]::new($process) }
         $stdoutTask = $process.StandardOutput.ReadLineAsync()
         $stderrTask = $process.StandardError.ReadLineAsync()
         while ($null -ne $stdoutTask -or $null -ne $stderrTask) {
             $pending = [System.Collections.Generic.List[System.Threading.Tasks.Task]]::new()
             if ($null -ne $stdoutTask) { [void]$pending.Add($stdoutTask) }
             if ($null -ne $stderrTask) { [void]$pending.Add($stderrTask) }
-            $completed = [System.Threading.Tasks.Task]::WhenAny($pending.ToArray()).GetAwaiter().GetResult()
+            $index = [System.Threading.Tasks.Task]::WaitAny($pending.ToArray(), 100)
+            if ($index -lt 0) { continue }
+            $completed = $pending[$index]
             if ($completed -eq $stdoutTask) {
                 $line = $stdoutTask.GetAwaiter().GetResult()
                 if ($null -eq $line) { $stdoutTask = $null } else {
@@ -103,6 +138,16 @@ function Invoke-DevInteractiveProcess {
         $process.WaitForExit()
         return $process.ExitCode
     } finally {
+        if ($ParentLifetime -and $started) {
+            # EOF is the owned parent's cancellation signal across wsl.exe.
+            # Wait for CLI cleanup, never mistake disposing Windows handles
+            # for release of Linux AP/TAP/PHY resources.
+            if ($null -ne $lifetime) { $lifetime.Dispose() } else { $process.StandardInput.Close() }
+            if (-not $process.WaitForExit(20000)) {
+                $process.Dispose()
+                Stop-DevOverlay 'DEV_CHILD_CLEANUP_UNVERIFIED' 'CLI did not finish cleanup after parent cancellation. Do not retry.'
+            }
+        }
         $process.Dispose()
     }
 }
@@ -123,10 +168,11 @@ function Invoke-DevInteractiveWsl {
         [Parameter(Mandatory)][string]$Distro,
         [Parameter(Mandatory)][string]$Command,
         [string[]]$Arguments = @(),
-        [string]$Cwd = '/opt/switchtrade'
+        [string]$Cwd = '/opt/switchtrade',
+        [switch]$ParentLifetime
     )
     $wslArguments = @('--distribution', $Distro, '--user', 'root', '--cd', $Cwd, '--', $Command) + $Arguments
-    Invoke-DevInteractiveProcess -FilePath 'wsl.exe' -ArgumentList $wslArguments
+    Invoke-DevInteractiveProcess -FilePath 'wsl.exe' -ArgumentList $wslArguments -ParentLifetime:$ParentLifetime
 }
 
 function Get-ActiveRuntime {
@@ -410,8 +456,11 @@ function Invoke-DevRun {
     } else {
         @($script:PythonPath) + $pythonArguments
     }
-    $envArguments = @('/usr/bin/env', 'PYTHONNOUSERSITE=1', 'PYTHONUNBUFFERED=1', "PYTHONPATH=$script:OverlayRoot/current", "SWITCHTRADE_SOURCE_ROOT=$script:OverlayRoot/current", "SWITCHTRADE_INSTALLED_ROOT=$script:InstalledRoot") + $commandArguments
-    $exitCode = Invoke-DevInteractiveWsl -Distro $runtime.Name -Cwd "$script:OverlayRoot/current" -Command $envArguments[0] -Arguments $envArguments[1..($envArguments.Count - 1)]
+    $parentEnvironment = if ($CoreCli) { @('SWITCHTRADE_PARENT_STDIN=1') } else { @() }
+    $envArguments = @('/usr/bin/env', 'PYTHONNOUSERSITE=1', 'PYTHONUNBUFFERED=1', "PYTHONPATH=$script:OverlayRoot/current", "SWITCHTRADE_SOURCE_ROOT=$script:OverlayRoot/current", "SWITCHTRADE_INSTALLED_ROOT=$script:InstalledRoot") + $parentEnvironment + $commandArguments
+    $interactiveOptions = @{}
+    if ($CoreCli) { $interactiveOptions.ParentLifetime = $true }
+    $exitCode = Invoke-DevInteractiveWsl -Distro $runtime.Name -Cwd "$script:OverlayRoot/current" -Command $envArguments[0] -Arguments $envArguments[1..($envArguments.Count - 1)] @interactiveOptions
     return [int]$exitCode
 }
 

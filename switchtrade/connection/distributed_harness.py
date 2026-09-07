@@ -42,6 +42,8 @@ ROLE_CHECKPOINTS = {
     "b_ap_host": "JOIN_SWITCH_GROUP",
 }
 SOURCE_SHA = re.compile(r"[0-9a-f]{40}")
+_WINDOWS_CONTROL_READ = os.name == "nt"
+_CONTROL_READ_WINDOW = 0.25
 RELAY_POLL_INTERVAL = 1.0
 RELAY_HEARTBEAT_INTERVAL = 10.0
 CONTROL_STATE_CONTRACT = "distributed-control-state.v1"
@@ -115,8 +117,25 @@ class DistributedControl:
 
     @classmethod
     def read_state(cls, path: Path) -> dict:
+        # Windows can deny a fresh read while the single publisher atomically
+        # replaces this exact state file (CI #104/#112). Retry only that read,
+        # briefly, never a command/action or invalid JSON/identity. A permanent
+        # denial still fails closed with the original PermissionError as cause.
+        deadline = time.monotonic() + _CONTROL_READ_WINDOW
+        first_denial = None
         try:
-            value = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+            while True:
+                try:
+                    text = Path(path).read_text(encoding="utf-8-sig")
+                    break
+                except PermissionError as error:
+                    if first_denial is None:
+                        first_denial = error
+                    if (not _WINDOWS_CONTROL_READ or Path(path).name != "distributed-control-state.json"
+                            or time.monotonic() >= deadline):
+                        raise first_denial
+                    time.sleep(.01)
+            value = json.loads(text)
             uuid.UUID(str(value.get("test_id")))
             if value.get("run_id") is not None:
                 uuid.UUID(str(value["run_id"]))

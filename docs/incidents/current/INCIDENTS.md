@@ -1524,3 +1524,44 @@ archive list and regenerate the index.
 - **Mandatory prevention gate:** Bridge active, LDN readiness and fake DATA tests
   are not end-to-end proof. Final qualification must exchange real encrypted
   local protocol datagrams through both actual TunnelSim instances and relay.
+
+### MTA-DEV-031 — Native PowerShell launch alone did not propagate Ctrl+C
+
+- **Observed failure:** In an isolated hidden Windows console, a real CTRL_C_EVENT
+  stopped the PowerShell invocation but the actual CLI child did not acknowledge
+  cancellation or finish cleanup within ten seconds. The foreground-native
+  simplification passed streaming/argv/exit tests but failed this lifecycle test.
+- **Cause certainty:** the first fixture inherited IGNORE_CTRL_C from its agent
+  host; Windows suppressed the event before application handlers. With that
+  fixture attribute explicitly cleared, a separate native-pipeline control
+  still terminated the CLI without its cleanup marker. Mere console inheritance
+  is therefore insufficient; the initial timeout itself was not product evidence.
+- **Recovery and residue:** only an isolated test console, virtual Linux resources
+  and localhost relay were used. The child had a 20-second self-deadline and
+  exited; its exact PID was checked after the test. No WSL/device was operated.
+- **Correction:** scoped Console.CancelKeyPress handling closes only the owned
+  child's lifetime pipe. CLI observes EOF without an orphan reader thread and
+  awaits supervisor cleanup; PowerShell waits boundedly for exit. Actual Ctrl+C
+  with real CLI/relay/StageSession and virtual OS now returns a clean marker.
+- **Platform reference:** Microsoft SetConsoleCtrlHandler documents the inherited
+  ignore attribute and per-process handlers; GenerateConsoleCtrlEvent requires
+  a shared console. The test uses its own hidden console, never the user's.
+- **Mandatory prevention gate:** exercise an actual Windows console interrupt
+  against the real CLI/StageSession with OS primitives replaced. Dispose/parent
+  exit alone is not a child cleanup report; unacknowledged shutdown stays failed.
+
+### MTA-CI-001 — Writer retry did not cover the Windows state reader
+
+- **Observed failure:** CI #104 and #112 failed the same concurrent control-state
+  polling test with PermissionError from io.open/read_state, not os.replace.
+- **Cause certainty:** confirmed reader access failure while publication was
+  concurrent; the original logs do not distinguish a Windows replacement window
+  from a participating external file scanner. Existing writer retry was incomplete.
+- **Recovery and residue:** exact temporary test state only; no runtime, device,
+  user ACL or antivirus setting changed. Strict identity/schema checks remain.
+- **Correction:** a 250ms Windows-only PermissionError read window for the exact
+  state filename, retaining the first denial on permanent failure. No commands,
+  invalid JSON or missing files are retried. 35 related tests pass, including a
+  real concurrent publisher/reader and the original failing test.
+- **Mandatory prevention gate:** diagnose the original call site and distinguish
+  successful atomic publication from a consumer's ability to open that file.

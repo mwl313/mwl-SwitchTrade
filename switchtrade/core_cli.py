@@ -307,10 +307,12 @@ async def _run_guest(args: argparse.Namespace) -> None:
 
 async def run(args: argparse.Namespace) -> int:
     _configure_logging(args)
-    if args.command == "host":
-        await _run_host(args)
+    operation = _run_host(args) if args.command == "host" else _run_guest(args)
+    if os.environ.get("SWITCHTRADE_PARENT_STDIN") == "1":
+        from switchtrade.parent_lifetime import run_with_parent
+        await run_with_parent(operation)
     else:
-        await _run_guest(args)
+        await operation
     return 0
 
 
