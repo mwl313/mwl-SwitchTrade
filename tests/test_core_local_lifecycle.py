@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import threading
 import unittest
@@ -22,7 +23,8 @@ from tests.test_direct_resource_ownership import stage_for
 
 class LocalLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancel_during_clean_retry_stop_awaits_the_actual_stage_owner(self):
-        await self._exercise_stop_race()
+        # Exceed the helper policy's old one-second readiness ceiling on purpose.
+        await self._exercise_stop_race(scan_delay=1.1)
 
     async def test_cancel_during_retry_stop_retains_actual_cleanup_failure(self):
         await self._exercise_stop_race(dirty=True)
@@ -33,11 +35,17 @@ class LocalLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancel_during_fatal_stage_stop_preserves_primary_and_cleanup(self):
         await self._exercise_stop_race(fatal=True, dirty=True)
 
-    async def _exercise_stop_race(self, *, fatal=False, dirty=False):
+    async def _exercise_stop_race(self, *, fatal=False, dirty=False, scan_delay=0):
         entered, release = threading.Event(), threading.Event()
+        sessions = []
 
         class Ldn(FakeLdn):
             rooms = []
+
+            @classmethod
+            async def scan(cls, *_args):
+                await trio.sleep(scan_delay)
+                return []
 
             @staticmethod
             def load_keys(path):
@@ -45,8 +53,9 @@ class LocalLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         class PausedStopSession(StageSession):
             def stop(self):
+                sessions.append(self)
                 entered.set()
-                if not release.wait(3):
+                if not release.wait(10):
                     raise RuntimeError("test did not release stop owner")
                 result = super().stop()
                 if dirty:
@@ -54,13 +63,17 @@ class LocalLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 return result
 
         driver = SwitchLdnEndpointDriver(
-            a_helpers.DirectADriverLifecycleTests()._policy(),
+            replace(a_helpers.DirectADriverLifecycleTests()._policy(), session_timeout=None),
             stage_factory=lambda _: stage_for(Ldn), session_factory=PausedStopSession,
             simulation_factory=lambda *_: _NoopSimulation())
         await driver.prepare()
         discovery = asyncio.create_task(driver.discover(asyncio.Event()))
         try:
-            self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+            self.assertTrue(await asyncio.to_thread(entered.wait, 10))
+            self.assertEqual(len(sessions), 1)
+            self.assertIsNone(sessions[0].timeout)  # Production human-wait policy.
+            self.assertEqual(sessions[0].report["failure"]["code"],
+                             "A_KEYS_INVALID" if fatal else "A_ROOM_NOT_OBSERVED")
             discovery.cancel()
             await asyncio.sleep(.02)
             self.assertFalse(discovery.done(), "cancellation orphaned the stop owner")
@@ -69,7 +82,7 @@ class LocalLifecycleTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(discovery.done())
             release.set()
             with self.assertRaises(Exception if fatal else asyncio.CancelledError) as failed:
-                await asyncio.wait_for(discovery, 2)
+                await asyncio.wait_for(discovery, 5)
             if fatal:
                 self.assertEqual(failed.exception.code, "A_KEYS_INVALID")
         finally:

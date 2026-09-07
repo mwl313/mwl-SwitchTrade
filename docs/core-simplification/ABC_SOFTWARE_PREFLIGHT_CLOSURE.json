@@ -1272,7 +1272,8 @@
     "Cancellation during clean no-room retry stop now awaits its owned StageSession result through repeated cancellation; fatal primary and actual cleanup failure stay independent (MTA-CORE-017; T17/T24).",
     "Streaming qualification now uses a parent/child acknowledgement rather than PowerShell startup time; bounded retry test no longer requires multiple attempts within a scheduling-sensitive 120ms (MTA-QA-023).",
     "Legacy service pure-GET regression now forces queued-versus-published phase lag and waits for the authoritative running snapshot; a finally-owned release prevents independent runner completion during 20 immutable reads (MTA-QA-019 recurrence; T43).",
-    "Relay routing readiness now follows authenticated hello and bounded pending-tail drain, independently of early socket ownership; CLI classifies before-hello loss for bounded recovery without retrying permanent identity failures (MTA-CORE-018; T32/T38)."
+    "Relay routing readiness now follows authenticated hello and bounded pending-tail drain, independently of early socket ownership; CLI classifies before-hello loss for bounded recovery without retrying permanent identity failures (MTA-CORE-018; T32/T38).",
+    "Stop-owner regression uses production's unlimited readiness and proves the intended Direct no-room/fatal report before cancellation; deliberate slow scan exceeds the inherited former one-second ceiling while real stop/dirty cleanup bounds stay unchanged (MTA-QA-024; T17/T24/T43)."
   ],
   "master_prompt": "docs/core-simplification/SWITCH_TO_SWITCH_FINAL_MASTER_PROMPT_20260907.md",
   "handoff_sha": "207537e28a66207fd7aad970e34b6487dfef1608",

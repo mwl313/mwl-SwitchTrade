@@ -1778,3 +1778,28 @@ archive list and regenerate the index.
   RFU test (46.86s); active loss and post-hello retry pass together (94.44s).
   The focused CLI/supervisor/real-relay/transport suite passes 57 tests. These
   packet results still require full and same-SHA platform CI qualification.
+
+### MTA-QA-024 — Stop-owner test inherited an unrelated readiness deadline
+
+- **Observed:** Windows CI 34127123795 at ddcfa35 had 809 passed/6 skipped
+  and one stop-owner regression failure. Instead of clean no-room cancellation,
+  its primary was DIRECT_STAGE_READY_TIMEOUT. All actual RFU integration cases
+  passed; Ubuntu's whole job and local full pytest also passed.
+- **Cause:** the stop-race fixture reuses a helper policy
+  with session_timeout=1 rather than the production default None. Its stop gate
+  does not prove which primary led to stop. The driver correctly retains a
+  fatal readiness error when later cancellation arrives; changing production to
+  hide that error would break first-failure preservation.
+- **Recovery state:** no physical/installed resource was used. The test's finally
+  releases and joins its StageSession owner; platform teardown checks thread
+  residue. A deliberate 1.1s synthetic scan reproduced the exact CI failure
+  locally (DIRECT_STAGE_READY_TIMEOUT, 1.35s), without any production changes.
+- **Correction:** use production's session_timeout=None in this stop-owner
+  fixture. Before cancellation, assert the actual StageSession report is clean
+  no-room or the intended fatal key error. Keep the slow scan as regression
+  coverage. Test-owned gate watchdogs allow scheduling delay; the real one-second
+  stop_timeout, repeated cancellation, unfinished-owner assertions, first fatal
+  identity, dirty cleanup readmission block and zero-thread residue remain.
+- **Prevention:** a synchronization event is not proof of its intended semantic
+  phase. Assert the producer's actual failure/report before injecting a race;
+  do not borrow an unrelated short readiness policy into a cleanup-only test.

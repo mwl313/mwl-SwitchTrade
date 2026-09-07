@@ -190,6 +190,17 @@ not change. See MTA-CORE-017 and MTA-QA-023.
 
 ## Physical handoff and modularity
 
+Windows candidate `ddcfa35` passed all actual RFU integration cases but its
+stop-owner fixture inherited a one-second StageSession readiness limit from a
+different test. Slow scheduling turned the intended clean no-room primary into
+a fatal readiness error, which production correctly retained. A deliberate
+1.1s synthetic scan reproduced the exact failure locally. This fixture now uses
+the production unlimited readiness policy and asserts the actual no-room/key
+failure report before cancellation. Repeated cancellation, real bounded stop,
+first failure and dirty cleanup/readmission checks are unchanged (MTA-QA-024).
+The slow-scan case remains in regression. This is a test correction, not a
+production timeout relaxation; final full and both platform CI must rerun.
+
 Ubuntu candidate CI at `e4137db` exposed a real relay initialization race: a
 peer's binary PEER_READY could overtake the new seat's JSON hello. The relay now
 keeps early replacement ownership separate from routing readiness and drains
