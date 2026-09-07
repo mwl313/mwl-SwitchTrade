@@ -19,17 +19,23 @@ class LdnDataPlane(dict):
         super().__init__(evidence)
         self.network = network
         self.ifname = ifname
-        self._tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self._rx = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_IP))
+        self._close_error = None
+        self._closed = False
         try:
+            self._tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self._rx = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_IP))
             self._tx.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self._tx.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             self._prepare_local_identity()
             self._tx.bind((self.our_ip, PIA_PORT))
             self._rx.bind((ifname, 0))
             self._rx.setblocking(False)
-        except BaseException:
-            self.close()
+        except BaseException as primary:
+            try:
+                self.close()
+            except BaseException as cleanup_error:
+                primary.cleanup_failed = True
+                primary.add_note("data-plane cleanup failed: " + type(cleanup_error).__name__)
             raise
 
     def _prepare_local_identity(self) -> None:
@@ -105,12 +111,21 @@ class LdnDataPlane(dict):
         return src_ip, dst_ip, dst_port, payload
 
     def close(self) -> None:
+        if self._close_error is not None:
+            raise self._close_error
+        if self._closed:
+            return
+        failures = []
         for stream in (getattr(self, "_rx", None), getattr(self, "_tx", None)):
             try:
                 if stream is not None:
                     stream.close()
-            except OSError:
-                pass
+            except OSError as error:
+                failures.append(error)
+        self._closed = True
+        if failures:
+            self._close_error = RuntimeError("LDN_DATA_PLANE_CLEANUP_FAILED")
+            raise self._close_error from failures[0]
 
 
 @contextlib.contextmanager
@@ -118,7 +133,14 @@ def open_ldn_data_plane(network: object, ifname: str, evidence: dict[str, bool])
     plane = LdnDataPlane(network, ifname, evidence)
     try:
         yield plane
-    finally:
+    except BaseException as primary:
+        try:
+            plane.close()
+        except BaseException as error:
+            primary.cleanup_failed = True
+            primary.add_note("data-plane cleanup failed: " + type(error).__name__)
+        raise
+    else:
         plane.close()
 
 

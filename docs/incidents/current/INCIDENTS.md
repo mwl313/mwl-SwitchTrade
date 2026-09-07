@@ -1480,3 +1480,23 @@ archive list and regenerate the index.
 - **Correction status:** terminal-signal test correction pending.
 - **Mandatory prevention gate:** Tests asserting generation clear after asynchronous cleanup must
   await a terminal supervisor completion signal, never an instrumented local-resource entry event.
+
+### MTA-CORE-011 — Readiness is not early VIF ownership or cleanup evidence
+
+- **Observed failure:** Source audit at `207537e28a66207fd7aad970e34b6487dfef1608`
+  found Direct A reporting `not_acquired` after a station VIF could already exist.
+  The opaque scan helper also owned a monitor. An association error followed by a
+  failed VIF delete could therefore be reported clean. StageSession cancellation
+  used a synchronous Trio acknowledgment that could exceed its stop deadline.
+- **Cause certainty:** confirmed against installed `ldn==0.0.17` source and
+  fault-injected early association/delete and cancellation-await tests.
+- **Recovery and residue:** no hardware was operated. Only in-process primitive
+  inventories and bounded test threads were owned. Fault inventories intentionally
+  retain the simulated failed-delete VIF; no production cleanup/retry was attempted.
+- **Correction:** run-local leaf context tracking, shielded bounded release,
+  independent absence evidence, collision rejection, preserved primary failure,
+  and sticky StageSession stop failure. Default Direct B reset no longer treats
+  configured names as ownership authority. Full integration closure remains open.
+- **Mandatory prevention gate:** readiness and stage-entry status must never
+  substitute for proof that every acquired VIF/socket/thread has been released.
+  Unknown cleanup blocks the next admission even after an eventual late exit.

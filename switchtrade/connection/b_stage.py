@@ -27,6 +27,7 @@ from .a_stage import (
 )
 from .b_fixture import FIXTURE, FIXTURE_ID, FIXTURE_NAME, FIXTURE_SHA256
 from .data_plane import open_ldn_data_plane
+from .resource_scope import ResourceScope, cancelled
 
 
 PIA_PORT = 12345
@@ -170,7 +171,7 @@ def quiesce_selected_phy(
         if flags & 1:
             raise BStageError("B_RADIO_QUIESCE_FAILED", GATES[-1], "radio interface remained active")
     tap = sys_net / tap_ifname
-    if tap.exists():
+    if tap_ifname in owned_ifnames and tap.exists():
         try:
             deleted = runner(["ip", "link", "del", "dev", tap_ifname], 3)
         except (OSError, subprocess.TimeoutExpired) as error:
@@ -295,10 +296,11 @@ class DirectBStage:
         self.ldn = ldn_module
         self.trio = trio_module
         owned = (self.ap_ifname, self.monitor_ifname, self.tap_ifname)
-        self.radio_reset = radio_reset or (lambda: reset_selected_phy(
-            self.phy, owned_ifnames=owned, tap_ifname=self.tap_ifname))
-        self.radio_quiesce = radio_quiesce or (lambda: quiesce_selected_phy(
-            self.phy, self.tap_ifname, owned_ifnames=owned))
+        # Names alone are not proof of ownership. Fresh acquisition rejects a
+        # collision; never reset a pre-existing netdev merely by its name.
+        self.radio_reset = radio_reset or (lambda: reset_selected_phy(self.phy))
+        self.radio_quiesce = radio_quiesce or (lambda: {
+            "selected_phy_only": all(ResourceScope.absent(name) for name in owned)})
         self.data_plane_factory = data_plane_factory or _open_data_plane
         self.network_factory = network_factory
         self.application_data = bytes(application_data)
@@ -307,9 +309,10 @@ class DirectBStage:
         self.started = time.monotonic()
         self.passed: list[dict] = []
         self.result_level = None
+        self.resources = ResourceScope()
         self.cleanup = {
             "ldn_context_released": True,
-            "radio_quiescent": False,
+            "radio_quiescent": True,
             "ldn_last_checkpoint": "not_started",
             "ap_stop_timed_out": False,
         }
@@ -388,7 +391,8 @@ class DirectBStage:
             override_challenge_key=param.override_challenge_key,
         )
         key = derivation.derive_data_key(param.server_random, param.password)
-        async with wlan.create_factory() as factory:
+        async with self.resources.context(wlan.create_factory(), "mirror.factory") as factory:
+            self.resources.instrument_factory(factory, "mirror")
             self.cleanup["ldn_last_checkpoint"] = "factory_entered"
             async with factory._create_interface(
                 param.phyname, param.ifname, wlan.nl80211.NL80211_IFTYPE_AP
@@ -431,7 +435,9 @@ class DirectBStage:
                     param.ssid.hex().encode("ascii"), param.channel, bytes(ap.address())
                 )
                 self.compatibility["beacon_head"] = True
-                async with ap.create():
+                async with self.resources.context(
+                    ap.create(), "mirror.ap", entry_owns_resource=False
+                ):
                     self.cleanup["ldn_last_checkpoint"] = "ap_started"
                     async with factory.create_monitor(
                         param.phyname_monitor, param.ifname_monitor
@@ -491,7 +497,9 @@ class DirectBStage:
 
                             network._destroy_network = destroy_remote_only
                             self.compatibility["remote_destroy"] = True
-                            async with network.start():
+                            async with self.resources.context(
+                                network.start(), "mirror.network", entry_owns_resource=False
+                            ):
                                 self.cleanup["ldn_last_checkpoint"] = "network_started"
                                 yield network, control_done
                             self.cleanup["ldn_last_checkpoint"] = "network_released"
@@ -514,19 +522,13 @@ class DirectBStage:
     @contextlib.asynccontextmanager
     async def _tracked_network_context(self, manager):
         """Record release only when the run-owned LDN context actually exits."""
-        body_error = None
         try:
             async with manager as opened:
-                try:
-                    yield opened
-                except BaseException as error:
-                    body_error = error
-                    raise
-        except BaseException as error:
-            self.cleanup["ldn_context_released"] = error is body_error
-            raise
-        else:
-            self.cleanup["ldn_context_released"] = True
+                yield opened
+        finally:
+            self.cleanup["ldn_context_released"] = self.resources.clean
+            self.cleanup["resources"] = dict(self.resources.states)
+            self.cleanup["errors"] = list(self.resources.failures)
 
     def _failure(self, error: BStageError) -> dict:
         return {
@@ -580,6 +582,7 @@ class DirectBStage:
                 raise BStageError("B_FIXTURE_HASH_MISMATCH", GATES[0], "diagnostic fixture hash changed")
             self._pass(GATES[0])
 
+            self.cleanup["radio_quiescent"] = False
             radio_evidence = self.radio_reset()
             if not isinstance(radio_evidence, dict) or radio_evidence.get("selected_phy_only") is not True:
                 raise BStageError("B_RADIO_RESET_FAILED", GATES[1], "radio reset evidence is incomplete")
@@ -595,6 +598,9 @@ class DirectBStage:
             self._pass(GATES[2])
 
             factory = self.network_factory or self._create_network
+            if self.network_factory is not None:
+                factory = lambda param: self.resources.context(
+                    self.network_factory(param), "injected.network")
             functional_complete = False
             self.cleanup["ldn_context_released"] = False
             try:
@@ -610,7 +616,9 @@ class DirectBStage:
                             raise BStageError("B_COMPATIBILITY_MISSING", GATES[3], "required host compatibility is missing")
                         self._pass(GATES[3])
 
-                        with self.data_plane_factory(network) as plane:
+                        with self.resources.sync_context(
+                            self.data_plane_factory(network), "data_plane"
+                        ) as plane:
                             if not all(plane.get(name) is True for name in (
                                 "tap_ready", "udp_bound", "packet_socket_bound"
                             )):
@@ -676,6 +684,8 @@ class DirectBStage:
                     raise BStageError("B_RADIO_QUIESCE_FAILED", GATES[-1], "owned radio cleanup is unverified")
             except BStageError:
                 raise
+            except (ImportError, metadata.PackageNotFoundError):
+                raise
             except Exception as error:
                 if functional_complete:
                     self.cleanup["ldn_context_released"] = False
@@ -712,30 +722,29 @@ class DirectBStage:
                 "cleanup": dict(self.cleanup),
             }
         except BStageError as error:
-            if radio_evidence is not None and not self.cleanup["radio_quiescent"]:
+            if not self.cleanup["radio_quiescent"]:
                 self._quiesce_owned_radio()
             report = self._failure(error)
             report["radio_reset"] = radio_evidence
             report["data_plane"] = plane_evidence
             report["association"] = association_evidence
             return report
+        except (ImportError, metadata.PackageNotFoundError):
+            if not self.cleanup["radio_quiescent"]:
+                self._quiesce_owned_radio()
+            return self._failure(BStageError(
+                "B_RUNTIME_DEPENDENCY_MISSING", GATES[0], "direct B runtime dependency is unavailable"
+            ))
         except BaseException as error:
-            cancelled = self.trio is not None and isinstance(
-                error, getattr(self.trio, "Cancelled", ())
-            )
-            if not cancelled:
-                raise
-            if radio_evidence is not None and not self.cleanup["radio_quiescent"]:
+            was_cancelled = self.trio is not None and cancelled(error)
+            if not self.cleanup["radio_quiescent"]:
                 self._quiesce_owned_radio()
             report = self._failure(BStageError(
-                "B_CANCELLED", GATES[min(len(self.passed), len(GATES) - 1)],
-                "direct B was cancelled",
+                "B_CANCELLED" if was_cancelled else "B_STAGE_INTERNAL",
+                GATES[min(len(self.passed), len(GATES) - 1)],
+                "direct B was cancelled" if was_cancelled else "direct B failed unexpectedly",
             ))
             report["radio_reset"] = radio_evidence
             report["data_plane"] = plane_evidence
             report["association"] = association_evidence
             return report
-        except (ImportError, metadata.PackageNotFoundError):
-            return self._failure(BStageError(
-                "B_RUNTIME_DEPENDENCY_MISSING", GATES[0], "direct B runtime dependency is unavailable"
-            ))

@@ -12,6 +12,7 @@ import time
 from typing import Awaitable, Callable
 
 from .data_plane import open_ldn_data_plane
+from .resource_scope import ResourceScope, cancelled
 
 
 COMMUNICATION_ID = 0x01006FA0233F8000
@@ -236,10 +237,7 @@ class DirectAStage:
         self.started = time.monotonic()
         self.passed: list[dict] = []
         self.result_level = None
-        # A does not take ownership of the prepared PHY.  It only owns an LDN
-        # context after STANetwork.start() yields.  Keep that distinction in
-        # the report so a no-room scan is retryable without blessing a partial
-        # join or an unobserved context teardown.
+        self.resources = ResourceScope()
         self.cleanup = {
             "ldn_context_released": True,
             "radio_quiescent": True,
@@ -283,9 +281,9 @@ class DirectAStage:
         wlan = ldn.wlan
         key_derivation = ldn.KeyDerivation(param.keys, param.network.protocol)
         wlan_key = key_derivation.derive_data_key(param.network.server_random, param.password)
-        body_error = None
         try:
-            async with wlan.create_factory() as factory:
+            async with self.resources.context(wlan.create_factory(), "join.factory") as factory:
+                self.resources.instrument_factory(factory, "join")
                 async with factory._create_interface(
                     param.phyname, param.ifname, wlan.nl80211.NL80211_IFTYPE_STATION
                 ) as attributes:
@@ -320,7 +318,9 @@ class DirectAStage:
                         self._pass(GATES[6])
 
                     station._register_key = tracked_register_key
-                    async with station.connect():
+                    async with self.resources.context(
+                        station.connect(), "join.station", entry_owns_resource=False
+                    ):
                         self.cleanup["ldn_context_released"] = False
                         self.cleanup["ldn_context_state"] = "acquiring"
                         sta = ldn.STANetwork(station, param, key_derivation)
@@ -338,26 +338,35 @@ class DirectAStage:
 
                         sta._authenticate = tracked_authenticate
                         sta._initialize_network = tracked_initialize
-                        async with sta.start():
+                        async with self.resources.context(
+                            sta.start(), "join.network", entry_owns_resource=False
+                        ):
                             self.cleanup["ldn_context_released"] = False
                             self.cleanup["ldn_context_state"] = "acquired"
-                            try:
-                                yield sta
-                            except BaseException as error:
-                                body_error = error
-                                raise
-        except BaseException as error:
-            if body_error is error:
-                self.cleanup["ldn_context_released"] = True
-                self.cleanup["ldn_context_state"] = "released"
-            elif self.cleanup["ldn_context_state"] in {"acquiring", "acquired"}:
-                self.cleanup["ldn_context_released"] = False
-                self.cleanup["ldn_context_state"] = "unknown"
-            raise
-        else:
-            if self.cleanup["ldn_context_state"] == "acquired":
-                self.cleanup["ldn_context_released"] = True
-                self.cleanup["ldn_context_state"] = "released"
+                            yield sta
+        finally:
+            self._record_cleanup()
+
+    def _record_cleanup(self):
+        self.cleanup["resources"] = dict(self.resources.states)
+        self.cleanup["errors"] = list(self.resources.failures)
+        self.cleanup["ldn_context_released"] = self.resources.clean
+        self.cleanup["radio_quiescent"] = self.resources.clean
+        self.cleanup["ldn_context_state"] = (
+            "unknown" if not self.resources.clean else
+            "released" if self.resources.states else "not_acquired")
+
+    async def _scan(self, keys):
+        # Pinned ldn.scan composition, with run-local factory instrumentation.
+        # Calling the opaque public helper hides its early monitor ownership.
+        derivations = {PROTOCOL: self.ldn.KeyDerivation(keys, PROTOCOL)}
+        async with self.resources.context(
+            self.ldn.wlan.create_factory(), "scan.factory"
+        ) as factory:
+            self.resources.instrument_factory(factory, "scan")
+            async with factory.create_monitor(self.phy, f"scan-{self.ifname}"[:15]) as monitor:
+                return await self.ldn.Scanner(derivations, monitor).scan(
+                    list(CHANNELS), self.dwell_time)
 
     async def _hold(self, network) -> None:
         disconnect_type = getattr(self.ldn, "DisconnectEvent", ())
@@ -370,6 +379,7 @@ class DirectAStage:
                     )
 
     def _failure(self, error: AStageError) -> dict:
+        self._record_cleanup()
         return {
             "contract_version": "direct-a-stage.v1",
             "schema": 1,
@@ -397,14 +407,7 @@ class DirectAStage:
             keys = self._preflight()
             try:
                 with self.trio.fail_after(self.scan_timeout):
-                    networks = await self.ldn.scan(
-                        keys,
-                        ifname=f"scan-{self.ifname}"[:15],
-                        phyname=self.phy,
-                        channels=list(CHANNELS),
-                        dwell_time=self.dwell_time,
-                        protocols=[PROTOCOL],
-                    )
+                    networks = await self._scan(keys)
             except self.trio.TooSlowError as error:
                 raise AStageError("A_SCAN_TIMEOUT", GATES[1], "LDN room scan timed out") from error
             if not networks:
@@ -437,7 +440,9 @@ class DirectAStage:
                 with self.trio.fail_after(self.join_timeout) as stage_scope:
                     async with self._connect(param) as network:
                         try:
-                            with self.data_plane_factory(network) as plane:
+                            with self.resources.sync_context(
+                                self.data_plane_factory(network), "data_plane"
+                            ) as plane:
                                 if not all(plane.get(name) is True for name in (
                                     "netdev_resolved", "udp_bound", "packet_socket_bound"
                                 )):
@@ -480,7 +485,11 @@ class DirectAStage:
                 ) from error
             except AStageError:
                 raise
+            except (ImportError, metadata.PackageNotFoundError):
+                raise
             except BaseException as error:
+                if cancelled(error):
+                    raise
                 index = min(len(self.passed), len(GATES) - 1)
                 codes = {
                     5: "A_ASSOCIATION_FAILED",
@@ -523,13 +532,11 @@ class DirectAStage:
             )), None
         except BaseException as error:
             index = min(len(self.passed), len(GATES) - 1)
-            cancelled = self.trio is not None and isinstance(
-                error, getattr(self.trio, "Cancelled", ())
-            )
+            was_cancelled = self.trio is not None and cancelled(error)
             return self._failure(AStageError(
-                "A_CANCELLED" if cancelled else "A_STAGE_INTERNAL",
+                "A_CANCELLED" if was_cancelled else "A_STAGE_INTERNAL",
                 GATES[index],
-                "direct A was cancelled" if cancelled else "direct A failed unexpectedly",
+                "direct A was cancelled" if was_cancelled else "direct A failed unexpectedly",
             )), None
 
 

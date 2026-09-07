@@ -95,6 +95,11 @@ class FakeFactory:
     async def _create_interface(self, *_args):
         yield {1: 7, 2: b"\x02\x00\x00\x00\x00\x02"}
 
+    @contextlib.asynccontextmanager
+    async def create_monitor(self, phy, name):
+        async with self._create_interface(phy, name, 6):
+            yield object()
+
 
 class FakeSTANetwork:
     def __init__(self, station, param, _key_derivation):
@@ -159,6 +164,10 @@ class FakeLdn:
     @classmethod
     async def scan(cls, *_args, **_kwargs):
         return list(cls.rooms)
+
+    @classmethod
+    def Scanner(cls, *_args):
+        return SimpleNamespace(scan=cls.scan)
 
 
 @contextlib.contextmanager
@@ -329,7 +338,9 @@ class DirectADriverLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await driver.prepare()
         generation = await asyncio.wait_for(driver.discover(asyncio.Event()), timeout=2)
         self.assertEqual(len(stages), 2)
-        self.assertEqual(stages[0].cleanup["ldn_context_state"], "not_acquired")
+        self.assertEqual(stages[0].cleanup["ldn_context_state"], "released")
+        self.assertTrue(all(state in {"released", "not_acquired"}
+                            for state in stages[0].cleanup["resources"].values()))
         self.assertTrue(stages[0].cleanup["ldn_context_released"])
         self.assertTrue((await generation.close("test")).local_resources_released)
 
@@ -388,7 +399,9 @@ class DirectADriverLifecycleTests(unittest.IsolatedAsyncioTestCase):
         cancel.set()
         with self.assertRaises(asyncio.CancelledError):
             await asyncio.wait_for(discovery, timeout=1)
-        self.assertEqual(stages[0].cleanup["ldn_context_state"], "not_acquired")
+        self.assertEqual(stages[0].cleanup["ldn_context_state"], "released")
+        self.assertTrue(all(state in {"released", "not_acquired"}
+                            for state in stages[0].cleanup["resources"].values()))
         self.assertTrue(stages[0].cleanup["ldn_context_released"])
         self.assertFalse(any(thread.name == "switchtrade-direct-stage" for thread in threading.enumerate()))
 
@@ -426,7 +439,9 @@ class DirectADriverLifecycleTests(unittest.IsolatedAsyncioTestCase):
         cancel.set()
         with self.assertRaises(asyncio.CancelledError):
             await asyncio.wait_for(discovery, timeout=1)
-        self.assertEqual(stages[0].cleanup["ldn_context_state"], "not_acquired")
+        self.assertEqual(stages[0].cleanup["ldn_context_state"], "released")
+        self.assertTrue(all(state in {"released", "not_acquired"}
+                            for state in stages[0].cleanup["resources"].values()))
         self.assertTrue(stages[0].cleanup["ldn_context_released"])
 
     async def test_actual_direct_a_unverified_context_teardown_blocks_next_attempt(self):

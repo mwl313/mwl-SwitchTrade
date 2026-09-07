@@ -45,6 +45,9 @@ class StageSession:
         self._cancel_scope = None
         self._trio_ready = threading.Event()
         self._stop_error: BaseException | None = None
+        self._start_called = False
+        self._owner_lock = threading.Lock()
+        self.end_reason: str | None = None
         stage.session_handler = self._hold
 
     async def _hold(self, network: object, transport: object, advertisement: bytes) -> None:
@@ -52,14 +55,33 @@ class StageSession:
 
         self.resources = StageResources(network, transport, bytes(advertisement))
         self._ready.set()
-        await trio.to_thread.run_sync(self._stop.wait, abandon_on_cancel=True)
+        ldn = getattr(self.stage, "ldn", None)
+        end_types = tuple(value for name in ("DisconnectEvent", "LeaveEvent")
+                          if isinstance(value := getattr(ldn, name, None), type))
+
+        async def watch_room():
+            while True:
+                event = await network.next_event()
+                if isinstance(event, end_types):
+                    self.end_reason = "local_room_ended"
+                    nursery.cancel_scope.cancel()
+                    return
+
+        async with trio.open_nursery() as nursery:
+            if end_types:
+                nursery.start_soon(watch_room)
+            while not self._stop.is_set():
+                await trio.sleep(0.02)
+            nursery.cancel_scope.cancel()
 
     def start(self) -> "StageSession":
-        if self._thread is not None:
-            raise RuntimeError("stage session was already started")
-        self._thread = threading.Thread(
-            target=self._run, name="switchtrade-direct-stage", daemon=True)
-        self._thread.start()
+        with self._owner_lock:
+            if self._start_called or self._stop.is_set():
+                raise RuntimeError("stage session was already started or stopped")
+            self._start_called = True
+            self._thread = threading.Thread(
+                target=self._run, name="switchtrade-direct-stage", daemon=True)
+            self._thread.start()
         return self
 
     def _run(self) -> None:
@@ -71,6 +93,8 @@ class StageSession:
                 with trio.CancelScope() as scope:
                     self._cancel_scope = scope
                     self._trio_ready.set()
+                    if self._stop.is_set():
+                        scope.cancel()
                     result = await self.stage.run()
                 if scope.cancelled_caught:
                     raise StageSessionError(
@@ -94,7 +118,7 @@ class StageSession:
                 "DIRECT_STAGE_READY_TIMEOUT", "DIRECT_STAGE_READY",
                 "direct stage did not reach its sustained-session checkpoint",
             )
-        if self.resources is not None:
+        if self.resources is not None and not self._done.is_set() and not self._stop.is_set():
             return self.resources
         if self._error is not None:
             raise self._error
@@ -107,22 +131,46 @@ class StageSession:
                 str(self.report["last_passed_gate"])
                 if self.report.get("last_passed_gate") is not None else None,
             )
+        if self._stop.is_set():
+            raise StageSessionError(
+                "DIRECT_STAGE_CANCELLED", "DIRECT_STAGE_READY",
+                "direct stage was stopped before readiness admission")
         raise StageSessionError(
             "DIRECT_STAGE_FAILED", "DIRECT_STAGE_READY",
             "direct stage failed before readiness",
         )
 
     def stop(self) -> None:
+        with self._owner_lock:
+            self._stop_owned()
+
+    @property
+    def ended(self) -> bool:
+        return self._done.is_set()
+
+    def raise_failure(self) -> None:
+        if self._error is not None:
+            raise self._error
+        failure = self.report.get("failure") if isinstance(self.report, dict) else None
+        if isinstance(failure, dict):
+            raise StageSessionError(failure["code"], failure["gate"], failure["message"],
+                                    self.report.get("last_passed_gate"))
+
+    def _stop_owned(self) -> None:
+        # A late thread exit must never turn an earlier unknown cleanup into a
+        # successful retry. One session has exactly one admission and stop result.
+        if self._stop_error is not None:
+            raise self._stop_error
+        self._stop.set()
+        self._ready.set()
         if self._thread is None:
-            if self._stop_error is not None:
-                raise self._stop_error
             return
         try:
-            self._stop.set()
-            if self.resources is None and self._trio_ready.wait(self.stop_timeout) and self._trio_token is not None and self._cancel_scope is not None:
+            if self.resources is None and self._trio_token is not None and self._cancel_scope is not None:
                 try:
-                    import trio
-                    trio.from_thread.run_sync(self._cancel_scope.cancel, trio_token=self._trio_token)
+                    # Enqueue, never synchronously wait for a possibly stalled
+                    # OS operation in the Trio thread to acknowledge cancellation.
+                    self._trio_token.run_sync_soon(self._cancel_scope.cancel)
                 except RuntimeError:
                     pass
             self._thread.join(self.stop_timeout)
