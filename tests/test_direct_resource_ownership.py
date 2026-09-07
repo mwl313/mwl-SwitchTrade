@@ -27,6 +27,23 @@ def stage_for(ldn):
         data_plane_factory=fake_data_plane, version_resolver=lambda: "0.0.17")
 
 
+def test_runtime_sockets_are_closed_even_when_library_objects_remain_referenced():
+    retained = []
+
+    class Ldn(FakeLdn):
+        @classmethod
+        async def scan(cls, *_args):
+            retained.extend([trio.socket.socket(), trio.socket.socket()])
+            return []
+
+    stage = stage_for(Ldn)
+    report, _ = trio.run(stage.run)
+    assert report["failure"]["code"] == "A_ROOM_NOT_OBSERVED"
+    assert retained and all(stream.fileno() == -1 for stream in retained)
+    assert report["cleanup"]["resources"]["runtime.sockets"] == "released"
+    assert report["cleanup"]["ldn_context_released"]
+
+
 @pytest.mark.parametrize("delete_fails", [False, True])
 def test_association_failure_retains_primary_and_independent_vif_release(delete_fails):
     inventory = {"health-monitor", "unrelated-wlan", "unrelated-tap"}

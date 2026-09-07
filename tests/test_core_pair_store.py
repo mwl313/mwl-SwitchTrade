@@ -55,7 +55,7 @@ class PairStoreTests(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=2) as workers:
             outcomes = list(workers.map(lambda _: self._join(store, host.code or ""), range(2)))
         self.assertEqual(outcomes.count("guest"), 1)
-        self.assertEqual(outcomes.count("PAIR_CODE_INVALID"), 1)
+        self.assertEqual(outcomes.count("PAIR_CODE_CONSUMED"), 1)
         with self.assertRaisesRegex(PairStoreError, "PAIR_AUTH_INVALID"):
             store.authenticate(host.pair_id, "wrong-token")
 
@@ -95,6 +95,31 @@ class PairStoreTests(unittest.TestCase):
             store.join(current.code or "", capabilities(GenerationRole.MIRROR)).pair_id,
             current.pair_id,
         )
+
+    def test_connected_pair_survives_reconnect_lease_but_cannot_readmit(self):
+        clock = Clock()
+        store = PairStore(now=clock)
+        host = store.create(capabilities(GenerationRole.ORIGIN))
+        store.attach(host.pair_id, host.access_token, "stream-1")
+        clock.advance(hours=2)
+        store.sweep()
+        self.assertIn(host.pair_id, store._pairs)
+        with self.assertRaisesRegex(PairStoreError, "PAIR_AUTH_INVALID"):
+            store.attach(host.pair_id, host.access_token, "stream-2")
+        store.detach(host.pair_id, "stream-1")
+        self.assertNotIn(host.pair_id, store._pairs)
+
+    def test_consumed_invite_is_explicit_but_established_pair_is_independent(self):
+        clock = Clock()
+        store = PairStore(now=clock)
+        host = store.create(capabilities(GenerationRole.ORIGIN))
+        guest = store.join(host.code, capabilities(GenerationRole.MIRROR))
+        with self.assertRaisesRegex(PairStoreError, "PAIR_CODE_CONSUMED"):
+            store.join(host.code, capabilities(GenerationRole.MIRROR))
+        clock.advance(minutes=11)
+        self.assertEqual(store.authenticate(host.pair_id, guest.access_token).value, "guest")
+        with self.assertRaisesRegex(PairStoreError, "PAIR_CODE_EXPIRED"):
+            store.join(host.code, capabilities(GenerationRole.MIRROR))
 
     @staticmethod
     def _join(store: PairStore, code: str) -> str:

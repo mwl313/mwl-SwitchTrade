@@ -7,10 +7,39 @@ from unittest.mock import AsyncMock, patch
 
 from switchtrade.core import PairCredentials, PairSeat
 from switchtrade.core.supervisor import SupervisorError
-from switchtrade.core_cli import CliError, _credentials, _policy, _websocket_url, main, parser, run
+from switchtrade.core_cli import CliError, _credentials, _policy, _websocket_url, _relay_base, _stop_preserving_failure, main, parser, run
 
 
 class SwitchCoreCliTests(unittest.IsolatedAsyncioTestCase):
+    def test_common_relay_http_and_websocket_urls_are_consistent(self):
+        for scheme, http, ws in (("http", "http", "ws"), ("ws", "http", "ws"),
+                                 ("https", "https", "wss"), ("wss", "https", "wss")):
+            self.assertEqual(_relay_base(f"{scheme}://relay.example/base/"), f"{http}://relay.example/base")
+            self.assertEqual(_relay_base(f"{scheme}://relay.example/base/", websocket=True), f"{ws}://relay.example/base")
+        for invalid in ("ftp://relay.example", "https://token@relay.example", "https://relay.example/?token=x",
+                        "http://relay.example:invalid", "http://", "https://relay.example/#fragment"):
+            with self.assertRaises(CliError):
+                _relay_base(invalid)
+
+    async def test_first_failure_survives_cleanup_but_cancel_cleanup_failure_is_nonzero(self):
+        cleanup = SupervisorError("S_CLEANUP_FAILED")
+        supervisor = type("Owner", (), {"stop": AsyncMock(side_effect=cleanup)})()
+        first = CliError("PAIR_AUTH_INVALID")
+        await _stop_preserving_failure(supervisor, first)
+        self.assertEqual(str(first), "PAIR_AUTH_INVALID")
+        self.assertIn("S_CLEANUP_FAILED", first.__notes__[0])
+        with self.assertRaises(SupervisorError) as caught:
+            await _stop_preserving_failure(supervisor, asyncio.CancelledError())
+        self.assertIs(caught.exception, cleanup)
+
+    def test_credentials_reject_missing_or_unbound_identities(self):
+        response = {"pair_id": "pair-1", "access_token": "token", "reconnect_expires_at": "2099-01-01T00:00:00+00:00", "code": "000042"}
+        self.assertEqual(_credentials(response, PairSeat.HOST).code, "000042")
+        for field, value in (("pair_id", "../other"), ("access_token", None),
+                             ("reconnect_expires_at", "2099-01-01"), ("code", 42)):
+            with self.assertRaises(CliError):
+                _credentials({**response, field: value}, PairSeat.HOST)
+
     def test_dev_core_route_runs_through_the_proven_radio_gate(self) -> None:
         root = Path(__file__).resolve().parents[1]
         self.assertIn("Invoke-DevRun -Arguments $runArguments -CoreCli", (root / "dev.ps1").read_text(encoding="utf-8"))

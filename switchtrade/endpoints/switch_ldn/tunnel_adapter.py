@@ -180,9 +180,9 @@ class CoreTunnelAdapter:
 
     @staticmethod
     def _validated_flags(flags: int) -> None:
-        if isinstance(flags, bool) or not isinstance(flags, int) or not 0 <= flags <= 0xFF:
+        if isinstance(flags, bool) or not isinstance(flags, int) or not 0 <= flags <= 0xFF or not flags & 1:
             raise SwitchLdnEndpointError(
-                "SWITCH_ENDPOINT_FLAGS_INVALID", "RFU flags are outside the Reliable wire bound"
+                "SWITCH_ENDPOINT_FLAGS_INVALID", "RFU requires uint8 Reliable AppData flags"
             )
 
     def _admit_open(self) -> None:

@@ -12,7 +12,7 @@ import time
 from typing import Awaitable, Callable
 
 from .data_plane import open_ldn_data_plane
-from .resource_scope import ResourceScope, cancelled
+from .resource_scope import ResourceScope, cancelled, run_with_owned_sockets
 
 
 COMMUNICATION_ID = 0x01006FA0233F8000
@@ -397,6 +397,12 @@ class DirectAStage:
         }
 
     async def run(self) -> tuple[dict, bytes | None]:
+        result = await run_with_owned_sockets(self.resources, self._run_stage)
+        self._record_cleanup()
+        result[0]["cleanup"] = dict(self.cleanup)
+        return result
+
+    async def _run_stage(self) -> tuple[dict, bytes | None]:
         try:
             if self.ldn is None:
                 import ldn

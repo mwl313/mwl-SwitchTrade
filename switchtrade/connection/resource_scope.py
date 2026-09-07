@@ -10,6 +10,59 @@ import contextlib
 import socket
 
 
+@contextlib.contextmanager
+def owned_trio_sockets():
+    """Retain and explicitly close every socket created by this LDN Trio run.
+
+LDN 0.0.17 Interface/Monitor retain sockets beyond factory exit (and Monitor
+replaces its initial Interface socket). The returned sockets are still the real
+Trio sockets; the run-local factory only records ownership, without changing IO.
+"""
+    import trio
+
+    streams = []
+
+    class Factory:
+        def socket(self, family=socket.AF_INET, type=socket.SOCK_STREAM, proto=0):
+            trio.socket.set_custom_socket_factory(previous)
+            try:
+                stream = trio.socket.socket(family, type, proto)
+                streams.append(stream)
+                return stream
+            finally:
+                trio.socket.set_custom_socket_factory(self)
+
+    previous = trio.socket.set_custom_socket_factory(Factory())
+    try:
+        yield
+    finally:
+        trio.socket.set_custom_socket_factory(previous)
+        failures = []
+        for stream in reversed(streams):
+            try:
+                if stream.fileno() != -1:
+                    stream.close()
+                if stream.fileno() != -1:
+                    raise RuntimeError("socket release unproven")
+            except BaseException as error:
+                failures.append(error)
+        if failures:
+            raise RuntimeError("LDN_RUNTIME_SOCKET_CLEANUP_FAILED") from failures[0]
+
+
+async def run_with_owned_sockets(resources, operation):
+    result = None
+    try:
+        with resources.sync_context(owned_trio_sockets(), "runtime.sockets"):
+            result = await operation()
+    except BaseException:
+        if result is None:
+            raise
+        # The operation already supplied the first functional result. Cleanup
+        # failure is separately retained by ResourceScope, never a replacement.
+    return result
+
+
 def cancelled(error: BaseException) -> bool:
     import trio
 

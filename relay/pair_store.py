@@ -36,13 +36,18 @@ class PairStore:
         self._pairs: dict[str, PairRecord] = {}
         self._codes: dict[str, str] = {}
         self._expired_codes: set[str] = set()
+        self._consumed_codes: dict[str, str] = {}
+        self._connections: dict[str, set[str]] = {}
         # ponytail: global lock; use per-pair locks only if relay throughput requires it.
         self._lock = RLock()
         self._limits: dict[tuple[str, str], deque[datetime]] = {}
 
     @staticmethod
     def _hash(token: str) -> str:
-        return hashlib.sha256(token.encode("ascii")).hexdigest()
+        try:
+            return hashlib.sha256(token.encode("ascii")).hexdigest()
+        except UnicodeEncodeError as error:
+            raise PairStoreError("PAIR_AUTH_INVALID") from error
 
     def _time(self) -> datetime:
         return self._now(UTC)
@@ -54,8 +59,11 @@ class PairStore:
                 if record.code_expires_at <= now:
                     if self._codes.get(record.code) == pair_id:
                         self._codes.pop(record.code, None)
-                    self._expired_codes.add(record.code)
-                if record.reconnect_expires_at <= now:
+                        self._expired_codes.add(record.code)
+                    if self._consumed_codes.get(record.code) == pair_id:
+                        self._consumed_codes.pop(record.code, None)
+                        self._expired_codes.add(record.code)
+                if record.reconnect_expires_at <= now and not self._connections.get(pair_id):
                     self._pairs.pop(pair_id)
                     if self._codes.get(record.code) == pair_id:
                         self._codes.pop(record.code, None)
@@ -80,6 +88,8 @@ class PairStore:
             self.sweep()
             if not code.isdigit() or len(code) != 6 or code not in self._codes:
                 self._limit("guess", client_id, 5)
+                if code in self._consumed_codes:
+                    raise PairStoreError("PAIR_CODE_CONSUMED")
                 if code in self._expired_codes:
                     raise PairStoreError("PAIR_CODE_EXPIRED")
                 raise PairStoreError("PAIR_CODE_INVALID")
@@ -96,6 +106,7 @@ class PairStore:
             record.token_hashes[PairSeat.GUEST] = self._hash(token)
             record.guest = capabilities
             self._codes.pop(code, None)
+            self._consumed_codes[code] = record.pair_id
             return PairCredentials(record.pair_id, PairSeat.GUEST, token, record.reconnect_expires_at.isoformat())
 
     def authenticate(self, pair_id: str, token: str) -> PairSeat:
@@ -103,11 +114,27 @@ class PairStore:
             self.sweep()
             record = self._pairs.get(pair_id)
             candidate = self._hash(token)
-            if record is not None:
+            if record is not None and record.reconnect_expires_at > self._time():
                 for seat, stored in record.token_hashes.items():
                     if hmac.compare_digest(candidate, stored):
                         return seat
             raise PairStoreError("PAIR_AUTH_INVALID")
+
+    def attach(self, pair_id: str, token: str, connection_id: str) -> PairSeat:
+        """Admit a new stream before the reconnect lease expires."""
+        with self._lock:
+            seat = self.authenticate(pair_id, token)
+            self._connections.setdefault(pair_id, set()).add(connection_id)
+            return seat
+
+    def detach(self, pair_id: str, connection_id: str) -> None:
+        with self._lock:
+            connections = self._connections.get(pair_id)
+            if connections is not None:
+                connections.discard(connection_id)
+                if not connections:
+                    self._connections.pop(pair_id, None)
+            self.sweep()
 
     def status(self, pair_id: str, token: str) -> dict[str, object]:
         with self._lock:
@@ -134,5 +161,6 @@ class PairStore:
             code = f"{secrets.randbelow(1_000_000):06d}"
             if code not in self._codes:
                 self._expired_codes.discard(code)
+                self._consumed_codes.pop(code, None)
                 return code
         raise PairStoreError("PAIR_CODE_EXHAUSTED")

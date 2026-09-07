@@ -27,7 +27,7 @@ from .a_stage import (
 )
 from .b_fixture import FIXTURE, FIXTURE_ID, FIXTURE_NAME, FIXTURE_SHA256
 from .data_plane import open_ldn_data_plane
-from .resource_scope import ResourceScope, cancelled
+from .resource_scope import ResourceScope, cancelled, run_with_owned_sockets
 
 
 PIA_PORT = 12345
@@ -561,6 +561,14 @@ class DirectBStage:
         )
 
     async def run(self) -> dict:
+        result = await run_with_owned_sockets(self.resources, self._run_stage)
+        self.cleanup["ldn_context_released"] = self.resources.clean
+        self.cleanup["resources"] = dict(self.resources.states)
+        self.cleanup["errors"] = list(self.resources.failures)
+        result["cleanup"] = dict(self.cleanup)
+        return result
+
+    async def _run_stage(self) -> dict:
         radio_evidence = None
         plane_evidence = None
         association_evidence = None

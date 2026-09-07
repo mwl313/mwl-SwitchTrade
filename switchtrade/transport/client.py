@@ -64,6 +64,9 @@ class WireClient:
             self._raise_if_failed()
             if revision != self.revision:
                 raise TransportError("T_PEER_RECONNECTED")
+            # connect() may replace the failure event while this old waiter is
+            # resuming. The old stream still ended; never return as healthy.
+            raise TransportError("T_TRANSPORT_REPLACED")
         finally:
             for task in (failed, changed):
                 task.cancel()
@@ -116,7 +119,19 @@ class WireClient:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._writer = self._reader = None
         if socket is not None:
-            await socket.close()
+            try:
+                await asyncio.wait_for(socket.close(), self._send_timeout)
+            finally:
+                self._clear_queues()
+        else:
+            self._clear_queues()
+
+    def _clear_queues(self) -> None:
+        while not self._incoming.empty():
+            self._incoming.get_nowait()
+        while not self._outgoing.empty():
+            self._outgoing.get_nowait()
+            self._outgoing.task_done()
 
     def discard_generation(self, generation_id: str) -> int:
         kept: list[Envelope] = []
@@ -126,7 +141,7 @@ class WireClient:
                 envelope = self._incoming.get_nowait()
             except asyncio.QueueEmpty:
                 break
-            if envelope.kind is FrameKind.DATA and envelope.generation_id == generation_id:
+            if envelope.generation_id == generation_id:
                 discarded += 1
             else:
                 kept.append(envelope)

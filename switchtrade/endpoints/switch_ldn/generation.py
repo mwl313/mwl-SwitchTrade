@@ -147,10 +147,18 @@ class SwitchLdnGeneration:
         runner_timed_out = self._runner.is_alive()
         if runner_timed_out:
             failures.append("runner:timeout")
-        try:
-            self.simulation.close()
-        except BaseException as error:
-            failures.append(f"simulation:{type(error).__name__}")
+        def close_simulation():
+            try:
+                self.simulation.close()
+            except BaseException as error:
+                failures.append(f"simulation:{type(error).__name__}")
+
+        closer = threading.Thread(target=close_simulation,
+                                  name="switchtrade-simulation-close", daemon=True)
+        closer.start()
+        await asyncio.to_thread(closer.join, _RUNNER_STOP_TIMEOUT)
+        if closer.is_alive():
+            failures.append("simulation:timeout")
         try:
             await asyncio.to_thread(self._session.stop)
         except BaseException as error:
@@ -177,6 +185,8 @@ class SwitchLdnGeneration:
         deadline = time.monotonic()
         while not self._runner_stop.is_set():
             if getattr(self._session, "end_reason", None) is not None:
+                return
+            if getattr(self._session, "ended", False):
                 return
             try:
                 self.simulation.tick()

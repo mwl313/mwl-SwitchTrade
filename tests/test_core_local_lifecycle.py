@@ -21,6 +21,41 @@ from tests.test_direct_resource_ownership import stage_for
 
 
 class LocalLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_invite_expiry_is_not_confused_with_an_already_consumed_pair(self):
+        for joined in (False, True):
+            wire = WireClient(PairSeat.HOST)
+            socket = MemorySocket()
+            socket.peer = MemorySocket()
+            await wire.connect(socket)
+
+            class Ldn(FakeLdn):
+                rooms = []
+
+            driver = SwitchLdnEndpointDriver(
+                a_helpers.DirectADriverLifecycleTests()._policy(),
+                stage_factory=lambda _: stage_for(Ldn), session_factory=StageSession,
+                simulation_factory=lambda *_: _NoopSimulation())
+
+            async def confirm_joined():
+                return joined
+
+            host = CoreSupervisor(credentials(PairSeat.HOST), driver, wire,
+                invite_expires_at=(datetime.now(UTC) + timedelta(seconds=.03)).isoformat(),
+                confirm_peer_joined=confirm_joined)
+            pending = asyncio.create_task(host.discover_local())
+            try:
+                if joined:
+                    await asyncio.sleep(.08)
+                    self.assertFalse(pending.done())
+                else:
+                    with self.assertRaisesRegex(SupervisorError, "S_PAIR_CODE_EXPIRED"):
+                        await asyncio.wait_for(pending, 1)
+            finally:
+                pending.cancel()
+                await asyncio.gather(pending, return_exceptions=True)
+                await host.stop()
+            self.assertTrue((await driver.close()).local_resources_released)
+
     async def asyncSetUp(self):
         self.left, self.right = MemorySocket(), MemorySocket()
         self.left.peer, self.right.peer = self.right, self.left

@@ -50,7 +50,8 @@ def _parse_offer(generation_id: str, payload: bytes) -> GenerationOffer:
 
 
 class CoreSupervisor:
-    def __init__(self, credentials: PairCredentials, driver: EndpointDriver, transport: WireClient, *, connector: Callable[[], Awaitable[BinarySocket]] | None = None, reconnect_timeout: float = 5.0) -> None:
+    def __init__(self, credentials: PairCredentials, driver: EndpointDriver, transport: WireClient, *, connector: Callable[[], Awaitable[BinarySocket]] | None = None, reconnect_timeout: float = 5.0,
+                 invite_expires_at: str | None = None, confirm_peer_joined: Callable[[], Awaitable[bool]] | None = None) -> None:
         if credentials.seat is not transport.state.seat:
             raise SupervisorError("S_SEAT_MISMATCH")
         if reconnect_timeout <= 0:
@@ -72,6 +73,21 @@ class CoreSupervisor:
         if self._lease_expires.tzinfo is None:
             raise ValueError("Pair lease must include a timezone")
         self.cleanup_failures: list[object] = []
+        self._invite_expires = datetime.fromisoformat(invite_expires_at) if invite_expires_at else None
+        self._confirm_peer_joined = confirm_peer_joined
+        self._invite_resolved = False
+
+    async def _invite_end(self) -> None:
+        if self._invite_resolved or self.transport.state.peer_epoch is not None:
+            self._invite_resolved = True
+            await asyncio.Future()
+        await asyncio.sleep(max(0, (self._invite_expires - datetime.now(UTC)).total_seconds()))
+        if self.transport.state.peer_epoch is not None or (
+            self._confirm_peer_joined is not None and await self._confirm_peer_joined()
+        ):
+            self._invite_resolved = True
+            await asyncio.Future()
+        raise SupervisorError("S_PAIR_CODE_EXPIRED")
 
     async def _lease_end(self) -> None:
         delay = (self._lease_expires - datetime.now(UTC)).total_seconds()
@@ -97,6 +113,8 @@ class CoreSupervisor:
         canceled = asyncio.create_task(self._cancel.wait())
         guards = [canceled, asyncio.create_task(self._lease_end()),
                   asyncio.create_task(self.transport.wait_interrupted(self._wire_revision))]
+        if self._invite_expires is not None:
+            guards.append(asyncio.create_task(self._invite_end()))
         if self._generation is not None:
             guards.append(asyncio.create_task(self._local_end()))
         peer = None
@@ -214,7 +232,7 @@ class CoreSupervisor:
             raise await self._fail_and_cleanup(getattr(exc, "code", "S_ENDPOINT_FAILED"), exc) from exc
         if accepted.kind is not FrameKind.GENERATION_ACCEPT or accepted.generation_id != generation.offer.generation_id:
             raise await self._fail_and_cleanup("S_GENERATION_STALE")
-        self._activate()
+        await self._activate()
 
     async def accept_next_offer(self) -> GenerationOffer:
         if self.credentials.seat is not PairSeat.GUEST:
@@ -256,7 +274,7 @@ class CoreSupervisor:
             await self.transport.send(FrameKind.GENERATION_ACCEPT, offer.generation_id)
         except TransportError as exc:
             raise await self._fail_and_cleanup("S_TRANSPORT_FAILED") from exc
-        self._activate()
+        await self._activate()
         return offer
 
     async def close_generation(self, outcome: str = "closed", *, notify_peer: bool = True) -> None:
@@ -321,6 +339,12 @@ class CoreSupervisor:
         except Exception:
             await self._cleanup_failed()
         try:
+            if self.transport.connected:
+                await self.transport.send(FrameKind.PEER_CLOSE)
+                await self.transport.drain()
+        except TransportError as error:
+            self.cleanup_failures.append({"owner": "peer_close", "code": error.code})
+        try:
             await self.transport.close()
         except Exception:
             await self._cleanup_failed()
@@ -357,10 +381,13 @@ class CoreSupervisor:
         self.state = SupervisorState.PAIRED
         self._wire_revision = self.transport.revision
 
-    def _activate(self) -> None:
+    async def _activate(self) -> None:
         activate = getattr(self._generation, "activate", None)
-        if activate is not None:
-            activate()
+        try:
+            if activate is not None:
+                activate()
+        except Exception as error:
+            raise await self._fail_and_cleanup(getattr(error, "code", "S_ENDPOINT_FAILED"), error) from error
         self.state = SupervisorState.ACTIVE
         self._pump_tasks = {asyncio.create_task(self._pump_local()), asyncio.create_task(self._pump_remote()),
                             asyncio.create_task(self._pump_lifecycle())}

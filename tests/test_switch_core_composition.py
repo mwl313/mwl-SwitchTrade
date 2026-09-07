@@ -168,8 +168,8 @@ class SwitchCoreCompositionTests(unittest.IsolatedAsyncioTestCase):
                 host_generation, guest_generation = host_driver.driver._generation, guest_driver.driver._generation
                 host_generation.tunnel.send_rfu(b"host", flags=0x7F)  # type: ignore[union-attr]
                 await self._wait_for_frames(guest_generation.tunnel, [(b"host", 0x7F)])  # type: ignore[union-attr]
-                guest_generation.tunnel.send_rfu(b"guest", flags=0x00)  # type: ignore[union-attr]
-                await self._wait_for_frames(host_generation.tunnel, [(b"guest", 0x00)])  # type: ignore[union-attr]
+                guest_generation.tunnel.send_rfu(b"guest", flags=0x01)  # type: ignore[union-attr]
+                await self._wait_for_frames(host_generation.tunnel, [(b"guest", 0x01)])  # type: ignore[union-attr]
                 checkpoint.assert_not_called()
 
             await host.close_generation()

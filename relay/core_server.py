@@ -71,25 +71,28 @@ def create_app(store: PairStore | None = None) -> FastAPI:
 
     @app.websocket("/core/v1/pairs/{pair_id}/ws")
     async def websocket(pair_id: str, websocket: WebSocket) -> None:
+        connection_id = str(id(websocket))
         try:
-            seat = pairs.authenticate(pair_id, token(websocket.headers.get("authorization")))
+            seat = pairs.attach(pair_id, token(websocket.headers.get("authorization")), connection_id)
         except (PairStoreError, HTTPException):
             await websocket.close(code=4401)
             return
         key = (pair_id, seat.value)
-        if seat.value in seen_seats.get(pair_id, set()):
-            clear_pending(pair_id)
-        previous = sockets.get(key)
-        if previous is not None:
-            clear_pending(pair_id)
-            await previous.close(code=4000)
-        seen_seats.setdefault(pair_id, set()).add(seat.value)
-        sockets[key] = websocket
-        await websocket.accept()
-        await websocket.send_json({"seat": seat.value})
-        for raw in pending.pop(key, ()):
-            await websocket.send_bytes(raw)
         try:
+            if seat.value in seen_seats.get(pair_id, set()):
+                clear_pending(pair_id)
+            previous = sockets.get(key)
+            # Publish the replacement first: the old socket's finally must not
+            # retire a newer socket or disconnect that replacement's peer.
+            sockets[key] = websocket
+            if previous is not None:
+                clear_pending(pair_id)
+                await asyncio.wait_for(previous.close(code=4000), 5)
+            seen_seats.setdefault(pair_id, set()).add(seat.value)
+            await websocket.accept()
+            await asyncio.wait_for(websocket.send_json({"seat": seat.value}), 5)
+            for raw in pending.pop(key, ()):
+                await asyncio.wait_for(websocket.send_bytes(raw), 5)
             while True:
                 raw = await websocket.receive_bytes()
                 try:
@@ -110,23 +113,29 @@ def create_app(store: PairStore | None = None) -> FastAPI:
                         return
                     queue.append(raw)
                     continue
-                try:
-                    await asyncio.wait_for(target.send_bytes(raw), timeout=5)
-                except (asyncio.TimeoutError, RuntimeError):
-                    if sockets.get(peer_key) is target:
-                        sockets.pop(peer_key, None)
-                    await target.close(code=4408)
-                    clear_pending(pair_id)
-                    await websocket.close(code=4408)
-                    return
-        except WebSocketDisconnect:
+                await asyncio.wait_for(target.send_bytes(raw), timeout=5)
+        except (WebSocketDisconnect, asyncio.TimeoutError, RuntimeError, OSError):
             pass
         finally:
+            pairs.detach(pair_id, connection_id)
             if sockets.get(key) is websocket:
                 sockets.pop(key, None)
-            if not any(current_pair_id == pair_id for current_pair_id, _ in sockets):
+                peer = PairSeat.GUEST if seat is PairSeat.HOST else PairSeat.HOST
+                target = sockets.pop((pair_id, peer.value), None)
                 clear_pending(pair_id)
                 seen_seats.pop(pair_id, None)
+                if target is not None:
+                    # A lost peer must interrupt pre-active/human waits even
+                    # when neither side produces DATA. Never forge a peer wire
+                    # frame/sequence; terminate only the captured old stream.
+                    try:
+                        await asyncio.wait_for(target.close(code=4001), 5)
+                    except (RuntimeError, OSError, asyncio.TimeoutError):
+                        pass
+            try:
+                await asyncio.wait_for(websocket.close(), 5)
+            except (RuntimeError, OSError, asyncio.TimeoutError):
+                pass
 
     return app
 

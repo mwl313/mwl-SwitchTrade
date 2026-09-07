@@ -15,6 +15,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class CoreTunnelAdapterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_non_appdata_flags_are_rejected_before_tunnelsim_can_drop_them(self):
+        adapter = CoreTunnelAdapter("generation-1", SWITCH_LDN_PROTOCOL)
+        for flags in (0, 2, 0xFE):
+            with self.assertRaises(SwitchLdnEndpointError):
+                adapter.send_rfu(b"invalid", flags=flags)
+            with self.assertRaises(SwitchLdnEndpointError):
+                await adapter.deliver_from_core(LinkPacket("generation-1", SWITCH_LDN_PROTOCOL, b"invalid", flags))
+        self.assertEqual(adapter.poll(), [])
+
     async def test_maps_opaque_rfu_payload_and_uint8_rfu_flags(self) -> None:
         adapter = CoreTunnelAdapter("generation-1", SWITCH_LDN_PROTOCOL)
         adapter.send_rfu(b"\x57opaque-local", flags=0xFF)

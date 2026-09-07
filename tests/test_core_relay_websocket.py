@@ -48,15 +48,23 @@ class CoreRelayWebSocketTests(unittest.TestCase):
             self.assertEqual(closed.exception.code, 4400)
         self.assertFalse(self.app.state.core_sockets)
 
-    def test_reconnect_discards_stale_pending_frames(self) -> None:
+    def test_disconnect_prevents_stale_pending_and_reconnect_starts_fresh(self) -> None:
         with self.client.websocket_connect(self.path, headers={"authorization": f"Bearer {self.host['access_token']}"}) as host:
             self.assertEqual(host.receive_json(), {"seat": "host"})
             with self.client.websocket_connect(self.path, headers={"authorization": f"Bearer {self.guest['access_token']}"}) as guest:
                 self.assertEqual(guest.receive_json(), {"seat": "guest"})
-            host.send_bytes(Envelope(FrameKind.DATA, PairSeat.HOST, 1, 1, "old-generation", b"stale").encode())
+            # Stronger than discarding a pending old frame on reconnect: an
+            # established peer loss closes the surviving old stream immediately,
+            # including during silent OPENING_LOCAL. WireState dropped-sequence
+            # resync is still separately tested through two real WireClients.
+            with self.assertRaises(WebSocketDisconnect) as closed:
+                host.receive_bytes()
+            self.assertEqual(closed.exception.code, 4001)
+        with self.client.websocket_connect(self.path, headers={"authorization": f"Bearer {self.host['access_token']}"}) as host:
+            self.assertEqual(host.receive_json(), {"seat": "host"})
             with self.client.websocket_connect(self.path, headers={"authorization": f"Bearer {self.guest['access_token']}"}) as guest:
                 self.assertEqual(guest.receive_json(), {"seat": "guest"})
-                fresh = Envelope(FrameKind.HEARTBEAT, PairSeat.HOST, 1, 2).encode()
+                fresh = Envelope(FrameKind.PEER_READY, PairSeat.HOST, 2, 0).encode()
                 host.send_bytes(fresh)
                 self.assertEqual(guest.receive_bytes(), fresh)
 

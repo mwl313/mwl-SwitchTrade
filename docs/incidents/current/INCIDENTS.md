@@ -1500,3 +1500,7 @@ archive list and regenerate the index.
 - **Mandatory prevention gate:** readiness and stage-entry status must never
   substitute for proof that every acquired VIF/socket/thread has been released.
   Unknown cleanup blocks the next admission even after an eventual late exit.
+- **Additional source finding:** LDN 0.0.17 Interface/Monitor sockets can outlive
+  factory exit through retained objects. Direct stages now retain run-local Trio
+  socket ownership and explicitly close/verify all such descriptors after context
+  teardown. No LDN/Pia protocol implementation or installed package is replaced.

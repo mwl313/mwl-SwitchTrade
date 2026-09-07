@@ -7,10 +7,13 @@ import asyncio
 import json
 import logging
 import os
+import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 from uuid import uuid4
 
 import websockets
@@ -63,6 +66,8 @@ def parser() -> argparse.ArgumentParser:
 
 def _configure_logging(args: argparse.Namespace) -> None:
     logger = logging.getLogger(__name__)
+    for handler in logger.handlers:
+        handler.close()
     logger.handlers.clear()
     logger.propagate = False
     logger.setLevel(logging.DEBUG)
@@ -85,13 +90,31 @@ def _capabilities(role: str) -> dict[str, object]:
     }
 
 
-async def _request(relay: str, path: str, payload: dict[str, object]) -> dict[str, object]:
-    base = relay.rstrip("/")
+def _relay_base(relay: str, *, websocket: bool = False) -> str:
+    try:
+        parts = urlsplit(relay)
+        valid_port = parts.port
+    except ValueError as error:
+        raise CliError("RELAY_URL_INVALID") from error
+    del valid_port
+    if (parts.scheme not in {"http", "https", "ws", "wss"} or not parts.hostname
+        or parts.username is not None or parts.password is not None or parts.query or parts.fragment):
+        raise CliError("RELAY_URL_INVALID: use an http(s) or ws(s) base URL without credentials/query")
+    secure = parts.scheme in {"https", "wss"}
+    scheme = ("wss" if secure else "ws") if websocket else ("https" if secure else "http")
+    return urlunsplit((scheme, parts.netloc, parts.path.rstrip("/"), "", ""))
+
+
+async def _request(relay: str, path: str, payload: dict[str, object] | None = None,
+                   *, access_token: str | None = None) -> dict[str, object]:
+    base = _relay_base(relay)
 
     def send() -> dict[str, object]:
-        request = Request(
-            f"{base}{path}", json.dumps(payload).encode("utf-8"), {"content-type": "application/json"}
-        )
+        headers = {"content-type": "application/json"}
+        if access_token is not None:
+            headers["authorization"] = f"Bearer {access_token}"
+        request = Request(f"{base}{path}",
+                          json.dumps(payload).encode("utf-8") if payload is not None else None, headers)
         with urlopen(request, timeout=10) as response:
             data = json.loads(response.read())
         if not isinstance(data, dict):
@@ -100,12 +123,33 @@ async def _request(relay: str, path: str, payload: dict[str, object]) -> dict[st
 
     try:
         return await asyncio.to_thread(send)
+    except HTTPError as exc:
+        try:
+            detail = json.loads(exc.read(4096)).get("detail", "PAIR_REQUEST_FAILED")
+        except (ValueError, AttributeError):
+            detail = "PAIR_REQUEST_FAILED"
+        finally:
+            exc.close()
+        if not isinstance(detail, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,95}", detail):
+            detail = "PAIR_REQUEST_FAILED"
+        raise CliError(detail) from exc
+    except (URLError, TimeoutError) as exc:
+        raise CliError("RELAY_UNREACHABLE: verify the common relay URL and connectivity") from exc
     except Exception as exc:
         raise CliError(f"Pair request failed: {exc}") from exc
 
 
 def _credentials(response: dict[str, object], seat: PairSeat) -> PairCredentials:
     try:
+        for field in ("pair_id", "access_token", "reconnect_expires_at"):
+            if not isinstance(response[field], str) or not response[field]:
+                raise ValueError("missing identity")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", response["pair_id"]):
+            raise ValueError("invalid Pair identity")
+        if datetime.fromisoformat(response["reconnect_expires_at"]).tzinfo is None:
+            raise ValueError("missing lease timezone")
+        if seat is PairSeat.HOST and not re.fullmatch(r"[0-9]{6}", str(response.get("code", ""))):
+            raise ValueError("invalid Pair code")
         return PairCredentials(
             str(response["pair_id"]), seat, str(response["access_token"]),
             str(response["reconnect_expires_at"]),
@@ -116,11 +160,7 @@ def _credentials(response: dict[str, object], seat: PairSeat) -> PairCredentials
 
 
 def _websocket_url(relay: str, credentials: PairCredentials) -> str:
-    parts = urlsplit(relay)
-    if parts.scheme not in {"http", "https", "ws", "wss"} or not parts.netloc:
-        raise CliError("relay URL must use http(s) or ws(s)")
-    scheme = "wss" if parts.scheme in {"https", "wss"} else "ws"
-    return urlunsplit((scheme, parts.netloc, f"{parts.path.rstrip('/')}/core/v1/pairs/{credentials.pair_id}/ws", "", ""))
+    return f"{_relay_base(relay, websocket=True)}/core/v1/pairs/{credentials.pair_id}/ws"
 
 
 async def _socket(relay: str, credentials: PairCredentials) -> _WebSocketSocket:
@@ -130,8 +170,8 @@ async def _socket(relay: str, credentials: PairCredentials) -> _WebSocketSocket:
         proxy=None,
     )
     try:
-        hello = json.loads(await connection.recv())
-    except Exception:
+        hello = json.loads(await asyncio.wait_for(connection.recv(), 5))
+    except BaseException:
         await connection.close()
         raise
     if hello != {"seat": credentials.seat.value}:
@@ -161,7 +201,8 @@ def _policy(args: argparse.Namespace) -> SwitchLdnPolicy:
         )
     except HardwarePolicyError as exc:
         raise CliError(str(exc)) from exc
-    run_id = f"core-{uuid4().hex}"
+    run_id = str(uuid4())
+    suffix = uuid4().hex[:7]
     return SwitchLdnPolicy(
         run_id=run_id,
         release=os.environ.get("SWITCHTRADE_CORE_RELEASE", "development"),
@@ -169,7 +210,10 @@ def _policy(args: argparse.Namespace) -> SwitchLdnPolicy:
         hardware_profile=profile.chipset,
         phy=phy,
         proven_radio_iface=ifname,
-        ifname=f"st-{uuid4().hex[:8]}",
+        ifname=f"st-{suffix}",
+        ap_ifname=f"ap-{suffix}",
+        monitor_ifname=f"mon-{suffix}",
+        tap_ifname=f"tap-{suffix}",
         keys_path=os.environ.get("SWITCHTRADE_KEYS", "/opt/switchtrade/config/prod.keys"),
         channel=args.channel,
     )
@@ -177,6 +221,16 @@ def _policy(args: argparse.Namespace) -> SwitchLdnPolicy:
 
 async def _bridge_until_canceled(supervisor: CoreSupervisor) -> None:
     await supervisor.wait_generation_end()
+
+
+async def _stop_preserving_failure(supervisor, primary: BaseException | None) -> None:
+    try:
+        await supervisor.stop()
+    except BaseException as cleanup:
+        if primary is None or isinstance(primary, asyncio.CancelledError):
+            raise
+        primary.add_note("cleanup failed: " + str(getattr(cleanup, "code", type(cleanup).__name__)))
+        logging.getLogger(__name__).error("Additional cleanup failure: %s", getattr(cleanup, "code", type(cleanup).__name__))
 
 
 async def _run_host(args: argparse.Namespace) -> None:
@@ -188,9 +242,16 @@ async def _run_host(args: argparse.Namespace) -> None:
     if expires_at := pair.get("code_expires_at"):
         print(f"Pair code expires at: {expires_at}", flush=True)
     transport = WireClient(PairSeat.HOST)
-    await transport.connect(await _socket(args.relay, credentials))
-    supervisor = CoreSupervisor(credentials, driver, transport, connector=lambda: _socket(args.relay, credentials))
+    async def peer_joined():
+        status = await _request(args.relay, f"/core/v1/pairs/{credentials.pair_id}",
+                                access_token=credentials.access_token)
+        return status.get("guest_joined") is True
+
+    supervisor = CoreSupervisor(credentials, driver, transport, connector=lambda: _socket(args.relay, credentials),
+                                invite_expires_at=pair.get("code_expires_at"), confirm_peer_joined=peer_joined)
+    primary = None
     try:
+        await transport.connect(await _socket(args.relay, credentials))
         while True:
             try:
                 print("Waiting for a Group Leader room...", flush=True)
@@ -206,8 +267,11 @@ async def _run_host(args: argparse.Namespace) -> None:
             except GenerationEnded:
                 pass
             print("Generation ended. Pair retained.", flush=True)
+    except BaseException as error:
+        primary = error
+        raise
     finally:
-        await supervisor.stop()
+        await _stop_preserving_failure(supervisor, primary)
 
 
 async def _run_guest(args: argparse.Namespace) -> None:
@@ -216,9 +280,10 @@ async def _run_guest(args: argparse.Namespace) -> None:
     print(f"Connecting with code {args.code}...", flush=True)
     credentials = _credentials(await _request(args.relay, "/core/v1/pairs:join", {"code": args.code, "capabilities": _capabilities("mirror")}), PairSeat.GUEST)
     transport = WireClient(PairSeat.GUEST)
-    await transport.connect(await _socket(args.relay, credentials))
     supervisor = CoreSupervisor(credentials, driver, transport, connector=lambda: _socket(args.relay, credentials))
+    primary = None
     try:
+        await transport.connect(await _socket(args.relay, credentials))
         while True:
             try:
                 print("Waiting for the host's Switch...", flush=True)
@@ -233,8 +298,11 @@ async def _run_guest(args: argparse.Namespace) -> None:
             except GenerationEnded:
                 pass
             print("Generation ended. Pair retained.", flush=True)
+    except BaseException as error:
+        primary = error
+        raise
     finally:
-        await supervisor.stop()
+        await _stop_preserving_failure(supervisor, primary)
 
 
 async def run(args: argparse.Namespace) -> int:
