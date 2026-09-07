@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import ssl
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -17,13 +18,14 @@ from urllib.error import HTTPError, URLError
 from uuid import uuid4
 
 import websockets
+from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from switchtrade.composition import create_switch_ldn_driver
 from switchtrade.core import CoreSupervisor, PairCredentials, PairSeat
 from switchtrade.core.contracts import GenerationEnded
 from switchtrade.endpoints.switch_ldn import SwitchLdnPolicy
 from switchtrade.hardware import HardwarePolicyError, require_hardware, select_profile
-from switchtrade.transport import WireClient
+from switchtrade.transport import TransportError, WireClient
 
 
 DEFAULT_RELAY = "http://127.0.0.1:8788"
@@ -165,19 +167,37 @@ def _websocket_url(relay: str, credentials: PairCredentials) -> str:
 
 
 async def _socket(relay: str, credentials: PairCredentials) -> _WebSocketSocket:
-    connection = await websockets.connect(
-        _websocket_url(relay, credentials),
-        additional_headers={"authorization": f"Bearer {credentials.access_token}"},
-        proxy=None,
-    )
+    connection = None
     try:
-        hello = json.loads(await asyncio.wait_for(connection.recv(), 5))
-    except BaseException:
-        await connection.close()
+        connection = await websockets.connect(
+            _websocket_url(relay, credentials),
+            additional_headers={"authorization": f"Bearer {credentials.access_token}"},
+            proxy=None,
+        )
+        raw = await asyncio.wait_for(connection.recv(), 5)
+        if not isinstance(raw, str):
+            raise TransportError("T_HANDSHAKE_INVALID")
+        try:
+            hello = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise TransportError("T_HANDSHAKE_INVALID") from exc
+        if hello != {"seat": credentials.seat.value}:
+            raise CliError("relay authenticated an unexpected Pair seat")
+    except BaseException as exc:
+        if connection is not None:
+            await connection.close()
+        if isinstance(exc, InvalidStatus):
+            code = "T_AUTH_INVALID" if exc.response.status_code in {401, 403} else "T_HANDSHAKE_INVALID"
+            raise TransportError(code) from exc
+        if isinstance(exc, ConnectionClosed):
+            close_code = exc.rcvd.code if exc.rcvd else None
+            code = "T_AUTH_INVALID" if close_code == 4401 else (
+                "T_HANDSHAKE_INVALID" if close_code in {1002, 1003, 1008, 4400, 4403, 4408}
+                else "T_TRANSPORT_FAILED")
+            raise TransportError(code) from exc
+        if isinstance(exc, (OSError, asyncio.TimeoutError)) and not isinstance(exc, ssl.SSLError):
+            raise TransportError("T_TRANSPORT_FAILED") from exc
         raise
-    if hello != {"seat": credentials.seat.value}:
-        await connection.close()
-        raise CliError("relay authenticated an unexpected Pair seat")
     return _WebSocketSocket(connection)
 
 

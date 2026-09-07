@@ -112,6 +112,44 @@ def credentials(seat: PairSeat) -> PairCredentials:
 
 
 class CoreSupervisorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_recovery_retries_transient_connector_failure_before_wire_connect(self):
+        calls = 0
+        peer = WireClient(PairSeat.GUEST)
+
+        async def connector():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise TransportError("T_TRANSPORT_FAILED")
+            host_socket, guest_socket = MemorySocket(), MemorySocket()
+            host_socket.peer, guest_socket.peer = guest_socket, host_socket
+            await peer.connect(guest_socket)
+            return host_socket
+
+        self.host._connector = connector
+        self.host._reconnect_timeout = 1
+        try:
+            await self.host.recover_pair()
+            self.assertEqual(calls, 2)
+            self.assertTrue(self.host_wire.state.ready)
+        finally:
+            await peer.close()
+
+    async def test_recovery_does_not_retry_connector_auth_failure(self):
+        calls = 0
+        first = TransportError("T_AUTH_INVALID")
+
+        async def connector():
+            nonlocal calls
+            calls += 1
+            raise first
+
+        self.host._connector = connector
+        with self.assertRaises(SupervisorError) as failed:
+            await self.host.recover_pair()
+        self.assertIs(failed.exception.__cause__, first)
+        self.assertEqual(calls, 1)
+
     async def test_recovery_retries_a_stream_lost_during_resync(self):
         calls = 0
         recovered_guest = WireClient(PairSeat.GUEST)

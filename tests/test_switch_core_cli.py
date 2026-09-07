@@ -1,16 +1,62 @@
 from __future__ import annotations
 
 import asyncio
+import ssl
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
+from websockets.exceptions import ConnectionClosedError, InvalidStatus
+from websockets.frames import Close
 
 from switchtrade.core import PairCredentials, PairSeat
 from switchtrade.core.supervisor import SupervisorError
 from switchtrade.core_cli import CliError, _credentials, _policy, _websocket_url, _relay_base, _stop_preserving_failure, main, parser, run
+from switchtrade.core_cli import _socket
+from switchtrade.transport import TransportError
 
 
 class SwitchCoreCliTests(unittest.IsolatedAsyncioTestCase):
+    async def test_socket_classifies_transient_loss_without_retrying_identity_failures(self):
+        credentials = PairCredentials("pair", PairSeat.HOST, "token", "2099-01-01T00:00:00+00:00")
+        cases = [
+            (OSError("dial lost"), "T_TRANSPORT_FAILED", False),
+            (TimeoutError("dial timed out"), "T_TRANSPORT_FAILED", False),
+            (InvalidStatus(SimpleNamespace(status_code=403)), "T_AUTH_INVALID", False),
+            (InvalidStatus(SimpleNamespace(status_code=400)), "T_HANDSHAKE_INVALID", False),
+            (ssl.SSLCertVerificationError("untrusted certificate"), None, False),
+            (TimeoutError("hello timed out"), "T_TRANSPORT_FAILED", True),
+            (ConnectionClosedError(Close(1012, "restart"), None), "T_TRANSPORT_FAILED", True),
+            (ConnectionClosedError(Close(4401, "auth"), None), "T_AUTH_INVALID", True),
+            (ConnectionClosedError(Close(4403, "seat"), None), "T_HANDSHAKE_INVALID", True),
+        ]
+        for failure, code, opened in cases:
+            with self.subTest(failure=type(failure).__name__, code=code, opened=opened):
+                connection = AsyncMock()
+                connection.recv.side_effect = failure
+                connect = AsyncMock(return_value=connection) if opened else AsyncMock(side_effect=failure)
+                with patch("switchtrade.core_cli.websockets.connect", connect):
+                    with self.assertRaises(TransportError if code else ssl.SSLError) as caught:
+                        await _socket("http://relay.example", credentials)
+                if code:
+                    self.assertEqual(caught.exception.code, code)
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIs(caught.exception, failure)
+                self.assertEqual(connection.close.await_count, int(opened))
+
+    async def test_socket_rejects_non_text_or_malformed_hello_and_closes_it(self):
+        credentials = PairCredentials("pair", PairSeat.HOST, "token", "2099-01-01T00:00:00+00:00")
+        for raw in (b"STPW\xff", "not-json"):
+            with self.subTest(raw=raw):
+                connection = AsyncMock()
+                connection.recv.return_value = raw
+                with patch("switchtrade.core_cli.websockets.connect", AsyncMock(return_value=connection)):
+                    with self.assertRaises(TransportError) as caught:
+                        await _socket("http://relay.example", credentials)
+                self.assertEqual(caught.exception.code, "T_HANDSHAKE_INVALID")
+                connection.close.assert_awaited_once()
+
     def test_common_relay_http_and_websocket_urls_are_consistent(self):
         for scheme, http, ws in (("http", "http", "ws"), ("ws", "http", "ws"),
                                  ("https", "https", "wss"), ("wss", "https", "wss")):

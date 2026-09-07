@@ -279,3 +279,4 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-CORE-016` | Recovery treated a transient resync-stream loss as terminal | Current ledger | 1687 |
 | `MTA-CORE-017` | Cancellation abandoned the waiter for an owned retry stop | Current ledger | 1710 |
 | `MTA-QA-023` | Timing assertions measured unrelated startup or attempt counts | Current ledger | 1730 |
+| `MTA-CORE-018` | Relay ownership publication preceded its seat hello | Current ledger | 1744 |

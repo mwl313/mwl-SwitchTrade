@@ -17,6 +17,7 @@ from switchtrade.transport.wire import Envelope, TransportError
 def create_app(store: PairStore | None = None) -> FastAPI:
     app, pairs = FastAPI(), store or PairStore()
     sockets: dict[tuple[str, str], WebSocket] = {}
+    ready: set[WebSocket] = set()
     pending: dict[tuple[str, str], deque[bytes]] = {}
     seen_seats: dict[str, set[str]] = {}
     app.state.core_sockets = sockets
@@ -90,11 +91,24 @@ def create_app(store: PairStore | None = None) -> FastAPI:
                 await asyncio.wait_for(previous.close(code=4000), 5)
             seen_seats.setdefault(pair_id, set()).add(seat.value)
             await websocket.accept()
-            await asyncio.wait_for(websocket.send_json({"seat": seat.value}), 5)
-            for raw in pending.pop(key, ()):
-                await asyncio.wait_for(websocket.send_bytes(raw), 5)
+            # Ownership is published early for replacement cleanup, but peer
+            # routing must wait for the seat hello and the entire pending tail.
+            # Frames arriving during a drain stay queued, never overtake it.
+            async with asyncio.timeout(5):
+                await websocket.send_json({"seat": seat.value})
+                while True:
+                    if sockets.get(key) is not websocket:
+                        return
+                    queued = pending.get(key)
+                    if not queued:
+                        pending.pop(key, None)
+                        break
+                    await websocket.send_bytes(queued.popleft())
+            ready.add(websocket)
             while True:
                 raw = await websocket.receive_bytes()
+                if sockets.get(key) is not websocket:
+                    return
                 try:
                     envelope = Envelope.decode(raw)
                 except TransportError:
@@ -106,7 +120,7 @@ def create_app(store: PairStore | None = None) -> FastAPI:
                 peer = PairSeat.GUEST if seat is PairSeat.HOST else PairSeat.HOST
                 peer_key = (pair_id, peer.value)
                 target = sockets.get(peer_key)
-                if target is None:
+                if target not in ready:
                     queue = pending.setdefault(peer_key, deque())
                     if len(queue) >= 8 or pending_count() >= 64:
                         await websocket.close(code=4408)
@@ -117,6 +131,7 @@ def create_app(store: PairStore | None = None) -> FastAPI:
         except (WebSocketDisconnect, asyncio.TimeoutError, RuntimeError, OSError):
             pass
         finally:
+            ready.discard(websocket)
             pairs.detach(pair_id, connection_id)
             if sockets.get(key) is websocket:
                 sockets.pop(key, None)
@@ -125,6 +140,7 @@ def create_app(store: PairStore | None = None) -> FastAPI:
                 clear_pending(pair_id)
                 seen_seats.pop(pair_id, None)
                 if target is not None:
+                    ready.discard(target)
                     # A lost peer must interrupt pre-active/human waits even
                     # when neither side produces DATA. Never forge a peer wire
                     # frame/sequence; terminate only the captured old stream.

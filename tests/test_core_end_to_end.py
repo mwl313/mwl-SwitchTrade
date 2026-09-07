@@ -4,17 +4,20 @@ import asyncio
 import json
 import socket
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import uvicorn
 import websockets
+from fastapi import WebSocket
 
 from relay.core_server import create_app
 from switchtrade.core.contracts import LinkPacket, PairCredentials, PairSeat
 from switchtrade.core.supervisor import CoreSupervisor, SupervisorState
 from switchtrade.endpoints.fake import FAKE_PROTOCOL, FakeEndpointDriver, FakeEndpointHub
 from switchtrade.transport import FrameKind, WireClient
+from switchtrade.core_cli import _socket as cli_socket
 
 
 CAPABILITIES = {"endpoint_kind": "fake", "runtime_kind": "in_process", "protocols": ["switchtrade.fake.v1"], "generation_roles": ["origin"]}
@@ -74,6 +77,83 @@ class CoreEndToEndTests(unittest.IsolatedAsyncioTestCase):
         async with asyncio.timeout(1):
             while supervisor.state is not state:
                 await asyncio.sleep(0)
+
+    async def test_relay_hello_precedes_concurrent_peer_wire_frames(self) -> None:
+        _, created = await self._post("/core/v1/pairs", {"capabilities": CAPABILITIES})
+        _, joined = await self._post("/core/v1/pairs:join", {
+            "code": created["code"], "capabilities": MIRROR})
+        credentials = [PairCredentials(data["pair_id"], seat, data["access_token"],
+                                       data["reconnect_expires_at"])
+                       for data, seat in ((created, PairSeat.HOST), (joined, PairSeat.GUEST))]
+        relay = f"http://127.0.0.1:{self.port}"
+        entered, release, host_frames = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        draining, drain_release, tail_received = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        forwarded = []
+        hello_sent, premature, received = False, [], 0
+        send_json, send_bytes, receive_bytes = (WebSocket.send_json, WebSocket.send_bytes,
+                                               WebSocket.receive_bytes)
+
+        async def delayed_hello(socket, data, *args, **kwargs):
+            nonlocal hello_sent
+            if data == {"seat": "guest"}:
+                entered.set()
+                await release.wait()
+                await send_json(socket, data, *args, **kwargs)
+                hello_sent = True
+            else:
+                await send_json(socket, data, *args, **kwargs)
+
+        async def observed_send(socket, data):
+            if socket.headers.get("authorization") == f"Bearer {joined['access_token']}":
+                forwarded.append(data)
+                if not hello_sent:
+                    premature.append(data)
+                elif not draining.is_set():
+                    draining.set()
+                    await drain_release.wait()
+            await send_bytes(socket, data)
+
+        async def observed_receive(socket):
+            nonlocal received
+            raw = await receive_bytes(socket)
+            if socket.headers.get("authorization") == f"Bearer {created['access_token']}":
+                received += 1
+                if received == 2:
+                    host_frames.set()  # First relay forwarding iteration has completed.
+                elif received == 3:
+                    tail_received.set()
+            return raw
+
+        host_wire, guest_wire = WireClient(PairSeat.HOST), WireClient(PairSeat.GUEST)
+        with patch.object(WebSocket, "send_json", delayed_hello), \
+                patch.object(WebSocket, "send_bytes", observed_send), \
+                patch.object(WebSocket, "receive_bytes", observed_receive):
+            host_socket = await cli_socket(relay, credentials[0])
+            opening = asyncio.create_task(cli_socket(relay, credentials[1]))
+            try:
+                await asyncio.wait_for(entered.wait(), 2)
+                await host_wire.connect(host_socket)
+                await asyncio.wait_for(host_frames.wait(), 2)
+                self.assertEqual(premature, [], "binary wire frame overtook the seat hello")
+                self.assertFalse(opening.done())
+                release.set()
+                await guest_wire.connect(await asyncio.wait_for(asyncio.shield(opening), 2))
+                await asyncio.wait_for(draining.wait(), 2)
+                await host_wire.send(FrameKind.HEARTBEAT)
+                await asyncio.wait_for(tail_received.wait(), 2)
+                self.assertEqual(len(forwarded), 1, "live frame overtook the pending tail")
+                drain_release.set()
+                await asyncio.gather(host_wire.wait_ready(), guest_wire.wait_ready())
+                await host_wire.send(FrameKind.GENERATION_OFFER, "ordered", b"offer")
+                self.assertEqual((await guest_wire.receive()).payload, b"offer")
+            finally:
+                release.set()
+                drain_release.set()
+                sockets = await asyncio.gather(opening, return_exceptions=True)
+                await asyncio.gather(host_wire.close(), guest_wire.close())
+                await host_socket.close()
+                if not isinstance(sockets[0], BaseException):
+                    await sockets[0].close()
 
     async def test_pair_generation_lifecycle_over_real_relay(self) -> None:
         created_status, created = await self._post("/core/v1/pairs", {"capabilities": CAPABILITIES})

@@ -1740,3 +1740,41 @@ archive list and regenerate the index.
   until-exit output fails via the child's independent bounded deadline/exit 42.
 - **Prevention:** test the named phase's invariant. Do not weaken production
   timeouts or confuse process startup duration with whether stdout streams.
+
+### MTA-CORE-018 — Relay ownership publication preceded its seat hello
+
+- **Observed:** Ubuntu CI run 34123795446 at e4137db failed the real
+  active-retry integration: CLI JSON hello parsing received an STPW binary
+  PEER_READY frame. 792 tests passed, 17 skipped, one failed. Local full run
+  passed 804/6, illustrating that local scheduling did not exclude the race.
+- **Cause:** relay put the replacement into its socket ownership map before
+  accept/hello. A live peer could route binary frames to that map entry before
+  its JSON hello. Early ownership is required to keep old cleanup from retiring
+  the replacement, but ownership alone is not routing readiness.
+- **Reproduction:** a real Uvicorn/CLI socket/two-WireClient test pauses the
+  actual guest hello and observes host PEER_READY/PROBE overtake it. The old
+  implementation failed the explicit no-premature-forwarding assertion.
+- **Correction:** retain early identity-bound ownership, but queue peer frames
+  until hello and the whole pending tail have drained. Drain one bounded item
+  at a time, including arrivals while sending; enforce one five-second technical
+  handshake/drain budget. Superseded handlers cannot consume new pending work
+  or forward new input. Routing readiness is discarded on all cleanup paths.
+- **Evidence/recovery:** the regression also blocks the first pending send,
+  injects a later real heartbeat, and verifies no overtaking or sequence gap;
+  both probes and a generation offer then succeed. Real sockets/servers are
+  closed by their test owners; only localhost and synthetic payloads were used.
+  Final full tests and exact-SHA platform CI are still required.
+- **Prevention:** keep credential ownership, protocol initialization and
+  routing readiness distinct; no data may precede the authenticated hello.
+- **Adjacent connection boundary:** the same actual CLI/Direct/StageSession/
+  TunnelSim scenario also closes the second Guest stream before its hello.
+  Before correction it failed after 27.42s: the connector was outside recovery's
+  transient-error handler and CLI exposed raw ConnectionClosed. The connector
+  now participates in the existing deadline/lease-bounded retry. CLI classifies
+  dial/hello loss separately from authentication, malformed protocol and TLS
+  failures; permanent identity failures are never retried. Owned sockets close
+  before errors propagate, retaining the original cause.
+- **Additional evidence:** before-hello loss now passes the actual two-generation
+  RFU test (46.86s); active loss and post-hello retry pass together (94.44s).
+  The focused CLI/supervisor/real-relay/transport suite passes 57 tests. These
+  packet results still require full and same-SHA platform CI qualification.

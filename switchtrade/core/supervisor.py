@@ -370,12 +370,17 @@ class CoreSupervisor:
                     remaining = min(deadline - loop.time(), lease)
                     if remaining <= 0:
                         raise first_transient or TransportError("T_READY_TIMEOUT")
-                    socket = await asyncio.wait_for(self._connector(), remaining)
-                    await self.transport.connect(socket)
-                self._wire_revision = self.transport.revision
                 try:
+                    if not peer_resynced:
+                        socket = await asyncio.wait_for(self._connector(), remaining)
+                        await self.transport.connect(socket)
+                    self._wire_revision = self.transport.revision
                     await self.transport.wait_ready(max(.001, deadline - loop.time()))
                     break
+                except asyncio.TimeoutError:
+                    if first_transient is not None:
+                        raise first_transient
+                    raise
                 except TransportError as exc:
                     if exc.code == "T_READY_TIMEOUT":
                         # A healthy stream with a late human peer is not dead.
@@ -384,8 +389,8 @@ class CoreSupervisor:
                         return
                     if exc.code != "T_TRANSPORT_FAILED" or self._connector is None:
                         raise
-                    # Opposite old-stream cleanup can terminate a newly admitted
-                    # stream during resync. Retry only that transport failure,
+                    # A connection/hello or resync stream can fail transiently.
+                    # Retry only that explicitly classified transport failure,
                     # within one technical deadline; never retry auth/protocol
                     # rejection or silently reuse the previous Generation.
                     first_transient = first_transient or exc

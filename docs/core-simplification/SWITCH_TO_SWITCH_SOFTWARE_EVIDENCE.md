@@ -190,6 +190,24 @@ not change. See MTA-CORE-017 and MTA-QA-023.
 
 ## Physical handoff and modularity
 
+Ubuntu candidate CI at `e4137db` exposed a real relay initialization race: a
+peer's binary PEER_READY could overtake the new seat's JSON hello. The relay now
+keeps early replacement ownership separate from routing readiness and drains
+the bounded pending tail before permitting live forwarding. A deterministic
+actual CLI/two-WireClient/real relay test holds the hello, then the first queued
+send, and proves both orderings without changing the protocol. It failed the
+premature-binary assertion before the fix. See MTA-CORE-018.
+
+The actual two-generation test also faults a replacement stream before its
+hello. This exposed a connector outside recovery's retry boundary. Dial/hello
+transport loss now joins the same bounded retry as resync; authentication,
+malformed protocol and TLS failures remain terminal with their original cause.
+Actual pre-hello interruption passes (46.86s), and active/post-hello interruption
+pass together (94.44s). Focused CLI/supervisor/real-relay/transport tests pass
+57 cases. These are packet observations, not final same-SHA qualification.
+The older `e4137db` local full run passed 804/6 and Windows CI passed; Ubuntu's
+792/17 plus this one failure demonstrate why local green alone was insufficient.
+
 Windows candidate CI at `197530d` exposed the previously recorded MTA-QA-019
 legacy service test race: its runner's event meant that a phase command was
 queued, not that the single writer had published it. The corrected test forces
