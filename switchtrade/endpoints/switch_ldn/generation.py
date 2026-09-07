@@ -51,6 +51,7 @@ def build_tunnelsim(
             peer_provider=lambda: (transport.host_mac, transport.host_ip),
             player_name="SwitchTrade",
             log=lambda *_parts: None,
+            maintain_rtt=True,
         )
     else:
         connection = pia_connect.ConnectionManager(
@@ -105,7 +106,16 @@ class SwitchLdnGeneration:
         return self._runner.is_alive()
 
     def activate(self) -> None:
-        """Start local DATA production only after Core admits this generation."""
+        """Core admission does not restart an already maintained local link."""
+        self.maintain_local()
+
+    def maintain_local(self) -> None:
+        """Keep Pia/RTT alive while a human/Internet peer is still joining.
+
+        Core alone starts the DATA pumps after admission. Early application
+        frames stay in the bounded adapter queue; overflow is an explicit
+        failure, never a silent drop or fabricated acknowledgement.
+        """
         if self._close_task is not None:
             raise SwitchLdnEndpointError("SWITCH_ENDPOINT_CLOSED", "generation is closing")
         if not self._started:

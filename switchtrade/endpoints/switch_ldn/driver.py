@@ -314,6 +314,7 @@ class SwitchLdnEndpointDriver:
             tunnel_capacity=self._tunnel_capacity,
         )
         self._generation = generation
+        generation.maintain_local()
         return generation
 
     def _mirror_generation(
@@ -329,6 +330,7 @@ class SwitchLdnEndpointDriver:
             tunnel_capacity=self._tunnel_capacity,
         )
         self._generation = generation
+        generation.maintain_local()
         return generation
 
     def _generation_closed(self, cleanup_verified: bool) -> None:

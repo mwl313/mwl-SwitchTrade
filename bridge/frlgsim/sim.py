@@ -460,6 +460,11 @@ class Sim:
                 rl = reliable.parse_reliable(m.payload)
                 if rl is None:
                     continue
+                if self.conn is not None:
+                    # Reliable is also proof that the peer accepted Session
+                    # finalize. Do not consume it before the connection FSM
+                    # can observe that proof (RTT may arrive later or be lost).
+                    self.conn.on_message(m.proto, m.payload, tick=self._tick)
                 if self.conn is None:                 # offline replay: feed frames as they arrive
                     fresh = self._note_in_seq(rl.seq)
                     if fresh and rl.flagsA & 0x01:

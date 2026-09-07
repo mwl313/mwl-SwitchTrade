@@ -481,7 +481,7 @@ class HostConnectionManager:
 
     def __init__(self, our_mac, our_ip, network_id, our_var=0x7620, seqid=2,
                  peer_provider=None, player_name="EMU", player_id=None,
-                 random4=None, log=lambda *a: None):
+                 random4=None, log=lambda *a: None, maintain_rtt=False):
         self.our_mac = bytes(our_mac)
         self.our_ip = our_ip
         self.network_id = network_id
@@ -503,6 +503,13 @@ class HostConnectionManager:
         self._last_net_tick = -HOST_NET_PERIOD
         self._outbox = []
         self.rtt_samples = []
+        self._last_rtt_tick = -RTT_ORIGINATE_PERIOD
+        self._rtt_pending = {}
+        # Automatic endpoint mode needs a live local control link even while
+        # opaque remote RFU waits. Keep capture-replay/legacy cadence unchanged.
+        self.maintain_rtt = maintain_rtt
+        self._session_reply = ()
+        self._last_session_tick = 0
 
     @property
     def connected(self):
@@ -519,6 +526,20 @@ class HostConnectionManager:
             self.host_var = _vid(peer_var)
 
     def poll(self, tick):
+        if self.maintain_rtt and self.state == ST_JOIN_RECEIVED:
+            if tick - self._last_session_tick >= HOST_NET_PERIOD:
+                self._last_session_tick = tick
+                self._outbox.extend(self._session_reply)
+            return
+        if self.pia_connected and self.maintain_rtt:
+            if tick - self._last_rtt_tick >= RTT_ORIGINATE_PERIOD:
+                self._last_rtt_tick = tick
+                template = b"\x00\x00\x00\x03" + bytes(15) + self.our_var.to_bytes(2, "big")
+                self._rtt_pending[tick] = tick
+                if len(self._rtt_pending) > 64:
+                    del self._rtt_pending[min(self._rtt_pending)]
+                self._queue_rtt(build_rtt_request(template, tick))
+            return
         if self.state != ST_ANNOUNCE or tick - self._last_net_tick < HOST_NET_PERIOD:
             return
         if self.peer_provider is not None:
@@ -540,7 +561,24 @@ class HostConnectionManager:
             "footer_var": None,
         })
 
+    def _queue_rtt(self, payload):
+        self._outbox.append({
+            "proto": PROTO_RTT, "payload": payload, "dst": SESSION_VAR,
+            "src": self.our_var, "compress": False, "footer": True,
+            "establishing": False, "unicast": True, "pktid": None,
+            "footer_var": self.host_var,
+        })
+
     def on_message(self, proto, payload, tick=None):
+        if proto == PROTO_RTT and self.pia_connected and self.maintain_rtt:
+            rtt = parse_rtt(payload)
+            if rtt and rtt["type"] == 0:
+                self._queue_rtt(build_rtt_response(payload))
+            elif rtt and rtt["type"] == 1 and tick is not None:
+                sent = self._rtt_pending.pop(int.from_bytes(rtt["systime"], "little"), None)
+                if sent is not None and tick >= sent:
+                    self.rtt_samples.append(tick - sent)
+            return
         if proto == PROTO_NET:
             net = parse_net(payload)
             if (net and net[1] == NET_CONN_RESPONSE and len(net[2]) >= 4
@@ -575,6 +613,8 @@ class HostConnectionManager:
                      "compress": True, "footer": True, "establishing": False,
                      "unicast": False, "pktid": None, "footer_var": self.host_var},
                 ))
+                self._session_reply = tuple(self._outbox[-2:])
+                self._last_session_tick = tick if tick is not None else 0
                 self.log(f"Switch Session join captured: var=0x{self.host_var:04x} "
                          f"constant={join['src_constant'].hex()} ip={join['address']}:"
                          f"{join['port']} name={join['names'][:1]}; native accept queued")
@@ -583,6 +623,7 @@ class HostConnectionManager:
                 session = parse_session(payload)
                 if session and session["type"] == SESSION_FINALIZE and self.state == ST_JOIN_RECEIVED:
                     self.state = ST_FINALIZED
+                    self._session_reply = ()
                     self.log("Switch finalized the Pia session; host RFU remains gated")
                     self.info("Switch finalized the Pia session.")
 

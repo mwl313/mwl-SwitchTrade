@@ -1504,3 +1504,23 @@ archive list and regenerate the index.
   factory exit through retained objects. Direct stages now retain run-local Trio
   socket ownership and explicitly close/verify all such descriptors after context
   teardown. No LDN/Pia protocol implementation or installed package is replaced.
+
+### MTA-CORE-012 — Bridge active did not prove local Pia completion
+
+- **Observed failure:** The actual CLI/real relay/installed LDN/real TunnelSim
+  primitive-boundary test reached both Bridge active messages, but RFU never
+  completed. Both Direct stage contexts were ready; encrypted local datagrams
+  decoded successfully. Child Pia remained in FINALIZE.
+- **Cause certainty:** confirmed: Sim bypassed the connection FSM for valid
+  Reliable, and automatic mirror mode lacked independent RTT liveness. Local
+  maintenance also started only after Internet admission.
+- **Recovery and residue:** the failed tests closed only their virtual netdevs,
+  TAP/raw sockets, StageSession threads and localhost relay. No physical device,
+  WSL or production runtime was operated; no retry against physical state occurred.
+- **Correction:** deliver valid Reliable evidence to the connection FSM; enable
+  bounded RTT/Session retransmission in automatic endpoint mode; maintain local
+  Pia before Core admission with bounded opaque application queues. Both RFU
+  directions and automatic second generation now pass the actual-path test.
+- **Mandatory prevention gate:** Bridge active, LDN readiness and fake DATA tests
+  are not end-to-end proof. Final qualification must exchange real encrypted
+  local protocol datagrams through both actual TunnelSim instances and relay.

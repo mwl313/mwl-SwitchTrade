@@ -268,3 +268,4 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-CORE-010` | Drain a queued generation close before stopping transport | Current ledger | 1450 |
 | `MTA-QA-021` | Assert generation clear after terminal cleanup, not local close entry | Current ledger | 1467 |
 | `MTA-CORE-011` | Readiness is not early VIF ownership or cleanup evidence | Current ledger | 1484 |
+| `MTA-CORE-012` | Bridge active did not prove local Pia completion | Current ledger | 1508 |
