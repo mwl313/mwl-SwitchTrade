@@ -1,0 +1,15 @@
+{
+  "scope": "emulator-only licensed two-round RFU homebrew; not a commercial ROM or physical cartridge image",
+  "dependency_repository": "https://github.com/afska/gba-link-connection",
+  "dependency_commit": "c61bf351f68ad2d6e1c9d72d70e21bec19adfc0b",
+  "dependency_license": "MIT",
+  "compiler": "Arm GNU Toolchain 14.2.Rel1; GCC 14.2.1 20241119",
+  "source_encoding": "UTF-8 with LF line endings",
+  "source_sha256": {
+    "main.cpp": "6bad6c8525126bd57506cc52d578f8f7a738e8a99ae978ee8f397cf2bf597086",
+    "crt0.s": "bb06d538d2405cd599440dd05506316cce946519c8ec8ba06177dc0445bd439d",
+    "linker.ld": "0ee52490f3c65045f2685df958d27a0dd8366cb35ccbfc1d6445439cacd8dd87"
+  },
+  "binary_sha256": "cfb0a21e1504931d7589a30b125ff3bbdf9211116a7bea690cfecadf031a2720",
+  "independent_builds_equal": true
+}

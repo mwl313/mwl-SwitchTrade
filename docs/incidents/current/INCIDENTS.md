@@ -1803,3 +1803,26 @@ archive list and regenerate the index.
 - **Prevention:** a synchronization event is not proof of its intended semantic
   phase. Assert the producer's actual failure/report before injecting a race;
   do not borrow an unrelated short readiness policy into a cleanup-only test.
+
+### MTA-QA-025 — Stock frontend test profile did not isolate per-core options
+
+- **Observed:** gpSP P0 attach probe 02 on the feature branch timed out before
+  Netplay connection. Its normal test-process exit then saved `config/gpSP/gpSP.opt`
+  under the pre-existing stock validation runtime. The harness detected a changed
+  runtime tree and correctly reported failure, not readiness or clean isolation.
+- **Cause:** the borrowed test helper redirected global `core_options_path` but
+  omitted RetroArch's per-core configuration directory. Startup through a private
+  config does not isolate every frontend write on normal exit.
+- **First failure and residue:** preserve probe 02's local report/frontend log.
+  The recorded Netplay timeout remains primary. The newly timestamped options
+  file (328 bytes) is retained as evidence; no deletion or restoration of an
+  unproven prior state is attempted. The exact harness-owned process exited 0
+  via its own window close; no remaining RetroArch process was observed. Stock
+  executable/core identities remain unchanged. No user game or save was loaded.
+- **Recovery:** before another probe, use a fresh, harness-owned copy of the
+  pinned executable, core and required runtime libraries, explicitly redirect
+  the per-core configuration root, and record before/after source-tree deltas.
+  Do not run further probes against the pre-existing binary tree directly.
+- **Prevention:** qualification launch/configuration code is test-only. Product
+  attach-only code must not write frontend settings or own its process. Check
+  every output boundary and retain the first isolation failure when retrying.
