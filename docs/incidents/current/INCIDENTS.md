@@ -1392,7 +1392,20 @@ archive list and regenerate the index.
 - **Recovery and residue:** Preserve the full-suite output, run this one test alone to distinguish
   an intermittent scheduling race from a reproducible service defect, and do not claim C4 full-suite
   green until the test has a reliable checkpoint. No runtime cleanup is required.
-- **Correction status:** isolated reproduction pending.
+- **2026-09-07 recurrence:** Final-candidate CI run 34121475475 at
+  `197530d9b0cb0bdd05f4bea78840565573f25da2` again observed revision 2/preflight
+  before revision 3/running (Windows: 1 failed, 803 passed, 6 skipped; Ubuntu green).
+  The original runner event is set after `RunControl.phase()` queues an internal
+  command, not after the service writer publishes it. `snapshot()` only copies
+  the projection under its condition; it does not perform that transition.
+- **Correction status:** the same regression now deterministically holds the
+  writer condition while the runner queues running, and proves the runner event
+  can coexist with the still-preflight snapshot. It then waits on the actual
+  published running phase before asserting all 20 GETs are identical and the
+  launch count stays one. The runner exits only on a test-owned event released
+  in `finally`, not after an unrelated two-second delay. No production behavior,
+  timeout, or expected idempotency/cleanup invariant changed. Focused service,
+  production-control and agent-context tests: 18 passed, 5.43s. Final CI must rerun.
 - **Mandatory prevention gate:** Concurrent snapshot tests must wait for the persisted phase they
   compare, not merely for an event emitted before that phase is committed.
 

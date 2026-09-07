@@ -262,20 +262,20 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-OPS-251` | Enumerate package metadata before dependency inspection | Current ledger | 1351 |
 | `MTA-OPS-252` | Narrow cross-layer option searches before reading defaults | Current ledger | 1366 |
 | `MTA-QA-019` | Snapshot assertions must wait for the runner's stated checkpoint | Current ledger | 1381 |
-| `MTA-OPS-253` | Verify Git branch, revision, and remote identity separately | Current ledger | 1399 |
-| `MTA-OPS-254` | Protect leading-dash ripgrep patterns with the option separator | Current ledger | 1416 |
-| `MTA-QA-020` | Do not await a peer-close notification without a bounded contract | Current ledger | 1431 |
-| `MTA-CORE-010` | Drain a queued generation close before stopping transport | Current ledger | 1450 |
-| `MTA-QA-021` | Assert generation clear after terminal cleanup, not local close entry | Current ledger | 1467 |
-| `MTA-CORE-011` | Readiness is not early VIF ownership or cleanup evidence | Current ledger | 1484 |
-| `MTA-CORE-012` | Bridge active did not prove local Pia completion | Current ledger | 1508 |
-| `MTA-DEV-031` | Native PowerShell launch alone did not propagate Ctrl+C | Current ledger | 1528 |
-| `MTA-CI-001` | Writer retry did not cover the Windows state reader | Current ledger | 1553 |
-| `MTA-CORE-013` | Pure Trio cancellation groups obscured proven leaf cleanup | Current ledger | 1569 |
-| `MTA-DEV-032` | Entrypoint source selection and error handling were not executable | Current ledger | 1591 |
-| `MTA-CORE-014` | Local datagram and key-file shapes needed explicit admission | Current ledger | 1617 |
-| `MTA-QA-022` | Process-wide soak metrics lacked a scenario-owned process | Current ledger | 1631 |
-| `MTA-CORE-015` | Public relay rate history retained unlimited client identities | Current ledger | 1654 |
-| `MTA-CORE-016` | Recovery treated a transient resync-stream loss as terminal | Current ledger | 1674 |
-| `MTA-CORE-017` | Cancellation abandoned the waiter for an owned retry stop | Current ledger | 1697 |
-| `MTA-QA-023` | Timing assertions measured unrelated startup or attempt counts | Current ledger | 1717 |
+| `MTA-OPS-253` | Verify Git branch, revision, and remote identity separately | Current ledger | 1412 |
+| `MTA-OPS-254` | Protect leading-dash ripgrep patterns with the option separator | Current ledger | 1429 |
+| `MTA-QA-020` | Do not await a peer-close notification without a bounded contract | Current ledger | 1444 |
+| `MTA-CORE-010` | Drain a queued generation close before stopping transport | Current ledger | 1463 |
+| `MTA-QA-021` | Assert generation clear after terminal cleanup, not local close entry | Current ledger | 1480 |
+| `MTA-CORE-011` | Readiness is not early VIF ownership or cleanup evidence | Current ledger | 1497 |
+| `MTA-CORE-012` | Bridge active did not prove local Pia completion | Current ledger | 1521 |
+| `MTA-DEV-031` | Native PowerShell launch alone did not propagate Ctrl+C | Current ledger | 1541 |
+| `MTA-CI-001` | Writer retry did not cover the Windows state reader | Current ledger | 1566 |
+| `MTA-CORE-013` | Pure Trio cancellation groups obscured proven leaf cleanup | Current ledger | 1582 |
+| `MTA-DEV-032` | Entrypoint source selection and error handling were not executable | Current ledger | 1604 |
+| `MTA-CORE-014` | Local datagram and key-file shapes needed explicit admission | Current ledger | 1630 |
+| `MTA-QA-022` | Process-wide soak metrics lacked a scenario-owned process | Current ledger | 1644 |
+| `MTA-CORE-015` | Public relay rate history retained unlimited client identities | Current ledger | 1667 |
+| `MTA-CORE-016` | Recovery treated a transient resync-stream loss as terminal | Current ledger | 1687 |
+| `MTA-CORE-017` | Cancellation abandoned the waiter for an owned retry stop | Current ledger | 1710 |
+| `MTA-QA-023` | Timing assertions measured unrelated startup or attempt counts | Current ledger | 1730 |

@@ -15,35 +15,46 @@ class ConnectionRunServiceTests(unittest.TestCase):
 
     def test_one_start_idempotent_commands_pure_get_and_verified_terminal(self):
         release = threading.Event()
+        publish = threading.Event()
         running = threading.Event()
         starts = []
 
         def runner(run_id, _request, control):
             starts.append(run_id)
+            publish.wait()
             control.phase("running", gate="C2_BRIDGE", last_passed_gate="C1_READY")
             running.set()
-            release.wait(2)
+            release.wait()
             return {"functional_status": "passed", "cleanup_status": "verified"}
 
         with tempfile.TemporaryDirectory() as temporary:
             with ConnectionRunService(temporary, runner) as service:
-                command_id = str(uuid.uuid4())
-                first = service.start(command_id=command_id, expected_revision=0,
-                                      request=self.request())
-                again = service.start(command_id=command_id, expected_revision=0,
-                                      request=self.request())
-                self.assertEqual(first, again)
-                self.assertTrue(running.wait(1), "runner did not reach its stable checkpoint")
-                before = service.snapshot(first["run_id"])
-                for _ in range(20):
-                    service.snapshot(first["run_id"])
-                after = service.snapshot(first["run_id"])
-                self.assertEqual(before, after)
-                deadline = time.monotonic() + 1
-                while not starts and time.monotonic() < deadline:
-                    time.sleep(0.01)
-                self.assertEqual(len(starts), 1)
-                release.set()
+                try:
+                    command_id = str(uuid.uuid4())
+                    first = service.start(command_id=command_id, expected_revision=0,
+                                          request=self.request())
+                    again = service.start(command_id=command_id, expected_revision=0,
+                                          request=self.request())
+                    self.assertEqual(first, again)
+                    # Force the old race: the runner can signal after enqueueing
+                    # its phase while the service writer still holds preflight.
+                    with service._condition:
+                        self.assertTrue(service._condition.wait_for(
+                            lambda: service.snapshot()["phase"] == "preflight", timeout=2))
+                        publish.set()
+                        self.assertTrue(running.wait(2))
+                        self.assertEqual(service.snapshot()["phase"], "preflight")
+                        self.assertTrue(service._condition.wait_for(
+                            lambda: service.snapshot()["phase"] == "running", timeout=2))
+                    # Compare GETs only after actual publication, with no writer
+                    # allowed to finish until this test releases its runner.
+                    before = service.snapshot(first["run_id"])
+                    for _ in range(20):
+                        self.assertEqual(service.snapshot(first["run_id"]), before)
+                    self.assertEqual(len(starts), 1)
+                finally:
+                    publish.set()
+                    release.set()
                 deadline = time.monotonic() + 2
                 while service.snapshot()["phase"] != "terminal" and time.monotonic() < deadline:
                     time.sleep(0.01)

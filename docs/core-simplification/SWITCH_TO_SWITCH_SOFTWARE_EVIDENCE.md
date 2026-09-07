@@ -190,6 +190,18 @@ not change. See MTA-CORE-017 and MTA-QA-023.
 
 ## Physical handoff and modularity
 
+Windows candidate CI at `197530d` exposed the previously recorded MTA-QA-019
+legacy service test race: its runner's event meant that a phase command was
+queued, not that the single writer had published it. The corrected test forces
+that exact ordering, observes the still-preflight projection despite the event,
+then waits for actual running publication before testing 20 immutable snapshots.
+Its runner cannot independently finish during that interval; `finally` releases
+the test-owned wait. All one-launch/idempotency/terminal-cleanup assertions remain.
+This changes only the regression fixture, not service or Switch production code.
+Local `197530d` full run was 804 passed/6 skipped; Windows had 803 passed/6 skipped
+and this one failure, while Ubuntu passed 793/17. Those are candidate results,
+not the final SHA's qualification; T43 must rerun after the correction.
+
 See `SWITCH_TO_SWITCH_PHYSICAL_RUNBOOK.md`. No physical result has been claimed.
 Real console interaction, radio timing/driver/firmware/kernel behavior, and actual
 machine provisioning are outside the virtual boundary's proof.
