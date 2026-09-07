@@ -1,0 +1,17 @@
+{
+  "packet": "P3",
+  "status": "PASS_PACKET_SCOPE_ONLY",
+  "source_base_sha": "866d382038632c7738df69326f26d8bd78e6e294",
+  "focused_passed": 88,
+  "focused_skipped": 0,
+  "minimal_native_environment_packages": {"pip": "25.0.1", "websockets": "17.0.1"},
+  "fresh_native_import_without_switch_ldn_hardware_or_trio": true,
+  "real_dev_doctor_against_stock_process_exit": 0,
+  "doctor_does_not_claim_rfu_ready": true,
+  "subsequent_real_core_stock_rfu_rounds": [1, 2],
+  "same_pair_and_local_netplay": true,
+  "owned_cleanup": true,
+  "source_runtime_metadata_unchanged": true,
+  "raw_evidence": ".qualification/gpsp-p3-native-doctor-01/report.json",
+  "remaining": ["P4 actual join CLI plus complete Switch stack", "long waits and soak", "full pytest", "final-SHA Windows/Ubuntu CI", "VMware runbook"]
+}

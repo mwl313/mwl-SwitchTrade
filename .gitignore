@@ -35,6 +35,7 @@
 __pycache__/
 /.pytest_cache/
 /.qualification/
+/.gpsp-venv/
 /apps/web/dist-desktop/
 /artifacts/
 **/bin/

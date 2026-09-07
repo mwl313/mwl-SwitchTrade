@@ -1,0 +1,6 @@
+# Native Windows x64 Python 3.12. No LDN, radio, WSL or frontend installer.
+# PyPI release JSON verified 2026-09-08: https://pypi.org/pypi/websockets/17.0.1/json
+--only-binary=:all:
+websockets==17.0.1 \
+    --hash=sha256:2b3f3020171202b135ca078e20434977c6b2b02af647130d6980c9e39b9462e3 \
+    --hash=sha256:c6be9cba65c65cc76dfa3d4619e359ff02a4476c74e179b215236c11a0b32345

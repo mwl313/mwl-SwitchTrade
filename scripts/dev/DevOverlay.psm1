@@ -19,8 +19,11 @@ function Stop-DevOverlay {
 }
 
 function Resolve-DevCoreArguments {
-    param([string[]]$Arguments)
+    param([string[]]$Arguments, [switch]$Native)
     $mode = $Arguments[0]
+    if ($Native -and $mode -notin @('join', 'doctor')) {
+        Stop-DevOverlay 'DEV_CORE_ARGUMENT_INVALID' 'gpSP currently supports join and doctor only.'
+    }
     $code = $null
     $start = 1
     if ($mode -eq 'join') {
@@ -31,6 +34,10 @@ function Resolve-DevCoreArguments {
         $start = 2
     }
     $options = @($Arguments | Select-Object -Skip $start)
+    $allowed = if ($Native) { @('--relay', '--log-dir', '--emulator', '--emulator-port', '--emulator-pid') } else {
+        @('--relay', '--usb-id', '--channel', '--log-dir')
+    }
+    $selectedEmulator = $false
     if ($env:SWITCHTRADE_CORE_RELAY -and -not ($options | Where-Object { $_ -eq '--relay' -or $_ -like '--relay=*' })) {
         # Windows environment variables are not automatically inherited by WSL.
         $options = @('--relay', $env:SWITCHTRADE_CORE_RELAY) + $options
@@ -40,7 +47,7 @@ function Resolve-DevCoreArguments {
         if ($option -eq '--verbose') { continue }
         $parts = $option -split '=', 2
         $name = $parts[0]
-        if ($name -notin @('--relay', '--usb-id', '--channel', '--log-dir')) {
+        if ($name -notin $allowed) {
             Stop-DevOverlay 'DEV_CORE_ARGUMENT_INVALID' 'Unknown Core CLI option.'
         }
         if ($parts.Count -eq 2) { $value = $parts[1] } else {
@@ -57,6 +64,19 @@ function Resolve-DevCoreArguments {
         if ($name -eq '--usb-id' -and $value -notmatch '^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$') {
             Stop-DevOverlay 'DEV_CORE_ARGUMENT_INVALID' 'usb-id must be VID:PID.'
         }
+        if ($name -eq '--emulator') {
+            if ($value -cne 'gpsp' -or $selectedEmulator) {
+                Stop-DevOverlay 'DEV_CORE_ARGUMENT_INVALID' 'Select exactly one supported emulator: gpsp.'
+            }
+            $selectedEmulator = $true
+        }
+        if ($name -in @('--emulator-port', '--emulator-pid')) {
+            [uint32]$number = 0
+            if (-not [uint32]::TryParse($value, [ref]$number) -or $number -eq 0 -or
+                ($name -eq '--emulator-port' -and $number -gt 65535)) {
+                Stop-DevOverlay 'DEV_CORE_ARGUMENT_INVALID' 'Invalid emulator port or PID.'
+            }
+        }
         if ($name -eq '--relay') {
             $uri = $null
             if (-not [Uri]::TryCreate($value, [UriKind]::Absolute, [ref]$uri) -or
@@ -65,6 +85,9 @@ function Resolve-DevCoreArguments {
                 Stop-DevOverlay 'DEV_CORE_ARGUMENT_INVALID' 'relay must be an HTTP(S)/WS(S) base URL without credentials or query.'
             }
         }
+    }
+    if ($Native -and -not $selectedEmulator) {
+        Stop-DevOverlay 'DEV_CORE_ARGUMENT_INVALID' 'Native execution requires --emulator gpsp.'
     }
     return @('-m', 'switchtrade.core_cli') + $options + @($mode) + $(if ($code) { @($code) } else { @() })
 }
@@ -112,7 +135,8 @@ function Invoke-DevInteractiveProcess {
         [Parameter(Mandatory)][string]$FilePath,
         [Parameter(Mandatory)][string[]]$ArgumentList,
         [string]$WorkingDirectory = $script:RepoRoot,
-        [switch]$ParentLifetime
+        [switch]$ParentLifetime,
+        [hashtable]$Environment = @{}
     )
 
     if ($ParentLifetime -and -not ('DevChildLifetime' -as [type])) {
@@ -150,6 +174,7 @@ public sealed class DevChildLifetime : IDisposable {
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
     $startInfo.RedirectStandardInput = [bool]$ParentLifetime
+    foreach ($name in $Environment.Keys) { $startInfo.Environment[$name] = $Environment[$name] }
     foreach ($argument in $ArgumentList) {
         [void]$startInfo.ArgumentList.Add($argument)
     }
@@ -521,6 +546,29 @@ function Invoke-DevRun {
     return [int]$exitCode
 }
 
+function Invoke-DevNative {
+    param([Parameter(Mandatory)][string[]]$Arguments)
+    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
+        Stop-DevOverlay 'GPSP_NATIVE_WINDOWS_REQUIRED' 'Run the gpSP endpoint in native Windows.'
+    }
+    $nativePython = if ($env:SWITCHTRADE_NATIVE_PYTHON) { $env:SWITCHTRADE_NATIVE_PYTHON } else {
+        Join-Path $script:RepoRoot '.gpsp-venv\Scripts\python.exe'
+    }
+    if (-not (Test-Path -LiteralPath $nativePython -PathType Leaf)) {
+        Stop-DevOverlay 'GPSP_ENVIRONMENT_MISSING' 'Prepare .gpsp-venv with Python 3.12 and requirements-gpsp.lock; no automatic installation is performed.'
+    }
+    $nativePython = (Resolve-Path -LiteralPath $nativePython).Path
+    $probeCode = 'import sys,importlib.metadata; assert sys.platform=="win32" and sys.version_info[:2]==(3,12) and sys.maxsize>2**32; assert importlib.metadata.version("websockets")=="17.0.1"'
+    $probe = Invoke-DevCapturedProcess -FilePath $nativePython -ArgumentList @('-I', '-c', $probeCode)
+    if ($probe.ExitCode -ne 0) {
+        Stop-DevOverlay 'GPSP_ENVIRONMENT_INVALID' 'Use native 64-bit Python 3.12 and install requirements-gpsp.lock in the selected environment.'
+    }
+    $nativeEnvironment = @{
+        PYTHONNOUSERSITE='1'; PYTHONUTF8='1'; PYTHONPATH=''; SWITCHTRADE_PARENT_STDIN='1'
+    }
+    return [int](Invoke-DevInteractiveProcess -FilePath $nativePython -ArgumentList (@('-s', '-u') + $Arguments) -ParentLifetime -Environment $nativeEnvironment)
+}
+
 function Invoke-DevClean {
     $runtime = Get-ActiveRuntime
     $result = Invoke-DevWsl -Distro $runtime.Name -Command '/bin/rm' -Arguments @('-rf', '--', $script:OverlayRoot)
@@ -529,4 +577,4 @@ function Invoke-DevClean {
     [ordered]@{ schema = 1; cleaned = $script:OverlayRoot } | ConvertTo-Json -Compress
 }
 
-Export-ModuleMember -Function Invoke-DevDoctor, Invoke-DevSync, Invoke-DevRun, Invoke-DevClean, Resolve-DevCoreArguments
+Export-ModuleMember -Function Invoke-DevDoctor, Invoke-DevSync, Invoke-DevRun, Invoke-DevClean, Resolve-DevCoreArguments, Invoke-DevNative

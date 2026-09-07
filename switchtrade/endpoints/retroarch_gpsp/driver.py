@@ -6,6 +6,7 @@ control belongs here; only our loopback stream and RFU peer are owned.
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from switchtrade.core.contracts import (
     CleanupReport, EndpointCapabilities, EndpointKind, GenerationEnded,
@@ -20,6 +21,7 @@ from .rfu import (
 )
 
 PROTOCOL = "switchtrade.gba-frame.v1"
+LOG = logging.getLogger(__name__)
 
 
 def clean(report):
@@ -53,6 +55,10 @@ class RetroArchGpspEndpointDriver:
         self.rfu_mode_verified = False
         self._probe_unresolved = False
 
+    @property
+    def generation(self):
+        return self._generation
+
     def _check(self):
         if self.failure is not None:
             raise self.failure
@@ -64,6 +70,7 @@ class RetroArchGpspEndpointDriver:
     def _fail(self, error):
         if self.failure is None:
             self.failure = error
+            LOG.error("endpoint_failure code=%s", getattr(error, "code", type(error).__name__))
         self._failed.set()
 
     async def wait_failed(self):
@@ -97,6 +104,8 @@ class RetroArchGpspEndpointDriver:
         # never launches the emulator and never acquires process-write rights.
         self._observer = self._observer or ProcessObserver.select(self._pid)
         self._observer.check()
+        LOG.info("observed_process identity=%s core=%s", getattr(self._observer, "identity", None),
+            getattr(self._observer, "core", None))
         self.local = LocalNetplay(self._observer, self._port)
         self._runner = asyncio.create_task(self._run(), name="gpsp-frontend")
         # Allow bind failures to surface before external Pair admission.
@@ -129,6 +138,7 @@ class RetroArchGpspEndpointDriver:
             raise GpspError("EMULATOR_RFU_MODE_UNPROVEN", "gpSP의 GBA Wireless Adapter 설정을 확인하세요. 적용에 필요한 게임 재로드는 직접 해주세요.")
         self._probe_unresolved = False
         self.rfu_mode_verified = True
+        LOG.info("local_netplay_rfu_mode_verified port=%s", self._port)
 
     async def _run(self):
         try:
@@ -180,6 +190,7 @@ class RetroArchGpspEndpointDriver:
             self._next_id += 2
             generation = GpspGeneration(self, offer, host, child)
             self._generation = generation
+            LOG.info("generation_prepared id=%s", offer.generation_id)
             return generation  # Core DATA must activate BEFORE game RFU ACK.
         finally:
             self._opening = None
@@ -348,6 +359,8 @@ class GpspGeneration:
             if errors:
                 self.driver._cleanup_verified = False
                 self.driver._cleanup_errors.extend(errors)
+            LOG.info("generation_closed id=%s outcome=%s clean=%s sent=%s received=%s",
+                self.offer.generation_id, outcome, not errors, self._sent, self._received)
             if self.driver._generation is self:
                 self.driver._generation = None
         return CleanupReport(not errors, not errors, not errors,

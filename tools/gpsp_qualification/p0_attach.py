@@ -10,6 +10,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import socket
@@ -95,11 +96,13 @@ def host_probe(connection, round_number):
 
 def run(root: Path, fixture: Path, output: Path, production_local: bool = False,
         rfu_mode: str = "rfu", rfu_probe: bool = False, core_endpoint: bool = False,
-        host_role_probe: bool = False):
+        host_role_probe: bool = False, native_doctor: bool = False):
     if core_endpoint and (rfu_probe or not production_local):
         raise ValueError("core-endpoint needs production-local and owns its own RFU handshake")
     if host_role_probe and (not production_local or core_endpoint or rfu_probe):
         raise ValueError("host-role-probe needs only production-local")
+    if native_doctor and not production_local:
+        raise ValueError("native-doctor requires the production listener to rebind after diagnosis")
     retained = core_endpoint or host_role_probe
     root, fixture = root.resolve(strict=True), fixture.resolve(strict=True)
     executable, core = root / "retroarch.exe", root / "cores/gpsp_libretro.dll"
@@ -187,6 +190,20 @@ def run(root: Path, fixture: Path, output: Path, production_local: bool = False,
             assert "SET_NETPACKET_INTERFACE" in status and "Geometry: 240x160" in status
             report["started_before_netplay"] = True
             report["input_method"] = "owned SDL window public key messages"
+            if native_doctor:
+                launch.listener.close()  # Release only the harness's reservation.
+                repo = Path(__file__).resolve().parents[2]
+                environment = dict(os.environ)
+                environment.pop("SWITCHTRADE_NATIVE_PYTHON", None)  # Exercise the default minimal venv.
+                checked = subprocess.run([shutil.which("pwsh"), "-NoProfile", "-File", str(repo / "dev.ps1"),
+                    "doctor", "--emulator", "gpsp", "--emulator-pid", str(process.pid),
+                    "--emulator-port", str(launch.port)], cwd=repo, env=environment,
+                    capture_output=True, text=True, encoding="utf-8", timeout=30)
+                (output / "native-doctor.log").write_text(checked.stdout + checked.stderr, encoding="utf-8")
+                report["native_doctor_exit"] = checked.returncode
+                assert checked.returncode == 0, "P3_NATIVE_DOCTOR_FAILED"
+                assert "not yet verified" in checked.stdout and "Bridge active" not in checked.stdout
+                report["native_doctor_minimal_environment"] = True
             with ThreadPoolExecutor(max_workers=1) as pool:
                 for number in (1, 2):
                     if not retained or number == 1:
@@ -283,4 +300,5 @@ if __name__ == "__main__":
     parser.add_argument("--rfu-probe", action="store_true")
     parser.add_argument("--core-endpoint", action="store_true")
     parser.add_argument("--host-role-probe", action="store_true")
+    parser.add_argument("--native-doctor", action="store_true")
     run(**vars(parser.parse_args()))

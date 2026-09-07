@@ -47,7 +47,7 @@ unsupported capabilities or placeholder implementations. Relay remains opaque.
 | P0 | Stock runtime identity; attach/exchange/detach/reattach without game reload/reset | PASS (local Windows; not full integration) |
 | P1 | Borrowed-process probe, local listener, hardened Netplay and RFU translator | PASS (packet scope; local Windows) |
 | P2 | Real Core endpoint, lifecycle, reconnect and next Generation | PASS (packet scope; local Windows) |
-| P3 | Native dev/CLI routing, diagnostics and user messages | NOT_STARTED |
+| P3 | Native dev/CLI routing, diagnostics and user messages | PASS (packet scope; local Windows) |
 | P4 | Full integration, two Generations, long waits/soak, CI and VMware runbook | NOT_STARTED |
 
 P0 is a hard gate: a stock compatibility failure must be recorded and reported,
@@ -166,6 +166,55 @@ P3/P4 remain open: lazy composition/native dev/CLI, final actual Switch-side pat
 long human waits/30-minute process soak, complete acceptance and full pytest,
 same-final-SHA Windows/Ubuntu CI, and the VMware physical test runbook.
 No final software-ready or physical-success claim is made at P2.
+
+### P3 evidence and native use (2026-09-08)
+
+The real `dev.ps1` dispatches `join CODE --emulator gpsp` and
+`doctor --emulator gpsp` to native Windows Python before any WSL/radio/runtime
+lookup. Switch host/join keep their existing radio-gated route. gpSP rejects
+Switch-only options, unsupported emulator names, invalid PID/port and Host role.
+Python composition and CLI import Switch/LDN dependencies only when selected;
+a fresh minimal native environment imports/constructs gpSP without them.
+
+Prepare explicitly in PowerShell 7 with native 64-bit Python 3.12 already installed:
+
+```powershell
+py -3.12 -m venv .gpsp-venv
+.\.gpsp-venv\Scripts\python.exe -m pip install --require-hashes -r requirements-gpsp.lock
+.\dev.ps1 doctor --emulator gpsp
+.\dev.ps1 run join 381742 --emulator gpsp
+```
+
+The native lock contains only `websockets==17.0.1` with official PyPI wheel
+SHA256s; no LDN/WSL/installer dependency. Run and doctor do not install anything.
+`SWITCHTRADE_NATIVE_PYTHON` is an explicit advanced interpreter override and is
+validated against the same native Python/dependency contract.
+
+Before running: manually start the qualified RetroArch/gpSP game and apply its
+GBA Wireless Adapter setting; save/reload manually if the frontend requires it.
+Then join the Pair and manually connect Netplay to `127.0.0.1:55435`, not the
+Internet relay. `--emulator-port` changes that exact local port; collision fails.
+Use `--emulator-pid` only to select among multiple running candidates.
+
+The CLI checks the process/bind before consuming the Pair code, prints the local
+Netplay target, waits for the Host's offer, and tells the user when to choose
+Join Group. `Bridge active.` is withheld until actual gpSP child data proves its
+RFU handshake completed. Normal room end retains Pair/local Netplay; Ctrl+C
+uses the existing owned parent-pipe cancellation path, never process-name kills.
+Doctor explicitly states that its process/core/port check is not RFU/game proof.
+Ordinary errors are short actions; stable codes/tracebacks go only to requested
+verbose/file logs. The product never manages the user's emulator/content/save.
+
+- 88 focused native CLI/PowerShell/Switch CLI/boundary/endpoint tests pass.
+  Existing real Windows Ctrl+C -> CLI -> StageSession cleanup still passes.
+- `.qualification/gpsp-p3-native-doctor-01/` runs actual PowerShell/dev/doctor
+  against the harness-owned stock process using default `.gpsp-venv` containing
+  only pip and websockets. Doctor exits zero without claiming RFU readiness.
+  Subsequent real-Core/stock two-Generation P2 exchange still passes, all owned
+  handles/sockets/desktop close, and original runtime metadata is unchanged.
+- P4 remains required: actual **join** CLI and real Direct A/StageSession/LDN/
+  TunnelSim on the opposite side, long waits/soak, full tests and final-SHA CI.
+  The P3 doctor result does not stand in for that final full-path qualification.
 
 ## Required final evidence
 
