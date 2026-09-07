@@ -112,12 +112,17 @@ class CleanupReport:
 Cancellation = asyncio.Event
 
 
+class GenerationEnded(Exception):
+    """Normal local-link completion, not an endpoint or transport failure."""
+
+
 class LocalGeneration(Protocol):
     offer: GenerationOffer
 
     async def receive(self) -> LinkPacket: ...
     async def send(self, packet: LinkPacket) -> None: ...
     async def close(self, outcome: str) -> CleanupReport: ...
+    async def wait_ended(self) -> None: ...
 
 
 class EndpointDriver(Protocol):
@@ -131,6 +136,6 @@ class EndpointDriver(Protocol):
 
 __all__ = (
     "Cancellation", "CleanupReport", "EndpointCapabilities", "EndpointDriver", "EndpointKind",
-    "GenerationOffer", "GenerationRole", "LinkPacket", "LocalGeneration", "MAX_PACKET_BYTES",
+    "GenerationEnded", "GenerationOffer", "GenerationRole", "LinkPacket", "LocalGeneration", "MAX_PACKET_BYTES",
     "MAX_SETUP_BYTES", "PairCredentials", "PairSeat", "RuntimeKind", "validate_protocol_id",
 )

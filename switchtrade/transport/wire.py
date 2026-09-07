@@ -122,6 +122,13 @@ class WireState:
     def ready(self) -> bool:
         return self._challenge_confirmed and self._responded_to_peer
 
+    @property
+    def peer_epoch(self) -> int | None:
+        return self._peer_epoch
+
+    def owns_generation(self, generation_id: str) -> bool:
+        return generation_id in {self.active_generation, self._inbound_offer, self._outbound_offer}
+
     def start(self, epoch: int | None = None, *, expect_peer_resync: bool | None = None) -> tuple[Envelope, Envelope]:
         candidate = secrets.randbits(64) if epoch is None else epoch
         if not 1 <= candidate <= 0xFFFFFFFFFFFFFFFF:
@@ -196,10 +203,10 @@ class WireState:
                 raise TransportError("T_GENERATION_STALE")
             self.active_generation, self._inbound_offer = generation_id, None
         elif kind is FrameKind.GENERATION_CLOSE:
-            if generation_id != self.active_generation:
+            if not self.owns_generation(generation_id):
                 raise TransportError("T_GENERATION_STALE")
             self._retiring_generation = generation_id
-            self.active_generation = None
+            self.active_generation = self._outbound_offer = self._inbound_offer = None
         elif kind is FrameKind.DATA:
             if generation_id != self.active_generation:
                 raise TransportError("T_GENERATION_INACTIVE")
@@ -211,14 +218,16 @@ class WireState:
                 raise TransportError("T_GENERATION_ACTIVE")
             self._inbound_offer = envelope.generation_id
         elif envelope.kind is FrameKind.GENERATION_ACCEPT:
+            if envelope.generation_id == self._retiring_generation:
+                return
             if envelope.generation_id != self._outbound_offer:
                 raise TransportError("T_GENERATION_STALE")
             self.active_generation, self._outbound_offer = envelope.generation_id, None
         elif envelope.kind is FrameKind.GENERATION_CLOSE:
-            if envelope.generation_id != self.active_generation:
+            if not self.owns_generation(envelope.generation_id) and envelope.generation_id != self._retiring_generation:
                 raise TransportError("T_GENERATION_STALE")
             self._retiring_generation = envelope.generation_id
-            self.active_generation = None
+            self.active_generation = self._outbound_offer = self._inbound_offer = None
         elif envelope.kind is FrameKind.DATA:
             if envelope.generation_id not in {self.active_generation, self._retiring_generation}:
                 raise TransportError("T_GENERATION_INACTIVE")

@@ -98,6 +98,7 @@ class SwitchLdnGeneration:
         )
         self._started = False
         self._report: CleanupReport | None = None
+        self._close_task: asyncio.Task[CleanupReport] | None = None
 
     @property
     def runner_alive(self) -> bool:
@@ -105,6 +106,8 @@ class SwitchLdnGeneration:
 
     def activate(self) -> None:
         """Start local DATA production only after Core admits this generation."""
+        if self._close_task is not None:
+            raise SwitchLdnEndpointError("SWITCH_ENDPOINT_CLOSED", "generation is closing")
         if not self._started:
             self._started = True
             self._runner.start()
@@ -115,7 +118,24 @@ class SwitchLdnGeneration:
     async def send(self, packet: LinkPacket) -> None:
         await self.tunnel.deliver_from_core(packet)
 
+    async def wait_ended(self) -> None:
+        """Translate the local stage lifecycle without exposing LDN to Core."""
+        while True:
+            if self._tick_failure is not None:
+                raise self._tick_failure
+            if getattr(self._session, "end_reason", None) is not None:
+                return
+            if getattr(self._session, "ended", False):
+                self._session.raise_failure()
+                return
+            await asyncio.sleep(.02)
+
     async def close(self, outcome: str) -> CleanupReport:
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(self._close(outcome))
+        return await asyncio.shield(self._close_task)
+
+    async def _close(self, outcome: str) -> CleanupReport:
         del outcome
         if self._report is not None:
             return self._report
@@ -156,9 +176,13 @@ class SwitchLdnGeneration:
     def _drive_simulation(self) -> None:
         deadline = time.monotonic()
         while not self._runner_stop.is_set():
+            if getattr(self._session, "end_reason", None) is not None:
+                return
             try:
                 self.simulation.tick()
             except BaseException as error:
+                if getattr(self._session, "end_reason", None) is not None:
+                    return
                 failure = SwitchLdnEndpointError(
                     "SWITCH_ENDPOINT_TICK_FAILED", "Switch LDN simulation tick failed"
                 )

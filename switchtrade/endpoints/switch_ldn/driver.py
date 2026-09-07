@@ -128,6 +128,8 @@ class SwitchLdnEndpointDriver:
         self._prepared = False
         self._generation: LeaderGeneration | MirrorGeneration | None = None
         self._cleanup_verified = True
+        self._opening: asyncio.Task | None = None
+        self._cleanup_errors: list[dict] = []
 
     async def prepare(self) -> None:
         if self._policy is None:
@@ -144,6 +146,21 @@ class SwitchLdnEndpointDriver:
         self._prepared = True
 
     async def discover(self, cancel: Cancellation) -> LocalGeneration:
+        return await self._open(self._discover, cancel)
+
+    async def accept(self, offer: GenerationOffer, cancel: Cancellation) -> LocalGeneration:
+        return await self._open(self._accept, offer, cancel)
+
+    async def _open(self, operation, *args):
+        if self._opening is not None:
+            raise SwitchLdnEndpointError("SWITCH_ENDPOINT_BUSY", "Switch LDN admission is pending")
+        self._opening = asyncio.current_task()
+        try:
+            return await operation(*args)
+        finally:
+            self._opening = None
+
+    async def _discover(self, cancel: Cancellation) -> LocalGeneration:
         if not self._prepared or self._policy is None:
             raise SwitchLdnEndpointError(
                 "SWITCH_ENDPOINT_POLICY_INVALID", "Switch LDN driver is not prepared"
@@ -169,8 +186,6 @@ class SwitchLdnEndpointDriver:
                 raise
             except BaseException as failure:
                 cleanup_ok = await self._stop_session(session)
-                if cancel.is_set():
-                    raise asyncio.CancelledError from failure
                 if not cleanup_ok or getattr(failure, "code", None) not in _RETRYABLE_A_CODES:
                     raise
                 await self._backoff(cancel)
@@ -181,7 +196,7 @@ class SwitchLdnEndpointDriver:
                 await self._stop_session(session)
                 raise
 
-    async def accept(
+    async def _accept(
         self, offer: GenerationOffer, cancel: Cancellation
     ) -> LocalGeneration:
         if not self._prepared or self._policy is None:
@@ -220,13 +235,18 @@ class SwitchLdnEndpointDriver:
             raise
 
     async def close(self) -> CleanupReport:
+        opening = self._opening
+        if opening is not None and opening is not asyncio.current_task():
+            opening.cancel()
+            await asyncio.gather(opening, return_exceptions=True)
         if self._generation is None:
             if not self._cleanup_verified:
                 return CleanupReport(
                     False,
                     False,
                     False,
-                    {"endpoint_kind": EndpointKind.SWITCH_LDN, "cleanup": "unverified"},
+                    {"endpoint_kind": EndpointKind.SWITCH_LDN, "cleanup": "unverified",
+                     "cleanup_errors": tuple(self._cleanup_errors)},
                 )
             return CleanupReport(True, True, True, {"endpoint_kind": EndpointKind.SWITCH_LDN})
         return await self._generation.close("driver_stop")
@@ -240,26 +260,30 @@ class SwitchLdnEndpointDriver:
             done, _pending = await asyncio.wait(
                 (ready_task, cancel_task), return_when=asyncio.FIRST_COMPLETED
             )
+            if ready_task.done() and not ready_task.cancelled() and ready_task.exception() is not None:
+                return ready_task.result()
             if cancel_task in done or cancel.is_set():
                 raise asyncio.CancelledError
             return ready_task.result()
         finally:
-            # ``wait_ready`` runs in a worker because StageSession owns a
-            # different event loop.  Awaiting that worker after cancellation
-            # deadlocks: only the caller's subsequent ``session.stop`` can
-            # make it return.  Cancel its asyncio wrapper and let stop join
-            # the stage before the worker is observed again.
+            # Canceling the asyncio wrapper does not stop its worker. The
+            # caller owns session.stop(), which wakes readiness before joining
+            # the stage, including when a kernel operation never returns.
             if not ready_task.done():
                 ready_task.cancel()
             if not cancel_task.done():
                 cancel_task.cancel()
-            await asyncio.gather(cancel_task, return_exceptions=True)
+            await asyncio.gather(ready_task, cancel_task, return_exceptions=True)
 
     async def _stop_session(self, session: StageSession) -> bool:
         try:
             await asyncio.to_thread(session.stop)
-        except BaseException:
+        except BaseException as error:
             self._cleanup_verified = False
+            self._cleanup_errors.append({
+                "error": type(error).__name__,
+                "report": getattr(session, "report", None),
+            })
             return False
         return True
 

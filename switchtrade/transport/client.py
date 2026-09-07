@@ -31,10 +31,16 @@ class WireClient:
         self._ready = asyncio.Event()
         self._failure: TransportError | None = None
         self._discarded_generation_frames = 0
+        self.revision = 0
+        self._changed = asyncio.Event()
 
     @property
     def discarded_generation_frames(self) -> int:
         return self._discarded_generation_frames
+
+    @property
+    def connected(self) -> bool:
+        return self._socket is not None and self._failure is None
 
     async def connect(self, socket: BinarySocket) -> None:
         await self.close()
@@ -48,6 +54,20 @@ class WireClient:
 
     async def wait_ready(self, timeout: float = 5.0) -> None:
         await self._wait(self._ready, timeout)
+
+    async def wait_interrupted(self, revision: int) -> None:
+        failed = asyncio.create_task(self._failed.wait())
+        changed = asyncio.create_task(self._changed.wait())
+        try:
+            if revision == self.revision:
+                await asyncio.wait((failed, changed), return_when=asyncio.FIRST_COMPLETED)
+            self._raise_if_failed()
+            if revision != self.revision:
+                raise TransportError("T_PEER_RECONNECTED")
+        finally:
+            for task in (failed, changed):
+                task.cancel()
+            await asyncio.gather(failed, changed, return_exceptions=True)
 
     async def send(self, kind: FrameKind, generation_id: str = "", payload: bytes = b"", flags: int = 0) -> None:
         self._raise_if_failed()
@@ -86,6 +106,8 @@ class WireClient:
             await asyncio.gather(drained, failed, return_exceptions=True)
 
     async def close(self) -> None:
+        self._fail(TransportError("T_CLOSED"))
+        self._ready.clear()
         socket, self._socket = self._socket, None
         tasks = tuple(task for task in (self._writer, self._reader) if task is not None)
         for task in tasks:
@@ -166,12 +188,22 @@ class WireClient:
             while True:
                 raw = await self._socket.recv()  # type: ignore[union-attr]
                 envelope = Envelope.decode(raw)
+                previous_epoch = self.state.peer_epoch
+                already_retiring = self.state.is_retiring_generation(envelope.generation_id)
                 replies = self.state.accept(envelope)
                 if replies is None:
                     continue
+                if previous_epoch is not None and previous_epoch != self.state.peer_epoch:
+                    self.revision += 1
+                    self._changed.set()
+                    self._changed = asyncio.Event()
+                    self._ready.clear()
                 for reply in replies:
                     self._enqueue(reply)
-                if envelope.kind is FrameKind.DATA and self.state.is_retiring_generation(envelope.generation_id):
+                if envelope.kind is FrameKind.PEER_CLOSE:
+                    raise TransportError("T_PEER_CLOSED")
+                if (envelope.kind is FrameKind.DATA and self.state.is_retiring_generation(envelope.generation_id)
+                    or already_retiring and envelope.kind in {FrameKind.GENERATION_ACCEPT, FrameKind.GENERATION_CLOSE}):
                     self._discarded_generation_frames += 1
                 elif envelope.kind in {FrameKind.GENERATION_OFFER, FrameKind.GENERATION_ACCEPT, FrameKind.GENERATION_CLOSE, FrameKind.DATA, FrameKind.CAPABILITIES, FrameKind.PEER_CLOSE}:
                     try:
@@ -180,6 +212,8 @@ class WireClient:
                         raise TransportError("T_RECEIVE_QUEUE_FULL") from exc
                 if self.state.ready:
                     self._ready.set()
+                else:
+                    self._ready.clear()
         except asyncio.CancelledError:
             raise
         except Exception as exc:

@@ -47,11 +47,19 @@ class FakeEndpointHub:
 
 
 class FakeGeneration:
-    def __init__(self, offer: GenerationOffer, incoming: asyncio.Queue[LinkPacket | None], outgoing: asyncio.Queue[LinkPacket | None]) -> None:
+    def __init__(self, offer: GenerationOffer, incoming: asyncio.Queue[LinkPacket | None], outgoing: asyncio.Queue[LinkPacket | None], on_closed=lambda: None) -> None:
         self.offer = offer
         self._incoming = incoming
         self._outgoing = outgoing
         self._closed = False
+        self._on_closed = on_closed
+        self._ended = asyncio.Event()
+
+    async def wait_ended(self) -> None:
+        await self._ended.wait()
+
+    def end_local(self) -> None:
+        self._ended.set()
 
     async def receive(self) -> LinkPacket:
         if self._closed:
@@ -82,6 +90,7 @@ class FakeGeneration:
         discarded = 0
         if not self._closed:
             self._closed = True
+            self._on_closed()
             while not self._outgoing.empty():
                 self._outgoing.get_nowait()
                 discarded += 1
@@ -115,7 +124,8 @@ class FakeEndpointDriver:
             raise RuntimeError("fake discover failure")
         generation_id, channel = self._hub.offer()
         offer = GenerationOffer(generation_id, FAKE_PROTOCOL, EndpointKind.FAKE, generation_id.encode())
-        self.generation = FakeGeneration(offer, channel.origin_to_core, channel.origin_delivered)
+        self.generation = FakeGeneration(offer, channel.origin_to_core, channel.origin_delivered,
+                                         lambda: self._hub._channels.pop(generation_id, None))
         return self.generation
 
     async def accept(self, offer: GenerationOffer, cancel: asyncio.Event) -> FakeGeneration:
@@ -129,4 +139,6 @@ class FakeEndpointDriver:
 
     async def close(self) -> CleanupReport:
         self._prepared = False
+        if self.generation is not None:
+            return await self.generation.close("driver_closed")
         return CleanupReport(True, True, True, {})

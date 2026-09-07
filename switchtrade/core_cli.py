@@ -17,6 +17,7 @@ import websockets
 
 from switchtrade.composition import create_switch_ldn_driver
 from switchtrade.core import CoreSupervisor, PairCredentials, PairSeat
+from switchtrade.core.contracts import GenerationEnded
 from switchtrade.endpoints.switch_ldn import SwitchLdnPolicy
 from switchtrade.hardware import HardwarePolicyError, require_hardware, select_profile
 from switchtrade.transport import WireClient
@@ -191,16 +192,20 @@ async def _run_host(args: argparse.Namespace) -> None:
     supervisor = CoreSupervisor(credentials, driver, transport, connector=lambda: _socket(args.relay, credentials))
     try:
         while True:
-            print("Waiting for a Group Leader room...", flush=True)
-            await supervisor.discover_local()
-            print("Group Leader room detected.", flush=True)
-            print("Waiting for peer...", flush=True)
-            await supervisor.wait_for_peer()
-            print("Peer connected.", flush=True)
-            await supervisor.offer_generation()
-            print("Remote mirror ready.", flush=True)
-            print("Bridge active.", flush=True)
-            await _bridge_until_canceled(supervisor)
+            try:
+                print("Waiting for a Group Leader room...", flush=True)
+                await supervisor.discover_local()
+                print("Group Leader room detected.", flush=True)
+                print("Waiting for peer...", flush=True)
+                await supervisor.wait_for_peer()
+                print("Peer connected.", flush=True)
+                await supervisor.offer_generation()
+                print("Remote mirror ready.", flush=True)
+                print("Bridge active.", flush=True)
+                await _bridge_until_canceled(supervisor)
+            except GenerationEnded:
+                pass
+            print("Generation ended. Pair retained.", flush=True)
     finally:
         await supervisor.stop()
 
@@ -215,15 +220,19 @@ async def _run_guest(args: argparse.Namespace) -> None:
     supervisor = CoreSupervisor(credentials, driver, transport, connector=lambda: _socket(args.relay, credentials))
     try:
         while True:
-            print("Waiting for the host's Switch...", flush=True)
-            await supervisor.wait_for_peer()
-            print("Peer connected.", flush=True)
-            print("Preparing the mirror access point...", flush=True)
-            print("Choose Join Group on the Switch when it appears.", flush=True)
-            await supervisor.accept_next_offer()
-            print("Mirror access point and Switch ready.", flush=True)
-            print("Bridge active.", flush=True)
-            await _bridge_until_canceled(supervisor)
+            try:
+                print("Waiting for the host's Switch...", flush=True)
+                await supervisor.wait_for_peer()
+                print("Peer connected.", flush=True)
+                print("Preparing the mirror access point...", flush=True)
+                print("Choose Join Group on the Switch when it appears.", flush=True)
+                await supervisor.accept_next_offer()
+                print("Mirror access point and Switch ready.", flush=True)
+                print("Bridge active.", flush=True)
+                await _bridge_until_canceled(supervisor)
+            except GenerationEnded:
+                pass
+            print("Generation ended. Pair retained.", flush=True)
     finally:
         await supervisor.stop()
 
