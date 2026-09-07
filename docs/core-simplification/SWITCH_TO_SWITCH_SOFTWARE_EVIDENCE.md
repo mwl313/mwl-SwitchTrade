@@ -158,6 +158,14 @@ source and evidence, and every I-ID to its required T-IDs. Unknown/partial entri
 or known software gaps prevent attestation. The final report also records a full
 local run on the exact final SHA; do not conflate it with an earlier packet run.
 
+Final source audit additionally reproduced an unbounded PairStore rate-identity
+table: 2100 synthetic invalid-code clients left 4200 buckets even after expiry
+and sweep. Per-key deque bounds did not bound the number of keys. Expired buckets
+are now reclaimed and the total live table is capped at 4096, rejecting new
+identities with the existing 429 contract without evicting live guess budgets.
+T38 includes capacity, expiry and existing-budget regression coverage. See
+MTA-CORE-015; no external relay or real client address was used.
+
 ## Physical handoff and modularity
 
 See `SWITCH_TO_SWITCH_PHYSICAL_RUNBOOK.md`. No physical result has been claimed.

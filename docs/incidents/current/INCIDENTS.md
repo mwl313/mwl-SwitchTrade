@@ -1650,3 +1650,23 @@ archive list and regenerate the index.
 - **Prevention:** process-wide resource measurements need process-wide ownership.
   Keep a failing count with ownership evidence rather than labeling it flaky or
   increasing the budget. New Core real-path tests remain separately mandatory.
+
+### MTA-CORE-015 — Public relay rate history retained unlimited client identities
+
+- **Observed:** final source audit and a local PairStore reproduction with 2100
+  synthetic invalid-code clients created 4200 rate buckets; all 4200 remained
+  after the one-minute window expired and sweep ran. No external relay or real
+  client address was used.
+- **Cause:** per-client event deques were bounded, but the enclosing identity
+  dictionary was never swept or capped. Distinct request sources accumulated
+  indefinitely despite the active Pair capacity limit.
+- **Correction:** reclaim buckets only after their full rate window expires and
+  cap total live buckets at 4096. At capacity reject new identities with the
+  existing PAIR_RATE_LIMITED/429 contract; never evict live history or reset a
+  client's guess budget. All mutations remain under PairStore's existing lock.
+- **Evidence/recovery:** regression tests cover identity flooding, preservation
+  of existing exhausted budgets, expiry admission and join/guess reclamation;
+  actual Pair API/WebSocket/transport tests remain required. Reproduction used
+  process-local synthetic memory only; no runtime, credentials or device residue.
+- **Prevention:** a bounded per-key queue is not a bounded keyspace. Verify both
+  independently when an Internet peer can create new request identities.

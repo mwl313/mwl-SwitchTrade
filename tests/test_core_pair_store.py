@@ -69,6 +69,35 @@ class PairStoreTests(unittest.TestCase):
         clock.advance(minutes=1, seconds=1)
         store.create(capabilities(GenerationRole.ORIGIN), "client")
 
+    def test_rate_table_caps_new_identities_without_evicting_live_budgets(self):
+        clock = Clock()
+        store = PairStore(now=clock)
+        with patch("relay.pair_store.MAX_RATE_BUCKETS", 3):
+            for _ in range(8):
+                store.create(capabilities(GenerationRole.ORIGIN), "existing")
+            for index in range(2):
+                store.create(capabilities(GenerationRole.ORIGIN), f"other-{index}")
+            for index in range(100):
+                with self.assertRaisesRegex(PairStoreError, "PAIR_RATE_LIMITED"):
+                    store.create(capabilities(GenerationRole.ORIGIN), f"new-{index}")
+            self.assertEqual(len(store._limits), 3)
+            with self.assertRaisesRegex(PairStoreError, "PAIR_RATE_LIMITED"):
+                store.create(capabilities(GenerationRole.ORIGIN), "existing")
+            clock.advance(minutes=1)
+            store.create(capabilities(GenerationRole.ORIGIN), "new-after-expiry")
+            self.assertEqual(set(store._limits), {("create", "new-after-expiry")})
+
+    def test_sweep_reclaims_expired_join_and_guess_history(self):
+        clock = Clock()
+        store = PairStore(now=clock)
+        for index in range(100):
+            with self.assertRaisesRegex(PairStoreError, "PAIR_CODE_INVALID"):
+                store.join("invalid", capabilities(GenerationRole.MIRROR), str(index))
+        self.assertEqual(len(store._limits), 200)
+        clock.advance(minutes=1)
+        store.sweep()
+        self.assertFalse(store._limits)
+
     def test_reconnect_expiry_releases_capacity(self) -> None:
         clock = Clock()
         store = PairStore(max_pairs=1, now=clock)

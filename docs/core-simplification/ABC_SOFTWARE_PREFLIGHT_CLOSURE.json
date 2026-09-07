@@ -1261,7 +1261,8 @@
     "CI104/112 Windows reader PermissionError was not covered by atomic writer retry.",
     "Trio body-failure/cancellation propagation is distinguished from new teardown failures only with independent named leaf release proof.",
     "Opt-in gate/cleanup/counter diagnostics exclude keys, MACs, advertisement and RFU payloads.",
-    "Legacy resource soak now owns its measured process instead of measuring all pytest workers; native resource bounds unchanged, Python identities and zero owned-thread residue additionally asserted."
+    "Legacy resource soak now owns its measured process instead of measuring all pytest workers; native resource bounds unchanged, Python identities and zero owned-thread residue additionally asserted.",
+    "Public Pair relay rate history now sweeps expired identities and caps total buckets without evicting live guess budgets (MTA-CORE-015; T38)."
   ],
   "master_prompt": "docs/core-simplification/SWITCH_TO_SWITCH_FINAL_MASTER_PROMPT_20260907.md",
   "handoff_sha": "207537e28a66207fd7aad970e34b6487dfef1608",

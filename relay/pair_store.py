@@ -12,6 +12,8 @@ from collections import deque
 
 from switchtrade.core.contracts import EndpointCapabilities, PairCredentials, PairSeat
 
+MAX_RATE_BUCKETS = 4096
+
 
 class PairStoreError(ValueError):
     def __init__(self, code: str) -> None:
@@ -55,6 +57,10 @@ class PairStore:
     def sweep(self) -> None:
         with self._lock:
             now = self._time()
+            cutoff = now - timedelta(minutes=1)
+            for key, bucket in tuple(self._limits.items()):
+                if not bucket or bucket[-1] <= cutoff:
+                    self._limits.pop(key)
             for pair_id, record in tuple(self._pairs.items()):
                 if record.code_expires_at <= now:
                     if self._codes.get(record.code) == pair_id:
@@ -149,7 +155,14 @@ class PairStore:
 
     def _limit(self, action: str, client_id: str, limit: int) -> None:
         now = self._time()
-        bucket = self._limits.setdefault((action, client_id), deque())
+        key = (action, client_id)
+        if key not in self._limits:
+            self.sweep()
+            if len(self._limits) >= MAX_RATE_BUCKETS:
+                # Never evict a live client's history: that would let a flood
+                # reset the guess budget. New identities fail closed until expiry.
+                raise PairStoreError("PAIR_RATE_LIMITED")
+        bucket = self._limits.setdefault(key, deque())
         while bucket and bucket[0] <= now - timedelta(minutes=1):
             bucket.popleft()
         if len(bucket) >= limit:
