@@ -21,6 +21,66 @@ from tests.test_direct_resource_ownership import stage_for
 
 
 class LocalLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cancel_during_clean_retry_stop_awaits_the_actual_stage_owner(self):
+        await self._exercise_stop_race()
+
+    async def test_cancel_during_retry_stop_retains_actual_cleanup_failure(self):
+        await self._exercise_stop_race(dirty=True)
+
+    async def test_cancel_during_fatal_stage_stop_preserves_primary(self):
+        await self._exercise_stop_race(fatal=True)
+
+    async def test_cancel_during_fatal_stage_stop_preserves_primary_and_cleanup(self):
+        await self._exercise_stop_race(fatal=True, dirty=True)
+
+    async def _exercise_stop_race(self, *, fatal=False, dirty=False):
+        entered, release = threading.Event(), threading.Event()
+
+        class Ldn(FakeLdn):
+            rooms = []
+
+            @staticmethod
+            def load_keys(path):
+                return {} if fatal else FakeLdn.load_keys(path)
+
+        class PausedStopSession(StageSession):
+            def stop(self):
+                entered.set()
+                if not release.wait(3):
+                    raise RuntimeError("test did not release stop owner")
+                result = super().stop()
+                if dirty:
+                    raise OSError("injected stop failure")
+                return result
+
+        driver = SwitchLdnEndpointDriver(
+            a_helpers.DirectADriverLifecycleTests()._policy(),
+            stage_factory=lambda _: stage_for(Ldn), session_factory=PausedStopSession,
+            simulation_factory=lambda *_: _NoopSimulation())
+        await driver.prepare()
+        discovery = asyncio.create_task(driver.discover(asyncio.Event()))
+        try:
+            self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+            discovery.cancel()
+            await asyncio.sleep(.02)
+            self.assertFalse(discovery.done(), "cancellation orphaned the stop owner")
+            discovery.cancel()  # Repeated cancellation still cannot orphan cleanup.
+            await asyncio.sleep(.02)
+            self.assertFalse(discovery.done())
+            release.set()
+            with self.assertRaises(Exception if fatal else asyncio.CancelledError) as failed:
+                await asyncio.wait_for(discovery, 2)
+            if fatal:
+                self.assertEqual(failed.exception.code, "A_KEYS_INVALID")
+        finally:
+            release.set()
+            await asyncio.gather(discovery, return_exceptions=True)
+            report = await driver.close()
+        self.assertEqual(report.local_resources_released, not dirty, report.details)
+        if dirty:
+            with self.assertRaisesRegex(Exception, "prior Switch LDN cleanup is unverified"):
+                await driver.prepare()
+
     async def test_invite_expiry_is_not_confused_with_an_already_consumed_pair(self):
         for joined in (False, True):
             wire = WireClient(PairSeat.HOST)

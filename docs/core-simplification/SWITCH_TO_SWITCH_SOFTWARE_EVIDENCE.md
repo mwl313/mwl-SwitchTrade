@@ -176,6 +176,18 @@ reused, and the first socket exception remains in the cause chain. The stronger
 `active-retry` scenario must exchange second-generation RFU after that additional
 loss. T32/T38 cover it alongside bounded/permanent-failure regressions.
 
+Full local b8eb58a also exposed cancellation arriving during the driver's
+already-running no-room retry stop. The asyncio wrapper previously returned
+before its StageSession stop thread, recording false unknown cleanup. A gated
+actual DirectA/StageSession reproduction now verifies that repeated cancellation
+waits for the owned stop result; fatal primary and real cleanup failure remain
+separate and sticky. T17/T24 include all four combinations. The two other local
+failures were phase/clock assertions: the 120ms recovery deadline need not fit
+two attempts (separate success test does require retry), and stdout streaming is
+now proven by a child waiting for the parent's acknowledgement rather than
+requiring PowerShell cold startup to finish within 1.5s. Production bounds did
+not change. See MTA-CORE-017 and MTA-QA-023.
+
 ## Physical handoff and modularity
 
 See `SWITCH_TO_SWITCH_PHYSICAL_RUNBOOK.md`. No physical result has been claimed.

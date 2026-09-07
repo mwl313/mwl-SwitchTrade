@@ -1693,3 +1693,37 @@ archive list and regenerate the index.
 - **Prevention:** real first-stream loss plus a second loss during resync must
   still yield fresh-generation RFU or an explicit bounded failure. Test permanent
   protocol rejection, exhausted deadline and original cause independently.
+
+### MTA-CORE-017 — Cancellation abandoned the waiter for an owned retry stop
+
+- **Observed:** full local b8eb58a qualification reported S_CLEANUP_FAILED after
+  canceling a consumed-invite/no-room wait. A deterministic actual DirectA +
+  StageSession reproduction paused the stop owner during clean retry; canceling
+  discover completed immediately before that owner was released.
+- **Cause:** canceling asyncio.to_thread(session.stop) cancels its waiter, not
+  the running stop thread. The driver counted that cancellation as an actual
+  cleanup failure without awaiting the owned result.
+- **Correction:** retain one shielded stop task through repeated cancellation,
+  await StageSession's existing bounded result, then propagate cancellation.
+  Actual stop failure remains sticky and blocks admission. A preceding fatal
+  stage failure stays primary; normal no-room/scan retry is not a fatal result.
+- **Evidence/recovery:** actual Direct/StageSession plus gated stop reproduction,
+  including repeated cancellation, real stop completion, injected cleanup failure
+  and prior fatal key failure combinations. Only synthetic OS state was used;
+  the gated thread was released and joined, with no physical device involved.
+- **Prevention:** losing an async waiter is neither cancellation of its thread
+  nor cleanup evidence. Own and await every in-progress stop before returning.
+
+### MTA-QA-023 — Timing assertions measured unrelated startup or attempt counts
+
+- **Observed:** the same local full run saw one transient recovery attempt fit
+  in a 120ms test deadline, while its assertion demanded at least two. Another
+  test measured 2.078s including PowerShell cold startup against a 1.5s stdout
+  bound, without showing that the child's output was actually buffered.
+- **Correction:** the deadline test keeps the original 120ms bound and first
+  cause assertion but allows one attempt; a separate test still requires a
+  successful second attempt. The streaming test uses a child/parent acknowledgement:
+  child prints ready and can succeed only after the parent observes it. Buffered
+  until-exit output fails via the child's independent bounded deadline/exit 42.
+- **Prevention:** test the named phase's invariant. Do not weaken production
+  timeouts or confuse process startup duration with whether stdout streams.

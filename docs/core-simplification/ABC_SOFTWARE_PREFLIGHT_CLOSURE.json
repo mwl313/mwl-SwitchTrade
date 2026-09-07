@@ -710,9 +710,10 @@
       "source_revision": "CI:GITHUB_SHA",
       "test_nodes": [
         "tests/test_real_direct_faults.py::test_actual_direct_cancel_at_kernel_await_releases_every_owned_resource",
-        "tests/test_direct_a_stage.py"
+        "tests/test_direct_a_stage.py",
+        "tests/test_core_local_lifecycle.py"
       ],
-      "command": "python -m pytest tests/test_real_direct_faults.py::test_actual_direct_cancel_at_kernel_await_releases_every_owned_resource tests/test_direct_a_stage.py",
+      "command": "python -m pytest tests/test_real_direct_faults.py::test_actual_direct_cancel_at_kernel_await_releases_every_owned_resource tests/test_direct_a_stage.py tests/test_core_local_lifecycle.py",
       "environment": "Windows + Ubuntu Python 3.12 with pinned dependencies; platform-specific primitives execute on their owning OS.",
       "exit_code": null,
       "observed_result": "Actual LDN scan kernel await canceled through driver/StageSession; terminal report and empty owner inventory.",
@@ -876,9 +877,10 @@
         "tests/test_switch_ldn_driver.py",
         "tests/test_real_direct_faults.py",
         "tests/test_core_supervisor.py",
-        "tests/test_switch_core_cli.py"
+        "tests/test_switch_core_cli.py",
+        "tests/test_core_local_lifecycle.py"
       ],
-      "command": "python -m pytest tests/test_switch_ldn_driver.py tests/test_real_direct_faults.py tests/test_core_supervisor.py tests/test_switch_core_cli.py",
+      "command": "python -m pytest tests/test_switch_ldn_driver.py tests/test_real_direct_faults.py tests/test_core_supervisor.py tests/test_switch_core_cli.py tests/test_core_local_lifecycle.py",
       "environment": "Windows + Ubuntu Python 3.12 with pinned dependencies; platform-specific primitives execute on their owning OS.",
       "exit_code": null,
       "observed_result": "First tick/Direct/transport error retained while all remaining simulation/session/driver/socket cleanup attempts run.",
@@ -1263,7 +1265,9 @@
     "Opt-in gate/cleanup/counter diagnostics exclude keys, MACs, advertisement and RFU payloads.",
     "Legacy resource soak now owns its measured process instead of measuring all pytest workers; native resource bounds unchanged, Python identities and zero owned-thread residue additionally asserted.",
     "Public Pair relay rate history now sweeps expired identities and caps total buckets without evicting live guess budgets (MTA-CORE-015; T38).",
-    "Resync stream loss now receives bounded transient-only recovery; original socket cause is preserved; actual CLI/relay/Direct/TunnelSim second-loss qualification added (MTA-CORE-016; T32/T38)."
+    "Resync stream loss now receives bounded transient-only recovery; original socket cause is preserved; actual CLI/relay/Direct/TunnelSim second-loss qualification added (MTA-CORE-016; T32/T38).",
+    "Cancellation during clean no-room retry stop now awaits its owned StageSession result through repeated cancellation; fatal primary and actual cleanup failure stay independent (MTA-CORE-017; T17/T24).",
+    "Streaming qualification now uses a parent/child acknowledgement rather than PowerShell startup time; bounded retry test no longer requires multiple attempts within a scheduling-sensitive 120ms (MTA-QA-023)."
   ],
   "master_prompt": "docs/core-simplification/SWITCH_TO_SWITCH_FINAL_MASTER_PROMPT_20260907.md",
   "handoff_sha": "207537e28a66207fd7aad970e34b6487dfef1608",

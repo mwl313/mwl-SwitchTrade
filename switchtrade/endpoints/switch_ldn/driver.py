@@ -185,15 +185,15 @@ class SwitchLdnEndpointDriver:
                 await self._stop_session(session)
                 raise
             except BaseException as failure:
-                cleanup_ok = await self._stop_session(session)
+                cleanup_ok = await self._stop_session(session, primary=failure)
                 if not cleanup_ok or getattr(failure, "code", None) not in _RETRYABLE_A_CODES:
                     raise
                 await self._backoff(cancel)
                 continue
             try:
                 return self._leader_generation(session, resources)
-            except BaseException:
-                await self._stop_session(session)
+            except BaseException as failure:
+                await self._stop_session(session, primary=failure)
                 raise
 
     async def _accept(
@@ -225,13 +225,13 @@ class SwitchLdnEndpointDriver:
         except asyncio.CancelledError:
             await self._stop_session(session)
             raise
-        except BaseException:
-            await self._stop_session(session)
+        except BaseException as failure:
+            await self._stop_session(session, primary=failure)
             raise
         try:
             return self._mirror_generation(offer, session, resources)
-        except BaseException:
-            await self._stop_session(session)
+        except BaseException as failure:
+            await self._stop_session(session, primary=failure)
             raise
 
     async def close(self) -> CleanupReport:
@@ -275,17 +275,34 @@ class SwitchLdnEndpointDriver:
                 cancel_task.cancel()
             await asyncio.gather(ready_task, cancel_task, return_exceptions=True)
 
-    async def _stop_session(self, session: StageSession) -> bool:
+    async def _stop_session(self, session: StageSession, *, primary=None) -> bool:
+        # Cancellation of the asyncio waiter cannot cancel a running stop()
+        # thread. Retain and await that owner, including repeated cancellation,
+        # before deciding whether its bounded cleanup actually failed.
+        stopping = asyncio.create_task(asyncio.to_thread(session.stop))
+        canceled = None
+        while not stopping.done():
+            try:
+                await asyncio.shield(stopping)
+            except asyncio.CancelledError as error:
+                canceled = error
+            except BaseException:
+                break
+        clean = True
         try:
-            await asyncio.to_thread(session.stop)
+            stopping.result()
         except BaseException as error:
             self._cleanup_verified = False
             self._cleanup_errors.append({
                 "error": type(error).__name__,
                 "report": getattr(session, "report", None),
             })
-            return False
-        return True
+            clean = False
+        if canceled is not None and (
+            primary is None or getattr(primary, "code", None) in _RETRYABLE_A_CODES
+        ):
+            raise canceled
+        return clean
 
     async def _backoff(self, cancel: Cancellation) -> None:
         assert self._policy is not None

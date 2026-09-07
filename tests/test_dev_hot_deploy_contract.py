@@ -4,7 +4,7 @@ import json
 import shutil
 import subprocess
 import sys
-import time
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -207,33 +207,46 @@ $module = Import-Module -Name '{module_path}' -Force -PassThru
             self.skipTest("PowerShell is unavailable")
         module_path = str(MODULE).replace("'", "''")
         python_path = sys.executable.replace("'", "''")
-        script = (
-            f"$module = Import-Module -Name '{module_path}' -Force -PassThru; "
-            f"& $module {{ Invoke-DevInteractiveProcess -FilePath '{python_path}' "
-            "-ArgumentList @('-c', 'import time; print(\"ready\", flush=True); time.sleep(2)') }"
-        )
-        started = time.monotonic()
-        process = subprocess.Popen(
-            [powershell, "-NoProfile", "-Command", script],
-            cwd=ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        try:
-            assert process.stdout is not None
-            self.assertEqual(process.stdout.readline().strip(), "ready")
-            self.assertLess(time.monotonic() - started, 1.5)
-            stderr = process.stderr.read() if process.stderr is not None else ""
-            self.assertEqual(process.wait(timeout=5), 0, stderr)
-        finally:
-            if process.poll() is None:
-                process.kill()
-                process.wait(timeout=5)
-            if process.stdout is not None:
-                process.stdout.close()
-            if process.stderr is not None:
-                process.stderr.close()
+        with tempfile.TemporaryDirectory() as state:
+            marker = Path(state) / "stdout-observed"
+            marker_arg = str(marker).replace("'", "''")
+            child = (
+                'import pathlib,sys,time; print("ready", flush=True); end=time.monotonic()+10\n'
+                'while not pathlib.Path(sys.argv[1]).exists():\n'
+                ' if time.monotonic() >= end: sys.exit(42)\n'
+                ' time.sleep(.01)\n'
+                'print("ack", flush=True)'
+            )
+            script = (
+                f"$module = Import-Module -Name '{module_path}' -Force -PassThru; "
+                f"& $module {{ exit (Invoke-DevInteractiveProcess -FilePath '{python_path}' "
+                f"-ArgumentList @('-c', '{child}', '{marker_arg}')) }}"
+            )
+            process = subprocess.Popen(
+                [powershell, "-NoProfile", "-Command", script], cwd=ROOT,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            try:
+                assert process.stdout is not None
+                self.assertEqual(process.stdout.readline().strip(), "ready")
+                # Child cannot exit successfully until the parent observes its
+                # streamed stdout. PowerShell's cold start isn't the I/O clock.
+                marker.touch()
+                stdout, stderr = process.communicate(timeout=15)
+                self.assertEqual(process.returncode, 0, stderr)
+                self.assertEqual(stdout.strip(), "ack")
+            finally:
+                marker.touch()
+                if process.poll() is None:
+                    try:
+                        process.wait(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=5)
+                if process.stdout is not None:
+                    process.stdout.close()
+                if process.stderr is not None:
+                    process.stderr.close()
 
 
 if __name__ == "__main__":

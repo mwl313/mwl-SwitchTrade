@@ -277,3 +277,5 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-QA-022` | Process-wide soak metrics lacked a scenario-owned process | Current ledger | 1631 |
 | `MTA-CORE-015` | Public relay rate history retained unlimited client identities | Current ledger | 1654 |
 | `MTA-CORE-016` | Recovery treated a transient resync-stream loss as terminal | Current ledger | 1674 |
+| `MTA-CORE-017` | Cancellation abandoned the waiter for an owned retry stop | Current ledger | 1697 |
+| `MTA-QA-023` | Timing assertions measured unrelated startup or attempt counts | Current ledger | 1717 |
