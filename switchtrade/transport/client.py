@@ -263,6 +263,8 @@ class WireClient:
     def _fail(self, exc: Exception) -> None:
         if self._failure is None:
             self._failure = exc if isinstance(exc, TransportError) else TransportError("T_TRANSPORT_FAILED")
+            if self._failure is not exc:
+                self._failure.__cause__ = exc
             self._failed.set()
 
     def _raise_if_failed(self) -> None:

@@ -276,3 +276,4 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-CORE-014` | Local datagram and key-file shapes needed explicit admission | Current ledger | 1617 |
 | `MTA-QA-022` | Process-wide soak metrics lacked a scenario-owned process | Current ledger | 1631 |
 | `MTA-CORE-015` | Public relay rate history retained unlimited client identities | Current ledger | 1654 |
+| `MTA-CORE-016` | Recovery treated a transient resync-stream loss as terminal | Current ledger | 1674 |

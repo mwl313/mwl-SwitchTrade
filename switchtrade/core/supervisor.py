@@ -358,22 +358,43 @@ class CoreSupervisor:
         self.state = SupervisorState.RECOVERING_PAIR
         try:
             await self.close_generation("transport_lost", notify_peer=False)
-            if not peer_resynced:
-                await self.transport.close()
-                remaining = (self._lease_expires - datetime.now(UTC)).total_seconds()
-                if remaining <= 0:
-                    raise await self._record_failure("S_PAIR_LEASE_EXPIRED")
-                socket = await asyncio.wait_for(self._connector(), min(self._reconnect_timeout, remaining))
-                await self.transport.connect(socket)
-            self._wire_revision = self.transport.revision
-            try:
-                await self.transport.wait_ready(self._reconnect_timeout)
-            except TransportError as exc:
-                if exc.code != "T_READY_TIMEOUT":
-                    raise
-                self.state = SupervisorState.WAITING_FOR_PEER
+            loop = asyncio.get_running_loop()
+            deadline, delay = loop.time() + self._reconnect_timeout, .05
+            first_transient = None
+            while True:
+                if not peer_resynced:
+                    await self.transport.close()
+                    lease = (self._lease_expires - datetime.now(UTC)).total_seconds()
+                    if lease <= 0:
+                        raise await self._record_failure("S_PAIR_LEASE_EXPIRED")
+                    remaining = min(deadline - loop.time(), lease)
+                    if remaining <= 0:
+                        raise first_transient or TransportError("T_READY_TIMEOUT")
+                    socket = await asyncio.wait_for(self._connector(), remaining)
+                    await self.transport.connect(socket)
                 self._wire_revision = self.transport.revision
-                return
+                try:
+                    await self.transport.wait_ready(max(.001, deadline - loop.time()))
+                    break
+                except TransportError as exc:
+                    if exc.code == "T_READY_TIMEOUT":
+                        # A healthy stream with a late human peer is not dead.
+                        self.state = SupervisorState.WAITING_FOR_PEER
+                        self._wire_revision = self.transport.revision
+                        return
+                    if exc.code != "T_TRANSPORT_FAILED" or self._connector is None:
+                        raise
+                    # Opposite old-stream cleanup can terminate a newly admitted
+                    # stream during resync. Retry only that transport failure,
+                    # within one technical deadline; never retry auth/protocol
+                    # rejection or silently reuse the previous Generation.
+                    first_transient = first_transient or exc
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        raise first_transient
+                    await asyncio.sleep(min(delay, remaining))
+                    delay = min(delay * 2, .5)
+                    peer_resynced = False
         except SupervisorError:
             raise
         except Exception as exc:

@@ -101,7 +101,7 @@ async def eventually(predicate, *, tasks=(), timeout=25):
             await asyncio.sleep(.01)
 
 
-@pytest.mark.parametrize("interruption", [None, "active", "opening", "waiting"])
+@pytest.mark.parametrize("interruption", [None, "active", "active-retry", "opening", "waiting"])
 def test_actual_cli_relay_ldn_tunnelsim_two_generations(interruption):
     asyncio.run(qualify_two_generations(interruption))
 
@@ -172,6 +172,23 @@ async def qualify_two_generations(interruption=None):
     with ExitStack() as stack:
         os.install(stack)
         from frlgsim.tunnel import TunnelSim
+        if interruption == "active-retry":
+            # A new authenticated real stream can die while its opposite old
+            # stream is still retiring. Fault the second Guest hello once;
+            # require real CLI recovery and second-generation RFU afterward.
+            from fastapi import WebSocket
+            send_json = WebSocket.send_json
+            guest_hellos = 0
+
+            async def interrupt_resync(socket, data, *args, **kwargs):
+                nonlocal guest_hellos
+                await send_json(socket, data, *args, **kwargs)
+                if data == {"seat": "guest"}:
+                    guest_hellos += 1
+                    if guest_hellos == 2:
+                        await socket.close(code=1012)
+
+            stack.enter_context(patch.object(WebSocket, "send_json", interrupt_resync))
         init_sim = TunnelSim.__init__
 
         def observe_sim(self, *args, **kwargs):
@@ -283,7 +300,7 @@ async def qualify_two_generations(interruption=None):
                                  tasks=(host, guest, *tickers))
                 assert parent_game.output == [(child_bytes, 0x7F)]
                 assert child_game.output == [(parent_bytes, 1)]
-                if interruption == "active" and generation == 0:
+                if interruption in {"active", "active-retry"} and generation == 0:
                     sockets = app.state.core_sockets
                     old_sockets = dict(sockets)
                     peer = next(ws for (pair_id, seat), ws in sockets.items() if seat == "guest")
@@ -293,7 +310,7 @@ async def qualify_two_generations(interruption=None):
                 await asyncio.to_thread(leader.stop)
                 await eventually(lambda: all(messages[s].count("Generation ended. Pair retained.") > generation + (host_offset if s == "host" else 0)
                                              for s in messages), tasks=(host, guest))
-                if interruption == "active" and generation == 0:
+                if interruption in {"active", "active-retry"} and generation == 0:
                     await eventually(lambda: set(sockets) == set(old_sockets)
                                      and all(sockets[key] is not old_sockets[key] for key in old_sockets),
                                      tasks=(host, guest))
@@ -303,6 +320,8 @@ async def qualify_two_generations(interruption=None):
                 await asyncio.gather(*tickers, return_exceptions=True)
                 tickers.clear()
             assert sum(x.startswith("Pair code: ") for x in messages["host"]) == 1
+            if interruption == "active-retry":
+                assert guest_hellos >= 3
             if interruption != "opening":
                 assert os.udp_sent > 10 and os.decrypted_frames > 5
         except BaseException as error:

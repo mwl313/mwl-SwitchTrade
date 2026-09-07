@@ -166,6 +166,16 @@ identities with the existing 429 contract without evicting live guess budgets.
 T38 includes capacity, expiry and existing-budget regression coverage. See
 MTA-CORE-015; no external relay or real client address was used.
 
+Ubuntu CI #116 exposed a transient stream loss during active reconnect's resync.
+The previous implementation made only one new-stream attempt. A new real relay
+fault closes the second Guest WebSocket immediately after its authenticated
+hello; it reproduced the terminal failure before the fix. Recovery now retries
+only transport loss with bounded backoff inside the existing technical deadline
+and lease. Protocol/auth failure stays terminal, old Generation data is never
+reused, and the first socket exception remains in the cause chain. The stronger
+`active-retry` scenario must exchange second-generation RFU after that additional
+loss. T32/T38 cover it alongside bounded/permanent-failure regressions.
+
 ## Physical handoff and modularity
 
 See `SWITCH_TO_SWITCH_PHYSICAL_RUNBOOK.md`. No physical result has been claimed.

@@ -1670,3 +1670,26 @@ archive list and regenerate the index.
   process-local synthetic memory only; no runtime, credentials or device residue.
 - **Prevention:** a bounded per-key queue is not a bounded keyspace. Verify both
   independently when an Internet peer can create new request identities.
+
+### MTA-CORE-016 — Recovery treated a transient resync-stream loss as terminal
+
+- **Observed:** Ubuntu CI #116 / 34117412611 failed actual CLI active-reconnect
+  qualification with T_TRANSPORT_FAILED inside recover_pair.wait_ready. The old
+  WireClient wrapper discarded the underlying socket exception, so the exact
+  original close ordering was not recoverable from that log.
+- **Reproduction:** a real relay fault closing Guest's second authenticated
+  WebSocket after its hello deterministically failed the actual CLI/Direct/
+  StageSession/TunnelSim two-generation test at the same recovery point (27.44s).
+  A two-WireClient unit reproduction also failed. This is a recoverable transport
+  interruption during resync, not proof of a radio or sequence error.
+- **Correction:** preserve the first underlying socket cause. After local
+  Generation cleanup, retry only T_TRANSPORT_FAILED during resync with bounded
+  backoff inside one existing recovery deadline and reconnect lease. Never
+  retry credential/protocol rejection or reuse the prior Generation. A healthy
+  stream awaiting a late peer remains normal waiting.
+- **Recovery/residue:** only test-owned localhost sockets and virtual OS devices
+  were used. The reproductions awaited local StageSession stop and relay exit;
+  the test processes exited. No physical or installed runtime state was touched.
+- **Prevention:** real first-stream loss plus a second loss during resync must
+  still yield fresh-generation RFU or an explicit bounded failure. Test permanent
+  protocol rejection, exhausted deadline and original cause independently.

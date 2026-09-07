@@ -112,6 +112,70 @@ def credentials(seat: PairSeat) -> PairCredentials:
 
 
 class CoreSupervisorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_recovery_retries_a_stream_lost_during_resync(self):
+        calls = 0
+        recovered_guest = WireClient(PairSeat.GUEST)
+        first = ConnectionError("new stream lost while previous peer retires")
+
+        async def connector():
+            nonlocal calls
+            calls += 1
+            host_socket, guest_socket = MemorySocket(), MemorySocket()
+            host_socket.peer, guest_socket.peer = guest_socket, host_socket
+            if calls == 1:
+                host_socket.incoming.put_nowait(first)
+            else:
+                await recovered_guest.connect(guest_socket)
+            return host_socket
+
+        self.host._connector = connector
+        self.host._reconnect_timeout = 1
+        try:
+            await self.host.recover_pair()
+            self.assertEqual(calls, 2)
+            self.assertTrue(self.host_wire.state.ready)
+            self.assertIsNone(self.host.failure)
+        finally:
+            await recovered_guest.close()
+
+    async def test_recovery_does_not_retry_protocol_failure(self):
+        calls = 0
+        first = TransportError("T_SEQUENCE_GAP")
+
+        async def connector():
+            nonlocal calls
+            calls += 1
+            socket = MemorySocket()
+            socket.peer = MemorySocket()
+            socket.incoming.put_nowait(first)
+            return socket
+
+        self.host._connector = connector
+        with self.assertRaises(SupervisorError) as failed:
+            await self.host.recover_pair()
+        self.assertIs(failed.exception.__cause__, first)
+        self.assertEqual(calls, 1)
+
+    async def test_recovery_transient_failure_is_bounded_and_keeps_first_cause(self):
+        calls = 0
+        first = ConnectionError("first resync loss")
+
+        async def connector():
+            nonlocal calls
+            calls += 1
+            socket = MemorySocket()
+            socket.peer = MemorySocket()
+            socket.incoming.put_nowait(first if calls == 1 else ConnectionError("later loss"))
+            return socket
+
+        self.host._connector = connector
+        self.host._reconnect_timeout = .12
+        with self.assertRaises(SupervisorError) as failed:
+            await asyncio.wait_for(self.host.recover_pair(), 1)
+        self.assertIs(failed.exception.__cause__.__cause__, first)
+        self.assertGreaterEqual(calls, 2)
+        self.assertLessEqual(calls, 3)
+
     async def _wait_for_packet(self, generation: TestGeneration, expected: LinkPacket) -> None:
         async with asyncio.timeout(1):
             while expected not in generation.sent:
