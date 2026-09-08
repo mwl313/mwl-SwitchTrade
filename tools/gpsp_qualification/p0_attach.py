@@ -169,6 +169,14 @@ def run(root: Path, fixture: Path, output: Path, production_local: bool = False,
     report["source_sha"] = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
     report["source_clean"] = not subprocess.check_output(["git", "status", "--porcelain"], cwd=repo, text=True).strip()
     report["production_local"] = production_local
+    if native_doctor or full_stack:
+        native = repo / ".gpsp-venv/Scripts/python.exe"
+        probe = ('import sys,sysconfig,json; print(json.dumps({'
+                 '"version":list(sys.version_info[:3]), "bits":64 if sys.maxsize>2**32 else 32,'
+                 '"implementation":sys.implementation.name,'
+                 '"free_threaded":bool(sysconfig.get_config_var("Py_GIL_DISABLED"))}))')
+        report["native_python"] = json.loads(subprocess.check_output(
+            [str(native), "-I", "-c", probe], cwd=repo, text=True, timeout=15))
     report["core_endpoint"] = core_endpoint
     report["host_role_probe"] = host_role_probe
     if host_role_probe:

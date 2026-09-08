@@ -555,13 +555,13 @@ function Invoke-DevNative {
         Join-Path $script:RepoRoot '.gpsp-venv\Scripts\python.exe'
     }
     if (-not (Test-Path -LiteralPath $nativePython -PathType Leaf)) {
-        Stop-DevOverlay 'GPSP_ENVIRONMENT_MISSING' 'Prepare .gpsp-venv with Python 3.12 and requirements-gpsp.lock; no automatic installation is performed.'
+        Stop-DevOverlay 'GPSP_ENVIRONMENT_MISSING' 'Prepare .gpsp-venv with Python 3.12 or 3.14 and requirements-gpsp.lock; no automatic installation is performed.'
     }
     $nativePython = (Resolve-Path -LiteralPath $nativePython).Path
-    $probeCode = 'import sys,importlib.metadata; assert sys.platform=="win32" and sys.version_info[:2]==(3,12) and sys.maxsize>2**32; assert importlib.metadata.version("websockets")=="17.0.1"'
+    $probeCode = 'import sys,sysconfig,importlib.metadata; assert sys.platform=="win32" and sys.implementation.name=="cpython" and sys.version_info[:2] in ((3,12),(3,14)) and sys.maxsize>2**32 and not sysconfig.get_config_var("Py_GIL_DISABLED"); assert importlib.metadata.version("websockets")=="17.0.1"'
     $probe = Invoke-DevCapturedProcess -FilePath $nativePython -ArgumentList @('-I', '-c', $probeCode)
     if ($probe.ExitCode -ne 0) {
-        Stop-DevOverlay 'GPSP_ENVIRONMENT_INVALID' 'Use native 64-bit Python 3.12 and install requirements-gpsp.lock in the selected environment.'
+        Stop-DevOverlay 'GPSP_ENVIRONMENT_INVALID' 'Use native 64-bit CPython 3.12 or 3.14 (standard, not free-threaded) and install requirements-gpsp.lock in the selected environment.'
     }
     $nativeEnvironment = @{
         PYTHONNOUSERSITE='1'; PYTHONUTF8='1'; PYTHONPATH=''; SWITCHTRADE_PARENT_STDIN='1'

@@ -17,6 +17,8 @@ def reports():
         result[kind] = {**{key: True for key in ("passed", "source_clean", "source_unchanged", "stock_tree_unchanged",
             "started_before_netplay", "same_process_two_rounds", "process_handle_cleanup", "desktop_cleanup")},
             "source_sha": "1" * 40, "retroarch_sha256": RA, "gpsp_sha256": CORE,
+            "native_python": {"version": [3, 12, 14], "bits": 64,
+                              "implementation": "cpython", "free_threaded": False},
             "fixture_sha256": FIXTURES[kind], "test_process_exit": 0, "stock_tree_delta": [],
             "socket_cleanup": [True] * count, "netplay_handshakes": count,
             "production_local": kind == "continuity", "native_doctor_exit": 0, "full_stack": kind == "full",
@@ -82,3 +84,19 @@ def test_archive_selection_is_exact_and_path_safe():
                   ["RetroArch-Win64/a.dll", "RetroArch-Win64/a.dll"]):
         with pytest.raises(ValueError):
             selected_members(names)
+
+
+def test_python_314_requires_its_own_actual_process_evidence():
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    evidence = reports()
+    with pytest.raises(ValueError, match="Python identity"):
+        attest(manifest, evidence, "1" * 40, {"windows": "success", "ubuntu": "success"},
+               "test://modeled", "3.14")
+    for report in evidence.values():
+        report["native_python"]["version"] = [3, 14, 7]
+    result = attest(manifest, evidence, "1" * 40, {"windows": "success", "ubuntu": "success"},
+                    "test://modeled", "3.14")
+    assert result["native_python_version"] == "3.14"
+    del evidence["full"]["native_python"]
+    with pytest.raises(ValueError, match="Python identity"):
+        validate_report(evidence["full"], "full", "1" * 40, "3.14")

@@ -2,11 +2,14 @@
 import asyncio
 from contextlib import redirect_stdout
 import io
+import importlib.metadata
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
+import sysconfig
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -18,6 +21,35 @@ from switchtrade.endpoints.retroarch_gpsp.errors import GpspError
 from switchtrade.core.contracts import CleanupReport
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.parametrize("minor,platform,bits,implementation,free_threaded,dependency,accepted", [
+    (12, "win32", 64, "cpython", None, "17.0.1", True),
+    (14, "win32", 64, "cpython", 0, "17.0.1", True),
+    (11, "win32", 64, "cpython", 0, "17.0.1", False),
+    (13, "win32", 64, "cpython", 0, "17.0.1", False),
+    (15, "win32", 64, "cpython", 0, "17.0.1", False),
+    (14, "linux", 64, "cpython", 0, "17.0.1", False),
+    (14, "win32", 32, "cpython", 0, "17.0.1", False),
+    (14, "win32", 64, "pypy", 0, "17.0.1", False),
+    (14, "win32", 64, "cpython", 1, "17.0.1", False),
+    (14, "win32", 64, "cpython", 0, "17.1", False),
+])
+def test_native_runtime_gate_preserves_identity_checks(
+        minor, platform, bits, implementation, free_threaded, dependency, accepted):
+    source = (ROOT / "scripts/dev/DevOverlay.psm1").read_text(encoding="utf-8")
+    # Execute the actual entrypoint probe, not a second copy of its policy.
+    probe = re.search(r"\$probeCode = '([^'\n]+)'", source).group(1)
+    with patch.object(sys, "version_info", (3, minor, 7)), \
+         patch.object(sys, "platform", platform), patch.object(sys, "maxsize", 2 ** (bits - 1) - 1), \
+         patch.object(sys, "implementation", SimpleNamespace(name=implementation)), \
+         patch.object(sysconfig, "get_config_var", return_value=free_threaded), \
+         patch.object(importlib.metadata, "version", return_value=dependency):
+        if accepted:
+            exec(probe, {})
+        else:
+            with pytest.raises(AssertionError):
+                exec(probe, {})
 
 
 def test_native_imports_do_not_load_switch_or_ldn():

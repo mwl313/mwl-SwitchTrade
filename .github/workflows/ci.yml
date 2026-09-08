@@ -10,13 +10,17 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.14"]
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
           cache: pip
           cache-dependency-path: |
             test-requirements.txt
@@ -48,7 +52,7 @@ jobs:
       - name: Upload sanitized actual-process reports only
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: gpsp-process-${{ github.sha }}
+          name: gpsp-process-${{ matrix.python }}-${{ github.sha }}
           include-hidden-files: true
           path: |
             .qualification/continuity/report.json
@@ -149,6 +153,10 @@ jobs:
     if: github.ref == 'refs/heads/Simple-Architecture' || github.ref == 'refs/heads/codex/gpsp-endpoint'
     needs: [windows, ubuntu]
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -156,25 +164,26 @@ jobs:
           python-version: "3.12"
       - uses: actions/download-artifact@v8
         with:
-          name: gpsp-process-${{ github.sha }}
+          name: gpsp-process-${{ matrix.python }}-${{ github.sha }}
           path: gpsp-reports
       - name: Attest mandatory exact-SHA gpSP integration and real-process evidence
         env:
           WINDOWS_RESULT: ${{ needs.windows.result }}
           UBUNTU_RESULT: ${{ needs.ubuntu.result }}
-        run: python tools/gpsp_qualification/attest.py --reports gpsp-reports --output GPSP_ACCEPTANCE.final.json
+        run: python tools/gpsp_qualification/attest.py --reports gpsp-reports --python-version ${{ matrix.python }} --output GPSP_ACCEPTANCE.final.json
       - name: Attest the complete exact-SHA software acceptance manifest
         env:
           WINDOWS_RESULT: ${{ needs.windows.result }}
           UBUNTU_RESULT: ${{ needs.ubuntu.result }}
         run: python tools/attest_preflight.py --output ABC_SOFTWARE_PREFLIGHT_CLOSURE.final.json
       - uses: actions/upload-artifact@v7.0.1
+        if: matrix.python == '3.12'
         with:
           name: abc-software-preflight-${{ github.sha }}
           path: ABC_SOFTWARE_PREFLIGHT_CLOSURE.final.json
           if-no-files-found: error
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: gpsp-software-preflight-${{ github.sha }}
+          name: gpsp-software-preflight-${{ matrix.python }}-${{ github.sha }}
           path: GPSP_ACCEPTANCE.final.json
           if-no-files-found: error

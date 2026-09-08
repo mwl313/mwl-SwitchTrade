@@ -15,7 +15,13 @@ FIXTURES = {"continuity": "cfb0a21e1504931d7589a30b125ff3bbdf9211116a7bea690cfec
     "full": "91168322aa3b7d1f73784c3b1c152bd064b02001f5460d46d6b0466f3f745ad4"}
 
 
-def validate_report(report, kind, sha):
+def validate_report(report, kind, sha, python_version="3.12"):
+    runtime = report.get("native_python", {})
+    if (python_version not in ("3.12", "3.14")
+            or runtime.get("version", [])[:2] != list(map(int, python_version.split(".")))
+            or runtime.get("bits") != 64 or runtime.get("implementation") != "cpython"
+            or runtime.get("free_threaded") is not False):
+        raise ValueError("native Python identity mismatch")
     for key in ("passed", "source_clean", "source_unchanged", "stock_tree_unchanged", "started_before_netplay",
                 "same_process_two_rounds", "process_handle_cleanup", "desktop_cleanup"):
         if report.get(key) is not True:
@@ -56,7 +62,7 @@ def validate_report(report, kind, sha):
                 raise ValueError("bounded resource soak failed")
 
 
-def attest(manifest, reports, sha, results, run_url):
+def attest(manifest, reports, sha, results, run_url, python_version="3.12"):
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise ValueError("exact source SHA required")
     if results != {"windows": "success", "ubuntu": "success"}:
@@ -69,10 +75,11 @@ def attest(manifest, reports, sha, results, run_url):
     if any(r.get("status") != "READY_FOR_FINAL_CI" or not r.get("evidence") for r in rows):
         raise ValueError("unresolved acceptance item")
     for kind in FIXTURES:
-        validate_report(reports[kind], kind, sha)
+        validate_report(reports[kind], kind, sha, python_version)
     result = copy.deepcopy(manifest)
     result.update(state="COMPLETE", final_sha=sha, ci={**results, "run_url": run_url},
-        verdict="Switch↔gpSP 소프트웨어 검증 완료, 실물 시험 준비 완료", real_process_evidence=reports)
+        verdict="Switch↔gpSP 소프트웨어 검증 완료, 실물 시험 준비 완료", real_process_evidence=reports,
+        native_python_version=python_version)
     for row in result["acceptance"]:
         row["status"] = "PASS"
     return result
@@ -82,6 +89,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--reports", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--python-version", choices=("3.12", "3.14"), required=True)
     args = parser.parse_args()
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     if (os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("GITHUB_SHA") != sha
@@ -91,5 +99,5 @@ if __name__ == "__main__":
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     result = attest(manifest, reports, sha, {"windows": os.environ.get("WINDOWS_RESULT"),
         "ubuntu": os.environ.get("UBUNTU_RESULT")},
-        f"https://github.com/mwl313/mwl-SwitchTrade/actions/runs/{os.environ['GITHUB_RUN_ID']}")
+        f"https://github.com/mwl313/mwl-SwitchTrade/actions/runs/{os.environ['GITHUB_RUN_ID']}", args.python_version)
     args.output.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

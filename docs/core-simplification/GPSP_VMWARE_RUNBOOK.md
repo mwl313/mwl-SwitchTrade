@@ -67,19 +67,27 @@ Expect `status: ok`. `127.0.0.1` on different PCs is not a common relay.
 
 ## One-time VM preparation (explicit user action)
 
-Have native Windows x64 Python 3.12 and PowerShell 7 installed first. In the
+Have native Windows x64 CPython 3.12 or 3.14 (standard, not free-threaded) and
+PowerShell 7 installed first. In the
 qualified checkout:
 
 ```powershell
 git rev-parse HEAD
 git status --short
-py -3.12 -m venv .gpsp-venv
+py -3.14 -m venv .gpsp-venv
 .\.gpsp-venv\Scripts\python.exe -m pip install --require-hashes -r requirements-gpsp.lock
 ```
 
 The minimal environment contains websockets 17.0.1, not LDN/WSL dependencies.
 Run/doctor never install anything. Do not overwrite an existing user environment;
 inspect it first if `.gpsp-venv` already exists.
+Use `py -3.12` instead to retain Python 3.12; existing 3.12 environments need no
+migration. Changing the system Python does not change an existing venv's Python.
+Other minor versions/free-threaded builds are not qualified. The physical Host's
+managed WSL and relay stay on their existing Python 3.12; peers do not need
+matching Python versions. Windows CI qualifies both supported native versions,
+including the actual-process two-room/30-minute test, with separate Python-bound
+`gpsp-software-preflight-<version>-<SHA>` evidence artifacts.
 
 In RetroArch, manually load the supported gpSP core and your legitimately owned
 game. Choose **Quick Menu → Core Options → Link Cable Connectivity → GBA Wireless Adapter**
