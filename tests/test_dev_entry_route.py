@@ -20,6 +20,29 @@ from tests.test_dev_console_interrupt import quoted, encoded
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_real_overlay_selection_can_import_package_in_an_isolated_directory(tmp_path):
+    pwsh = shutil.which("pwsh")
+    if not pwsh:
+        pytest.skip("PowerShell unavailable")
+    script = f"""
+$module = Import-Module {quoted(ROOT / 'scripts/dev/DevOverlay.psm1')} -Force -PassThru
+& $module {{ @(Get-SourceFiles) | ConvertTo-Json -Compress }}
+"""
+    result = subprocess.run([pwsh, "-NoProfile", "-EncodedCommand", encoded(script)],
+        cwd=ROOT, capture_output=True, text=True, encoding="utf-8", timeout=15)
+    assert result.returncode == 0, result.stderr
+    selected = json.loads(result.stdout)
+    assert "switchtrade/VERSION" in selected
+    for relative in ("switchtrade/__init__.py", "switchtrade/VERSION"):
+        assert relative in selected
+        target = tmp_path / relative
+        target.parent.mkdir(exist_ok=True)
+        shutil.copy2(ROOT / relative, target)
+    subprocess.run([sys.executable, "-I", "-c",
+        "import sys; sys.path.insert(0, sys.argv[1]); import switchtrade; assert switchtrade.__version__",
+        str(tmp_path)], cwd=tmp_path, check=True, timeout=10)
+
+
 @pytest.mark.parametrize("encoding,option", [("utf-16-le", "-OutputEncoding ([Text.Encoding]::Unicode)"), ("utf-8", "")])
 def test_captured_process_decodes_wsl_inventory_without_changing_linux_output(encoding, option):
     pwsh = shutil.which("pwsh")

@@ -1,4 +1,5 @@
 switchtrade/**/*.py
+switchtrade/VERSION
 bridge/**/*.py
 bridge/**/*.sh
 scripts/**/*.sh

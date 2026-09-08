@@ -1884,3 +1884,23 @@ archive list and regenerate the index.
 - Correction: validate the real provisioner schema and bind its release ID to
   the selected active pointer. Replace the fictitious fixture with that contract;
   reject missing fields, foreign owners, wrong schema/product/release/hash.
+
+### MTA-DEV-035 — Source overlay omitted the package version resource
+
+- Date: 2026-09-08. Source `38b30ab72d0f23fdd69f825076634c5af5c7af7b`.
+- First failure: doctor and path-bound sync succeeded, then an import-only check
+  in the real overlay failed with FileNotFoundError for `switchtrade/VERSION`.
+  No radio gate, Pair, USB attach or game operation was started.
+- Cause: the source allowlist copied Python modules but omitted the VERSION
+  resource read unconditionally by `switchtrade.__init__`. Modeled sync tests
+  and repository-based integration retained that file and missed the omission.
+- Recovery state: retain the first immutable overlay and error as evidence;
+  preserve the installed base/keys/kernel. Do not patch the installed VERSION,
+  fill files into a hash-bound release, or fall back to unrelated source trees.
+- Correction: explicitly allowlist VERSION. A regression obtains the real
+  source selection and imports its package in an isolated directory. Sync then
+  creates a new content-bound release and the actual Linux import is repeated.
+- Observed verification: real dev/WSL/Core CLI help and Switch driver/StageSession
+  imports pass from the new overlay; all 22 pinned runtime versions match,
+  key shape passes without printing key material, and both radio scripts parse.
+  Runtime provisioning and source import are not radio or physical-game PASS.

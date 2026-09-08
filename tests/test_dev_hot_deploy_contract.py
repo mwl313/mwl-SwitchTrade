@@ -28,6 +28,7 @@ class DevHotDeployContractTests(unittest.TestCase):
             if line.strip() and not line.lstrip().startswith("#")
         }
         self.assertIn("switchtrade/**/*.py", entries)
+        self.assertIn("switchtrade/VERSION", entries)
         self.assertIn("bridge/**/*.py", entries)
         self.assertIn("tests/**/*.py", entries)
         self.assertNotIn("config/prod.keys", entries)
