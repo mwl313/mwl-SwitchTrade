@@ -87,16 +87,53 @@ multiple transfers, malformed lengths/windows/END, all native compatibility
 bits and identity-free summaries. The reconstructed private captures also pass
 the strict reassembler; no private payload is included in a public test vector.
 
+## Follow-up: second selected advertisement collected
+
+A later user-authorized scan-only packet collected three identical selected
+waiting-room records for the second existing profile. Trainer ID and the full
+eight-byte name match its previously recovered native child NI. Both profiles
+now have advertisement/native-NI correlations, still across different times and
+roles. Two opaque game-state bytes differ between their waiting advertisements;
+this alone does not isolate co-varying game version and gender or prove the
+unexercised language/progression/partner/trade fields.
+
+The first nine scans returned no selected record. The last three of these,
+after adding non-identifying counts, found one contract-compatible room but
+rejected its name. Existing authenticated NI exposed a diagnostic bug: the
+observer required eight-byte equality with FF-filled synthetic name padding.
+An exact terminated name with zero bytes after EOS was incorrectly excluded.
+Two synthetic cases failed before repair. Selection now compares the exact
+encoded name **including EOS**, ignores only bytes after EOS, preserves the raw
+record, and still rejects ambiguous rooms, prefixes and missing terminators.
+Corrected selection then captured all three records. Original failed outcomes
+are preserved, not retrospectively counted as successes. No game restart was
+needed; the earlier observations do not establish a 5GHz cause.
+
+Physical source: base `d22fd393481c19fdf481fc0365d66186ff83f78e` with the
+explicit dirty diagnostic patch, immutable overlay
+`229194736a9b34c26d2bb41b2d8fa3483471c25f64ac7ef36f0104d3c3e0c3f9`, observer
+SHA256 `e298a91b5aa06f0b76749bd05304cba4ee13092eae8f4b9440ef21f81df4f186`.
+All twelve scans reported released sockets/factory/VIF and no cleanup failure.
+The selected records were copied locally with source/destination hash equality;
+all evidence remains private. Exact USB attachment and bounded keeper were
+released, no wireless/packet-socket or observer residue remained, and the
+separate Internet route was unchanged. No VM, Pair, room join or game traffic.
+
+Focused observer regression: **6 passed on Python 3.12 and 6 on Python 3.14**.
+No full pytest or CI completion is claimed; CI is not awaited for this packet.
+This fixes the diagnostic selector, NOT the production RFU converter.
+
 ## Remaining work / exact next input
 
 - The missing mapping is Switch opaque game-state bytes to native compatibility,
   gender, started/activity, partner and trade fields. Identifying a native field
   does not identify where Sloop stores it. The existing first-server homebrew
   test still cannot validate the game's discovery filter.
-- Reuse the two recovered native NI records. Next useful physical input, only
-  after user authorization, is a selected waiting-room advertisement from a
-  second existing profile. No new trade, save edit, game progression,
-  VM/emulator or full-session recapture is needed for that comparison.
+- Reuse the two recovered native NI records and both selected advertisements.
+  The second waiting-room input is now collected; do not request it again or
+  restart full-session capture. Next work is offline mapping reconciliation.
+  Request another controlled physical observation only if a specific unresolved
+  bit cannot be established from the retained evidence or serialization source.
 - If profiles differ in both game version and gender, their difference alone
   must not be presented as isolating those two variables. Additional controlled
   evidence or authoritative serialization source may still be needed for

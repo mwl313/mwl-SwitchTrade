@@ -21,16 +21,32 @@ from switchtrade.connection.stage_session import StageSession
 from switchtrade.endpoints.retroarch_gpsp.rfu import _advertisement_record
 
 
-def selected_record(networks, trainer_name):
+def selected_record(networks, trainer_name, diagnostics=None):
     from frlgsim.beacon import encode_frlg_name
 
-    expected = encode_frlg_name(trainer_name)
+    # EOS terminates the name; bytes after it can be zero-filled, not only FF.
+    expected = encode_frlg_name(trainer_name).split(b"\xff", 1)[0] + b"\xff"
     matches = []
+    counts = {"networks": 0, "compatible_rooms": 0, "selected_matches": 0,
+              "other_trainers": 0, "rejected_conditions": {}}
+    if diagnostics is not None:
+        diagnostics.update(counts)
+        counts = diagnostics
     for network in networks:
-        if not room_mismatches(network):
-            record = _advertisement_record(network.application_data)
-            if record[2:10] == expected:
-                matches.append(record)
+        counts["networks"] += 1
+        mismatches = room_mismatches(network)
+        for reason in mismatches:
+            rejected = counts["rejected_conditions"]
+            rejected[reason] = rejected.get(reason, 0) + 1
+        if mismatches:
+            continue
+        counts["compatible_rooms"] += 1
+        record = _advertisement_record(network.application_data)
+        if record[2:10].startswith(expected):
+            matches.append(record)
+            counts["selected_matches"] += 1
+        else:
+            counts["other_trainers"] += 1
     if len(matches) > 1:
         raise AStageError("A_ROOM_AMBIGUOUS", GATES[2], "multiple matching trainers")
     return matches[0] if matches else None
@@ -44,11 +60,13 @@ class ScanOnlyStage(DirectAStage):
     async def _run_stage(self):
         import ldn
         self.ldn, self.trio = ldn, trio
+        self.scan_diagnostics = {"completed": False}
         try:
             keys = self._preflight()
             with trio.fail_after(self.scan_timeout):
                 networks = await self._scan(keys)
-            record = selected_record(networks, self.trainer_name)
+            self.scan_diagnostics["completed"] = True
+            record = selected_record(networks, self.trainer_name, self.scan_diagnostics)
             return {"status": "observed" if record else "not_observed", "failure": None}, record
         except BaseException as error:
             code = getattr(error, "code", None) or (
@@ -116,6 +134,7 @@ def main():
                    "cleanup_error": stop_error, "observed": record is not None,
                    "source": policy.release, "utc": datetime.now(timezone.utc).isoformat(),
                    "observer_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+        summary["scan"] = getattr(stage, "scan_diagnostics", {"completed": False})
         write_private(args.output / f"sample-{index}.json",
                       {**summary, "record_hex": record.hex() if record is not None else None})
         print(json.dumps(summary, sort_keys=True), flush=True)

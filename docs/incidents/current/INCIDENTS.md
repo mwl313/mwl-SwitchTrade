@@ -2035,6 +2035,20 @@ archive list and regenerate the index.
   regression tests. See GPSP_GOLD_AD_NI_REANALYSIS_20260909.md. Production probe
   still FAIL; mapping/issue remain OPEN. No new physical retry was performed.
 
+- 2026-09-09 selected-observer follow-up: an authorized scan-only comparison
+  returned no selected record with clean cleanup. Counts added to the existing
+  observer then showed one contract-compatible room rejected by name matching.
+  The observer compared all eight name bytes against FF-filled synthetic padding;
+  native gold contains EOS followed by zero bytes. Two synthetic cases reproduce
+  the false rejection. Match exact encoded name INCLUDING EOS, ignoring only
+  trailing padding; preserve the original record and ambiguous-room rejection.
+  Counts expose no names, IDs, addresses or raw payload. This diagnostic defect
+  is separate from the still-open production RFU converter; no gpSP fix claimed.
+  Corrected physical observer then captured three identical selected records
+  matching existing native NI identity. All scan cleanup reports were clean;
+  exact USB/keeper release and absent residue checked. Six focused tests pass
+  on each Python3.12/3.14. See the gold reanalysis follow-up for source identity.
+
 ### MTA-CORE-021 — Physical scan cancellation retained unknown cleanup
 
 - Same trial/source as MTA-GPSP-002. At23:55:34 KST local_room_ended; active

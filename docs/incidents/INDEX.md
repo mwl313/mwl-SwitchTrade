@@ -292,5 +292,5 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-GPSP-001` | Connected physical trial lacked RFU discovery diagnostics | Current ledger | 1966 |
 | `MTA-DEV-037` | Entrypoint test primitive lagged manifest mode verification | Current ledger | 1991 |
 | `MTA-GPSP-002` | Switch search record was sent as a native RFU broadcast | Current ledger | 2007 |
-| `MTA-CORE-021` | Physical scan cancellation retained unknown cleanup | Current ledger | 2038 |
-| `MTA-PRIVACY-001` | Public diagnostic handoff included private profile annotations | Current ledger | 2080 |
+| `MTA-CORE-021` | Physical scan cancellation retained unknown cleanup | Current ledger | 2052 |
+| `MTA-PRIVACY-001` | Public diagnostic handoff included private profile annotations | Current ledger | 2094 |
