@@ -1,5 +1,83 @@
 # gpSP discovery defect and compatibility research
 
+## Follow-up: ACK-reader lifetime repaired; advertisement mapping still open
+
+Follow-up baseline: `codex/gpsp-endpoint`, local/remote
+`7e064308bd72edb751885537d8878716274bc399`, clean before work.
+The user approved continuing software research/repair, not another physical run.
+
+### Concrete progress
+
+MTA-CORE-021 has a software reproduction: factory-level netlink readers are
+sibling tasks of the scan consumer. Cancellation reaches those readers before
+the leaf VIF's shielded deletion waits for its ACK. The kernel can delete the
+interface but its confirmation is never dispatched. Shielding only deletion
+does not keep a sibling receiver alive. This explains the observed failure
+shape; it does not rule out additional physical driver failures.
+
+The production change is limited to the shared resource owner and its three
+Direct A/B factory call sites. A shielded factory-owner task keeps its readers
+alive until the consumer finishes exact-resource teardown. The consumer's scan,
+association and session wait remain cancellable. The factory's context/nurseries
+enter and exit in their original task; shutdown/unfinished entry has a bounded
+three-second deadline. Genuine missing ACK, failed reader or incomplete cleanup
+remains a failure. No release by guessed interface name, global network reset,
+dependency modification or increased timeout is used.
+
+Inspected local runtime packages: `ldn==0.0.17`, `python-netlink==0.0.15`,
+`trio==0.33.0`. `tests/test_direct_netlink_lifetime.py` adds actual NetlinkSocket
+request/ACK dispatch to the actual Direct A/LDN/StageSession path, substituting
+only kernel IO. Before repair, cancellation and scan deadline both failed
+cleanup (2 failures). The older virtual kernel returned requests directly;
+its lack of a receiver task hid this defect. Its kernel identity is now bound
+to the StageSession's Trio run, not to an assumption that factory and consumer
+share one task. Tests check socket/thread/netdev absence after exit.
+
+Post-repair checks on the final source changes in this packet:
+
+- Python 3.12: ownership/netlink/real Direct faults, **39 passed**.
+- Python 3.12: Direct A/B and the actual CLI/real relay/LDN/TunnelSim
+  two-Generation no-interruption path, **30 passed, 5 deselected** (other
+  interruption variants deliberately excluded from this focused command).
+- Python 3.14: ownership/netlink/Direct A/B/real Direct faults, **68 passed**.
+- Negative cases retain missing delete ACK as unknown, reject repeated stop,
+  bound stalled factory entry/exit, and preserve first functional/cancel failure
+  independently of factory cleanup failure. Actual reader failure interrupts
+  the consumer instead of becoming a normal user cancellation.
+
+These are local Windows software tests. Full pytest, stock RetroArch process
+qualification and same-SHA platform CI are not claimed by this packet. Physical
+scan-stop requalification remains required; trial04's original cleanup failure
+is unchanged. No WSL, USB, physical Switch, VM, emulator or relay deployment was
+operated. Core/Relay wire formats and the gpSP production converter are unchanged.
+
+### Mapping investigation and precise resume point
+
+Rechecked the pinned FireRed `link_rfu.h`, `link_rfu_3.c` and `sloopsvc.c`,
+upstream LDN transport, and public fork/repository listings. The game struct is
+not a different conditional Switch layout: SVC47 copies the existing game data
+and name into Sloop, whose LDN field packing is not implemented in that wrapper.
+The available fork trees did not expose a verified inverse. An indexed GBA
+bridge repository remains unavailable for source inspection; its description
+cannot substitute for mapping evidence. No new mapping was established.
+
+Therefore MTA-GPSP-002 stays in `software_gaps`; the production format probe
+still returns FAIL. Do not hard-code language/activity/progression to force a
+visible room or claim the full format is merely an endian/checksum adjustment.
+
+Next necessary input is an authoritative encoder/decoder source or separately
+authorized controlled Switch advertisement observations with known game states.
+For observations: first recheck the corrected owned scan/stop path, then collect
+only the selected room's needed fields, change one user-operated game condition
+at a time, retain raw material privately, and publish only synthetic derivations.
+Unchanged/variable bytes across a few rooms alone do not prove every bitfield.
+Do not start that physical activity or request a VM trading retry without the
+user's agreement. The VM has no functional advertisement fix to pull yet.
+
+---
+
+## Prior packet record
+
 Baseline: `codex/gpsp-endpoint`, local/remote
 `881a9c58cfe8068c45383a0f7f66728b9dff2d10`, clean before this packet.
 User authorized normal stop, advertisement repair and compatibility research;

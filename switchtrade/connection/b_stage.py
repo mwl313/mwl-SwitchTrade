@@ -395,7 +395,7 @@ class DirectBStage:
             override_challenge_key=param.override_challenge_key,
         )
         key = derivation.derive_data_key(param.server_random, param.password)
-        async with self.resources.context(wlan.create_factory(), "mirror.factory") as factory:
+        async with self.resources.factory(wlan.create_factory(), "mirror.factory") as factory:
             self.resources.instrument_factory(factory, "mirror")
             self.cleanup["ldn_last_checkpoint"] = "factory_entered"
             async with factory._create_interface(

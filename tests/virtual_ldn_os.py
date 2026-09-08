@@ -152,7 +152,7 @@ class Router:
 class RawSocket:
     def __init__(self, os, family=socket.AF_INET, type=socket.SOCK_STREAM, proto=0):
         self.os, self.family, self.type = os, family, type
-        self.kernel = CURRENT.get(None)
+        self.kernel = CURRENT.get([None])[0]
         self.fd = os.next_id()
         self.bound = None
         self.incoming = queue.Queue()
@@ -220,7 +220,7 @@ class AsyncRawSocket(RawSocket):
 
 class TapFile:
     def __init__(self, os):
-        self.os, self.kernel = os, CURRENT.get()
+        self.os, self.kernel = os, CURRENT.get()[0]
         self.fd = os.next_id()
         self.incoming = queue.Queue()
         self.link = None
@@ -329,11 +329,14 @@ class VirtualLdnOS:
     @asynccontextmanager
     async def netlink(self):
         kernel = Kernel(self)
-        token = CURRENT.set(kernel)
+        # Each StageSession has one Trio run; the factory may live in a child
+        # owner task while its consumer creates sockets in another task.
+        binding = CURRENT.get()
+        previous, binding[0] = binding[0], kernel
         try:
             yield kernel
         finally:
-            CURRENT.reset(token)
+            binding[0] = previous
 
     @asynccontextmanager
     async def route(self):
@@ -363,6 +366,7 @@ class VirtualLdnOS:
 
         def run(function, *args, **kwargs):
             async def entry():
+                CURRENT.set([None])
                 trio.socket.set_custom_socket_factory(Factory())
                 return await function(*args)
             return original_run(entry, **kwargs)

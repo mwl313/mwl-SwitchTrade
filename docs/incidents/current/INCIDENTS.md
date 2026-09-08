@@ -2042,3 +2042,20 @@ archive list and regenerate the index.
   path can affect Switch-to-Switch as well as gpSP. No blind retry, widened
   cleanup scope or timeout bypass. Preserve original private stop evidence;
   inspect bounded VIF/factory teardown before declaring physical readiness.
+- 2026-09-09 software reproducer: actual Direct A/LDN/StageSession and actual
+  python-netlink NetlinkSocket request/ACK dispatcher, with an in-memory kernel,
+  fail cleanup for both external scan cancellation and scan deadline (2 failed).
+  The factory's sibling ACK reader inherits the cancellation before shielded
+  VIF deletion. The old virtual kernel returned request results directly and
+  could not expose this ordering. No physical process/device was started.
+- Correction: a run-owned shielded factory task keeps netlink readers alive
+  while the cancellable consumer releases its exact VIF/AP/TAP resources.
+  Factory entry/exit stays in that same task; shutdown has a three-second
+  deadline. Applied to scan, station and mirror factories, not just the observed
+  scan. No interface-name recovery, driver patch or timeout bypass was added.
+- Regression proof: real LDN/Direct/StageSession + NetlinkSocket ACK dispatch
+  now release on scan cancel/deadline and A/B opening cancellation. Lost delete
+  confirmation remains unknown with a sticky failed stop; stalled factory
+  entry/exit is bounded, reader failures interrupt consumers, and original
+  functional/cancel errors survive secondary cleanup errors. Actual physical
+  stop is not requalified and the original trial04 failure is not relabeled.

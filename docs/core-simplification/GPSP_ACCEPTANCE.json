@@ -5,7 +5,7 @@
   "state": "BLOCKED_SOFTWARE",
   "final_sha": null,
   "verdict": "NOT_ATTESTED",
-  "software_gaps": ["MTA-GPSP-002: production Switch advertisement is not a valid native GBA RFU broadcast; exact game-data mapping remains unproven", "MTA-CORE-021: physical Direct A scan cancellation ended with unknown VIF/factory cleanup"],
+  "software_gaps": ["MTA-GPSP-002: production Switch advertisement is not a valid native GBA RFU broadcast; exact game-data mapping remains unproven"],
   "scope": "Switch origin to native RetroArch/gpSP mirror. Physical trial reached empty game room list; a software advertisement-format defect is confirmed. Historical homebrew evidence does not cover FRLG discovery validation. See GPSP_COMPATIBILITY_RESEARCH_20260909.md. No completion claim is permitted while software_gaps remain.",
   "acceptance": [
     {"id":"G01","status":"READY_FOR_FINAL_CI","requirement":"Absent emulator rejected before Pair","evidence":["tests/test_gpsp_process.py","tests/test_gpsp_cli.py"],"boundary":"modeled OS query; actual dev doctor also runs in Windows qualification"},
@@ -33,5 +33,5 @@
     {"id":"G23","status":"READY_FOR_FINAL_CI","requirement":"Endpoint-neutral Core/Relay and future emulator onboarding contract","evidence":["tests/test_gpsp_cli.py","tests/test_switch_ldn_driver.py","docs/core-simplification/GPSP_VMWARE_RUNBOOK.md"],"boundary":"lazy static composition; mGBA/VBA not implemented or advertised"},
     {"id":"G24","status":"READY_FOR_FINAL_CI","requirement":"Full regression, ABC I01-I18/T01-T44 and same-SHA Windows/Ubuntu CI","evidence":[".github/workflows/ci.yml","tools/attest_preflight.py","tools/gpsp_qualification/attest.py","docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"],"boundary":"generated CI artifacts only after both complete jobs and real-process report validation"}
   ],
-  "physical_risks": ["Actual Nintendo Switch/USB Wi-Fi/driver behavior", "Commercial Pokemon RFU behavior and successful trade", "VMware scheduling/graphics and user-specific networking", "Other RetroArch/gpSP binary builds; mGBA/VBA not supported"]
+  "physical_risks": ["Actual Nintendo Switch/USB Wi-Fi/driver behavior", "MTA-CORE-021: netlink cancellation lifetime fixed and software-regressed; physical scan-stop recheck remains outstanding", "Commercial Pokemon RFU behavior and successful trade", "VMware scheduling/graphics and user-specific networking", "Other RetroArch/gpSP binary builds; mGBA/VBA not supported"]
 }

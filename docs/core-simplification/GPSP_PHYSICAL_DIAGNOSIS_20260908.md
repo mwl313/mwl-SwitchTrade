@@ -4,7 +4,9 @@
 
 Trial04 is stopped. A production RFU advertisement-format defect is confirmed,
 but its full field mapping is not yet repaired. A separate scan-cancellation
-cleanup failure was preserved; the exact USB attachment was released. See
+cleanup failure was preserved; the exact USB attachment was released. Its
+netlink ACK-reader lifetime defect is now repaired and software-regressed;
+physical stop has not been requalified. Advertisement conversion is still open. See
 [the current research and unresolved repair record](GPSP_COMPATIBILITY_RESEARCH_20260909.md)
 before any retry. Earlier trial notes below remain historical evidence, not a
 current readiness assertion. No new Pair is active.

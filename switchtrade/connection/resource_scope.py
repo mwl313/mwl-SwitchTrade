@@ -102,6 +102,64 @@ class ResourceScope:
         return name not in {item[1] for item in socket.if_nameindex()}
 
     @contextlib.asynccontextmanager
+    async def factory(self, manager, label):
+        """Keep factory IO alive until its borrowed VIFs finish bounded teardown.
+
+        A shield around VIF deletion alone cannot protect netlink's sibling ACK
+        reader. Own the factory in a shielded task; the consumer stays cancellable.
+        Never move a Trio nursery's enter/exit between tasks or cancel-scope stacks.
+        """
+        import trio
+
+        ready, finish = trio.Event(), trio.Event()
+        lifetime = trio.CancelScope(shield=True)
+        value = None
+        primary = None
+        factory_failed_first = False
+
+        async def own_factory():
+            nonlocal value, factory_failed_first
+            try:
+                with lifetime:
+                    self.states[label] = "acquiring"
+                    # Let the factory propagate its own nursery failure. A
+                    # cancelled finish.wait() can mean a failed ACK reader,
+                    # not consumer cancellation or successful factory cleanup.
+                    async with manager as value:
+                        self.states[label] = "acquired"
+                        ready.set()
+                        await finish.wait()
+                if lifetime.cancelled_caught:
+                    raise trio.TooSlowError
+                self.states[label] = "released"
+            except BaseException as error:
+                self.states[label] = "unknown"
+                self.failures.append(label + ":" + type(error).__name__)
+                factory_failed_first = primary is None
+                raise
+
+        try:
+            async with trio.open_nursery() as nursery:
+                nursery.start_soon(own_factory)
+                try:
+                    await ready.wait()
+                    yield value
+                except BaseException as error:
+                    primary = error
+                finally:
+                    # Includes cancellation before factory entry completes.
+                    # Leaf teardown has already run before this context exits.
+                    lifetime.deadline = trio.current_time() + 3
+                    finish.set()
+        except BaseException:
+            if primary is None or factory_failed_first:
+                raise
+            # The independently tracked factory failure remains secondary.
+            raise primary
+        if primary is not None:
+            raise primary
+
+    @contextlib.asynccontextmanager
     async def context(self, manager, label, *, ifname=None, shield_exit=False,
                       entry_owns_resource=True, release_dependencies=()):
         import trio

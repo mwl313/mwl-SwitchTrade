@@ -251,3 +251,80 @@ def test_borrowing_group_keeps_functional_failure_and_uses_leaf_release_proof():
         assert caught.value is first
         assert resources.clean
     trio.run(exercise)
+
+
+@pytest.mark.parametrize("phase", ["entry", "exit"])
+def test_factory_stalled_entry_or_exit_is_bounded_and_not_clean(phase):
+    from trio.testing import MockClock
+
+    async def exercise():
+        resources = ResourceScope()
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            if phase == "entry":
+                await trio.sleep_forever()
+            yield object()
+            await trio.sleep_forever()
+
+        started = trio.current_time()
+        with trio.move_on_after(.01) as cancellation:
+            async with resources.factory(factory(), "factory"):
+                await trio.sleep_forever()
+        assert cancellation.cancelled_caught
+        assert trio.current_time() - started < 3.1
+        assert resources.states["factory"] == "unknown"
+        assert resources.failures and not resources.clean
+
+    trio.run(exercise, clock=MockClock(autojump_threshold=0))
+
+
+def test_factory_cleanup_failure_does_not_replace_body_failure():
+    async def exercise():
+        resources = ResourceScope()
+        first = ValueError("first functional failure")
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield object()
+            raise OSError("factory close failed")
+
+        with pytest.raises(ValueError) as caught:
+            async with resources.factory(factory(), "factory"):
+                raise first
+        assert caught.value is first
+        assert resources.failures == ["factory:OSError"]
+        assert not resources.clean
+    trio.run(exercise)
+
+
+def test_factory_reader_failure_interrupts_consumer_and_keeps_functional_cause():
+    async def exercise():
+        resources = ResourceScope()
+        fail = trio.Event()
+        first = OSError("ACK reader failed")
+
+        async def reader():
+            await fail.wait()
+            raise first
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            async with trio.open_nursery() as nursery:
+                nursery.start_soon(reader)
+                yield object()
+                nursery.cancel_scope.cancel()
+
+        with pytest.raises(ExceptionGroup) as caught:
+            async with resources.factory(factory(), "factory"):
+                fail.set()
+                await trio.sleep_forever()
+
+        def contains(error):
+            return error is first or isinstance(error, BaseExceptionGroup) and any(
+                contains(item) for item in error.exceptions)
+
+        assert contains(caught.value)
+        assert resources.states["factory"] == "unknown"
+        assert resources.failures and not resources.clean
+    trio.run(exercise)

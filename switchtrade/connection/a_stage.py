@@ -286,7 +286,7 @@ class DirectAStage:
         key_derivation = ldn.KeyDerivation(param.keys, param.network.protocol)
         wlan_key = key_derivation.derive_data_key(param.network.server_random, param.password)
         try:
-            async with self.resources.context(wlan.create_factory(), "join.factory") as factory:
+            async with self.resources.factory(wlan.create_factory(), "join.factory") as factory:
                 self.resources.instrument_factory(factory, "join")
                 async with factory._create_interface(
                     param.phyname, param.ifname, wlan.nl80211.NL80211_IFTYPE_STATION
@@ -368,7 +368,7 @@ class DirectAStage:
         # Pinned ldn.scan composition, with run-local factory instrumentation.
         # Calling the opaque public helper hides its early monitor ownership.
         derivations = {PROTOCOL: self.ldn.KeyDerivation(keys, PROTOCOL)}
-        async with self.resources.context(
+        async with self.resources.factory(
             self.ldn.wlan.create_factory(), "scan.factory"
         ) as factory:
             self.resources.instrument_factory(factory, "scan")

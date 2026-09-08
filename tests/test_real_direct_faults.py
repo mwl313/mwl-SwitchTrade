@@ -11,6 +11,7 @@ import trio
 
 from tests.virtual_ldn_os import VirtualLdnOS, N, ldn
 from tests.test_switch_physical_boundary import stage_b, stage_a, eventually
+from tests.test_direct_netlink_lifetime import with_ack_dispatcher
 from switchtrade.connection.b_fixture import FIXTURE
 from switchtrade.connection.stage_session import StageSession
 from switchtrade.core.contracts import GenerationOffer
@@ -80,8 +81,10 @@ def test_actual_direct_cancel_at_kernel_await_releases_every_owned_resource(boun
         os = VirtualLdnOS()
         entered = threading.Event()
         sessions = []
+        ack_sockets = []
         with ExitStack() as stack:
             os.install(stack)
+            stack.enter_context(patch.object(N, "connect", with_ack_dispatcher(N.connect, ack_sockets)))
             origin = boundary in {"scan", "join"}
             driver = SwitchLdnEndpointDriver(policy(0 if origin else 2))
             await driver.prepare()
@@ -129,6 +132,7 @@ def test_actual_direct_cancel_at_kernel_await_releases_every_owned_resource(boun
                         error.add_note(repr(session.report))
                         raise
             os.assert_clean()
+            assert ack_sockets and all(sock.closed for sock in ack_sockets)
             assert not any(t.name.startswith("switchtrade-") for t in threading.enumerate())
     asyncio.run(exercise())
 
