@@ -76,7 +76,9 @@ does not prove four-participant slot assignment, routing or lifecycle support.
 No battle capability is registered or claimed by this evidence.
 
 MTA-GPSP-002 remains unresolved: the production converter has not changed.
-Next software work should correlate these observations with the authoritative
-game-side format, then obtain independent evidence for missing fields rather
-than hard-code a compatible-looking profile. See the
-[compatibility investigation](GPSP_COMPATIBILITY_RESEARCH_20260909.md).
+The subsequent [gold reanalysis](GPSP_GOLD_AD_NI_REANALYSIS_20260909.md) recovered
+native NI for both existing profiles and matched one to these advertisements.
+Private provenance records corrections without changing the original
+observations or hashes. Missing
+field packing still needs independent evidence rather than a hard-coded profile.
+See the [compatibility investigation](GPSP_COMPATIBILITY_RESEARCH_20260909.md).

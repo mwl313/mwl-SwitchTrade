@@ -1,6 +1,15 @@
 # gpSP discovery defect and compatibility research
 
-## Latest: controlled waiting-room observations preserved
+## Latest: existing gold NI recovered; mapping still open
+
+[Offline gold reanalysis](GPSP_GOLD_AD_NI_REANALYSIS_20260909.md) recovers and
+authenticates native child NI from both fixed-radio captures, and a second
+profile from real Switch inbound traffic in the older PC-host capture. It
+separates roles/rooms, preserves provenance privately, and adds a strict
+synthetic-tested NI evidence decoder. This reuses existing join/trade data;
+it does not yet repair the production advertisement converter.
+
+## Previous: controlled waiting-room observations preserved
 
 The user subsequently authorized Switch-only selected-room observation.
 [The observation record](GPSP_ADVERTISEMENT_OBSERVATIONS_20260909.md) documents

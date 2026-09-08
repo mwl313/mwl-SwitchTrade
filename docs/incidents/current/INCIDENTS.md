@@ -2026,6 +2026,15 @@ archive list and regenerate the index.
   capture collected. Research/restart prerequisites:
   docs/core-simplification/GPSP_COMPATIBILITY_RESEARCH_20260909.md.
 
+- 2026-09-09 offline gold reanalysis: both fixed-radio captures authenticate
+  and reconstruct identical complete native child NI. A separate PC-host gold's
+  real Switch inbound NI matches the native advertised parent by trainer identity;
+  synthetic PC-parent bytes are excluded. Identity comparisons stay private;
+  no same-room/same-role inference is made across these captures.
+  Added bounded NI evidence reassembly, identity-free summaries and synthetic
+  regression tests. See GPSP_GOLD_AD_NI_REANALYSIS_20260909.md. Production probe
+  still FAIL; mapping/issue remain OPEN. No new physical retry was performed.
+
 ### MTA-CORE-021 — Physical scan cancellation retained unknown cleanup
 
 - Same trial/source as MTA-GPSP-002. At23:55:34 KST local_room_ended; active
@@ -2067,3 +2076,18 @@ archive list and regenerate the index.
   docs/core-simplification/GPSP_ADVERTISEMENT_OBSERVATIONS_20260909.md.
   This is narrow physical scan-stop evidence, not full A/B lifecycle or gameplay
   qualification; trial04 remains an original failure, not retroactive success.
+
+### MTA-PRIVACY-001 — Public diagnostic handoff included private profile annotations
+
+- A feature-branch diagnostic commit included user-provided game/profile
+  annotations in its public report. The push was rejected before execution;
+  no transmission occurred. Standing permission to push code is not permission
+  to publish personal evidence.
+- Retain those annotations only in ignored local provenance. Remove them from
+  public reports and summaries, preserving only non-identifying methodology,
+  synthetic tests and technical counts. Replace the agent-owned unpublished
+  commit so the rejected payload is not retained in outgoing history.
+- Before retry, verify the exact destination, remote baseline, replacement
+  commit's parent and complete outgoing diff. No force push or alternative
+  upload path. Keep the first rejection and private evidence locally; a new
+  push is permitted only after the sanitized payload passes review.
