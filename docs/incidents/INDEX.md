@@ -283,3 +283,5 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-QA-024` | Stop-owner test inherited an unrelated readiness deadline | Current ledger | 1782 |
 | `MTA-QA-025` | Stock frontend test profile did not isolate per-core options | Current ledger | 1807 |
 | `MTA-QA-026` | Physical-input ticker outlived its test-owned radio | Current ledger | 1829 |
+| `MTA-DEV-033` | WSL inventory encoding hid a registered managed runtime | Current ledger | 1853 |
+| `MTA-DEV-034` | Dev doctor expected a fictitious runtime ownership marker | Current ledger | 1873 |

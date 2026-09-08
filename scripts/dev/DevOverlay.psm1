@@ -96,7 +96,8 @@ function Invoke-DevCapturedProcess {
     param(
         [Parameter(Mandatory)][string]$FilePath,
         [Parameter(Mandatory)][string[]]$ArgumentList,
-        [string]$WorkingDirectory = $script:RepoRoot
+        [string]$WorkingDirectory = $script:RepoRoot,
+        [System.Text.Encoding]$OutputEncoding = [System.Text.Encoding]::UTF8
     )
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
@@ -106,6 +107,8 @@ function Invoke-DevCapturedProcess {
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
+    $startInfo.StandardOutputEncoding = $OutputEncoding
+    $startInfo.StandardErrorEncoding = $OutputEncoding
     foreach ($argument in $ArgumentList) {
         [void]$startInfo.ArgumentList.Add($argument)
     }
@@ -269,10 +272,12 @@ function Get-ActiveRuntime {
         Stop-DevOverlay 'DEV_ACTIVE_RUNTIME_INVALID' 'active-runtime.json is not valid JSON.'
     }
     if ($state.schema -ne 1 -or $state.active_runtime -isnot [string] -or
-        $state.active_runtime -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$') {
+        $state.active_runtime -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' -or
+        $state.PSObject.Properties.Name -notcontains 'release_id' -or
+        $state.release_id -isnot [string] -or $state.release_id -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') {
         Stop-DevOverlay 'DEV_ACTIVE_RUNTIME_INVALID' 'active runtime schema or name is invalid.'
     }
-    return [pscustomobject]@{ Name = $state.active_runtime; StatePath = $statePath }
+    return [pscustomobject]@{ Name = $state.active_runtime; ReleaseId = $state.release_id; StatePath = $statePath }
 }
 
 function ConvertTo-WslPath {
@@ -432,7 +437,8 @@ function Set-DevCurrentRelease {
 
 function Invoke-DevDoctor {
     $runtime = Get-ActiveRuntime
-    $listResult = Invoke-DevCapturedProcess -FilePath 'wsl.exe' -ArgumentList @('--list', '--quiet')
+    # WSL management output is UTF-16LE; commands inside Linux still emit UTF-8.
+    $listResult = Invoke-DevCapturedProcess -FilePath 'wsl.exe' -ArgumentList @('--list', '--quiet') -OutputEncoding ([System.Text.Encoding]::Unicode)
     if ($listResult.ExitCode -ne 0 -or -not (@($listResult.Stdout -split "`r?`n" | ForEach-Object { $_.Trim() }) -contains $runtime.Name)) {
         Stop-DevOverlay 'DEV_WSL_RUNTIME_NOT_REGISTERED' 'The active WSL distro is not registered.'
     }
@@ -441,7 +447,10 @@ function Invoke-DevDoctor {
         Stop-DevOverlay 'DEV_RUNTIME_OWNERSHIP_INVALID' 'The SwitchTrade distro marker is unavailable.'
     }
     try { $marker = $markerResult.Stdout | ConvertFrom-Json } catch { Stop-DevOverlay 'DEV_RUNTIME_OWNERSHIP_INVALID' 'The distro marker is invalid JSON.' }
-    if ($marker.owner -ne 'SwitchTrade') {
+    $missingMarkerFields = @('schema', 'owner', 'product', 'release_id', 'payload_sha256' | Where-Object { $marker.PSObject.Properties.Name -notcontains $_ })
+    if ($missingMarkerFields.Count -gt 0 -or $marker.schema -ne 1 -or
+        $marker.owner -cne 'switchtrade-provisioner' -or $marker.product -cne 'SwitchTrade' -or
+        $marker.release_id -cne $runtime.ReleaseId -or $marker.payload_sha256 -cnotmatch '^[0-9a-f]{64}$') {
         Stop-DevOverlay 'DEV_RUNTIME_OWNERSHIP_INVALID' 'The active distro is not owned by SwitchTrade.'
     }
     $pythonProbe = Invoke-DevWsl -Distro $runtime.Name -Command '/usr/bin/test' -Arguments @('-x', $script:PythonPath)

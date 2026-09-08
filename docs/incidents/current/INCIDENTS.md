@@ -1849,3 +1849,38 @@ archive list and regenerate the index.
   fresh isolated output/process. Never reuse a failed report as acceptance or
   kill by process name. No user game/save/config, WSL, VM, or physical device
   was touched. This supersedes no prior incident.
+
+### MTA-DEV-033 — WSL inventory encoding hid a registered managed runtime
+
+- Date: 2026-09-08. Source `d8d8d642a7afc6ed702903cb6fab390d56709081`.
+- First failure: after successful owner-approved fresh runtime installation,
+  `dev.ps1 doctor` returned `DEV_WSL_RUNTIME_NOT_REGISTERED`; sync never began.
+  Native provisioner status and the exact Lxss registration agreed with the
+  active pointer. No Pair, radio gate, USB attach or game test had run.
+- Cause: `wsl.exe --list --quiet` emitted BOM-less UTF-16LE, but the captured
+  process helper used a UTF-8 reader. The decoded name contained alternating
+  NULs (83,0,119,0,105,0...), so exact-name comparison necessarily failed.
+- Recovery state: preserve the installed runtime, ownership pointer, kernel
+  and setup correlation in local preparation evidence. Both radios remained
+  shared but unattached. This is a launcher parsing defect, not corrupt WSL;
+  do not Repair, unregister, strip arbitrary characters, or bypass ownership.
+- Correction: use an explicit UTF-16LE reader for management inventory only;
+  leave Linux/native subprocess output UTF-8. Regression emits actual UTF-16LE
+  and UTF-8 bytes on both child streams, including a non-ASCII name.
+- Retry gate: record the first failure and verify encoding/identity before
+  rerunning doctor on that same runtime, then sync the current source normally.
+
+### MTA-DEV-034 — Dev doctor expected a fictitious runtime ownership marker
+
+- Date: 2026-09-08. After fixing MTA-DEV-033, the same runtime correctly passed
+  enumeration but doctor stopped at `DEV_RUNTIME_OWNERSHIP_INVALID` before sync.
+- Cause: doctor and its modeled fixture expected `owner=SwitchTrade`. The actual
+  immutable runtime schema requires `owner=switchtrade-provisioner`,
+  `product=SwitchTrade`, schema 1, release_id and a 64-hex payload identity.
+  The installed marker matched that schema and the successful provisioner check.
+- Recovery state: no USB attach, Pair, physical game or source deployment had
+  occurred. Keep the verified installed runtime and original failure evidence;
+  never rewrite its marker to satisfy a development fixture or bypass the gate.
+- Correction: validate the real provisioner schema and bind its release ID to
+  the selected active pointer. Replace the fictitious fixture with that contract;
+  reject missing fields, foreign owners, wrong schema/product/release/hash.

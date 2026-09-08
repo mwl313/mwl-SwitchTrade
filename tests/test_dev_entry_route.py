@@ -20,6 +20,62 @@ from tests.test_dev_console_interrupt import quoted, encoded
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize("encoding,option", [("utf-16-le", "-OutputEncoding ([Text.Encoding]::Unicode)"), ("utf-8", "")])
+def test_captured_process_decodes_wsl_inventory_without_changing_linux_output(encoding, option):
+    pwsh = shutil.which("pwsh")
+    if not pwsh:
+        pytest.skip("PowerShell unavailable")
+    expected = "SwitchTrade-한글\n"
+    producer = ("import sys; value=" + repr(expected) + "; "
+                f"sys.stdout.buffer.write(value.encode('{encoding}')); "
+                f"sys.stderr.buffer.write(value.encode('{encoding}'))")
+    script = f"""
+$module = Import-Module {quoted(ROOT / 'scripts/dev/DevOverlay.psm1')} -Force -PassThru
+& $module {{
+    Invoke-DevCapturedProcess -FilePath {quoted(sys.executable)} -ArgumentList @('-c', {quoted(producer)}) {option} | ConvertTo-Json -Compress
+}}
+"""
+    result = subprocess.run([pwsh, "-NoProfile", "-EncodedCommand", encoded(script)],
+        cwd=ROOT, capture_output=True, text=True, encoding="utf-8", timeout=15)
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert value == {"ExitCode": 0, "Stdout": expected, "Stderr": expected}
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "owner", "schema", "product", "release_id", "payload_sha256"])
+def test_doctor_requires_the_real_provisioner_ownership_contract(fault):
+    pwsh = shutil.which("pwsh")
+    if not pwsh:
+        pytest.skip("PowerShell unavailable")
+    marker = {"schema": 1, "owner": "switchtrade-provisioner", "product": "SwitchTrade",
+              "release_id": "test-release", "payload_sha256": "a" * 64}
+    if fault == "missing":
+        del marker["product"]
+    elif fault:
+        marker[fault] = 2 if fault == "schema" else "wrong"
+    script = f"""
+$module = Import-Module {quoted(ROOT / 'scripts/dev/DevOverlay.psm1')} -Force -PassThru
+& $module {{
+    function Get-ActiveRuntime {{ [pscustomobject]@{{Name='SwitchTrade-Test'; ReleaseId='test-release'}} }}
+    function Invoke-DevCapturedProcess {{ [pscustomobject]@{{ExitCode=0; Stdout='SwitchTrade-Test'; Stderr=''}} }}
+    function Invoke-DevWsl {{
+        param($Distro, $Command, $Arguments)
+        $value = if ($Command -eq '/bin/cat') {{ {quoted(json.dumps(marker))} }} else {{ 'Python 3.12' }}
+        [pscustomobject]@{{ExitCode=0; Stdout=$value; Stderr=''}}
+    }}
+    function Assert-DependencyCompatibility {{}}
+    try {{ Invoke-DevDoctor }} catch {{ [Console]::Out.WriteLine($_.Exception.Code) }}
+}}
+"""
+    result = subprocess.run([pwsh, "-NoProfile", "-EncodedCommand", encoded(script)],
+        cwd=ROOT, capture_output=True, text=True, encoding="utf-8", timeout=15)
+    assert result.returncode == 0, result.stderr
+    if fault:
+        assert result.stdout.strip() == "DEV_RUNTIME_OWNERSHIP_INVALID"
+    else:
+        assert json.loads(result.stdout)["dependency_match"] is True
+
+
 def test_actual_dev_missing_runtime_reports_original_code_without_type_resolution_error(tmp_path):
     pwsh = shutil.which("pwsh")
     if not pwsh:
@@ -80,7 +136,7 @@ def test_actual_dev_ps1_dispatches_through_manifest_and_wsl_boundary(mode, tmp_p
     assert pwsh
     state = tmp_path / "SwitchTrade/state/active-runtime.json"
     state.parent.mkdir(parents=True)
-    state.write_text(json.dumps({"schema": 1, "active_runtime": "SwitchTrade-Test"}), encoding="utf-8")
+    state.write_text(json.dumps({"schema": 1, "active_runtime": "SwitchTrade-Test", "release_id": "test-release"}), encoding="utf-8")
     options = ["--relay", "https://relay.example", "--usb-id=0bda:818b", "--channel", "11"]
     environment = {**os.environ, "LOCALAPPDATA": str(tmp_path)}
     environment.pop("SWITCHTRADE_CORE_RELAY", None)
@@ -112,7 +168,7 @@ function Import-Module {
                 $command = $ArgumentList[$index + 1]
                 $args = @($ArgumentList | Select-Object -Skip ($index + 2))
                 switch ($command) {
-                    '/bin/cat' { $out = '{"owner":"SwitchTrade"}' }
+                    '/bin/cat' { $out = '{"schema":1,"owner":"switchtrade-provisioner","product":"SwitchTrade","release_id":"test-release","payload_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' }
                     '/usr/bin/test' { }
                     '/opt/switchtrade/bridge/.venv/bin/python' { $out = 'Python 3.12' }
                     '/usr/bin/sha256sum' {
