@@ -1926,3 +1926,21 @@ archive list and regenerate the index.
   check identity/legacy-route absence and real bidirectional WebSocket forwarding;
   rerun existing Pair/Generation relay regressions. This is not a Docker build
   or deployed ingress qualification; those remain deployment-owner checks.
+
+### MTA-CORE-020 — Core HTTP requests lacked the product User-Agent
+
+- Baseline: `90ed965a59b7940fc814070f96fbbf1d5ad1487b`. Public health succeeded
+  in PowerShell, but the real managed WSL urllib path returned HTTP 403 with
+  Cloudflare error 1010. Same-URL product-UA GETs succeeded. Preserve this first
+  failure; PowerShell health alone does not qualify the production client path.
+- Cause: `core_cli._request` left urllib's default User-Agent in place; it was
+  rejected at the edge. `transport/client.py` does not issue these HTTP requests.
+- Correction: identify the actual product/version in HTTP and WebSocket opening
+  handshakes at their shared CLI connection boundary. No browser impersonation,
+  TLS bypass, credential changes, Cloudflare policy changes or legacy imports.
+- Regression scope: headers on GET/POST and WebSocket dial, existing authentication
+  and handshake-failure behavior. Public health/unauthenticated checks do not
+  establish credentialed WebSocket forwarding or physical-game compatibility.
+- Recovery state: no public Pair or radio test created. Prior temporary USB/WSL
+  preparation resources were already released; do not attach/recover hardware
+  as a side effect of this HTTP fix. Re-sync the clean committed client source.

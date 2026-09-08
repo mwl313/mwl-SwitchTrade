@@ -287,3 +287,4 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-DEV-034` | Dev doctor expected a fictitious runtime ownership marker | Current ledger | 1873 |
 | `MTA-DEV-035` | Source overlay omitted the package version resource | Current ledger | 1888 |
 | `MTA-CORE-019` | Default deployment still selected the legacy Room relay | Current ledger | 1908 |
+| `MTA-CORE-020` | Core HTTP requests lacked the product User-Agent | Current ledger | 1930 |

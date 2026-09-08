@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ssl
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -12,11 +13,42 @@ from websockets.frames import Close
 from switchtrade.core import PairCredentials, PairSeat
 from switchtrade.core.supervisor import SupervisorError
 from switchtrade.core_cli import CliError, _credentials, _policy, _websocket_url, _relay_base, _stop_preserving_failure, main, parser, run
-from switchtrade.core_cli import _socket
+from switchtrade.core_cli import USER_AGENT, _request, _socket
+from switchtrade import __version__
 from switchtrade.transport import TransportError
 
 
 class SwitchCoreCliTests(unittest.IsolatedAsyncioTestCase):
+    async def test_http_requests_identify_product_without_changing_auth_or_payload(self):
+        self.assertEqual(USER_AGENT, f"SwitchTrade-Core/{__version__}")
+        for payload in (None, {"capabilities": {}}):
+            with self.subTest(payload=payload), patch(
+                "switchtrade.core_cli.urlopen", return_value=BytesIO(b"{}")
+            ) as send:
+                await _request("https://relay.example", "/core/v1/pairs", payload,
+                               access_token="test-credential")
+                request = send.call_args.args[0]
+                self.assertEqual(request.get_header("User-agent"), USER_AGENT)
+                self.assertEqual(request.get_header("Authorization"), "Bearer test-credential")
+                self.assertEqual(request.get_header("Content-type"), "application/json")
+                self.assertEqual(request.get_method(), "GET" if payload is None else "POST")
+                self.assertEqual(request.data, None if payload is None else b'{"capabilities": {}}')
+                self.assertEqual(send.call_args.kwargs, {"timeout": 10})
+
+    async def test_websocket_identifies_same_product_and_preserves_auth_and_tls_defaults(self):
+        credentials = PairCredentials("pair", PairSeat.HOST, "token", "2099-01-01T00:00:00+00:00")
+        connection = AsyncMock()
+        connection.recv.return_value = '{"seat":"host"}'
+        with patch("switchtrade.core_cli.websockets.connect", AsyncMock(return_value=connection)) as connect:
+            socket = await _socket("https://relay.example", credentials)
+            connect.assert_awaited_once_with(
+                "wss://relay.example/core/v1/pairs/pair/ws",
+                additional_headers={"authorization": "Bearer token"},
+                user_agent_header=USER_AGENT, proxy=None,
+            )
+            await socket.close()
+            connection.close.assert_awaited_once()
+
     async def test_socket_classifies_transient_loss_without_retrying_identity_failures(self):
         credentials = PairCredentials("pair", PairSeat.HOST, "token", "2099-01-01T00:00:00+00:00")
         cases = [

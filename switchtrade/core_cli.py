@@ -20,6 +20,7 @@ from uuid import uuid4
 import websockets
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
+from switchtrade import __version__
 from switchtrade.composition import create_switch_ldn_driver, create_retroarch_gpsp_driver
 from switchtrade.core import CoreSupervisor, PairCredentials, PairSeat
 from switchtrade.core.contracts import GenerationEnded
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
 
 
 DEFAULT_RELAY = "http://127.0.0.1:8788"
+USER_AGENT = f"SwitchTrade-Core/{__version__}"
 
 
 class CliError(RuntimeError):
@@ -124,7 +126,7 @@ async def _request(relay: str, path: str, payload: dict[str, object] | None = No
     base = _relay_base(relay)
 
     def send() -> dict[str, object]:
-        headers = {"content-type": "application/json"}
+        headers = {"content-type": "application/json", "User-Agent": USER_AGENT}
         if access_token is not None:
             headers["authorization"] = f"Bearer {access_token}"
         request = Request(f"{base}{path}",
@@ -183,6 +185,7 @@ async def _socket(relay: str, credentials: PairCredentials) -> _WebSocketSocket:
         connection = await websockets.connect(
             _websocket_url(relay, credentials),
             additional_headers={"authorization": f"Bearer {credentials.access_token}"},
+            user_agent_header=USER_AGENT,
             proxy=None,
         )
         raw = await asyncio.wait_for(connection.recv(), 5)
