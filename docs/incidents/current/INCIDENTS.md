@@ -1944,3 +1944,21 @@ archive list and regenerate the index.
 - Recovery state: no public Pair or radio test created. Prior temporary USB/WSL
   preparation resources were already released; do not attach/recover hardware
   as a side effect of this HTTP fix. Re-sync the clean committed client source.
+
+### MTA-DEV-036 — Windows source archives dropped executable permissions
+
+- Baseline d7cf82cc0258e940ce24e61e8d51962771079dbc. First authorized physical
+  Host start failed with DEV_PARENT_CONTROL_FAILED: PermissionError before the
+  radio gate or Pair creation. The owned command processes were absent afterward.
+- Git tracked both radio entrypoints as 100755, but Windows tar extraction into
+  WSL yielded mode 666. Hash-only overlay verification accepted these unusable
+  files. The installed base was not changed; no RF failure was established.
+- Correction: derive regular-file modes from the Git index (untracked files are
+  non-executable), include modes in a v2 content identity, apply them only to a
+  fresh staging directory, and verify modes on both publication and reuse.
+- Preserve the failed immutable release and first transcript. Do not chmod an
+  existing release, bypass the parent guard, or replace the radio health check.
+  Temporary USB attachment and the precisely identified keeper were released.
+- Focused regression covers identity changes on mode-only changes, staging-only
+  mutations and rejection of non-executable/writable tar modes despite valid hashes.
+  Verify a newly committed overlay's real Linux modes before the physical retry.

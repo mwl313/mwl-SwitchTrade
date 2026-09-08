@@ -101,7 +101,7 @@ $module = Import-Module -Name '{module_path}' -Force -PassThru
     function Get-SourceManifest {{
         param([string[]]$RelativePaths)
         $files = [ordered]@{{ 'switchtrade/example.py' = $script:fileHash }}
-        [pscustomobject]@{{ GitHead = ('0' * 40); ContentId = $script:contentId; Dirty = $false; Files = $files }}
+        [pscustomobject]@{{ GitHead = ('0' * 40); ContentId = $script:contentId; Dirty = $false; Files = $files; Modes = @{{ 'switchtrade/example.py' = '644' }} }}
     }}
     function Invoke-DevCapturedProcess {{
         param([string]$FilePath, [string[]]$ArgumentList, [string]$WorkingDirectory)
@@ -115,6 +115,10 @@ $module = Import-Module -Name '{module_path}' -Force -PassThru
         }}
         if ($Command -eq '/usr/bin/sha256sum') {{
             $output = (($Arguments | ForEach-Object {{ "$($script:fileHash)  $_" }}) -join "`n")
+            return [pscustomobject]@{{ ExitCode = 0; Stdout = $output; Stderr = '' }}
+        }}
+        if ($Command -eq '/usr/bin/stat') {{
+            $output = (($Arguments | Select-Object -Skip 3 | ForEach-Object {{ "644:$_" }}) -join "`n")
             return [pscustomobject]@{{ ExitCode = 0; Stdout = $output; Stderr = '' }}
         }}
         if ($Command -eq '/bin/mv' -and $Arguments.Count -eq 2) {{ $script:releases[$Arguments[1]] = $true }}
@@ -201,6 +205,64 @@ $module = Import-Module -Name '{module_path}' -Force -PassThru
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "DEV_MANIFEST_MISMATCH")
+
+    @unittest.skipUnless(sys.platform == "win32", "requires Windows path semantics")
+    def test_git_modes_are_identity_bound_restored_only_in_staging_and_verified(self):
+        module_path = str(MODULE).replace("'", "''")
+        script = f"""
+$ErrorActionPreference = 'Stop'
+$module = Import-Module '{module_path}' -Force -PassThru
+& $module {{
+    $script:executable = '100755'
+    function Invoke-DevCapturedProcess {{
+        param($FilePath, $ArgumentList)
+        $output = if ($ArgumentList -contains '--stage') {{
+            "$script:executable $('a' * 40) 0`tscripts/wsl-radio-prepare.sh`n100644 $('b' * 40) 0`tswitchtrade/VERSION"
+        }} elseif ($ArgumentList -contains 'rev-parse') {{ 'a' * 40 }} else {{ '' }}
+        [pscustomobject]@{{ ExitCode = 0; Stdout = $output; Stderr = '' }}
+    }}
+    $paths = @('scripts/wsl-radio-prepare.sh', 'switchtrade/VERSION')
+    $script:manifest = Get-SourceManifest $paths
+    $script:executable = '100644'
+    $other = Get-SourceManifest $paths
+    if ($manifest.ContentId -eq $other.ContentId) {{ throw 'mode not included in content identity' }}
+    if ($manifest.Modes[$paths[0]] -ne '755' -or $manifest.Modes[$paths[1]] -ne '644') {{ throw 'incorrect Git mode mapping' }}
+    $script:badMode = $false
+    $script:chmodCalls = 0
+    function Invoke-DevWsl {{
+        param($Distro, $Command, $Arguments)
+        $output = ''
+        if ($Command -eq '/bin/chmod') {{
+            $script:chmodCalls++
+            foreach ($target in @($Arguments | Select-Object -Skip 2)) {{
+                if ($target -notlike '/opt/switchtrade-dev/.staging-*/*') {{ throw 'mutated published release' }}
+                if ($target.EndsWith('.sh') -and $Arguments[0] -ne '755') {{ throw 'script not executable' }}
+            }}
+        }} elseif ($Command -eq '/usr/bin/sha256sum') {{
+            $output = (($manifest.Files.Keys | ForEach-Object {{ "$($manifest.Files[$_])  /overlay/$_" }}) -join "`n")
+        }} elseif ($Command -eq '/usr/bin/stat') {{
+            $output = (($manifest.Files.Keys | ForEach-Object {{
+                $mode = if ($script:badMode) {{ '666' }} else {{ $manifest.Modes[$_] }}
+                "${{mode}}:/overlay/$_"
+            }}) -join "`n")
+        }}
+        [pscustomobject]@{{ ExitCode = 0; Stdout = $output; Stderr = '' }}
+    }}
+    Set-StagingFileModes 'mock' $manifest ("/opt/switchtrade-dev/.staging-" + ('a' * 64) + '-' + ('b' * 32))
+    if ($script:chmodCalls -ne 2) {{ throw 'missing file mode groups' }}
+    try {{ Set-StagingFileModes 'mock' $manifest '/opt/switchtrade-dev/releases/existing'; throw 'accepted immutable target' }}
+    catch [DevOverlayException] {{ if ($_.Exception.Code -ne 'DEV_EXTRACT_FAILED') {{ throw }} }}
+    Assert-RemoteManifest 'mock' $manifest '/overlay'
+    $script:badMode = $true
+    try {{ Assert-RemoteManifest 'mock' $manifest '/overlay'; throw 'accepted nonexecutable tar modes' }}
+    catch [DevOverlayException] {{ if ($_.Exception.Code -ne 'DEV_MANIFEST_MISMATCH') {{ throw }} }}
+    'MODE_CONTRACT_PASS'
+}}
+"""
+        result = subprocess.run([shutil.which("pwsh"), "-NoProfile", "-Command", script],
+                                cwd=ROOT, capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "MODE_CONTRACT_PASS")
 
     def test_interactive_process_forwards_output_before_exit(self) -> None:
         powershell = shutil.which("pwsh") or shutil.which("powershell")

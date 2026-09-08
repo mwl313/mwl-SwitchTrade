@@ -329,15 +329,31 @@ function Get-SourceFiles {
 function Get-SourceManifest {
     param([Parameter(Mandatory)][string[]]$RelativePaths)
     $fileMap = [ordered]@{}
+    $modeMap = [ordered]@{}
+    $trackedModes = @{}
+    $indexResult = Invoke-DevCapturedProcess -FilePath 'git' -ArgumentList @('-c', 'core.quotepath=false', 'ls-files', '--stage')
+    if ($indexResult.ExitCode -ne 0) { Stop-DevOverlay 'DEV_SOURCE_FORBIDDEN' 'Could not read Git source modes.' }
+    foreach ($line in ($indexResult.Stdout -split "`r?`n" | Where-Object { $_ })) {
+        if ($line -notmatch '^(?<mode>[0-7]{6}) [0-9a-f]+ 0\t(?<path>.+)$') {
+            Stop-DevOverlay 'DEV_SOURCE_FORBIDDEN' 'Source index is unmerged or invalid.'
+        }
+        $trackedModes[$Matches.path] = $Matches.mode
+    }
     $identityLines = [System.Collections.Generic.List[string]]::new()
+    [void]$identityLines.Add("overlay-file-modes-v2`n")
     foreach ($relativePath in $RelativePaths) {
         $absolutePath = Join-Path $script:RepoRoot ($relativePath -replace '/', '\')
         if (-not (Test-Path -LiteralPath $absolutePath -PathType Leaf)) {
             Stop-DevOverlay 'DEV_SOURCE_FORBIDDEN' "Allowlisted source is missing: $relativePath"
         }
         $digest = Get-FileDigest -Path $absolutePath
+        if ($trackedModes.ContainsKey($relativePath) -and $trackedModes[$relativePath] -notin @('100644', '100755')) {
+            Stop-DevOverlay 'DEV_SOURCE_FORBIDDEN' 'Overlay source must be a regular file.'
+        }
+        $mode = if ($trackedModes[$relativePath] -eq '100755') { '755' } else { '644' }
         $fileMap[$relativePath] = $digest
-        [void]$identityLines.Add("$relativePath`0$digest`n")
+        $modeMap[$relativePath] = $mode
+        [void]$identityLines.Add("$relativePath`0$digest`0$mode`n")
     }
     $identityBytes = [System.Text.Encoding]::UTF8.GetBytes(($identityLines -join ''))
     $contentId = ([BitConverter]::ToString(([System.Security.Cryptography.SHA256]::Create().ComputeHash($identityBytes))).Replace('-', '')).ToLowerInvariant()
@@ -347,11 +363,12 @@ function Get-SourceManifest {
     }
     $dirty = (Invoke-DevCapturedProcess -FilePath 'git' -ArgumentList @('status', '--porcelain')).Stdout.Trim().Length -gt 0
     return [pscustomobject]@{
-        Schema = 1
+        Schema = 2
         GitHead = $headResult.Stdout.Trim()
         Dirty = $dirty
         ContentId = $contentId
         Files = $fileMap
+        Modes = $modeMap
     }
 }
 
@@ -419,6 +436,36 @@ function Assert-RemoteManifest {
         if (-not $actualFiles.ContainsKey($relativePath) -or $actualFiles[$relativePath] -ne $Manifest.Files[$relativePath]) {
             Stop-DevOverlay 'DEV_MANIFEST_MISMATCH' 'The copied source does not match the local manifest.'
         }
+    }
+    $modeResult = Invoke-DevWsl -Distro $Distro -Command '/usr/bin/stat' -Arguments (@('-c', '%a:%n', '--') + $verifyArguments)
+    if ($modeResult.ExitCode -ne 0) { Stop-DevOverlay 'DEV_MANIFEST_MISMATCH' 'Could not verify overlay file modes.' }
+    $actualModes = @{}
+    foreach ($line in ($modeResult.Stdout -split "`r?`n" | Where-Object { $_ })) {
+        if ($line -notmatch '^(?<mode>[0-7]{3,4}):(?<path>.+)$' -or -not $Matches.path.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+            Stop-DevOverlay 'DEV_MANIFEST_MISMATCH' 'Invalid overlay mode evidence.'
+        }
+        $relativePath = $Matches.path.Substring($prefix.Length)
+        if ($actualModes.ContainsKey($relativePath)) { Stop-DevOverlay 'DEV_MANIFEST_MISMATCH' 'Duplicate overlay mode evidence.' }
+        $actualModes[$relativePath] = $Matches.mode
+    }
+    if ($actualModes.Count -ne $Manifest.Files.Count) { Stop-DevOverlay 'DEV_MANIFEST_MISMATCH' 'Incomplete overlay mode evidence.' }
+    foreach ($relativePath in $Manifest.Files.Keys) {
+        if ($actualModes[$relativePath] -ne $Manifest.Modes[$relativePath]) {
+            Stop-DevOverlay 'DEV_MANIFEST_MISMATCH' 'Overlay file permissions differ from the source manifest.'
+        }
+    }
+}
+
+function Set-StagingFileModes {
+    param([string]$Distro, $Manifest, [string]$StagingPath)
+    if ($StagingPath -cnotmatch '^/opt/switchtrade-dev/\.staging-[0-9a-f]{64}-[0-9a-f]{32}$') {
+        Stop-DevOverlay 'DEV_EXTRACT_FAILED' 'Permissions may only be set in a fresh staging directory.'
+    }
+    foreach ($mode in @('644', '755')) {
+        $paths = @($Manifest.Files.Keys | Where-Object { $Manifest.Modes[$_] -eq $mode } | ForEach-Object { "$StagingPath/$_" })
+        if ($paths.Count -eq 0) { continue }
+        $result = Invoke-DevWsl -Distro $Distro -Command '/bin/chmod' -Arguments (@($mode, '--') + $paths)
+        if ($result.ExitCode -ne 0) { Stop-DevOverlay 'DEV_EXTRACT_FAILED' 'Could not restore source file permissions.' }
     }
 }
 
@@ -506,6 +553,7 @@ function Invoke-DevSync {
         if ($stageResult.ExitCode -ne 0) { Stop-DevOverlay 'DEV_EXTRACT_FAILED' 'Could not create the staging directory.' }
         $extractResult = Invoke-DevWsl -Distro $doctor.active_runtime -Command '/usr/bin/tar' -Arguments @('-xf', (ConvertTo-WslPath $tempTar), '-C', $stagingPath)
         if ($extractResult.ExitCode -ne 0) { Stop-DevOverlay 'DEV_EXTRACT_FAILED' 'Could not extract the source archive in WSL.' }
+        Set-StagingFileModes -Distro $doctor.active_runtime -Manifest $manifest -StagingPath $stagingPath
         Assert-RemoteManifest -Distro $doctor.active_runtime -Manifest $manifest -RemoteRoot $stagingPath
         $commitResult = Invoke-DevWsl -Distro $doctor.active_runtime -Command '/bin/mv' -Arguments @($stagingPath, $releasePath)
         if ($commitResult.ExitCode -ne 0) { Stop-DevOverlay 'DEV_COMMIT_FAILED' 'Could not commit the immutable overlay release.' }
