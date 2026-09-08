@@ -290,3 +290,4 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-CORE-020` | Core HTTP requests lacked the product User-Agent | Current ledger | 1930 |
 | `MTA-DEV-036` | Windows source archives dropped executable permissions | Current ledger | 1948 |
 | `MTA-GPSP-001` | Connected physical trial lacked RFU discovery diagnostics | Current ledger | 1966 |
+| `MTA-DEV-037` | Entrypoint test primitive lagged manifest mode verification | Current ledger | 1991 |

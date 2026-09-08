@@ -177,6 +177,7 @@ function Import-Module {
     $module = Microsoft.PowerShell.Core\Import-Module -Name $Name -Force -PassThru -Global
     & $module {
         $script:RealCaptured = (Get-Command Invoke-DevCapturedProcess).ScriptBlock
+        $script:ModeChecks = 0
         function script:Invoke-DevCapturedProcess {
             param([string]$FilePath, [string[]]$ArgumentList, [string]$WorkingDirectory = $script:RepoRoot)
             if ($FilePath -eq 'git') {
@@ -205,6 +206,19 @@ function Import-Module {
                             "$hash  $path"
                         }) -join "`n")
                     }
+                    '/usr/bin/stat' {
+                        if (($args[0..2] -join ' ') -ne '-c %a:%n --') { throw 'unexpected stat arguments' }
+                        $manifest = Get-SourceManifest -RelativePaths @(Get-SourceFiles)
+                        $out = (@(foreach ($path in ($args | Select-Object -Skip 3)) {
+                            if ($path -notmatch '^/opt/switchtrade-dev/releases/[0-9a-f]{64}/(.+)$') {
+                                throw "unbound mode path $path"
+                            }
+                            $relative = $Matches[1]
+                            if (-not $manifest.Modes.Contains($relative)) { throw 'unknown mode path' }
+                            "$($manifest.Modes[$relative]):$path"
+                        }) -join "`n")
+                        $script:ModeChecks += 1
+                    }
                     '/bin/mkdir' { }
                     '/bin/rmdir' { }
                     '/bin/ln' { }
@@ -218,7 +232,7 @@ function Import-Module {
         function script:Invoke-DevInteractiveProcess {
             param([string]$FilePath, [string[]]$ArgumentList, [string]$WorkingDirectory, [switch]$ParentLifetime)
             if ($FilePath -ne 'wsl.exe') { throw 'not WSL boundary' }
-            [Console]::Out.WriteLine((@{ argv=$ArgumentList; lifetime=[bool]$ParentLifetime } | ConvertTo-Json -Compress))
+            [Console]::Out.WriteLine((@{ argv=$ArgumentList; lifetime=[bool]$ParentLifetime; mode_checks=$script:ModeChecks } | ConvertTo-Json -Compress))
             [Console]::Error.WriteLine('ordinary child stderr')
             return [int]23
         }
@@ -233,6 +247,7 @@ function Import-Module {
     assert result.returncode == 23, (result.stdout, result.stderr)
     assert "ordinary child stderr" in result.stderr
     value = json.loads(result.stdout)
+    assert value["mode_checks"] >= 1
     argv = value["argv"]
     assert argv[:4] == ["--distribution", "SwitchTrade-Test", "--user", "root"]
     assert value["lifetime"] is (mode != "generic")

@@ -1987,3 +1987,19 @@ archive list and regenerate the index.
   identity, no success count on failed writes and no payload leakage.
 - Resume: docs/core-simplification/GPSP_PHYSICAL_DIAGNOSIS_20260908.md. User paused
   physical work; no automatic retry, emulator action, WSL reset or deployment.
+
+### MTA-DEV-037 — Entrypoint test primitive lagged manifest mode verification
+
+- CI34197485309 at aa80498 failed four Windows dev-entry dispatch cases on both
+  Python versions: unexpected WSL primitive /usr/bin/stat. Ubuntu passed; later
+  Windows stock-process qualification did not run. Never call this CI green.
+- The mode-verifying production overlay added by MTA-DEV-036 was modeled in its
+  focused tests, but the separate real-dev-entry WSL primitive stub lacked stat.
+  This is a test-boundary omission, not evidence of a gpSP RFU or radio failure.
+- Correction: model path-bound Git-manifest modes at that existing stub and
+  assert the real dispatcher requested mode evidence before starting its child.
+  Keep actual manifest verification, runtime selection and negative-mode tests.
+- No product runtime code changes. Run the entry-route and hot-deploy suites on
+  both supported Python versions before push. User explicitly authorizes later
+  diagnostic physical work after focused tests without waiting for full CI;
+  this does not waive source/USB/radio/cleanup gates or prove physical success.
