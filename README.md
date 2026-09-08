@@ -7,6 +7,7 @@ not the legacy desktop Room/Ready flow described below. Software qualification
 does not establish that two physical Switch consoles have passed a trade.
 
 - [Switch-to-Switch test runbook](docs/core-simplification/SWITCH_TO_SWITCH_PHYSICAL_RUNBOOK.md)
+- [Core relay deployment handoff (Docker or native server)](relay/DEPLOYMENT.md)
 - [Actual software path and test boundary evidence](docs/core-simplification/SWITCH_TO_SWITCH_SOFTWARE_EVIDENCE.md)
 - [Acceptance manifest and final CI artifact procedure](docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_RESUME.md)
 

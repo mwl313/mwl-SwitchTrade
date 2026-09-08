@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+import os
 
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket
 from fastapi.websockets import WebSocketDisconnect
@@ -44,7 +45,10 @@ def create_app(store: PairStore | None = None) -> FastAPI:
 
     @app.get("/core/health")
     def health() -> dict[str, str]:
-        return {"status": "ok"}
+        # Build/deployment identity only, never Pair identifiers or credentials.
+        return {"status": "ok", "service": "switchtrade-core-relay",
+                "contract_version": "switchtrade-pair.v1",
+                "source_revision": os.environ.get("SWITCHTRADE_RELAY_REVISION", "unknown")}
 
     @app.post("/core/v1/pairs")
     def create(request: CreatePairRequest, http_request: Request) -> dict[str, object]:

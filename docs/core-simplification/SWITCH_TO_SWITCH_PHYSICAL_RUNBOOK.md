@@ -35,14 +35,20 @@ closure record/report and use that SHA on both PCs and the relay.
 
 ## Common relay (operator, on a separate Linux host)
 
+For deployment/cutover use the canonical [Core relay handoff](../../relay/DEPLOYMENT.md).
+The direct-TLS command below is an alternative, not a second concurrent service.
+
 In a checkout of the qualified SHA, using Python 3.12:
 
 ```bash
 python3.12 -m venv .relay-venv
-.relay-venv/bin/python -m pip install -r requirements.txt
+.relay-venv/bin/python -m pip install --require-hashes -r relay/requirements.txt
 .relay-venv/bin/python -m pip check
+export SWITCHTRADE_RELAY_REVISION="$(git rev-parse HEAD)"
 .relay-venv/bin/python -m uvicorn relay.core_server:create_app --factory \
-  --host 0.0.0.0 --port 8788 --workers 1 --no-access-log \
+  --host 0.0.0.0 --port 8788 --workers 1 --no-access-log --log-level warning \
+  --no-proxy-headers --ws-max-size 1048832 --ws-max-queue 8 \
+  --timeout-graceful-shutdown 10 \
   --ssl-certfile /path/to/fullchain.pem --ssl-keyfile /path/to/private-key.pem
 ```
 
@@ -53,7 +59,8 @@ binding the backend to loopback. Expose only the intended relay service accordin
 to that host's firewall policy. This document does not deploy or alter a firewall.
 
 Use the **Core** application above, not `relay.server` or the old Room authority.
-`GET /core/health` returns `{"status":"ok"}`. The Pair store is in-memory:
+`GET /core/health` returns `status=ok` plus service/contract/source identity.
+Check `source_revision` against the qualified SHA. The Pair store is in-memory:
 use one worker; restarting it invalidates Pairs, so both clients must create/join
 a new Pair. TLS protects each PC-to-relay hop, not RFU from the trusted relay
 operator; this is not an end-to-end-encrypted untrusted relay design.

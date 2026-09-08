@@ -38,14 +38,20 @@ build):
 
 ## Common relay
 
+For deployment/cutover use the canonical [Core relay handoff](../../relay/DEPLOYMENT.md).
+The direct-TLS command below is an alternative, not a second concurrent service.
+
 On an already prepared trusted Linux server, Python 3.12, qualified checkout:
 
 ```bash
 python3.12 -m venv .relay-venv
-.relay-venv/bin/python -m pip install -r requirements.txt
+.relay-venv/bin/python -m pip install --require-hashes -r relay/requirements.txt
 .relay-venv/bin/python -m pip check
+export SWITCHTRADE_RELAY_REVISION="$(git rev-parse HEAD)"
 .relay-venv/bin/python -m uvicorn relay.core_server:create_app --factory \
-  --host 0.0.0.0 --port 8788 --workers 1 --no-access-log \
+  --host 0.0.0.0 --port 8788 --workers 1 --no-access-log --log-level warning \
+  --no-proxy-headers --ws-max-size 1048832 --ws-max-queue 8 \
+  --timeout-graceful-shutdown 10 \
   --ssl-certfile /path/to/fullchain.pem --ssl-keyfile /path/to/private-key.pem
 ```
 

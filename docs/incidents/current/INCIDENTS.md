@@ -1904,3 +1904,25 @@ archive list and regenerate the index.
   imports pass from the new overlay; all 22 pinned runtime versions match,
   key shape passes without printing key material, and both radio scripts parse.
   Runtime provisioning and source import are not radio or physical-game PASS.
+
+### MTA-CORE-019 — Default deployment still selected the legacy Room relay
+
+- Date: 2026-09-08. Baseline `156b9da6348a2b082dd12318bb63320cc19e44c5`.
+- First observation: the public Core health path returned 404 while repository
+  Docker/Compose still selected `relay.server:app` and the Room health contract.
+  A 404 alone does not identify the deployed SHA or distinguish an old backend
+  from a proxy routing failure. No public Pair or hardware test was attempted.
+- Cause: the new Core service existed separately, but the default deployment
+  entrypoint, healthcheck and operator guide had not been migrated with it.
+- Recovery state: preserve the existing remote process, ingress and legacy
+  authority data. This packet changes only repository deployment artifacts;
+  the separate deployment owner must record their identities before cutover.
+  No remote deployment, stop, volume deletion, USB or WSL operation was performed.
+- Correction: select the Core factory, package only its source dependencies,
+  remove legacy database mounts from the new service, expose build identity,
+  document trusted proxy/TLS and one-worker constraints, and retain the old
+  guide explicitly as historical evidence. Never interpret health as data-path PASS.
+- Regression: start the Docker-selected command against only its copied files,
+  check identity/legacy-route absence and real bidirectional WebSocket forwarding;
+  rerun existing Pair/Generation relay regressions. This is not a Docker build
+  or deployed ingress qualification; those remain deployment-owner checks.

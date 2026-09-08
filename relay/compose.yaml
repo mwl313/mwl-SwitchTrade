@@ -3,17 +3,15 @@ services:
     build:
       context: ..
       dockerfile: relay/Dockerfile
-    image: switchtrade-relay:0.3.0-validation.1
+      args:
+        SWITCHTRADE_RELAY_REVISION: ${SWITCHTRADE_RELAY_REVISION:?Set the exact clean checkout SHA}
+    image: switchtrade-core-relay:${SWITCHTRADE_RELAY_REVISION:?Set the exact clean checkout SHA}
     restart: unless-stopped
     init: true
     read_only: true
     environment:
-      SWITCHTRADE_AUTH_DB: /var/lib/switchtrade/authority.sqlite3
-      SWITCHTRADE_DIAGNOSTICS_ROOT: /var/lib/switchtrade/diagnostics
-      SWITCHTRADE_ENABLE_LEGACY_RELAY: "0"
-      SWITCHTRADE_TRUSTED_PROXIES: 172.16.0.0/12
-    volumes:
-      - authority:/var/lib/switchtrade
+      # The immediate TLS ingress address as seen INSIDE this container, never '*'.
+      FORWARDED_ALLOW_IPS: ${SWITCHTRADE_RELAY_TRUSTED_PROXIES:?Set the exact trusted ingress IP}
     tmpfs:
       - /tmp:size=16m,mode=1777
     ports:
@@ -29,11 +27,10 @@ services:
         - -c
         - >-
           import json,urllib.request;
-          assert json.load(urllib.request.urlopen('http://127.0.0.1:8788/health',timeout=2))['status']=='ready'
+          data=json.load(urllib.request.urlopen('http://127.0.0.1:8788/core/health',timeout=2));
+          assert data['status']=='ok' and data['service']=='switchtrade-core-relay'
       interval: 15s
       timeout: 3s
       retries: 4
       start_period: 10s
-
-volumes:
-  authority:
+    stop_grace_period: 20s
