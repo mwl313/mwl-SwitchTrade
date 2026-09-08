@@ -1,5 +1,14 @@
 # Switch to gpSP physical trial: pause and diagnostic handoff
 
+## Latest update, 2026-09-09
+
+Trial04 is stopped. A production RFU advertisement-format defect is confirmed,
+but its full field mapping is not yet repaired. A separate scan-cancellation
+cleanup failure was preserved; the exact USB attachment was released. See
+[the current research and unresolved repair record](GPSP_COMPATIBILITY_RESEARCH_20260909.md)
+before any retry. Earlier trial notes below remain historical evidence, not a
+current readiness assertion. No new Pair is active.
+
 ## Scope and current verdict
 
 Branch: `codex/gpsp-endpoint`. Physical-trial source:

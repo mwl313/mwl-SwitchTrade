@@ -69,7 +69,8 @@ run. The test-owned process exits only after the full continuity assertion.
   `81c11b6f24932bf7918f05eee8928035bff3887335fd2a081507c75e9d94d06a`.
 - Stock gpSP DLL SHA256:
   `c84f619c1077a7fbae84c385df752fbeb867d301880400add7cce6a380dbd516`
-  (displayed `v1.0-74db5e6`, netpacket protocol `gpSP v1.0`).
+  (displayed `v1.1.0-74db5e5`, netpacket protocol `gpSP v1.0`; label corrected
+  from the physical screenshot, binary hash unchanged).
 - Homebrew SHA256:
   `cfb0a21e1504931d7589a30b125ff3bbdf9211116a7bea690cfecadf031a2720`.
   Two independent builds agree; provenance is beside the fixture.

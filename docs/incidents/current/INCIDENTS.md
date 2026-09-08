@@ -2003,3 +2003,42 @@ archive list and regenerate the index.
   both supported Python versions before push. User explicitly authorizes later
   diagnostic physical work after focused tests without waiting for full CI;
   this does not waive source/USB/radio/cleanup gates or prove physical success.
+
+### MTA-GPSP-002 — Switch search record was sent as a native RFU broadcast
+
+- Baseline881a9c58cfe8068c45383a0f7f66728b9dff2d10; physical trial04, 2026-09-08.
+  Host Direct A/A9 and Guest Netplay mode passed, but game room list was empty.
+  Advertisement writes315, gpSP packets0, searching/link_ready=false. These
+  counts prove local writes, not emulator consumption or the sole failure cause.
+- Confirmed software defect: RfuTranslator only endian-converts the decoded
+  Switch record. Native GBA RFU expects serial2, gname13, checksum1 and uname8;
+  the existing synthetic output fails both serial and checksum validation.
+  Golden-vector equality and first-server homebrew selection did not check the
+  game's discovery filter. Switch-to-Switch bypasses this converter entirely.
+- Repair remains OPEN: exact Switch opaque game-state -> native gname mapping
+  is not established by current source. Do not synthesize a fake compatible
+  profile or claim a checksum-only repair. No product wire change made here.
+- Added independent offline checker with positive/corrupt synthetic cases;
+  its production-converter probe exits1/FAIL. Passing checker unit tests do not
+  close this defect. GPSP_ACCEPTANCE software_gaps blocks final attestation.
+- User authorized stop/repair/research, not another trial. Host ended; separate
+  cleanup failure preserved as MTA-CORE-021. No user's game/save/ROM or raw
+  capture collected. Research/restart prerequisites:
+  docs/core-simplification/GPSP_COMPATIBILITY_RESEARCH_20260909.md.
+
+### MTA-CORE-021 — Physical scan cancellation retained unknown cleanup
+
+- Same trial/source as MTA-GPSP-002. At23:55:34 KST local_room_ended; active
+  generation cleanup was true, all reported resources released, Pia4180/failed0.
+  Host then resumed no-room scanning automatically on the same Pair.
+- User-authorized owning-console Ctrl+C:23:56:03 A_CANCELLED/A1_RADIO_SCAN,
+  scan.vif.6:TooSlowError and scan.factory:BaseExceptionGroup. Both unknown;
+  radio_quiescent=false. CLI exited1/S_CLEANUP_FAILED. Do not relabel it clean.
+- Subsequent inspection found original Core/guardian absent and no created
+  VIF/TAP. Only baseline wlan0 remained; its monitor mode was not broadly reset
+  or interface deleted. Exact run-owned USB attachment was released and its
+  client field verified empty. Other adapters/Internet interface untouched.
+- Software-versus-driver cause remains unresolved. The shared Direct A Host
+  path can affect Switch-to-Switch as well as gpSP. No blind retry, widened
+  cleanup scope or timeout bypass. Preserve original private stop evidence;
+  inspect bounded VIF/factory teardown before declaring physical readiness.

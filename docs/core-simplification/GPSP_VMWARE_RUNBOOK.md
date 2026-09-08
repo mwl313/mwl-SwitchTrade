@@ -1,5 +1,8 @@
 # Switch ↔ RetroArch/gpSP: VMware Windows 11 physical test
 
+**2026-09-09: known software blocker; do not treat this runbook as readiness.**
+See [advertisement diagnosis and compatibility research](GPSP_COMPATIBILITY_RESEARCH_20260909.md).
+
 Execute only after `GPSP_ACCEPTANCE.final.json` and both platform jobs for the
 same literal SHA are successful. This document is preparation, not a Pokémon
 trade result. Keep `main` and existing work intact; use the qualified feature
@@ -28,7 +31,7 @@ build):
 
 - RetroArch **1.22.2** exe SHA256:
   `81c11b6f24932bf7918f05eee8928035bff3887335fd2a081507c75e9d94d06a`.
-- gpSP **v1.0-74db5e6** DLL SHA256:
+- gpSP **v1.1.0-74db5e5** DLL SHA256:
   `c84f619c1077a7fbae84c385df752fbeb867d301880400add7cce6a380dbd516`;
   stock Netpacket protocol `gpSP v1.0`.
 - Test inputs came from the [official RetroArch 1.22.2 x64 archive directory](https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/).

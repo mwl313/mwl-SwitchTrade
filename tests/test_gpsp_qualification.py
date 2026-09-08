@@ -9,6 +9,13 @@ from tools.gpsp_qualification.attest import attest, validate_report, MANIFEST, R
 from tools.gpsp_qualification.prepare_stock import selected_members
 
 
+def modeled_ready_manifest():
+    # Positive validator unit fixture, not the actual project's readiness.
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    manifest.update(state="AWAITING_FINAL_CI", software_gaps=[])
+    return manifest
+
+
 def reports():
     sample = {"handles": 100, "private_bytes": 32 * 1024 * 1024}
     result = {}
@@ -32,7 +39,7 @@ def reports():
 
 
 def test_complete_evidence_requires_all_ids_and_exact_process_reports():
-    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    manifest = modeled_ready_manifest()
     original = copy.deepcopy(manifest)
     result = attest(manifest, reports(), "1" * 40, {"windows": "success", "ubuntu": "success"}, "test://modeled")
     assert result["state"] == "COMPLETE" and manifest == original
@@ -67,12 +74,20 @@ def test_incomplete_or_modeled_evidence_never_attests(fault):
 
 
 def test_failed_ci_or_open_acceptance_cannot_close():
-    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    manifest = modeled_ready_manifest()
     with pytest.raises(ValueError):
         attest(manifest, reports(), "1" * 40, {"windows": "success", "ubuntu": "failure"}, "test://modeled")
     manifest["acceptance"][0]["status"] = "PARTIAL"
     with pytest.raises(ValueError):
         attest(manifest, reports(), "1" * 40, {"windows": "success", "ubuntu": "success"}, "test://modeled")
+
+
+def test_current_known_software_defect_blocks_even_green_ci():
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    if manifest.get("software_gaps"):
+        with pytest.raises(ValueError, match="unfinished software acceptance"):
+            attest(manifest, reports(), "1" * 40,
+                   {"windows": "success", "ubuntu": "success"}, "test://modeled")
 
 
 def test_archive_selection_is_exact_and_path_safe():
@@ -87,7 +102,7 @@ def test_archive_selection_is_exact_and_path_safe():
 
 
 def test_python_314_requires_its_own_actual_process_evidence():
-    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    manifest = modeled_ready_manifest()
     evidence = reports()
     with pytest.raises(ValueError, match="Python identity"):
         attest(manifest, evidence, "1" * 40, {"windows": "success", "ubuntu": "success"},
