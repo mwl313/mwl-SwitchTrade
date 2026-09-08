@@ -1,9 +1,11 @@
 """P2 modeled core/stock peer checks, not actual emulator qualification."""
 import asyncio
 import contextlib
+import json
 import socket
 import struct
 import unittest
+from unittest.mock import AsyncMock, patch
 
 from switchtrade.core.contracts import GenerationEnded, GenerationOffer, EndpointKind, LinkPacket, PairCredentials, PairSeat
 from switchtrade.core.supervisor import CoreSupervisor, SupervisorError, SupervisorState
@@ -108,6 +110,87 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
 
     def offer(self, index=1):
         return GenerationOffer(f"room-{index}", PROTOCOL, EndpointKind.SWITCH_LDN, advertisement())
+
+    async def test_search_diagnostics_are_bounded_private_and_generation_scoped(self):
+        await self.ready()
+        with self.assertLogs("switchtrade.endpoints.retroarch_gpsp.driver", level="INFO") as logs:
+            generation = await self.driver.accept(self.offer(), asyncio.Event())
+            generation.activate()
+            await self.peer.receive(r.RFU1_BROADCAST)
+            self.assertEqual((await generation.receive()).payload, r.METADATA_FRAME)
+            # Force just the diagnostic deadline; no human timeout or extra packets.
+            generation._diagnostic_due = 0
+            generation._diagnose("periodic")
+            before = len(logs.output)
+            for _ in range(100):
+                generation._diagnose("periodic")
+            self.assertEqual(len(logs.output), before)
+            snapshot = json.loads(logs.output[-1].split(" ", 2)[2])
+            self.assertEqual(snapshot["state"], "searching")
+            self.assertGreaterEqual(snapshot["advertisement_writes"], 1)
+            self.assertEqual(snapshot["gpsp_kinds"], {})
+            self.assertEqual(snapshot["gpsp_packets"], 0)
+            self.assertEqual(snapshot["core_dequeued"], 1)
+            self.assertFalse(snapshot["link_ready"])
+            self.assertTrue(clean(await generation.close("test_end")))
+            next_generation = await self.driver.accept(self.offer(2), asyncio.Event())
+            next_generation.activate()
+            fresh = json.loads(logs.output[-1].split(" ", 2)[2])
+            self.assertEqual(fresh["advertisement_writes"], 0)
+            self.assertEqual(fresh["core_dequeued"], 0)
+            self.assertEqual(fresh["gpsp_kinds"], {})
+            self.assertTrue(clean(await next_generation.close("test_end")))
+        combined = "\n".join(logs.output)
+        self.assertNotIn(advertisement().hex(), combined)
+        self.assertNotIn("HOST", combined)
+        self.assertNotIn("payload", combined)
+        self.assertNotIn("ProcessIdentity", combined)
+        progress = [line for line in logs.output if "gpsp_rfu_progress" in line]
+        self.assertEqual(sum('"event": "closed"' in line for line in progress), 2)
+
+    async def test_rfu_diagnostics_show_handshake_data_and_failure_without_payloads(self):
+        await self.ready()
+        with self.assertLogs("switchtrade.endpoints.retroarch_gpsp.driver", level="INFO") as logs:
+            generation = await self.driver.accept(self.offer(), asyncio.Event())
+            generation.activate()
+            await generation.receive()
+            await self.peer.receive(r.RFU1_BROADCAST)
+            await self.peer.send(r.RFU1_CONNECT_REQ, generation.host)
+            await generation.receive()
+            accept = gba(r.GBA_ACCEPT, HOST_SESSION.to_bytes(2, "little") +
+                generation.child.to_bytes(2, "little") + b"\0\0")
+            await generation.send(LinkPacket(generation.offer.generation_id, PROTOCOL, accept, 7))
+            await self.peer.receive(r.RFU1_CONNECT_ACK)
+            await self.peer.send(r.RFU1_CLIENT_SEND, 8 << 24 | generation.child, b"PRIVATE!")
+            await generation.receive()
+            await generation.wait_link_ready()
+            with self.assertRaises(r.TranslatorError) as failed:
+                await generation.send(LinkPacket(generation.offer.generation_id, PROTOCOL, accept, 0x100))
+            self.assertEqual(failed.exception.code, "TRANSLATOR_RELIABLE_FLAGS")
+            self.assertTrue(clean(await generation.close("test_end")))
+        snapshots = [json.loads(line.split(" ", 2)[2]) for line in logs.output
+                     if "gpsp_rfu_progress" in line]
+        self.assertTrue(any(row["state"] == "connecting" for row in snapshots))
+        self.assertTrue(any(row["state"] == "connected" and row["link_ready"] for row in snapshots))
+        self.assertTrue(any(row["state"] == "failed" for row in snapshots))
+        self.assertEqual(snapshots[-1]["gpsp_kinds"], {"connect_request": 1, "client_send": 1})
+        self.assertEqual(snapshots[-1]["switch_packets"], 2)
+        self.assertNotIn("PRIVATE!", "\n".join(logs.output))
+        self.assertNotIn(b"PRIVATE!".hex(), "\n".join(logs.output))
+
+    async def test_failed_advertisement_is_not_counted_as_written(self):
+        await self.ready()
+        generation = await self.driver.accept(self.offer(), asyncio.Event())
+        first = GpspError("EMULATOR_NETPLAY_CLOSED", "test send failed")
+        with self.assertLogs("switchtrade.endpoints.retroarch_gpsp.driver", level="INFO") as logs:
+            with patch.object(self.driver.local, "send", new=AsyncMock(side_effect=first)):
+                generation.activate()
+                with self.assertRaises(GpspError) as failure:
+                    await asyncio.wait_for(self.driver.wait_failed(), 1)
+            self.assertIs(failure.exception, first)
+            self.assertEqual(generation._advertisements, 0)
+            self.assertEqual(generation._local_writes, 0)
+        self.assertTrue(any('"event": "advertiser_failed"' in line for line in logs.output))
 
     async def test_prepare_proves_bind_or_fails_before_pair_admission(self):
         with socket.socket() as occupied:

@@ -195,6 +195,11 @@ checks in the linked Switch runbook; preserve the pre-existing proven interface.
 
 ## Failure evidence and extension boundary
 
+For the paused physical trial, new RFU progress fields and next diagnostic steps,
+see [the 2026-09-08 diagnosis handoff](GPSP_PHYSICAL_DIAGNOSIS_20260908.md).
+Physical game compatibility is unresolved; do not read software/homebrew evidence
+as a completed Pokemon trade.
+
 Preserve the **first** error and cleanup status separately. Collect exact branch
 SHA, overlay content-id on Host, frontend/core hashes, selected process start
 identity, VM networking mode, sanitized commands, both opt-in

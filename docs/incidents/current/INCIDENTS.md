@@ -1962,3 +1962,28 @@ archive list and regenerate the index.
 - Focused regression covers identity changes on mode-only changes, staging-only
   mutations and rejection of non-executable/writable tar modes despite valid hashes.
   Verify a newly committed overlay's real Linux modes before the physical retry.
+
+### MTA-GPSP-001 — Connected physical trial lacked RFU discovery diagnostics
+
+- Source 61be8530cbcee4d93fb87fc3b476e05f09d8d213, 2026-09-08. Actual Direct A
+  reached A9 and Host Bridge active; native gpSP Netplay/RFU mode and generation
+  preparation passed, but the user's game Join Group list remained empty.
+  No Guest Bridge active or completed game RFU exchange was evidenced.
+- Cause of the empty list is unresolved. Existing logs exposed preparation and
+  close only, not advertisement writes, RFU request kinds or live converter state.
+  Do not interpret source-side socket writes as emulator/game consumption.
+- The preceding trial ended local_room_ended, then failed A5 association with
+  join.factory unknown cleanup. Preserve it separately: the next trial stayed
+  connected until requested cancellation and does not disprove that failure.
+- Recovery: stop owning Host through Ctrl+C; latest stage resources all released,
+  cleanup_ok true, no owned Core/guardian or generated VIF/TAP remained. Release
+  only its exact USB attachment. Preserve private evidence; do not modify the
+  user's emulator, game or settings. Recheck USB ownership before any next trial.
+- Correction scope: add bounded opt-in generation progress summaries, finite RFU
+  type counters and state transitions, no payloads, new traffic or timeout. This
+  closes an observability gap only, not the physical compatibility issue.
+- Regression: searching/periodic progress, no per-beacon log flood, generation
+  reset, real local socket handshake/data state transitions, unchanged failure
+  identity, no success count on failed writes and no payload leakage.
+- Resume: docs/core-simplification/GPSP_PHYSICAL_DIAGNOSIS_20260908.md. User paused
+  physical work; no automatic retry, emulator action, WSL reset or deployment.

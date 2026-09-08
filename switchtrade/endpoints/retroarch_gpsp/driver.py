@@ -6,7 +6,10 @@ control belongs here; only our loopback stream and RFU peer are owned.
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
+import json
 import logging
+import time
 
 from switchtrade.core.contracts import (
     CleanupReport, EndpointCapabilities, EndpointKind, GenerationEnded,
@@ -22,6 +25,10 @@ from .rfu import (
 
 PROTOCOL = "switchtrade.gba-frame.v1"
 LOG = logging.getLogger(__name__)
+_RFU_KIND_NAMES = (
+    "broadcast", "connect_request", "connect_ack", "connect_nack",
+    "disconnect", "host_send", "client_send", "client_ack",
+)
 
 
 def clean(report):
@@ -241,6 +248,29 @@ class GpspGeneration:
         self._finished = False
         self._link_ready = asyncio.Event()
         self._received = self._sent = 0
+        self._advertisements = self._local_writes = 0
+        self._core_enqueued = self._core_dequeued = 0
+        self._gpsp_kinds = Counter()
+        self._diagnostic_state = None
+        self._diagnostic_due = 0.0
+
+    def _diagnose(self, event, *, force=False):
+        # Counts/types only: no advertisement, RFU bytes, names, RFU IDs or saves.
+        # A completed socket write is NOT proof of gpSP/game consumption.
+        state = (self.translator.state, self._link_ready.is_set())
+        now = time.monotonic()
+        if not force and state == self._diagnostic_state and now < self._diagnostic_due:
+            return
+        self._diagnostic_state = state
+        self._diagnostic_due = now + 5
+        LOG.info("gpsp_rfu_progress id=%s %s", self.offer.generation_id, json.dumps({
+            "event": event, "state": state[0], "link_ready": state[1],
+            "advertisement_writes": self._advertisements,
+            "local_writes": self._local_writes, "gpsp_packets": self._received,
+            "gpsp_kinds": dict(self._gpsp_kinds), "switch_packets": self._sent,
+            "core_enqueued": self._core_enqueued, "core_dequeued": self._core_dequeued,
+            "core_queue": self._out.qsize(),
+        }, sort_keys=True))
 
     def activate(self):
         self.driver._check()
@@ -250,11 +280,13 @@ class GpspGeneration:
             self._active = True
             for action in self.translator.start():
                 self._enqueue(action)
+            self._diagnose("activated", force=True)
             self._advertiser = asyncio.create_task(self._advertise(), name="gpsp-room-advertisement")
 
     def _enqueue(self, action):
         try:
             self._out.put_nowait(LinkPacket(self.offer.generation_id, PROTOCOL, action.payload, action.flags))
+            self._core_enqueued += 1
             self._wake.set()
         except asyncio.QueueFull as error:
             raise GpspError("EMULATOR_QUEUE_FULL", "RFU 송신 대기열이 가득 찼습니다.") from error
@@ -265,6 +297,11 @@ class GpspGeneration:
                 self._enqueue(action)
             else:
                 await self.driver.local.send(action.payload, peer_id=action.peer_id)
+                self._local_writes += 1
+                if action.classification == "broadcast":
+                    self._advertisements += 1
+                    if self._advertisements == 1:
+                        self._diagnose("first_advertisement_write", force=True)
 
     async def _advertise(self):
         try:
@@ -272,10 +309,12 @@ class GpspGeneration:
                 async with self._lock:
                     if self.translator.state == "searching":
                         await self._actions(self._broadcast)
+                    self._diagnose("periodic")
                 await asyncio.sleep(.1)  # Beacon cadence, never a discovery timeout.
         except asyncio.CancelledError:
             raise
         except Exception as error:
+            self._diagnose("advertiser_failed", force=True)
             self.driver._fail(error)
 
     async def feed(self, packet):
@@ -285,11 +324,17 @@ class GpspGeneration:
             if not self._active:
                 raise GpspError("EMULATOR_DATA_BEFORE_ACTIVE", "새 방 준비 전에 RFU 데이터가 도착했습니다.")
             self._received += 1
-            actions = self.translator.from_core(packet.payload, peer_id=packet.peer_id, sequence=self._received)
-            await self._actions(actions)
-            if any(action.classification == "child_transfer" for action in actions):
-                self._link_ready.set()
-            self._finish_if_closed()
+            kind = int.from_bytes(packet.payload[4:8], "big")
+            name = _RFU_KIND_NAMES[kind] if kind < len(_RFU_KIND_NAMES) else "invalid"
+            self._gpsp_kinds[name] += 1
+            try:
+                actions = self.translator.from_core(packet.payload, peer_id=packet.peer_id, sequence=self._received)
+                await self._actions(actions)
+                if any(action.classification == "child_transfer" for action in actions):
+                    self._link_ready.set()
+                self._finish_if_closed()
+            finally:
+                self._diagnose("gpsp_packet", force=self._gpsp_kinds[name] == 1)
 
     async def send(self, packet):
         self.driver._check()
@@ -298,10 +343,13 @@ class GpspGeneration:
                 packet.generation_id != self.offer.generation_id or packet.protocol_id != PROTOCOL):
                 raise GpspError("EMULATOR_GENERATION_STALE", "이전 방의 데이터를 차단했습니다.")
             self._sent += 1
-            actions = self.translator.from_switch(packet.payload, flags=packet.flags,
-                generation=self.host, sequence=self._sent)
-            await self._actions(actions)
-            self._finish_if_closed()
+            try:
+                actions = self.translator.from_switch(packet.payload, flags=packet.flags,
+                    generation=self.host, sequence=self._sent)
+                await self._actions(actions)
+                self._finish_if_closed()
+            finally:
+                self._diagnose("switch_packet", force=self._sent == 1)
 
     def _finish_if_closed(self):
         if self.translator.state == "closed":
@@ -316,6 +364,7 @@ class GpspGeneration:
         while True:
             self.driver._check()
             if not self._out.empty():
+                self._core_dequeued += 1
                 return self._out.get_nowait()
             if self._finished:
                 raise GenerationEnded()
@@ -361,6 +410,7 @@ class GpspGeneration:
                 self.driver._cleanup_errors.extend(errors)
             LOG.info("generation_closed id=%s outcome=%s clean=%s sent=%s received=%s",
                 self.offer.generation_id, outcome, not errors, self._sent, self._received)
+            self._diagnose("closed", force=True)
             if self.driver._generation is self:
                 self.driver._generation = None
         return CleanupReport(not errors, not errors, not errors,
