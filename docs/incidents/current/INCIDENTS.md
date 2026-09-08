@@ -2059,3 +2059,11 @@ archive list and regenerate the index.
   entry/exit is bounded, reader failures interrupt consumers, and original
   functional/cancel errors survive secondary cleanup errors. Actual physical
   stop is not requalified and the original trial04 failure is not relabeled.
+- Subsequent user-authorized 2026-09-09 scan-only check on source 79295ad5:
+  acquired monitor cancellation through real StageSession.stop preserved
+  A_CANCELLED and released sockets/factory/VIF with no cleanup error. Fifteen
+  normal observation scans also cleaned up. Read-only residue checks and final
+  exact-attachment/keeper release verified absence. See
+  docs/core-simplification/GPSP_ADVERTISEMENT_OBSERVATIONS_20260909.md.
+  This is narrow physical scan-stop evidence, not full A/B lifecycle or gameplay
+  qualification; trial04 remains an original failure, not retroactive success.

@@ -1,5 +1,15 @@
 # gpSP discovery defect and compatibility research
 
+## Latest: controlled waiting-room observations preserved
+
+The user subsequently authorized Switch-only selected-room observation.
+[The observation record](GPSP_ADVERTISEMENT_OBSERVATIONS_20260909.md) documents
+Trade/reopened Trade/Single/Double/Multi waiting rooms, private evidence
+preservation, candidate activity distinctions and verified diagnostic cleanup.
+This adds narrow physical scan-cancel evidence; it does not complete the
+advertisement conversion or prove battle/trade traffic. Earlier packet claims
+below retain their original scope and time.
+
 ## Follow-up: ACK-reader lifetime repaired; advertisement mapping still open
 
 Follow-up baseline: `codex/gpsp-endpoint`, local/remote
