@@ -13,6 +13,7 @@ import struct
 from typing import Final
 
 from .errors import GpspError
+from .progress import RfuProgress
 
 
 RFU1_MAGIC: Final = 0x52465531
@@ -184,6 +185,8 @@ class RfuTranslator:
         self.gpsp_slot = gpsp_slot
         self.gpsp_host_id = gpsp_host_id
         self.state = "waiting_advertisement"
+        self.disconnected_by: str | None = None
+        self.progress = RfuProgress()
         self._failure: TranslatorError | None = None
         self._started = False
         self._advertisement_hash: bytes | None = None
@@ -213,6 +216,8 @@ class RfuTranslator:
             "tunnel_epoch": self.tunnel_epoch,
             "group_state": self._group_state,
             "pending_core_acks": len(self._pending_parent_timestamps),
+            "disconnected_by": self.disconnected_by,
+            "llsf": self.progress.snapshot(),
         }
 
     def _fail(self, code: str, message: str):
@@ -314,6 +319,7 @@ class RfuTranslator:
                     or header & 0x00FC0000 or any(body[size:])):
                 self._fail("TRANSLATOR_CLIENT_DATA", "gpSP child data is invalid")
             slot = body[:size]
+            self.progress.observe(slot, parent=False)
             timestamp = self._child_timestamp
             self._child_timestamp = (timestamp + 1) & 0xFFFFFFFF
             if self._child_timestamp == 0:
@@ -335,6 +341,7 @@ class RfuTranslator:
                     self.assignment, self.gpsp_device_id):
                 self._fail("TRANSLATOR_DISCONNECT", "gpSP disconnect is invalid")
             self.state = "closed"
+            self.disconnected_by = "gpsp"
             return (TranslatorAction(
                 "tunnel", _gba(GBA_DISCONNECT, self.child_connection_id),
                 "disconnect", flags=FLAGS_GBA),)
@@ -396,6 +403,7 @@ class RfuTranslator:
             if self.state not in ("connecting", "connected") or body != self.child_connection_id:
                 self._fail("TRANSLATOR_DISCONNECT", "Switch disconnect is invalid")
             self.state = "closed"
+            self.disconnected_by = "switch"
             return (TranslatorAction(
                 "core", _rfu1(RFU1_DISCONNECT, self.assignment),
                 "disconnect", peer_id=0),)
@@ -429,6 +437,7 @@ class RfuTranslator:
         slot = body[8:8 + slot_length]
         if any(body[8 + slot_length:]):
             self._fail("TRANSLATOR_PARENT_PADDING", "Switch parent transfer padding is invalid")
+        self.progress.observe(slot, parent=True)
         self._pending_parent_timestamps.append(timestamp)
         return (TranslatorAction(
             "core", _rfu1(RFU1_HOST_SEND, slot_length, slot),

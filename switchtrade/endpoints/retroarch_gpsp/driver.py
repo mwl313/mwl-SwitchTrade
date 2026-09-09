@@ -258,7 +258,7 @@ class GpspGeneration:
     def _diagnose(self, event, *, force=False):
         # Counts/types only: no advertisement, RFU bytes, names, RFU IDs or saves.
         # A completed socket write is NOT proof of gpSP/game consumption.
-        state = (self.translator.state, self._link_ready.is_set())
+        state = (self.translator.state, self._link_ready.is_set(), self.translator.progress.milestone)
         now = time.monotonic()
         if not force and state == self._diagnostic_state and now < self._diagnostic_due:
             return
@@ -271,6 +271,8 @@ class GpspGeneration:
             "gpsp_kinds": dict(self._gpsp_kinds), "switch_packets": self._sent,
             "core_enqueued": self._core_enqueued, "core_dequeued": self._core_dequeued,
             "core_queue": self._out.qsize(),
+            "disconnected_by": self.translator.disconnected_by,
+            "llsf": self.translator.progress.snapshot(),
         }, sort_keys=True))
 
     def activate(self):

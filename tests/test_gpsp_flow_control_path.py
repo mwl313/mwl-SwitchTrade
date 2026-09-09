@@ -20,6 +20,7 @@ from tests.test_gpsp_rfu import advertisement, gba, parent_t, HOST_SESSION
 from tests.test_switch_physical_boundary import PhysicalGameInput, eventually
 from tests.virtual_ldn_os import VirtualLdnOS
 from switchtrade.endpoints.retroarch_gpsp import rfu as r
+from bridge.frlgsim import ni, rfu as native
 
 
 class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
@@ -36,6 +37,52 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await endpoint_helpers.EndpointTests.asyncTearDown(self)
         await relay_helpers.CoreEndToEndTests.asyncTearDown(self)
+
+    async def ni_roundtrip(self, generation, game, ticker):
+        """Drive native NI at the game boundary, not a replacement endpoint.
+
+        Receiver ACKs are emitted only after the actual end-to-end delivery.
+        This covers the modeled handshake, not the commercial game's outcome.
+        """
+        timestamp = 1
+
+        async def from_child(slot):
+            game.output.clear()
+            await self.peer.send(r.RFU1_CLIENT_SEND, len(slot) << 24 | generation.child, slot)
+            await eventually(lambda: any(p.startswith(b"WT") for p, _ in game.output), tasks=(ticker,))
+            frames = [p for p, _ in game.output if p.startswith(b"WT")]
+            self.assertEqual(frames[-1][12:12 + len(slot)], slot)
+
+        async def from_parent(slot):
+            nonlocal timestamp
+            game.output.clear()
+            game.press(parent_t(timestamp, slot), 7)
+            self.assertEqual((await self.peer.receive(r.RFU1_HOST_SEND))[2][:len(slot)], slot)
+            await self.peer.send(r.RFU1_CLIENT_ACK, generation.child)
+            await eventually(lambda: any(p.startswith(b"WK") for p, _ in game.output), tasks=(ticker,))
+            timestamp += 1
+
+        sender = ni.NISender(bytes(range(26)))
+        while not sender.done:
+            slot = sender.next_slot()
+            await from_child(slot)
+            header = native.parse_llsf_child(slot)
+            if header["state"] != native.LCOM_NULL:
+                await from_parent(ni.parent_recv_ack_slot(header["state"], header["n"], header["phase"]))
+        for slot in ni.parent_join_status_slots():
+            await from_parent(slot)
+            word = int.from_bytes(slot[:3], "little")
+            if (word >> 14) & 15 != native.LCOM_NULL:
+                await from_child(ni.recv_ack_slot((word >> 14) & 15, (word >> 11) & 3, (word >> 9) & 3))
+        await from_child(native.uni_slot(bytes(14)))
+        await from_parent(native.parent_uni_slot([bytes(14)]))
+        progress = generation.translator.progress.snapshot()
+        for side in ("child", "parent"):
+            self.assertEqual(progress[side]["unknown_slots"], 0)
+            for kind in ("ni_start", "ni", "ni_end", "null", "ni_start_ack", "ni_ack", "ni_end_ack", "uni"):
+                self.assertGreater(progress[side]["kinds"][kind], 0)
+        game.output.clear()
+        return timestamp
 
     async def test_slow_radio_ack_two_generations_real_endpoint_path(self):
         # Use the production event-loop mode: debug task stack capture can
@@ -96,6 +143,7 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
                         generation.child.to_bytes(2, "little") + b"\0\0"), 15)
                     await self.peer.receive(r.RFU1_CONNECT_ACK)
                     game.output.clear()
+                    parent_timestamp = await self.ni_roundtrip(generation, game, ticker)
                     # A progressing 100 ms console cadence slows local ACKs;
                     # no production scheduler, admission, or wire queue is mocked.
                     period = .1
@@ -124,11 +172,15 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(all(flags == 7 for _, flags in game.output))
                     for index in range(1, 9):
                         slot = number.to_bytes(4, "little") + index.to_bytes(4, "little")
-                        game.press(parent_t(index, slot), 7)
+                        game.press(parent_t(parent_timestamp + index, slot), 7)
                         self.assertEqual((await self.peer.receive(r.RFU1_HOST_SEND))[2][:8], slot)
                         await self.peer.send(r.RFU1_CLIENT_ACK, generation.child)
                     await eventually(lambda: sum(p.startswith(b"WK") for p, _ in game.output) == 8,
                                      tasks=(ticker,))
+                    status = origin._generation.simulation.flow_status()
+                    self.assertGreater(status["reliable_tx_new"], count)
+                    self.assertGreaterEqual(status["reliable_tx_retransmits"], 0)
+                    self.assertGreater(status["reliable_rto_ms"], 0)
                     ticker.cancel()
                     await asyncio.gather(ticker, return_exceptions=True)
                     sim.close()

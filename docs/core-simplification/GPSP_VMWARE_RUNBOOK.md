@@ -206,6 +206,12 @@ see [the 2026-09-08 diagnosis handoff](GPSP_PHYSICAL_DIAGNOSIS_20260908.md).
 Physical game compatibility is unresolved; do not read software/homebrew evidence
 as a completed Pokemon trade.
 
+For the later connected-but-unavailable trial, see
+[trial08 NI/Reliable diagnosis](GPSP_JOIN_DIAGNOSIS_20260909.md). It separates
+native NI ACKs from gpSP socket ACKs and records the remaining causal uncertainty.
+When copying VM commands, copy only the command inside its code block, never
+the PowerShell `PS ...>` prompt or previous error output. Run commands separately.
+
 Preserve the **first** error and cleanup status separately. Collect exact branch
 SHA, overlay content-id on Host, frontend/core hashes, selected process start
 identity, VM networking mode, sanitized commands, both opt-in

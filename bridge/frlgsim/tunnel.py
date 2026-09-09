@@ -32,6 +32,7 @@ class TunnelSim(Sim):
         self._rx_deferrals = 0
         self._rx_first = self._rx_last = None
         self._rx_init_waits = 0
+        self._tx_new = self._tx_retransmits = 0  # Scheduled attempts, not peer delivery.
         self._tunnel_generation = getattr(tunnel, "connection_generation", None)
         self.parent = bool(parent)
         self.observer = observer
@@ -79,6 +80,10 @@ class TunnelSim(Sim):
                   "reliable_rx_deferrals": self._rx_deferrals,
                   "reliable_rx_initialized": int(self._in_seq_initialized),
                   "reliable_rx_init_waits": self._rx_init_waits,
+                  "reliable_tx_new": self._tx_new,
+                  "reliable_tx_retransmits": self._tx_retransmits,
+                  "reliable_send_window": self.rel.send_low(),
+                  "reliable_rto_ms": round(self.rel.rto() or 0),
                   "pia_rx": self.rx_count, "pia_rx_failed": self.rx_fail}
         for label, header in (("first", self._rx_first), ("last", self._rx_last)):
             for field, value in zip(("seq", "flags", "window"), header or (-1, -1, -1)):
@@ -128,6 +133,7 @@ class TunnelSim(Sim):
         now_ms = self._now_ms
         limit = PARENT_RTX_LIMIT if self.parent else RTX_GAP_LIMIT
         batch = list(self.rel.due_retransmits(now_ms, limit=limit))[:RELIABLE_BATCH_MAX]
+        self._tx_retransmits += len(batch)
 
         while self._pending_remote and len(batch) < RELIABLE_BATCH_MAX:
             if self.rel.inflight() >= self.rel.max_inflight:
@@ -141,6 +147,7 @@ class TunnelSim(Sim):
                 sender_role = "parent" if self.parent else "child"
                 self.observer.submit(self.remote_seat, sender_role, envelope.payload)
             seq = self.rel.queue(envelope.payload, flags, now_ms)
+            self._tx_new += 1
             batch.append((seq, flags, envelope.payload))
 
         due = self.parent or (self._tick - self._last_ack_tick) >= ACK_PERIOD

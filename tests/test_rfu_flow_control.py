@@ -90,6 +90,33 @@ def test_drain_respects_remaining_capacity_before_send_slots_are_consumed():
     asyncio.run(exercise())
 
 
+def test_numeric_diagnostics_distinguish_new_send_retransmit_and_window_progress():
+    async def exercise():
+        adapter = CoreTunnelAdapter("test", PROTOCOL)
+        sim, sent = simulation(adapter)
+        try:
+            await adapter.deliver_from_core(packet(0))
+            sim._drive_tunnel_reliable()
+            status = sim.flow_status()
+            assert status["reliable_tx_new"] == 1
+            assert status["reliable_tx_retransmits"] == 0
+            assert status["reliable_rto_ms"] > 0
+            oldest = status["reliable_send_window"]
+            sim._tick += 120  # Virtual elapsed time only, no physical retry.
+            sim._drive_tunnel_reliable()
+            status = sim.flow_status()
+            assert status["reliable_tx_new"] == 1
+            assert status["reliable_tx_retransmits"] == 1
+            assert status["reliable_send_window"] == oldest
+            sim.rel.on_ack(sim.rel.out_seq, now_ms=sim._now_ms)
+            assert sim.flow_status()["reliable_send_window"] == (oldest + 1) & 0xFFFF
+            assert len(sent) == 1
+        finally:
+            adapter.close()
+            sim.close()
+    asyncio.run(exercise())
+
+
 @pytest.mark.parametrize("ending", ["cancel", "close", "seal", "fail", "reset"])
 def test_full_adapter_wait_is_cancellable_and_never_rebinds_to_reset(ending):
     async def exercise():

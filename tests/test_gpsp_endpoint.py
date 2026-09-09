@@ -214,6 +214,30 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         await self.peer.receive(r.RFU1_CONNECT_ACK)
         return generation
 
+    async def test_ni_first_stage_and_disconnect_log_before_periodic_deadline(self):
+        from bridge.frlgsim import ni, rfu as native
+        generation = await self.connected_generation()
+        slot = ni.NISender(bytes(range(26))).next_slot()
+        with self.assertLogs("switchtrade.endpoints.retroarch_gpsp.driver", level="INFO") as logs:
+            for _ in range(3):
+                await self.peer.send(r.RFU1_CLIENT_SEND, len(slot) << 24 | generation.child, slot)
+                await generation.receive()
+            ack = ni.parent_recv_ack_slot(native.LCOM_NI_START, 1, 0)
+            await generation.send(LinkPacket(generation.offer.generation_id, PROTOCOL, parent_t(1, ack), 7))
+            await self.peer.receive(r.RFU1_HOST_SEND)
+            await self.peer.send(r.RFU1_CLIENT_ACK, generation.child)
+            await generation.receive()
+            await self.peer.send(r.RFU1_DISCONNECT, generation.child)
+            await generation.receive()
+            self.assertTrue(clean(await generation.close("local_ended")))
+        snapshots = [json.loads(line.split(" ", 2)[2]) for line in logs.output if "gpsp_rfu_progress" in line]
+        self.assertTrue(any(row["llsf"]["parent"]["kinds"] == {"ni_start_ack": 1} for row in snapshots))
+        self.assertEqual(snapshots[-1]["disconnected_by"], "gpsp")
+        self.assertEqual(snapshots[-1]["llsf"]["child"]["kinds"], {"ni_start": 3})
+        self.assertEqual(snapshots[-1]["llsf"]["child"]["repeated_slots"], 2)
+        self.assertTrue(generation._link_ready.is_set())  # Traffic, not NI success.
+        self.assertNotIn("payload", "\n".join(logs.output))
+
     async def test_core_queue_pressure_resumes_without_reordering(self):
         generation = await self.connected_generation()
         count = generation._out.maxsize + n.MAX_QUEUE + 20

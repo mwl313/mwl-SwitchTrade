@@ -2233,3 +2233,26 @@ archive list and regenerate the index.
 - Actual CLI and stock qualification must use independent peer sequence seeds.
   Gold sniffer gaps are not live retransmission evidence or permission to drop
   data. See `RELIABLE_BOOTSTRAP_REPAIR_20260909.md` for coverage and causal limits.
+
+### MTA-GPSP-004 — RFU traffic counts concealed the native game join phase
+
+- At Host base `76d8963`, correlated private logs show WA acceptance and
+  bidirectional RFU, followed first by a gpSP RFU DISCONNECT and clean generation
+  retirement. The user saw Trainer unavailable. Later peer-close followed the
+  planned Host stop; receive-bootstrap deferral was not observed in the first
+  generation. Guest source SHA was not included in the supplied log.
+- Queue pressure was real, but no native NI state or retransmission totals were
+  logged. It was not possible to establish NI timeout, rejection or receiver loss
+  from RFU1 CLIENT_ACK counts. Pinned gpSP ACKs before checking its game-facing
+  receive-buffer space. Socket ACK is not game consumption or a native NI ACK.
+- Prior recovery remained verified: exact owned Host processes/VIFs were absent
+  and only the run-acquired USB lease was returned. This repair performs no
+  physical retry, radio operation, emulator manipulation or relay deployment.
+- Repair records validated structural LLSF fields, bounded repeat/change counts,
+  disconnect source and numeric Reliable transmit/RTO state. No raw game data,
+  speculative deduplication, invented ACK, timeout increase or wire change.
+- Qualification now includes the modeled native NI sequence through the real
+  endpoint/relay/LDN path in two generations. It passes without a wire change,
+  so it does not reproduce or close the commercial-game failure. The failing
+  Ubuntu loopback fixture gets separate port owners and actual readiness checks.
+  See `GPSP_JOIN_DIAGNOSIS_20260909.md`; gameplay root cause remains unresolved.

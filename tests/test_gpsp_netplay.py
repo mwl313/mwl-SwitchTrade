@@ -57,7 +57,16 @@ class NetplayTests(unittest.IsolatedAsyncioTestCase):
 
     async def dial(self):
         self.opening = asyncio.create_task(self.session.open(self.cancel))
-        await asyncio.sleep(0)
+        listening = asyncio.create_task(self.session.listening.wait())
+        try:
+            async with asyncio.timeout(3):
+                await asyncio.wait((listening, self.opening), return_when=asyncio.FIRST_COMPLETED)
+                if self.opening.done():
+                    await self.opening  # Surface the original bind/observer failure.
+                await listening
+        finally:
+            listening.cancel()
+            await asyncio.gather(listening, return_exceptions=True)
         self.client = await asyncio.open_connection("127.0.0.1", self.port)
         return self.client
 
@@ -132,6 +141,23 @@ class NetplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.exception.code, "EMULATOR_PORT_UNAVAILABLE")
         self.assertEqual(self.session.port, self.port)
 
+    async def test_dial_surfaces_opening_failure_before_connecting(self):
+        first = GpspError("EMULATOR_QUERY_FAILED", "synthetic observation failure")
+        self.observer.failure = first
+        with self.assertRaises(GpspError) as failure:
+            await self.dial()
+        self.assertIs(failure.exception, first)
+        self.assertIsNone(self.client)
+
+    async def test_dial_waits_for_actual_listener_after_scheduler_delay(self):
+        original = self.session.open
+        async def delayed(cancel):
+            await asyncio.sleep(.05)
+            return await original(cancel)
+        with patch.object(self.session, "open", side_effect=delayed):
+            await self.connect()
+        self.assertTrue(self.session.connected)
+
     async def test_malformed_huge_header_fails_before_body_read(self):
         _, writer = await self.connect()
         writer.write(struct.pack("!II", 0xFFFF, 0xFFFFFFFF))
@@ -178,28 +204,29 @@ class NetplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([p.payload for p in packets], payloads)
         self.assertEqual([p.sequence for p in packets], list(range(1, len(payloads) + 1)))
 
-    async def test_full_queue_close_or_process_failure_releases_reader(self):
-        for ending in ("close", "process"):
-            with self.subTest(ending=ending):
-                if ending == "process":
-                    self.session = n.LocalNetplay(self.observer, self.port, handshake_timeout=3)
-                _, writer = await self.connect()
-                writer.write(core_packet() * (n.MAX_QUEUE + 5))
-                await writer.drain()
-                async with asyncio.timeout(2):
-                    while not self.session._packets.full():
-                        await asyncio.sleep(0)
-                if ending == "process":
-                    first = GpspError("EMULATOR_EXITED", "synthetic process exit")
-                    self.observer.failure = first
-                    with self.assertRaises(GpspError) as failure:
-                        await asyncio.wait_for(self.session.wait_ended(), 2)
-                    self.assertIs(failure.exception, first)
-                report = await asyncio.wait_for(self.session.close(), 2)
-                self.assertTrue(report.local_resources_released)
-                writer.close()
-                with suppress(ConnectionError):
-                    await writer.wait_closed()
+    async def test_full_queue_close_releases_reader(self):
+        await self.full_queue_ending(process_exit=False)
+
+    async def test_full_queue_process_failure_releases_reader(self):
+        await self.full_queue_ending(process_exit=True)
+
+    async def full_queue_ending(self, *, process_exit):
+        # Independent test owners get independent ports. Rebinding a closed
+        # TCP port in the next subtest also tested OS TIME_WAIT accidentally.
+        _, writer = await self.connect()
+        writer.write(core_packet() * (n.MAX_QUEUE + 5))
+        await writer.drain()
+        async with asyncio.timeout(2):
+            while not self.session._packets.full():
+                await asyncio.sleep(0)
+        if process_exit:
+            first = GpspError("EMULATOR_EXITED", "synthetic process exit")
+            self.observer.failure = first
+            with self.assertRaises(GpspError) as failure:
+                await asyncio.wait_for(self.session.wait_ended(), 2)
+            self.assertIs(failure.exception, first)
+        report = await asyncio.wait_for(self.session.close(), 2)
+        self.assertTrue(report.local_resources_released)
 
     async def test_ordered_barrier_and_uncorrelated_pong(self):
         reader, writer = await self.connect()
