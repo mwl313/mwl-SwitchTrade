@@ -80,6 +80,17 @@ def test_native_waits_for_actual_rfu_before_bridge_message_and_preserves_endpoin
     asyncio.run(_waits_for_actual_rfu())
 
 
+def test_translator_failure_surfaces_action_instead_of_generic_network_error():
+    from switchtrade.endpoints.retroarch_gpsp.rfu import TranslatorError
+    first = TranslatorError("TRANSLATOR_ADVERTISEMENT_UNSUPPORTED", "Use an empty English FRLG Trade room.")
+    outer = RuntimeError("S_OPEN_FAILED")
+    outer.__cause__ = first
+    output = io.StringIO()
+    with patch.object(cli, "run", AsyncMock(side_effect=outer)), redirect_stdout(output):
+        assert cli.main(["join", "003817", "--emulator", "gpsp"]) == 1
+    assert output.getvalue().strip() == first.message
+
+
 async def _waits_for_actual_rfu():
     ready, finished = asyncio.Event(), asyncio.Event()
     generation = SimpleNamespace(wait_link_ready=ready.wait)

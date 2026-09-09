@@ -159,7 +159,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             await generation.receive()
             accept = gba(r.GBA_ACCEPT, HOST_SESSION.to_bytes(2, "little") +
                 generation.child.to_bytes(2, "little") + b"\0\0")
-            await generation.send(LinkPacket(generation.offer.generation_id, PROTOCOL, accept, 7))
+            await generation.send(LinkPacket(generation.offer.generation_id, PROTOCOL, accept, 15))
             await self.peer.receive(r.RFU1_CONNECT_ACK)
             await self.peer.send(r.RFU1_CLIENT_SEND, 8 << 24 | generation.child, b"PRIVATE!")
             await generation.receive()
@@ -304,7 +304,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await generation.receive()).payload,
                 gba(r.GBA_CONNECT, generation.child.to_bytes(2, "little")))
             accept = gba(r.GBA_ACCEPT, HOST_SESSION.to_bytes(2, "little") + generation.child.to_bytes(2, "little") + b"\0\0")
-            await generation.send(LinkPacket(generation.offer.generation_id, PROTOCOL, accept, 7))
+            await generation.send(LinkPacket(generation.offer.generation_id, PROTOCOL, accept, 15))
             self.assertEqual((await self.peer.receive(r.RFU1_CONNECT_ACK))[1], generation.child)
             await self.peer.send(r.RFU1_CLIENT_SEND, 8 << 24 | generation.child, b"child123")
             outgoing = await generation.receive()
@@ -481,7 +481,7 @@ class RelayEndpointTests(unittest.IsolatedAsyncioTestCase):
                     while not any(p.payload[:2] == b"WC" for p in origin.sent):
                         await asyncio.sleep(0)
                 await origin.incoming.put(LinkPacket(origin.offer.generation_id, PROTOCOL,
-                    gba(r.GBA_ACCEPT, HOST_SESSION.to_bytes(2, "little") + generation.child.to_bytes(2, "little") + b"\0\0"), 7))
+                    gba(r.GBA_ACCEPT, HOST_SESSION.to_bytes(2, "little") + generation.child.to_bytes(2, "little") + b"\0\0"), 15))
                 await self.peer.receive(r.RFU1_CONNECT_ACK)
                 await self.peer.send(r.RFU1_CLIENT_SEND, 8 << 24 | generation.child, b"child123")
                 async with asyncio.timeout(2):

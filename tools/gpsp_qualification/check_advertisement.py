@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def inspect_broadcast(packet: bytes) -> dict[str, bool]:
-    checks = dict(frame=False, game_serial=False, game_checksum=False)
+    checks = dict(frame=False, game_serial=False, game_checksum=False, trade_candidate=False)
     if len(packet) != 36:
         return checks
     magic, kind, device = struct.unpack("!III", packet[:12])
@@ -25,6 +25,10 @@ def inspect_broadcast(packet: bytes) -> dict[str, bool]:
     # serial(2), gname(13), checksum(1), uname(8). Multiboot is not this profile.
     checks["game_serial"] = data[:2] == b"\x02\x00"
     checks["game_checksum"] = data[15] == (~sum(data[2:10] + data[16:24]) & 0xFF)
+    checks["trade_candidate"] = (
+        int.from_bytes(data[2:4], "little") in (0x1002, 0x1402)
+        and not any(data[6:12]) and data[12] == 4 and data[13] <= 1
+        and data[14] == 0 and data[16] != 0xFF and b"\xff" in data[16:24])
     return checks
 
 

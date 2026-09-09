@@ -5,6 +5,7 @@ the product. Reuse the existing LDN OS boundary, not fake sessions/simulations.
 """
 import asyncio
 import base64
+import json
 from collections import deque
 from contextlib import ExitStack
 import os
@@ -102,6 +103,7 @@ class FullStackProbe:
         self.sessions, self.tickers, self.simulations, self.readers = [], [], [], []
         self.result = None
         self.cleanup_errors = []
+        self.observed_sims = []
 
     def call(self, coroutine, timeout=60):
         return asyncio.run_coroutine_threadsafe(coroutine, self.loop).result(timeout=timeout)
@@ -123,6 +125,15 @@ class FullStackProbe:
 
     async def open(self):
         self.os.install(self.stack)
+        from frlgsim.tunnel import TunnelSim
+        init_sim = TunnelSim.__init__
+        def observe_sim(sim, *args, **kwargs):
+            init_sim(sim, *args, **kwargs)
+            sim.test_log = deque(maxlen=40)
+            sim.log = lambda *parts: sim.test_log.append(" ".join(map(str, parts)))
+            sim.conn.log = sim.log
+            self.observed_sims.append(sim)
+        self.stack.enter_context(patch.object(TunnelSim, "__init__", observe_sim))
         proven = {"SWITCHTRADE_USB_ID": "0bda:818b", "SWITCHTRADE_P0_TARGET_CHANNEL": "6",
             "SWITCHTRADE_P0_RX_PASSED": "1", "SWITCHTRADE_PHY": "phy0",
             "SWITCHTRADE_IFACE": "proven0", "SWITCHTRADE_KEYS": "/synthetic-test.keys"}
@@ -186,7 +197,7 @@ class FullStackProbe:
         leader = StageSession(DirectBStage(run_id=f"gpsp-physical-{number}", release="test", phy="phy1",
             ap_ifname="test-ap", monitor_ifname="test-mon", tap_ifname="test-tap",
             keys_path="/synthetic-test.keys",
-            application_data=build_application_data(0x2211, "TEST", 0x1234, b"\x01")), timeout=30).start()
+            application_data=build_application_data(0x2211, "TEST", 0x1234, b"\0\0\0\0\x04\x14")), timeout=30).start()
         self.sessions.append(leader)
         resources = await asyncio.to_thread(leader.wait_ready)
         self.game = PhysicalGameInput()
@@ -200,7 +211,15 @@ class FullStackProbe:
         self.tickers.append(asyncio.create_task(tick()))
 
     async def expect(self, prefix):
-        await self.until(lambda: bool(self.game.output), timeout=15)
+        try:
+            await self.until(lambda: bool(self.game.output), timeout=15)
+        except TimeoutError:
+            # Private, bounded harness evidence; never collect user game bytes.
+            diagnostics = [{"parent": sim.parent, "state": sim.conn.state,
+                "rx": sim.rx_count, "rx_failed": sim.rx_fail, "tx": sim.tx_count,
+                "protocols": sim.rx_protos, "log": list(sim.test_log)} for sim in self.observed_sims]
+            (self.launch.output / "timeout.json").write_text(json.dumps(diagnostics, indent=2), encoding="utf-8")
+            raise TimeoutError("P4_EXPECT_" + prefix.hex()) from None
         payload, flags = self.game.output.popleft()
         assert payload.startswith(prefix), (prefix, payload[:4])
         assert flags == (15 if prefix == b"J\0" else 7)
@@ -221,7 +240,7 @@ class FullStackProbe:
             game_wait = time.monotonic() - started
             self.launch.controls.command("GAME_START")
             request = await self.expect(b"WC")
-            self.game.press(_gba(GBA_ACCEPT, b"\x34\x12" + request[4:6] + b"\0\0"), 7)
+            self.game.press(_gba(GBA_ACCEPT, b"\x34\x12" + request[4:6] + b"\0\0"), 15)
             started, count = time.monotonic(), 0
             samples = []
             sampled_at = -60
@@ -258,7 +277,8 @@ class FullStackProbe:
             self.simulations[-1].close()
             self.live()
             return {"round": number, "in_ram_counter": number, "same_pair": True,
-                "local_netplay_retained": True, "bidirectional_exchanges": count - 1,
+                "local_netplay_retained": True, "native_discovery_gate": True,
+                "bidirectional_exchanges": count - 1,
                 "real_traffic_seconds": elapsed, "game_wait_seconds": game_wait,
                 "local_netplay_wait_seconds": self.local_wait, "radio_room_end": True,
                 "encrypted_ldn_frames": self.os.decrypted_frames, "resource_samples": samples}

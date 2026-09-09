@@ -2049,6 +2049,35 @@ archive list and regenerate the index.
   exact USB/keeper release and absent residue checked. Six focused tests pass
   on each Python3.12/3.14. See the gold reanalysis follow-up for source identity.
 
+- 2026-09-09 repair packet (base30ade54): independently encode native serial,
+  compatibility, trainer fields and checksum for the observed empty English
+  FR/LG Trade profile. Unsupported nonzero/started/other-activity discovery
+  fields fail closed; no fabricated general-purpose game-state mapping.
+  The upstream mystery_stamps_pi search-word findings and paired native NI
+  corroborate the narrow mapping; details/limits are in
+  GPSP_ADVERTISEMENT_REPAIR_20260909.md. The production format checker now
+  passes. Strengthened the licensed homebrew to inspect native discovery
+  fields before connection, replacing first-server selection. Original physical
+  failure remains retained. Only fresh isolated harness-owned processes may be
+  run next, with stock-tree/process/socket cleanup evidence; no physical retry
+  or user's game/save/config operation is authorized by this repair packet.
+
+- Repair short probe01: real stock/CLI handshake completed, but the harness
+  timed out before a connect request reached its physical-input boundary.
+  First TimeoutError retained
+  in the ignored report, not converted into a pass. Exact harness frontend
+  exited0, socket/thread/desktop cleanup true, original stock tree unchanged;
+  retired listener exclusive-bind and frontend absence independently checked.
+  Add bounded per-simulation connection diagnostics before the next isolated
+  short probe. Do not lengthen a deadline or skip the metadata requirement.
+- Instrumented short probe02 localized the same timeout to WC, not metadata:
+  metadata/Pia/RTT had succeeded. The new homebrew used LinkRawWireless's
+  string-decoding Server helper, whose recoverName removes embedded zero
+  bytes. That is inappropriate for binary native gname. Use its public raw
+  RFU command response and preserve all bytes; retain the discovery filter.
+  Cleanup again proved clean, original stock tree unchanged, retired listener
+  released. Build the new licensed fixture reproducibly before fresh retry.
+
 ### MTA-CORE-021 — Physical scan cancellation retained unknown cleanup
 
 - Same trial/source as MTA-GPSP-002. At23:55:34 KST local_room_ended; active
@@ -2105,3 +2134,22 @@ archive list and regenerate the index.
   commit's parent and complete outgoing diff. No force push or alternative
   upload path. Keep the first rejection and private evidence locally; a new
   push is permitted only after the sanitized payload passes review.
+
+### MTA-GPSP-003 — Native WA INIT flags rejected as metadata
+
+- During the advertisement repair at base30ade54, authenticated native gold
+  reanalysis found the parent's WA accept carries Reliable flags0x0F, whereas
+  gpSP converter/tests modeled it only with0x07. The converter interpreted all
+  0x0F payloads as J metadata and would reject the native WA before connection.
+  This is an offline-confirmed additional defect, not a newly attempted physical
+  test or proof that it caused the earlier empty room list.
+- Repair: interpret payload opcode as well as flags. Allow validated WA on INIT,
+  retaining length/session/child/state validation; unknown INIT and upper flags
+  still fail closed, including duplicate inputs. Keep Core/Relay opaque.
+  Unit, actual WebSocket endpoint and stock-process full-path fixtures now use
+  native0x0F for WA. Translator failures retain their code/cause and expose the
+  action message through the existing gpSP error boundary.
+- Recovery: no physical resources acquired. Previous short process probe03
+  completed two generations with clean socket/process/desktop teardown and
+  unchanged source runtime; it predates this flags fix, not final qualification.
+  Require new-source regression/process evidence before closing this repair.

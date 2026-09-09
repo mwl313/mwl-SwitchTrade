@@ -49,7 +49,7 @@ class Origin:
 
     def start(self, number):
         self.offer = GenerationOffer(f"gpsp-core-{number}", PROTOCOL, EndpointKind.SWITCH_LDN,
-            build_application_data(0x2211, "TEST", 0x1234, b"\x01"))
+            build_application_data(0x2211, "TEST", 0x1234, b"\0\0\0\0\x04\x14"))
         self.incoming, self.outgoing = asyncio.Queue(), asyncio.Queue()
 
     async def expect(self, prefix):
@@ -57,8 +57,8 @@ class Origin:
         assert packet.payload.startswith(prefix), (prefix.hex(), packet.payload.hex())
         return packet.payload
 
-    async def inject(self, payload):
-        await self.outgoing.put(LinkPacket(self.offer.generation_id, PROTOCOL, payload, 7))
+    async def inject(self, payload, flags=7):
+        await self.outgoing.put(LinkPacket(self.offer.generation_id, PROTOCOL, payload, flags))
 
 
 class CoreProbeLaunch(StockNetplayLaunch):
@@ -128,7 +128,7 @@ class CoreProbe:
             await self.origin.expect(b"J\0")
             request = await self.origin.expect(b"WC")
             child = request[4:6]
-            await self.origin.inject(_gba(GBA_ACCEPT, b"\x34\x12" + child + b"\0\0"))
+            await self.origin.inject(_gba(GBA_ACCEPT, b"\x34\x12" + child + b"\0\0"), flags=15)
             data = await self.origin.expect(b"WT")
             assert data[12:20] == struct.pack("<II", 0x53544631, number), "P2_RAM_COUNTER_OR_DATA_MISMATCH"
             await self.origin.inject(_gba(GBA_TRANSFER, number.to_bytes(4, "little") + b"\x08\0\0\0" +

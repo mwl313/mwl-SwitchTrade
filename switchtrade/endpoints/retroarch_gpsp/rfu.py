@@ -12,6 +12,8 @@ import hashlib
 import struct
 from typing import Final
 
+from .errors import GpspError
+
 
 RFU1_MAGIC: Final = 0x52465531
 RFU1_BROADCAST: Final = 0x00
@@ -48,12 +50,10 @@ MAX_PENDING: Final = 256
 CHILD_TIMESTAMP_SEED: Final = 0x0000362E
 
 
-class TranslatorError(RuntimeError):
+class TranslatorError(GpspError):
     def __init__(self, code: str, message: str):
-        super().__init__(message)
-        self.code = code
+        super().__init__(code, message)
         self.gate = "E4_TRANSLATOR"
-        self.message = message
 
 
 @dataclass(frozen=True)
@@ -137,6 +137,30 @@ def _metadata_valid(payload: bytes) -> bool:
         return False
     title = payload[7:18].rstrip(b"\0")
     return title in (b"LeafGreen_e", b"FireRed_e") and not any(payload[18:])
+
+
+def _native_game_broadcast(record: bytes) -> bytes:
+    """Switch search record -> native serial/gname/checksum/uname, not RFU1.
+
+    Qualified boundary: English FR/LG empty Direct Corner Trade. The search
+    word is not the native RfuGameCompatibilityData word. Unmapped nonzero
+    fields are rejected rather than discarded or assigned invented defaults.
+    Field provenance/limits: GPSP_ADVERTISEMENT_REPAIR_20260909.md.
+    """
+    activity, gender = record[16] & 0x7F, record[16] >> 7
+    version, language = record[17] & 7, (record[17] >> 3) & 7
+    if (version not in (4, 5) or language != 2 or activity != 4
+            or record[17] & 0xC0 or any(record[12:16] + record[18:24])):
+        raise TranslatorError("TRANSLATOR_ADVERTISEMENT_UNSUPPORTED",
+            "This room's discovery fields are not qualified. Use an empty English FireRed/LeafGreen Trade Group Leader room.")
+    name = record[2:10]
+    if b"\xff" not in name or name[0] == 0xFF:
+        raise TranslatorError("TRANSLATOR_ADVERTISEMENT", "Switch trainer name is not terminated")
+    compatibility = language | (version << 10)
+    gname = (compatibility.to_bytes(2, "little") + record[:2] + bytes(6)
+             + bytes((activity, gender, 0)))
+    checksum = (~sum(gname[:8] + name)) & 0xFF
+    return b"\x02\x00" + gname + bytes((checksum,)) + name
 
 
 class RfuTranslator:
@@ -239,7 +263,11 @@ class RfuTranslator:
         self._active()
         if generation != self.tunnel_epoch:
             self._fail("TRANSLATOR_GENERATION_STALE", "Advertisement generation is stale")
-        record = _advertisement_record(application_data)
+        try:
+            record = _advertisement_record(application_data)
+            broadcast = _native_game_broadcast(record)
+        except TranslatorError as error:
+            self._fail(error.code, error.message)
         digest = hashlib.sha256(application_data).digest()
         if self._advertisement_hash is not None and digest != self._advertisement_hash:
             self._fail("TRANSLATOR_ADVERTISEMENT_CHANGED", "Switch advertisement changed")
@@ -252,7 +280,7 @@ class RfuTranslator:
         if self.state == "waiting_advertisement":
             self.state = "searching"
         network_words = b"".join(
-            struct.pack("!I", int.from_bytes(record[offset:offset + 4], "little"))
+            struct.pack("!I", int.from_bytes(broadcast[offset:offset + 4], "little"))
             for offset in range(0, 24, 4))
         return (TranslatorAction(
             "core", _rfu1(RFU1_BROADCAST, self.gpsp_host_id or host_session_id, network_words),
@@ -325,14 +353,16 @@ class RfuTranslator:
             lambda: self._from_switch(bytes(payload), flags))
 
     def _from_switch(self, payload: bytes, flags: int) -> tuple[TranslatorAction, ...]:
-        if flags == FLAGS_METADATA:
+        # INIT (0x0F) carries both child metadata and the native parent's first
+        # WA accept. It is a Reliable stream flag, not a metadata opcode.
+        if flags == FLAGS_METADATA and payload[:2] != b"WA":
             if not _metadata_valid(payload):
                 self._fail("TRANSLATOR_METADATA", "Switch metadata is invalid")
             if self._remote_metadata is not None and payload != self._remote_metadata:
                 self._fail("TRANSLATOR_METADATA_CHANGED", "Switch metadata changed")
             self._remote_metadata = payload
             return ()
-        if flags != FLAGS_GBA:
+        if flags not in (FLAGS_GBA, FLAGS_METADATA):
             self._fail("TRANSLATOR_RELIABLE_FLAGS", "Switch Reliable flags are invalid")
         frame_type, body = _parse_gba(payload)
         if frame_type == GBA_ACCEPT:

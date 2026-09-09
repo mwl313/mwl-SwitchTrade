@@ -12,6 +12,7 @@ from switchtrade.endpoints.retroarch_gpsp.rfu import (
     METADATA_FRAME, RFU1_BROADCAST, RFU1_CLIENT_ACK, RFU1_CLIENT_SEND,
     RFU1_CONNECT_ACK, RFU1_CONNECT_REQ, RFU1_DISCONNECT, RFU1_HOST_SEND,
     RFU1_MAGIC, RfuTranslator, TranslatorError,
+    _native_game_broadcast,
 )
 
 
@@ -48,8 +49,47 @@ def accept() -> bytes:
         HOST_SESSION.to_bytes(2, "little") + CHILD_CONNECTION + b"\0\0")
 
 
-def advertisement(*, session: int = HOST_SESSION, partner: bytes = b"\x01") -> bytes:
+def advertisement(*, session: int = HOST_SESSION, partner: bytes = b"\0\0\0\0\x04\x14") -> bytes:
     return build_application_data(0x2211, "HOST", session, partner)
+
+
+@pytest.mark.parametrize("version,gender", [(4, 0), (4, 1), (5, 0), (5, 1)])
+@pytest.mark.parametrize("name", [b"\xbb\xff" + bytes(6), b"\xbb" * 7 + b"\xff"])
+def test_search_record_translates_fields_not_identity_or_session(version, gender, name):
+    record = (b"\x11\x22" + name + b"\x34\x12" + bytes(4)
+              + bytes((4 | gender << 7, version | 2 << 3)) + bytes(6))
+    native = _native_game_broadcast(record)
+    assert len(native) == 24
+    assert native[:2] == b"\x02\0"
+    assert int.from_bytes(native[2:4], "little") == 2 | version << 10
+    assert native[4:6] == record[:2]
+    assert native[6:15] == bytes(6) + bytes((4, gender, 0))
+    assert native[16:] == name
+    assert native[15] == (~sum(native[2:10] + name)) & 255
+    changed_session = record[:10] + b"\x78\x56" + record[12:]
+    assert _native_game_broadcast(changed_session) == native
+
+
+@pytest.mark.parametrize("offset,value", [(12, 1), (15, 1), (16, 1), (16, 2),
+    (16, 3), (17, 0x0C), (17, 0x16), (17, 0x54), (17, 0x94), (18, 1), (23, 1)])
+def test_unmapped_discovery_fields_fail_closed(offset, value):
+    record = bytearray(b"\x11\x22" + b"\xbb\xff" + bytes(6) + b"\x34\x12"
+                       + bytes(4) + b"\x04\x14" + bytes(6))
+    record[offset] = value
+    with pytest.raises(TranslatorError) as failure:
+        _native_game_broadcast(bytes(record))
+    assert failure.value.code == "TRANSLATOR_ADVERTISEMENT_UNSUPPORTED"
+
+
+def test_unsupported_advertisement_failure_is_sticky_without_state_advance():
+    translator = TranslatorFixture.create()
+    with pytest.raises(TranslatorError) as first:
+        translator.accept_advertisement(advertisement(partner=b"\0" * 4 + b"\x01\x14"), generation=1)
+    assert first.value.code == "TRANSLATOR_ADVERTISEMENT_UNSUPPORTED"
+    assert translator._host_session_id is None and translator._advertisement_hash is None
+    with pytest.raises(TranslatorError) as repeated:
+        translator.accept_advertisement(advertisement(), generation=1)
+    assert repeated.value is first.value
 
 
 class TranslatorFixture:
@@ -72,7 +112,7 @@ class TranslatorFixture:
     @classmethod
     def connected(cls) -> RfuTranslator:
         value = cls.connecting()
-        value.from_switch(accept(), flags=FLAGS_GBA, generation=1, sequence=2)
+        value.from_switch(accept(), flags=FLAGS_METADATA, generation=1, sequence=2)
         return value
 
 
@@ -106,7 +146,9 @@ class RfuTranslatorGoldenTests(unittest.TestCase):
         words = b"".join(
             struct.unpack("!I", action.payload[offset:offset + 4])[0].to_bytes(4, "little")
             for offset in range(12, 36, 4))
-        self.assertEqual(words, build_rfu_record(0x2211, "HOST", HOST_SESSION, b"\x01"))
+        self.assertEqual(words[:15], bytes.fromhex("020002101122000000000000040000"))
+        self.assertEqual(words[16:], build_rfu_record(0x2211, "HOST", HOST_SESSION)[2:10])
+        self.assertEqual(words[15], (~sum(words[2:10] + words[16:])) & 0xFF)
 
     def test_connect_accept_and_child_transfer_golden_vectors(self):
         translator = TranslatorFixture.connecting()
@@ -121,7 +163,7 @@ class RfuTranslatorGoldenTests(unittest.TestCase):
         accept_frame = accept()
         self.assertEqual(accept_frame.hex(), VECTORS["vectors"]["switch_accept"])
         action = translator.from_switch(
-            accept_frame, flags=FLAGS_GBA, generation=1, sequence=2)[0]
+            accept_frame, flags=FLAGS_METADATA, generation=1, sequence=2)[0]
         self.assertEqual(action.payload.hex(), VECTORS["vectors"]["core_connect_ack"])
         self.assertEqual(
             struct.unpack("!III", action.payload[:12]),
@@ -206,6 +248,21 @@ class RfuTranslatorFailureTests(unittest.TestCase):
         with self.assertRaises(TranslatorError) as raised:
             call()
         self.assertEqual(raised.exception.code, code)
+
+    def test_native_init_accept_does_not_relax_other_opcode_or_identity_validation(self):
+        translator = TranslatorFixture.connecting()
+        first = translator.from_switch(accept(), flags=FLAGS_METADATA, generation=1, sequence=2)
+        self.assertEqual(translator.from_switch(accept(), flags=FLAGS_METADATA, generation=1, sequence=2), first)
+        self.assertEqual(translator.state, "connected")
+        self.assert_code("TRANSLATOR_RELIABLE_FLAGS", lambda: translator.from_switch(
+            accept(), flags=0x010F, generation=1, sequence=2))
+        translator = TranslatorFixture.connected()
+        self.assert_code("TRANSLATOR_METADATA", lambda: translator.from_switch(
+            parent_t(1, b"hello"), flags=FLAGS_METADATA, generation=1, sequence=3))
+        translator = TranslatorFixture.connecting()
+        bad = gba(GBA_ACCEPT, b"\0" * 6)
+        self.assert_code("TRANSLATOR_ACCEPT", lambda: translator.from_switch(
+            bad, flags=FLAGS_METADATA, generation=1, sequence=2))
 
     def test_sequence_duplicate_gap_reorder_and_generation(self):
         translator = TranslatorFixture.connecting()

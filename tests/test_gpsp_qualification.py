@@ -32,6 +32,7 @@ def reports():
             "rounds": [{"in_ram_counter": number, "real_traffic_seconds": 1801,
                 "game_wait_seconds": 181, "local_netplay_wait_seconds": 181,
                 "same_pair": True, "local_netplay_retained": True, "radio_room_end": True,
+                "native_discovery_gate": True,
                 "bidirectional_exchanges": 3000, "encrypted_ldn_frames": 6000,
                 "resource_samples": [{"seconds": n * 60, "native": dict(sample), "retroarch": dict(sample)}
                                      for n in range(31)]} for number in (1, 2)]}
@@ -48,7 +49,7 @@ def test_complete_evidence_requires_all_ids_and_exact_process_reports():
 
 
 @pytest.mark.parametrize("fault", ["skip", "source", "dirty", "changed", "binary", "fixture", "forced", "cleanup",
-    "reset", "reconnect", "modeled", "short_wait", "short_game", "short_soak", "no_resources", "leak", "room"])
+    "reset", "reconnect", "modeled", "short_wait", "short_game", "short_soak", "no_resources", "leak", "room", "discovery"])
 def test_incomplete_or_modeled_evidence_never_attests(fault):
     value = reports()["full"]
     first = value["rounds"][0]
@@ -69,6 +70,7 @@ def test_incomplete_or_modeled_evidence_never_attests(fault):
     elif fault == "no_resources": first["resource_samples"] = []
     elif fault == "leak": first["resource_samples"][-1]["native"]["handles"] = 999
     elif fault == "room": first["radio_room_end"] = False
+    elif fault == "discovery": first.pop("native_discovery_gate")
     with pytest.raises(ValueError):
         validate_report(value, "full", "1" * 40)
 

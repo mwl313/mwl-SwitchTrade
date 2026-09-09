@@ -13,9 +13,9 @@
   "binary_sha256": "cfb0a21e1504931d7589a30b125ff3bbdf9211116a7bea690cfecadf031a2720",
   "independent_builds_equal": true,
   "qualification": {
-    "source_sha256": "14d00be97f3206f757c7aad5e0f08544c3e085b4ddd4ae049a87b4e672df5ff8",
-    "binary_sha256": "91168322aa3b7d1f73784c3b1c152bd064b02001f5460d46d6b0466f3f745ad4",
+    "source_sha256": "c3f75801b8710a0c46414a5205443cabe5e2c24f5781de9fc5a080eb83382c80",
+    "binary_sha256": "8dc38db4b62b1fd66ce2ee390db66b22e040b5da7f4138470f7c318e9fe1c9ea",
     "independent_builds_equal": true,
-    "purpose": "Manual Start input gate, sustained bidirectional RFU, radio-driven room end, two in-RAM generations"
+    "purpose": "Native serial/checksum/English FRLG empty Trade discovery gate, manual Start input, sustained bidirectional RFU, radio-driven room end, two in-RAM generations"
   }
 }

@@ -2,11 +2,11 @@
   "schema": 1,
   "branch": "codex/gpsp-endpoint",
   "base_sha": "5f27ea95c7d39fa8537df4ee7606244e94bae471",
-  "state": "BLOCKED_SOFTWARE",
+  "state": "AWAITING_FINAL_CI",
   "final_sha": null,
   "verdict": "NOT_ATTESTED",
-  "software_gaps": ["MTA-GPSP-002: production Switch advertisement is not a valid native GBA RFU broadcast; exact game-data mapping remains unproven"],
-  "scope": "Switch origin to native RetroArch/gpSP mirror. Physical trial reached empty game room list; a software advertisement-format defect is confirmed. Historical homebrew evidence does not cover FRLG discovery validation. See GPSP_COMPATIBILITY_RESEARCH_20260909.md. No completion claim is permitted while software_gaps remain.",
+  "software_gaps": [],
+  "scope": "Switch origin to native RetroArch/gpSP mirror, qualified empty English FR/LG Direct Corner Trade profile only. Search-record conversion and native INIT WA are repaired; unsupported nonzero/other-activity discovery fields fail closed. New discovery-checking homebrew and exact-SHA full qualification are mandatory. See GPSP_ADVERTISEMENT_REPAIR_20260909.md. Commercial Pokemon discovery/trade and broader game states are not attested by homebrew evidence.",
   "acceptance": [
     {"id":"G01","status":"READY_FOR_FINAL_CI","requirement":"Absent emulator rejected before Pair","evidence":["tests/test_gpsp_process.py","tests/test_gpsp_cli.py"],"boundary":"modeled OS query; actual dev doctor also runs in Windows qualification"},
     {"id":"G02","status":"READY_FOR_FINAL_CI","requirement":"Wrong frontend/core/version rejected","evidence":["tests/test_gpsp_process.py","tests/test_gpsp_netplay.py"],"boundary":"pinned actual binaries plus negative modeled identity/handshake"},
@@ -16,7 +16,7 @@
     {"id":"G06","status":"READY_FOR_FINAL_CI","requirement":"Attach, RFU exchange, detach and reattach same running game","evidence":["tools/gpsp_qualification/p0_attach.py","tests/fixtures/rfu/gpsp-attach/main.cpp"],"boundary":"mandatory Windows continuity/report.json; actual stock process and homebrew RAM counters"},
     {"id":"G07","status":"READY_FOR_FINAL_CI","requirement":"RFU mode verification distinct from waiting for game input","evidence":["tests/test_gpsp_endpoint.py","tools/gpsp_qualification/full_probe.py"],"boundary":"actual idle homebrew mode probe; disabled/host-mode actual local P2 records plus modeled faults"},
     {"id":"G08","status":"READY_FOR_FINAL_CI","requirement":"Partial frames and scheduling delays are not poll timeouts","evidence":["tests/test_gpsp_netplay.py"],"boundary":"real delayed TCP writes"},
-    {"id":"G09","status":"READY_FOR_FINAL_CI","requirement":"Flags, lengths, sequence, ACK, padding and duplicate validation","evidence":["tests/test_gpsp_rfu.py","tests/test_gpsp_netplay.py"],"boundary":"strict parser/converter faults; 16-bit flags checked before duplicate cache"},
+    {"id":"G09","status":"READY_FOR_FINAL_CI","requirement":"Discovery conversion, native INIT WA, flags, lengths, sequence, ACK, padding and duplicates","evidence":["tests/test_gpsp_rfu.py","tests/test_gpsp_netplay.py","tests/test_gpsp_advertisement_check.py","docs/core-simplification/GPSP_ADVERTISEMENT_REPAIR_20260909.md"],"boundary":"observed empty English FRLG Trade profiles; raw native discovery checked by actual gpSP/homebrew; unsupported metadata fails closed"},
     {"id":"G10","status":"READY_FOR_FINAL_CI","requirement":"Bounded queues and timestamp/ACK caches","evidence":["tests/test_gpsp_rfu.py","tests/test_gpsp_netplay.py","tools/gpsp_qualification/full_probe.py"],"boundary":"10k converter stress, socket saturation, actual 30-minute traffic"},
     {"id":"G11","status":"READY_FOR_FINAL_CI","requirement":"Preparation cancellation and process exit","evidence":["tests/test_gpsp_netplay.py","tests/test_gpsp_endpoint.py"],"boundary":"real owned sockets plus OS exit faults"},
     {"id":"G12","status":"READY_FOR_FINAL_CI","requirement":"Waiting for peer and OPENING_LOCAL cancellation/transport failure","evidence":["tests/test_gpsp_endpoint.py","tests/test_core_supervisor.py"],"boundary":"actual Core task guards/transport, modeled stock peer"},
@@ -33,5 +33,5 @@
     {"id":"G23","status":"READY_FOR_FINAL_CI","requirement":"Endpoint-neutral Core/Relay and future emulator onboarding contract","evidence":["tests/test_gpsp_cli.py","tests/test_switch_ldn_driver.py","docs/core-simplification/GPSP_VMWARE_RUNBOOK.md"],"boundary":"lazy static composition; mGBA/VBA not implemented or advertised"},
     {"id":"G24","status":"READY_FOR_FINAL_CI","requirement":"Full regression, ABC I01-I18/T01-T44 and same-SHA Windows/Ubuntu CI","evidence":[".github/workflows/ci.yml","tools/attest_preflight.py","tools/gpsp_qualification/attest.py","docs/core-simplification/ABC_SOFTWARE_PREFLIGHT_CLOSURE.json"],"boundary":"generated CI artifacts only after both complete jobs and real-process report validation"}
   ],
-  "physical_risks": ["Actual Nintendo Switch/USB Wi-Fi/driver behavior", "MTA-CORE-021: netlink cancellation lifetime fixed and software-regressed; narrow physical scan-cancel recheck passed on 2026-09-09, full A/B lifecycle remains unqualified", "Commercial Pokemon RFU behavior and successful trade", "VMware scheduling/graphics and user-specific networking", "Other RetroArch/gpSP binary builds; mGBA/VBA not supported"]
+  "physical_risks": ["Actual Nintendo Switch/USB Wi-Fi/driver behavior", "MTA-CORE-021: netlink cancellation lifetime fixed and software-regressed; narrow physical scan-cancel recheck passed on 2026-09-09, full A/B lifecycle remains unqualified", "Commercial Pokemon discovery, NI compatibility and successful trade; homebrew is not the game", "Broader language/activity/progress/card/search fields remain unsupported; two profile observations do not independently isolate every bit", "VMware scheduling/graphics and user-specific networking", "Other RetroArch/gpSP binary builds; mGBA/VBA not supported"]
 }

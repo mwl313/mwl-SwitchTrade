@@ -36,7 +36,19 @@ def test_legacy_synthetic_golden_is_not_a_valid_game_advertisement():
     # Frozen pre-fix bytes, independent of the golden file that a real fix must
     # update. Old tests checked only equality with these same wrong bytes.
     packet = bytes.fromhex("524655310000000000001234c9c22211ffffcecd1234ffff000000010000000000000000")
-    assert inspect_broadcast(packet) == dict(frame=True, game_serial=False, game_checksum=False)
+    assert inspect_broadcast(packet) == dict(frame=True, game_serial=False,
+                                            game_checksum=False, trade_candidate=False)
+
+
+@pytest.mark.parametrize("offset,value", [(2, 1), (3, 8), (6, 1), (12, 1),
+                                         (12, 0x84), (13, 2), (14, 1), (16, 255)])
+def test_valid_checksum_alone_does_not_make_a_trade_candidate(offset, value):
+    data = bytearray(valid_record())
+    data[offset] = value
+    data[15] = (~sum(data[2:10] + data[16:24])) & 255
+    checks = inspect_broadcast(broadcast(data))
+    assert checks["game_serial"] and checks["game_checksum"]
+    assert not checks["trade_candidate"]
 
 
 @pytest.mark.parametrize("packet", [b"", bytes(35), bytes(36), bytes(37)])

@@ -1,7 +1,10 @@
 # Switch ↔ RetroArch/gpSP: VMware Windows 11 physical test
 
-**2026-09-09: known software blocker; do not treat this runbook as readiness.**
-See [advertisement diagnosis and compatibility research](GPSP_COMPATIBILITY_RESEARCH_20260909.md).
+**2026-09-09: advertisement/native WA repair; final qualification is still required.**
+See [repair evidence and support limits](GPSP_ADVERTISEMENT_REPAIR_20260909.md).
+Use an empty English FR/LG Direct Corner **Trade** Group Leader room. Other
+activities and unqualified nonzero discovery fields fail closed; do not test
+battle/Mystery Gift as if they were supported by this repair.
 
 Execute only after `GPSP_ACCEPTANCE.final.json` and both platform jobs for the
 same literal SHA are successful. This document is preparation, not a Pokémon
