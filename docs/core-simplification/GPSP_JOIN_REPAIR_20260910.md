@@ -56,6 +56,67 @@ Host periodic snapshot preceded first END; final receive counts alone cannot
 close that gap. Do not fabricate an END ACK, drop repeated NI, enlarge the
 Reliable window or raise a game timeout on this evidence.
 
+## Additional terminal-completion defect
+
+The expanded integration assertion exposed an intermittent early return from
+`CoreSupervisor.wait_generation_end()`. A separate deterministic test failed
+before the fix: after `close_generation()` clears its pump set, endpoint close
+can still be waiting. A new waiter previously returned immediately, before
+cleanup verification, final peer-close drain and clearing generation ownership.
+
+The waiter now crosses the existing close lock after waiting for pumps. Clean
+cleanup must finish before success; dirty cleanup must publish and surface its
+original terminal error. No new Core state, endpoint branch or protocol message
+was introduced. This protects the CLI's next-generation flow for both Switch and
+gpSP. It does not explain the earlier game NI timeout.
+
+## NI pressure and final-position evidence
+
+The actual relay/Direct A/B/StageSession/LDN/TunnelSim test now includes 20
+copies of each child NI data phase and 185 NI_END frames. All copies must reach
+the modeled console boundary unchanged, in timestamp order, before its modeled
+native ACK is injected. NULL, parent NI/join status and bidirectional UNI follow,
+then the existing 1,024-frame slow-ACK pressure test. Repeat on the same Pair and
+Netplay connection for generation two. This is burst/delivery qualification,
+not a reproduction of the commercial game's VBlank cadence or timeout. It
+shows no unconditional NI_END encoding/drop failure in that modeled path.
+
+`switch_rfu_progress` now also emits `event=stopped` after its runner ends but
+before simulation cleanup. This captures final new-send, in-flight, window and
+receive counters even when the entire game failure falls between five-second
+samples. Adapter queues are already sealed at this point: zero queue depth is
+**not** proof that the prior backlog drained. A stuck runner is not read
+concurrently; unavailable diagnostics are logged without masking cleanup.
+
+On a separately authorized diagnostic trial, match generation IDs and compare
+the Guest's first-NI_END `core_enqueued` ordinal with the Host's final
+`reliable_tx_new` and `reliable_inflight`. If the send count never reaches that
+ordinal, END never reached local Reliable transmission; if it does, distinguish
+unacknowledged local transmission from acknowledged transport. Even a local
+Reliable ACK is not proof that the physical game's RFU receiver consumed END.
+Keep complete logs through cleanup, not just the last traceback. No relay or
+emulator reinstall is needed for these source changes.
+
+## Verification results
+
+All runs below are local Windows software checks. Test names identify modeled
+scope; none is evidence of a commercial-game trade or new stock-process soak.
+
+| Runtime | Focused selection | Result |
+| --- | --- | --- |
+| Python 3.12.14 | gpSP endpoint, real NI/pressure path, Core supervisor, Switch CLI, agent-context policy | 73 passed, 75.16 s |
+| Python 3.14.7 | real NI/pressure path, Core supervisor, Switch CLI | 46 passed, 60.04 s |
+| Python 3.14.7 | gpSP endpoint and gpSP CLI after the Core fix | 45 passed, 8.13 s |
+| Python 3.12.14 | Switch driver, RFU conversion/progress, bounded flow, receive bootstrap, agent-context policy | 95 passed, 2.36 s |
+
+Both functional races have a failing-before/fixed-after regression. Earlier
+development runs also found two unprepared diagnostic test fixtures (corrected
+to use prepare before discover) and the late-waiter failure described above;
+those failed runs are not reported as successful qualification. Final checks
+have existing dependency deprecation/fixture collection warnings, no failures.
+Full pytest and final-SHA Windows/Ubuntu CI are not claimed or waited on in this
+bounded repair. No source/runtime/physical gate was bypassed.
+
 ## Recovery and remaining boundary
 
 Before this packet, trial09 Host cleanup was verified, run-owned processes and

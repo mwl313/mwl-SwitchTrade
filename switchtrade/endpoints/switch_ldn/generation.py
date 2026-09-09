@@ -159,6 +159,16 @@ class SwitchLdnGeneration:
         runner_timed_out = self._runner.is_alive()
         if runner_timed_out:
             failures.append("runner:timeout")
+        else:
+            # Capture the final send/window position even when the game failed
+            # between periodic samples. Core adapter queues are already sealed;
+            # these numbers are not evidence of game delivery or clean residue.
+            try:
+                self._log_flow("stopped")
+            except Exception as error:
+                logging.getLogger(__name__).warning(
+                    "switch_rfu_progress_unavailable id=%s error=%s",
+                    self.offer.generation_id, type(error).__name__)
         def close_simulation():
             try:
                 self.simulation.close()
@@ -200,6 +210,13 @@ class SwitchLdnGeneration:
             getattr(self.simulation, "rx_count", None), getattr(self.simulation, "rx_fail", None))
         return self._report
 
+    def _log_flow(self, event: str) -> None:
+        snapshot = getattr(self.simulation, "flow_status", None)
+        if callable(snapshot):
+            logging.getLogger(__name__).info(
+                "switch_rfu_progress id=%s %s", self.offer.generation_id,
+                json.dumps({**snapshot(), "event": event}, sort_keys=True))
+
     def _drive_simulation(self) -> None:
         deadline = time.monotonic()
         diagnostic_due = deadline
@@ -211,11 +228,7 @@ class SwitchLdnGeneration:
             try:
                 self.simulation.tick()
                 if time.monotonic() >= diagnostic_due:
-                    snapshot = getattr(self.simulation, "flow_status", None)
-                    if callable(snapshot):
-                        logging.getLogger(__name__).info(
-                            "switch_rfu_progress id=%s %s", self.offer.generation_id,
-                            json.dumps(snapshot(), sort_keys=True))
+                    self._log_flow("periodic")
                     diagnostic_due = time.monotonic() + 5
             except BaseException as error:
                 if getattr(self._session, "end_reason", None) is not None:

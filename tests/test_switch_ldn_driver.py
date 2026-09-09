@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ast
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -442,6 +443,57 @@ class SwitchLdnDriverBoundaryTests(unittest.IsolatedAsyncioTestCase):
         report = await generation.close("failed")
         self.assertTrue(report.local_resources_released)
         self.assertEqual(report.details["primary_failure_code"], "SWITCH_ENDPOINT_TICK_FAILED")
+        self.assertTrue(session.stopped)
+
+    async def test_final_flow_snapshot_is_once_after_runner_stop_before_simulation_close(self) -> None:
+        session = FakeSession(StageResources(object(), object(), b"advertisement"))
+        simulation = FakeSimulation()
+        driver = SwitchLdnEndpointDriver(
+            policy(), stage_factory=lambda _policy: object(),
+            session_factory=lambda *_args, **_kwargs: session,
+            simulation_factory=lambda *_args: simulation,
+        )
+        await driver.prepare()
+        generation = await driver.discover(asyncio.Event())
+        observations = []
+        def snapshot():
+            observations.append((generation.runner_alive, simulation.closed))
+            return {"reliable_tx_new": 130, "reliable_inflight": 6}
+        simulation.flow_status = snapshot
+        with self.assertLogs("switchtrade.endpoints.switch_ldn.generation", level="INFO") as logs:
+            first = await generation.close("remote_ended")
+            self.assertIs(await generation.close("again"), first)
+        entries = [line for line in logs.output if '"event": "stopped"' in line]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(observations[-1], (False, False))
+        self.assertEqual(json.loads(entries[0].split(" ", 2)[2]), {
+            "event": "stopped", "reliable_tx_new": 130, "reliable_inflight": 6})
+        self.assertTrue(first.local_resources_released)
+        self.assertTrue(simulation.closed)
+        self.assertTrue(session.stopped)
+
+    async def test_unavailable_final_diagnostics_do_not_prevent_cleanup(self) -> None:
+        session = FakeSession(StageResources(object(), object(), b"advertisement"))
+        simulation = FakeSimulation()
+        driver = SwitchLdnEndpointDriver(
+            policy(), stage_factory=lambda _policy: object(),
+            session_factory=lambda *_args, **_kwargs: session,
+            simulation_factory=lambda *_args: simulation,
+        )
+        await driver.prepare()
+        generation = await driver.discover(asyncio.Event())
+        def unavailable():
+            if generation.runner_alive:
+                return {}
+            raise ValueError("private diagnostic detail")
+        simulation.flow_status = unavailable
+        with self.assertLogs("switchtrade.endpoints.switch_ldn.generation", level="WARNING") as logs:
+            report = await generation.close("remote_ended")
+        self.assertIn("progress_unavailable", logs.output[0])
+        self.assertNotIn("private diagnostic detail", logs.output[0])
+        self.assertTrue(report.local_resources_released)
+        self.assertIsNone(report.details["primary_failure_code"])
+        self.assertTrue(simulation.closed)
         self.assertTrue(session.stopped)
 
     async def test_runner_timeout_still_closes_simulation_and_stage_session(self) -> None:

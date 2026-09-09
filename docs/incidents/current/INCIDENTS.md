@@ -2294,3 +2294,22 @@ archive list and regenerate the index.
 - Regression includes real relay/Core concurrency and two successive
   generations on the same Pair/local Netplay. The earlier NI_END stall remains
   unresolved; see `GPSP_JOIN_REPAIR_20260910.md` for evidence and causal limits.
+
+### MTA-CORE-025 — Late generation-end waiter escaped terminal cleanup
+
+- While extending trial09's real relay/LDN two-generation test, a final-flow
+  assertion intermittently ran before endpoint cleanup logged its terminal
+  snapshot. All synthetic resources were released by the fixture's finally;
+  no physical process, radio or emulator was operated.
+- Independent deterministic reproduction: hold LocalGeneration.close, enter
+  wait_generation_end after close_generation cleared the pump set, and observe
+  premature completion. The caller can announce room end, attempt next-room
+  admission or miss a late cleanup failure while ownership is still active.
+- Use the existing close lock as the terminal barrier after joining pumps.
+  Only after cleanup and peer-close drain finish may the waiter return or
+  surface the preserved first failure. This is endpoint-neutral; do not add
+  gpSP-specific Core state or weaken cleanup/next-generation admission.
+- Regression holds both clean and failed cleanup, checks the waiter stays
+  pending, and checks the exact terminal failure identity. See
+  `GPSP_JOIN_REPAIR_20260910.md`. This later lifecycle defect is not proof of
+  the cause of the physical game's earlier NI_END stall.

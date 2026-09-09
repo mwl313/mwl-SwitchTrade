@@ -327,12 +327,16 @@ class CoreSupervisor:
             self.state = SupervisorState.FAILED if self.failure else SupervisorState.PAIRED
 
     async def wait_generation_end(self) -> None:
-        """Wait for the active data-plane pumps and surface their terminal failure."""
+        """Wait for pumps and terminal cleanup, then surface the first failure."""
         tasks = tuple(self._pump_tasks)
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        if self.failure is not None:
-            raise self.failure
+        # close_generation clears the pump set before awaiting endpoint cleanup
+        # and peer CLOSE drain. A late waiter must not mistake that empty set
+        # for completion (or miss a cleanup failure published afterward).
+        async with self._lock:
+            if self.failure is not None:
+                raise self.failure
 
     async def stop(self) -> None:
         if self._stop_started:

@@ -375,6 +375,39 @@ class CoreSupervisorTests(unittest.IsolatedAsyncioTestCase):
         await self.guest.wait_generation_end()
         self.assertEqual(self.guest.state, SupervisorState.PAIRED)
 
+    async def test_wait_generation_end_waits_for_cleanup_after_pumps_are_cleared(self) -> None:
+        for clean in (True, False):
+            with self.subTest(clean=clean):
+                generation = TestGeneration(GenerationOffer(
+                    "closing-room", FAKE_PROTOCOL, EndpointKind.FAKE, b"setup"),
+                    clean=clean, close_wait=asyncio.Event())
+                supervisor = CoreSupervisor(credentials(PairSeat.HOST), TestDriver(generation), self.host_wire)
+                await supervisor.prepare()
+                await supervisor.discover_local()
+                closing = asyncio.create_task(supervisor.close_generation(notify_peer=False))
+                waiting = None
+                try:
+                    await asyncio.wait_for(generation.closed_event.wait(), 1)
+                    self.assertFalse(supervisor._pump_tasks)
+                    waiting = asyncio.create_task(supervisor.wait_generation_end())
+                    await asyncio.sleep(0)
+                    self.assertFalse(waiting.done(), "completion escaped before cleanup returned")
+                    generation.close_wait.set()
+                    if clean:
+                        await closing
+                        await waiting
+                        self.assertIsNone(supervisor.generation_id)
+                        self.assertEqual(supervisor.state, SupervisorState.PAIRED)
+                    else:
+                        with self.assertRaisesRegex(SupervisorError, "S_CLEANUP_FAILED"):
+                            await closing
+                        with self.assertRaises(SupervisorError) as error:
+                            await waiting
+                        self.assertIs(error.exception, supervisor.failure)
+                finally:
+                    generation.close_wait.set()
+                    await asyncio.gather(closing, *([waiting] if waiting else []), return_exceptions=True)
+
     async def test_failure_stop_preserves_failed_terminal_state(self) -> None:
         failed = CoreSupervisor(credentials(PairSeat.HOST), TestDriver(self.host_generation, fail_prepare=True), self.host_wire)
         with self.assertRaisesRegex(SupervisorError, "S_ENDPOINT_FAILED"):

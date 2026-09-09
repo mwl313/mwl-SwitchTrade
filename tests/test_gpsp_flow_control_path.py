@@ -5,6 +5,7 @@ is not stock-process qualification or evidence of a commercial Pokemon trade.
 """
 import asyncio
 from contextlib import ExitStack
+import json
 import unittest
 
 from switchtrade.connection.b_stage import DirectBStage
@@ -46,12 +47,16 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
         """
         timestamp = 1
 
-        async def from_child(slot):
+        async def from_child(slot, repeats=1):
             game.output.clear()
-            await self.peer.send(r.RFU1_CLIENT_SEND, len(slot) << 24 | generation.child, slot)
-            await eventually(lambda: any(p.startswith(b"WT") for p, _ in game.output), tasks=(ticker,))
+            for _ in range(repeats):
+                await self.peer.send(r.RFU1_CLIENT_SEND, len(slot) << 24 | generation.child, slot)
+            await eventually(lambda: sum(p.startswith(b"WT") for p, _ in game.output) == repeats,
+                             tasks=(ticker,))
             frames = [p for p, _ in game.output if p.startswith(b"WT")]
-            self.assertEqual(frames[-1][12:12 + len(slot)], slot)
+            self.assertEqual([p[12:12 + len(slot)] for p in frames], [slot] * repeats)
+            timestamps = [int.from_bytes(p[4:8], "little") for p in frames]
+            self.assertEqual(timestamps, list(range(timestamps[0], timestamps[0] + repeats)))
 
         async def from_parent(slot):
             nonlocal timestamp
@@ -65,8 +70,13 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
         sender = ni.NISender(bytes(range(26)))
         while not sender.done:
             slot = sender.next_slot()
-            await from_child(slot)
             header = native.parse_llsf_child(slot)
+            # Replay native retry pressure, not just one frame/one ACK. A burst
+            # stresses the actual queues without using polling as a game timer.
+            # This is delivery qualification, NOT a model of the game's timeout.
+            repeats = 185 if header["state"] == native.LCOM_NI_END else (
+                20 if header["state"] == native.LCOM_NI else 1)
+            await from_child(slot, repeats)
             if header["state"] != native.LCOM_NULL:
                 await from_parent(ni.parent_recv_ack_slot(header["state"], header["n"], header["phase"]))
         for slot in ni.parent_join_status_slots():
@@ -183,9 +193,14 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
                     self.assertGreater(status["reliable_rto_ms"], 0)
                     ticker.cancel()
                     await asyncio.gather(ticker, return_exceptions=True)
-                    sim.close()
-                    await asyncio.to_thread(session.stop)  # Physical room ends, not a Core shortcut.
-                    await asyncio.wait_for(asyncio.gather(host.wait_generation_end(), guest.wait_generation_end()), 20)
+                    with self.assertLogs("switchtrade.endpoints.switch_ldn.generation", level="INFO") as logs:
+                        sim.close()
+                        await asyncio.to_thread(session.stop)  # Physical room ends, not a Core shortcut.
+                        await asyncio.wait_for(asyncio.gather(host.wait_generation_end(), guest.wait_generation_end()), 20)
+                    stopped = [json.loads(line.split(" ", 2)[2]) for line in logs.output
+                               if '"event": "stopped"' in line]
+                    self.assertEqual(len(stopped), 1, logs.output)
+                    self.assertGreater(stopped[0]["reliable_tx_new"], count)
                     self.assertIs(self.driver.local, local)
                     self.assertTrue(local.connected)
                     self.assertEqual(host.credentials.pair_id, guest.credentials.pair_id)
