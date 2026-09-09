@@ -411,6 +411,26 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(GenerationEnded):
             await asyncio.wait_for(receiving, .5)
 
+    async def test_local_disconnect_retires_inflight_data_before_close_tail_drains(self):
+        generation = await self.connected_generation()
+        await generation.feed(n.CorePacket(r._rfu1(r.RFU1_DISCONNECT, generation.child), 1, 1))
+        self.assertTrue(generation._finished)
+        self.assertEqual(generation._out.qsize(), 1)  # final disconnect not sent yet
+        sent = generation._sent
+        await generation.send(LinkPacket(generation.offer.generation_id, PROTOCOL,
+            parent_t(1, b"late1234"), 7))
+        self.assertEqual(generation.translator.state, "closed")
+        self.assertEqual(generation._sent, sent)
+        with self.assertRaises(GpspError) as stale:
+            await generation.send(LinkPacket("other-room", PROTOCOL, parent_t(2, b"stale123"), 7))
+        self.assertEqual(stale.exception.code, "EMULATOR_GENERATION_STALE")
+        self.assertEqual((await generation.receive()).payload[1], r.GBA_DISCONNECT)
+        with self.assertRaises(GenerationEnded):
+            await generation.receive()
+        self.assertTrue(clean(await generation.close("local_ended")))
+        self.assertIsNone(self.driver.failure)
+        self.assertTrue(self.driver.local.connected)
+
     async def test_lost_cleanup_barrier_remains_dirty_and_blocks_next_generation(self):
         await self.ready()
         generation = await self.driver.accept(self.offer(), asyncio.Event())
@@ -564,7 +584,32 @@ class RelayEndpointTests(unittest.IsolatedAsyncioTestCase):
                 await origin.incoming.put(LinkPacket(origin.offer.generation_id, PROTOCOL, parent_t(number, b"parent12"), 7))
                 self.assertEqual((await self.peer.receive(r.RFU1_HOST_SEND))[2][:8], b"parent12")
                 await self.peer.send(r.RFU1_CLIENT_ACK, generation.child)
-                await self.peer.send(r.RFU1_DISCONNECT, generation.child)
+                # Hold only the final outbound disconnect. A same-generation
+                # parent frame arrives through the real relay before Core can
+                # finish retirement (the physical trial09 interleaving).
+                entered, release, late_seen = asyncio.Event(), asyncio.Event(), asyncio.Event()
+                send_wire, send_local = guest_wire.send, generation.send
+                async def held_send(kind, generation_id="", payload=b"", flags=0):
+                    if payload[:2] == b"WD":
+                        entered.set()
+                        await release.wait()
+                    return await send_wire(kind, generation_id, payload, flags)
+                async def observed_send(packet):
+                    try:
+                        return await send_local(packet)
+                    finally:
+                        late_seen.set()
+                with patch.object(guest_wire, "send", held_send), patch.object(generation, "send", observed_send):
+                    try:
+                        await self.peer.send(r.RFU1_DISCONNECT, generation.child)
+                        await asyncio.wait_for(entered.wait(), 2)
+                        await origin.incoming.put(LinkPacket(origin.offer.generation_id, PROTOCOL,
+                            parent_t(number + 100, b"late1234"), 7))
+                        await asyncio.wait_for(late_seen.wait(), 2)
+                        self.assertEqual(generation.translator.state, "closed")
+                        self.assertIsNone(guest.failure)
+                    finally:
+                        release.set()
                 await asyncio.wait_for(asyncio.gather(host.wait_generation_end(), guest.wait_generation_end()), 2)
                 self.assertEqual((host.state, guest.state), (SupervisorState.PAIRED, SupervisorState.PAIRED))
                 self.assertIsNone(guest.failure)

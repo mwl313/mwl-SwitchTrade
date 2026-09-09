@@ -357,6 +357,10 @@ class GpspGeneration:
             if (not self._active or self._closing is not None or
                 packet.generation_id != self.offer.generation_id or packet.protocol_id != PROTOCOL):
                 raise GpspError("EMULATOR_GENERATION_STALE", "이전 방의 데이터를 차단했습니다.")
+            if self._finished:
+                # Local RFU close can precede in-flight peer DATA. Retire it;
+                # receive() still drains our final disconnect before Core CLOSE.
+                return
             self._sent += 1
             try:
                 actions = self.translator.from_switch(packet.payload, flags=packet.flags,

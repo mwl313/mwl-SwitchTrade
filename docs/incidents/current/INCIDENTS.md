@@ -2275,3 +2275,22 @@ archive list and regenerate the index.
   process argument forwarding, exact-once coverage, late hash/mode mismatch,
   missing/duplicate evidence and failed batches. This preparation repair makes
   no claim about the unresolved commercial gpSP game join or trade outcome.
+
+### MTA-GPSP-005 — In-flight DATA revived an already-retired RFU translator
+
+- At `db39750`, trial09 first stalled at native NI_END without an observed
+  NI_END_ACK, then gpSP disconnected. A later Switch frame changed closed to
+  failed; S_PUMP_FAILED and peer-close followed. Clean cleanup did not mean a
+  successful game join. Private source/generation/recovery identities are kept
+  with the trial evidence, not copied into this public ledger.
+- A deterministic driver regression fails with TRANSLATOR_NOT_ACTIVE when
+  final WD is queued but an in-flight WT reaches send before Core retires it.
+  Retirement input must not re-enter the closed translator. Validate ownership
+  first, discard only this finished generation's late input, drain final WD,
+  then report GenerationEnded. Do not relax translator or cleanup checks.
+- Recovery was already verified: owned Host processes/VIFs absent, only the
+  acquired USB lease returned. No physical retry or emulator manipulation in
+  this repair. VM cleanup is reported, not independently residue-proven.
+- Regression includes real relay/Core concurrency and two successive
+  generations on the same Pair/local Netplay. The earlier NI_END stall remains
+  unresolved; see `GPSP_JOIN_REPAIR_20260910.md` for evidence and causal limits.

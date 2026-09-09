@@ -300,3 +300,4 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-CORE-024` | Strict receive ordering assumed the local send seed | Current ledger | 2215 |
 | `MTA-GPSP-004` | RFU traffic counts concealed the native game join phase | Current ledger | 2237 |
 | `MTA-DEV-038` | Growing source manifest exceeded Windows WSL command length | Current ledger | 2260 |
+| `MTA-GPSP-005` | In-flight DATA revived an already-retired RFU translator | Current ledger | 2279 |
