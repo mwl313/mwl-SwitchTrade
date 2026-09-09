@@ -295,3 +295,4 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-CORE-021` | Physical scan cancellation retained unknown cleanup | Current ledger | 2081 |
 | `MTA-PRIVACY-001` | Public diagnostic handoff included private profile annotations | Current ledger | 2123 |
 | `MTA-GPSP-003` | Native WA INIT flags rejected as metadata | Current ledger | 2138 |
+| `MTA-CORE-022` | DATA bursts fail before drain; recovery masks first failure | Current ledger | 2157 |

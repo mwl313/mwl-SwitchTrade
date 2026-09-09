@@ -112,6 +112,63 @@ def credentials(seat: PairSeat) -> PairCredentials:
 
 
 class CoreSupervisorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_local_send_racing_peer_generation_close_is_normal_end(self):
+        offer = await self.host.discover_local()
+        await self.host_wire.send(FrameKind.GENERATION_OFFER, offer.generation_id, b"setup")
+        await self.guest_wire.receive()
+        await self.guest_wire.send(FrameKind.GENERATION_ACCEPT, offer.generation_id)
+        await self.host_wire.receive()
+        await self.guest_wire.send(FrameKind.GENERATION_CLOSE, offer.generation_id)
+        await self.host_wire.receive()  # WireState has accepted the peer's close.
+        await self.host_generation.incoming.put(LinkPacket(offer.generation_id, FAKE_PROTOCOL, b"late"))
+        await asyncio.wait_for(self.host._pump_local(), 1)
+        self.assertIsNone(self.host.failure)
+        self.assertIsNone(self.host.generation_id)
+        self.assertEqual(self.host.state, SupervisorState.PAIRED)
+
+    async def test_protocol_or_backpressure_failure_does_not_reconnect(self):
+        async def connector():
+            self.fail("A non-transient transport failure must not be retried")
+
+        self.host._connector = connector
+        error = TransportError("T_SEND_BACKPRESSURE_TIMEOUT")
+        await self.host._recover_after_transport_loss(error)
+        self.assertIs(self.host.failure.__cause__, error)
+
+    async def test_original_transport_error_survives_failed_generation_cleanup(self):
+        await self.host.discover_local()
+        self.host_generation.clean = False
+        async def connector():
+            self.fail("Failed local cleanup must block reconnect")
+        self.host._connector = connector
+        original = TransportError("T_TRANSPORT_FAILED")
+        await self.host._recover_after_transport_loss(original)
+        self.assertEqual(self.host.failure.code, "S_TRANSPORT_FAILED")
+        self.assertIs(self.host.failure.__cause__, original)
+        self.assertTrue(self.host._blocked)
+        self.assertTrue(self.host.cleanup_failures)
+
+    async def test_original_transport_error_survives_recovery_close_timeout(self):
+        original = TransportError("T_TRANSPORT_FAILED")
+        original.__cause__ = ConnectionResetError("first socket failure")
+        close_started = asyncio.Event()
+
+        async def stalled_close():
+            close_started.set()
+            await asyncio.Future()
+
+        async def connector():
+            self.fail("Unverified close must not admit another socket")
+
+        self.host_socket.close = stalled_close
+        self.host_wire._send_timeout = .02
+        self.host._connector = connector
+        await asyncio.wait_for(self.host._recover_after_transport_loss(original), 1)
+        self.assertTrue(close_started.is_set())
+        self.assertIs(self.host.failure.__cause__, original)
+        self.assertTrue(any(item.get("owner") == "transport_close"
+                            for item in self.host.cleanup_failures if isinstance(item, dict)))
+
     async def test_recovery_retries_transient_connector_failure_before_wire_connect(self):
         calls = 0
         peer = WireClient(PairSeat.GUEST)

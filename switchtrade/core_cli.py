@@ -39,8 +39,9 @@ class CliError(RuntimeError):
 
 
 class _WebSocketSocket:
-    def __init__(self, connection: Any) -> None:
+    def __init__(self, connection: Any, *, close_timeout: float = 2.0) -> None:
         self._connection = connection
+        self._close_timeout = close_timeout
 
     async def send(self, data: bytes) -> None:
         await self._connection.send(data)
@@ -52,7 +53,18 @@ class _WebSocketSocket:
         return data
 
     async def close(self) -> None:
-        await self._connection.close()
+        try:
+            await asyncio.wait_for(self._connection.close(), self._close_timeout)
+        except TimeoutError:
+            # WireClient's outer bound must not cancel a longer WebSocket close
+            # handshake and forget its TCP owner. Abort only this connection,
+            # then prove local socket termination before returning clean.
+            logging.getLogger(__name__).warning("websocket_close_abort reason=handshake_timeout")
+            self._connection.transport.abort()
+            await asyncio.wait_for(self._connection.wait_closed(), 1.0)
+        except asyncio.CancelledError:
+            self._connection.transport.abort()
+            raise
 
 
 def parser() -> argparse.ArgumentParser:

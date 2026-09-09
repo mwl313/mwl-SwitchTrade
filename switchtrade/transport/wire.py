@@ -119,6 +119,10 @@ class WireState:
         self._retiring_generation: str | None = None
 
     @property
+    def local_epoch(self) -> int | None:
+        return self._epoch
+
+    @property
     def ready(self) -> bool:
         return self._challenge_confirmed and self._responded_to_peer
 

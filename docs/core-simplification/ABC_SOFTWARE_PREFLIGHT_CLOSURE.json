@@ -1105,6 +1105,7 @@
       "source_revision": "CI:GITHUB_SHA",
       "test_nodes": [
         "tests/test_core_transport.py",
+        "tests/test_core_backpressure.py",
         "tests/test_core_relay_websocket.py",
         "tests/test_core_relay_api.py",
         "tests/test_core_pair_store.py",
@@ -1112,7 +1113,7 @@
         "tests/test_core_end_to_end.py",
         "tests/test_switch_core_cli.py"
       ],
-      "command": "python -m pytest tests/test_core_transport.py tests/test_core_relay_websocket.py tests/test_core_relay_api.py tests/test_core_pair_store.py tests/test_core_supervisor.py tests/test_core_end_to_end.py tests/test_switch_core_cli.py",
+      "command": "python -m pytest tests/test_core_transport.py tests/test_core_backpressure.py tests/test_core_relay_websocket.py tests/test_core_relay_api.py tests/test_core_pair_store.py tests/test_core_supervisor.py tests/test_core_end_to_end.py tests/test_switch_core_cli.py",
       "environment": "Windows + Ubuntu Python 3.12 with pinned dependencies; platform-specific primitives execute on their owning OS.",
       "exit_code": null,
       "observed_result": "Phase B auth/rate/seat/probe/sequence/epoch/bounds/stale data/backpressure/socket ownership regression. Connector and resync retries share one deadline; auth/protocol/TLS failures stay terminal and original causes remain available.",

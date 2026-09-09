@@ -2153,3 +2153,31 @@ archive list and regenerate the index.
   completed two generations with clean socket/process/desktop teardown and
   unchanged source runtime; it predates this flags fix, not final qualification.
   Require new-source regression/process evidence before closing this repair.
+
+### MTA-CORE-022 — DATA bursts fail before drain; recovery masks first failure
+
+- At based29759c, software-only reproductions show that 64 valid DATA frames
+  can exhaust the bounded send/receive queue before a live writer/consumer is
+  scheduled. Recovery with an unresponsive socket close also replaces the
+  original transport failure with a close timeout. Three regression tests fail
+  before repair; evidence is kept in the ignored qualification directory.
+- The preceding physical trial reached discovery, RFU connection and initial
+  bidirectional traffic before transport loss. Its first transport exception
+  was not retained. The burst reproduction is a confirmed software defect, not
+  proof of that trial's initial trigger or a commercial-game compatibility result.
+- Scope: bounded DATA backpressure, first-failure diagnostics and identity-bound
+  socket-close ownership. Do not drop ordered packets or enlarge queues as a fix.
+  An unverified close must remain failed on repeated close/reconnect attempts.
+- Recovery state: the in-memory reproduction acquired no hardware resources;
+  test-owned tasks/sockets were closed. No VM, WSL, USB or physical retry is
+  authorized by this packet. Repair now covers bounded DATA/control admission,
+  canceled/stale waiters, normal peer-close races, original-error preservation
+  and sticky unconfirmed ownership. Retire outbound queues only when the local
+  epoch rotates; retain unsent probes of an already-new local epoch.
+- Final-source focused tests: Python3.12 75 passed, Python3.14 93 passed. Final
+  Python3.14 full pytest: 1034 passed/6 Linux-only skips, including actual CLI,
+  relay, Direct A/B, StageSession and TunnelSim under virtual OS primitives,
+  two 64-packet bidirectional generations and the >180-second human wait.
+  See CORE_TRANSPORT_BURST_REPAIR_20260909.md for scope and evidence boundaries.
+  Pushed-SHA Windows/Ubuntu and actual-stock process CI remain mandatory; no
+  physical/commercial-game pass is asserted by these software results.

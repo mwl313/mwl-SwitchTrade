@@ -101,7 +101,7 @@ async def eventually(predicate, *, tasks=(), timeout=25):
             await asyncio.sleep(.01)
 
 
-@pytest.mark.parametrize("interruption", [None, "active", "active-retry", "active-before-hello", "opening", "waiting"])
+@pytest.mark.parametrize("interruption", [None, "burst", "active", "active-retry", "active-before-hello", "opening", "waiting"])
 def test_actual_cli_relay_ldn_tunnelsim_two_generations(interruption):
     asyncio.run(qualify_two_generations(interruption))
 
@@ -296,13 +296,17 @@ async def qualify_two_generations(interruption=None):
                 # invokes the production CoreTunnelAdapter's send_rfu()/poll().
                 child_bytes = b"WJ" + bytes([generation]) + bytes(range(32))
                 parent_bytes = b"WT" + bytes([generation]) + bytes(range(64))
-                child_game.press(child_bytes, 0x7F)
-                parent_game.press(parent_bytes, 0x01)
-                await eventually(lambda: (child_bytes, 0x7F) in parent_game.output
-                                 and (parent_bytes, 1) in child_game.output,
+                count = 64 if interruption == "burst" else 1
+                child_packets = [(child_bytes + bytes([i]), 0x7F) for i in range(count)]
+                parent_packets = [(parent_bytes + bytes([i]), 1) for i in range(count)]
+                for payload, flags in child_packets:
+                    child_game.press(payload, flags)
+                for payload, flags in parent_packets:
+                    parent_game.press(payload, flags)
+                await eventually(lambda: len(parent_game.output) >= count and len(child_game.output) >= count,
                                  tasks=(host, guest, *tickers))
-                assert parent_game.output == [(child_bytes, 0x7F)]
-                assert child_game.output == [(parent_bytes, 1)]
+                assert parent_game.output == child_packets
+                assert child_game.output == parent_packets
                 if interruption in {"active", "active-retry", "active-before-hello"} and generation == 0:
                     sockets = app.state.core_sockets
                     old_sockets = dict(sockets)

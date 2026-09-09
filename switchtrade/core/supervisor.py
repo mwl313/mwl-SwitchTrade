@@ -73,6 +73,7 @@ class CoreSupervisor:
         if self._lease_expires.tzinfo is None:
             raise ValueError("Pair lease must include a timezone")
         self.cleanup_failures: list[object] = []
+        self.last_transport_failure: TransportError | None = None
         self._invite_expires = datetime.fromisoformat(invite_expires_at) if invite_expires_at else None
         self._confirm_peer_joined = confirm_peer_joined
         self._invite_resolved = False
@@ -188,8 +189,8 @@ class CoreSupervisor:
             except TransportError as exc:
                 if exc.code == "T_READY_TIMEOUT":
                     continue
-                if exc.code == "T_PEER_RECONNECTED" or self._connector is not None and exc.code != "T_PEER_CLOSED":
-                    await self.recover_pair(peer_resynced=exc.code == "T_PEER_RECONNECTED")
+                if exc.code == "T_PEER_RECONNECTED" or self._connector is not None and exc.code in {"T_TRANSPORT_FAILED", "T_TRANSPORT_REPLACED"}:
+                    await self.recover_pair(peer_resynced=exc.code == "T_PEER_RECONNECTED", initial_error=exc)
                     continue
                 raise await self._transport_failed(exc) from exc
             except SupervisorError as exc:
@@ -300,6 +301,7 @@ class CoreSupervisor:
             self._pump_tasks.clear()
             self._discarded_remote_packets += self.transport.discard_generation(generation.offer.generation_id)
             failure_code: str | None = None
+            failure_cause: Exception | None = None
             try:
                 report = await generation.close(outcome)
                 if not (report.endpoint_stopped and report.local_resources_released and report.transport_drained):
@@ -307,17 +309,20 @@ class CoreSupervisor:
                     self.cleanup_failures.append(dict(report.details))
             except Exception as error:
                 failure_code = "S_CLEANUP_FAILED"
+                failure_cause = error
                 self.cleanup_failures.append(type(error).__name__)
             if notify_peer and self.transport.state.owns_generation(generation.offer.generation_id):
                 try:
                     await self.transport.send(FrameKind.GENERATION_CLOSE, generation.offer.generation_id)
                     await self.transport.drain()
-                except TransportError:
+                except TransportError as error:
+                    if failure_code is None:
+                        failure_cause = error
                     failure_code = failure_code or "S_TRANSPORT_FAILED"
             self._discarded_remote_packets += self.transport.discard_generation(generation.offer.generation_id)
             if failure_code:
                 self._blocked = True
-                raise await self._record_failure(failure_code)
+                raise await self._record_failure(failure_code, failure_cause)
             self._generation = None
             self.state = SupervisorState.FAILED if self.failure else SupervisorState.PAIRED
 
@@ -360,9 +365,11 @@ class CoreSupervisor:
         if self.failure and prior_failure is None:
             raise self.failure
 
-    async def recover_pair(self, *, peer_resynced: bool = False) -> None:
+    async def recover_pair(self, *, peer_resynced: bool = False, initial_error: TransportError | None = None) -> None:
+        if initial_error is not None:
+            self.last_transport_failure = initial_error
         if self._connector is None and not peer_resynced:
-            raise await self._record_failure("S_TRANSPORT_FAILED")
+            raise await self._fail_and_cleanup("S_TRANSPORT_FAILED", initial_error)
         self.state = SupervisorState.RECOVERING_PAIR
         try:
             await self.close_generation("transport_lost", notify_peer=False)
@@ -371,7 +378,12 @@ class CoreSupervisor:
             first_transient = None
             while True:
                 if not peer_resynced:
-                    await self.transport.close()
+                    try:
+                        await self.transport.close()
+                    except Exception as exc:
+                        self._blocked = True
+                        self.cleanup_failures.append({"owner": "transport_close", "code": getattr(exc, "code", "S_CLEANUP_FAILED")})
+                        raise
                     lease = (self._lease_expires - datetime.now(UTC)).total_seconds()
                     if lease <= 0:
                         raise await self._record_failure("S_PAIR_LEASE_EXPIRED")
@@ -408,10 +420,17 @@ class CoreSupervisor:
                     await asyncio.sleep(min(delay, remaining))
                     delay = min(delay * 2, .5)
                     peer_resynced = False
-        except SupervisorError:
+        except SupervisorError as exc:
+            if initial_error is not None and exc.code == "S_CLEANUP_FAILED":
+                # Recovery was entered for a functional transport failure. A
+                # failed local cleanup is secondary, not its replacement.
+                self.cleanup_failures.append({"owner": "generation_close", "code": exc.code})
+                self.failure = SupervisorError("S_TRANSPORT_FAILED")
+                self.failure.__cause__ = initial_error
+                raise self.failure
             raise
         except Exception as exc:
-            raise await self._record_failure("S_TRANSPORT_FAILED") from exc
+            raise await self._record_failure("S_TRANSPORT_FAILED", initial_error or exc)
         self.state = SupervisorState.PAIRED
         self._wire_revision = self.transport.revision
 
@@ -448,6 +467,12 @@ class CoreSupervisor:
         except asyncio.CancelledError:
             raise
         except TransportError as exc:
+            if exc.code == "T_GENERATION_INACTIVE" and self.transport.state.is_retiring_generation(self.generation_id):
+                # The reader can accept the peer's CLOSE before its queued
+                # notification reaches _pump_remote, while this send waits for
+                # capacity. That is a normal room end, not a failed Pair.
+                await self.close_generation("peer_closed", notify_peer=False)
+                return
             await self._recover_after_transport_loss(exc)
         except Exception as exc:
             await self._fail_and_cleanup("S_PUMP_FAILED", exc)
@@ -513,6 +538,9 @@ class CoreSupervisor:
             if error.code == "T_PEER_CLOSED":
                 await self._fail_and_cleanup("S_PEER_CLOSED", error)
                 return
-            await self.recover_pair(peer_resynced=error.code == "T_PEER_RECONNECTED")
+            if error.code not in {"T_TRANSPORT_FAILED", "T_TRANSPORT_REPLACED", "T_PEER_RECONNECTED"}:
+                await self._transport_failed(error)
+                return
+            await self.recover_pair(peer_resynced=error.code == "T_PEER_RECONNECTED", initial_error=error)
         except SupervisorError:
             pass

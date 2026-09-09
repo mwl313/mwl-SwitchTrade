@@ -210,10 +210,12 @@ class WireClientTests(unittest.TestCase):
     def test_queue_full_and_close_do_not_corrupt_client_state(self) -> None:
         async def run() -> None:
             socket = MemorySocket()
-            client = WireClient(PairSeat.HOST, queue_limit=2)
+            client = WireClient(PairSeat.HOST, queue_limit=2, send_timeout=.03)
             await client.connect(socket)
+            client._writer.cancel()  # A genuinely stalled owner, not scheduler luck.
+            await asyncio.gather(client._writer, return_exceptions=True)
             sequence = client.state._next_sequence
-            with self.assertRaisesRegex(TransportError, "T_SEND_QUEUE_FULL"):
+            with self.assertRaisesRegex(TransportError, "T_SEND_BACKPRESSURE_TIMEOUT"):
                 await client.send(FrameKind.GENERATION_OFFER, "generation-1", b"setup")
             self.assertEqual(client.state._next_sequence, sequence)
             self.assertIsNone(client.state._outbound_offer)
@@ -227,14 +229,14 @@ class WireClientTests(unittest.TestCase):
         async def run() -> None:
             first, second = MemorySocket(), MemorySocket()
             first.peer, second.peer = second, first
-            host, guest = WireClient(PairSeat.HOST, queue_limit=2), WireClient(PairSeat.GUEST)
+            host, guest = WireClient(PairSeat.HOST, queue_limit=2, send_timeout=.1), WireClient(PairSeat.GUEST)
             await host.connect(first)
             await guest.connect(second)
             await asyncio.gather(host.wait_ready(), guest.wait_ready())
             for _ in range(3):
                 await guest.send(FrameKind.CAPABILITIES, payload=b"caps")
-            await asyncio.sleep(0)
-            with self.assertRaisesRegex(TransportError, "T_RECEIVE_QUEUE_FULL"):
+            await asyncio.wait_for(host._failed.wait(), 1)
+            with self.assertRaisesRegex(TransportError, "T_RECEIVE_BACKPRESSURE_TIMEOUT"):
                 await host.receive()
             await asyncio.gather(host.close(), guest.close())
             timeout_socket = MemorySocket()
