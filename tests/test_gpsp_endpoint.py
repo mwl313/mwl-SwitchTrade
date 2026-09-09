@@ -219,9 +219,17 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         generation = await self.connected_generation()
         slot = ni.NISender(bytes(range(26))).next_slot()
         with self.assertLogs("switchtrade.endpoints.retroarch_gpsp.driver", level="INFO") as logs:
+            received_before = generation._received
             for _ in range(3):
                 await self.peer.send(r.RFU1_CLIENT_SEND, len(slot) << 24 | generation.child, slot)
-                await generation.receive()
+            await self.driver.local.barrier()
+            async with asyncio.timeout(1):
+                while generation._received < received_before + 3:
+                    await asyncio.sleep(.001)
+            packet = await asyncio.wait_for(generation.receive(), 1)
+            self.assertEqual(packet.payload[12:12 + len(slot)], slot)
+            self.assertEqual(generation.cadence.snapshot()["ni_paced"], 2)
+            self.assertTrue(generation._out.empty())
             ack = ni.parent_recv_ack_slot(native.LCOM_NI_START, 1, 0)
             await generation.send(LinkPacket(generation.offer.generation_id, PROTOCOL, parent_t(1, ack), 7))
             await self.peer.receive(r.RFU1_HOST_SEND)
@@ -255,6 +263,45 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([p.payload[-8:] for p in packets],
                          [i.to_bytes(8, "little") for i in range(count)])
         self.assertTrue(clean(await generation.close("test_end")))
+
+    async def test_quiet_receipt_flush_and_pending_cleanup_do_not_leak_to_next_room(self):
+        generation = await self.connected_generation()
+        clock = [0.0]
+        generation.cadence.clock = lambda: clock[0]
+        for timestamp in (1, 2):
+            await generation.send(LinkPacket(generation.offer.generation_id, PROTOCOL,
+                parent_t(timestamp, b"parent12"), 7))
+            await self.peer.receive(r.RFU1_HOST_SEND)
+            received = generation._received
+            await self.peer.send(r.RFU1_CLIENT_ACK, generation.child)
+            async with asyncio.timeout(1):
+                while generation._received == received:
+                    await asyncio.sleep(.001)
+        first = await asyncio.wait_for(generation.receive(), 1)
+        self.assertEqual(int.from_bytes(first.payload[12:16], "little"), 1)
+        self.assertEqual(generation.cadence.snapshot()["receipt_pending"], 1)
+        clock[0] = .3
+        last = await asyncio.wait_for(generation.receive(), 1)  # no further game input
+        self.assertEqual(int.from_bytes(last.payload[4:8], "little"), 2)
+        self.assertEqual(int.from_bytes(last.payload[12:16], "little"), 2)
+        await generation.send(LinkPacket(generation.offer.generation_id, PROTOCOL,
+            parent_t(3, b"parent12"), 7))
+        await self.peer.receive(r.RFU1_HOST_SEND)
+        await generation.feed(n.CorePacket(r._rfu1(r.RFU1_CLIENT_ACK, generation.child), 1, 1))
+        self.assertEqual(generation.cadence.snapshot()["receipt_pending"], 1)
+        self.assertTrue(clean(await generation.close("test_end")))
+        self.assertTrue(generation._advertiser.done())
+        clock[0] = 100
+        self.assertEqual(generation.cadence.poll(), ())
+        self.assertEqual(generation.cadence.snapshot()["receipt_pending"], 0)
+        second = await self.driver.accept(self.offer(2), asyncio.Event())
+        second.activate()
+        self.assertEqual((await second.receive()).payload, r.METADATA_FRAME)
+        self.assertTrue(second._out.empty())
+        self.assertEqual(second.cadence.snapshot()["receipt_pending"], 0)
+        self.assertEqual(second.cadence.snapshot()["ni_lanes"], 0)
+        self.assertTrue(self.driver.local.connected)
+        self.assertTrue(clean(await second.close("test_end")))
 
     async def test_full_queues_can_close_generation_and_reuse_same_netplay(self):
         generation = await self.connected_generation()

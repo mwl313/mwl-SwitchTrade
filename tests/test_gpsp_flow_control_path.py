@@ -39,7 +39,86 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
         await endpoint_helpers.EndpointTests.asyncTearDown(self)
         await relay_helpers.CoreEndToEndTests.asyncTearDown(self)
 
-    async def ni_roundtrip(self, generation, game, ticker):
+    async def timed_ni_finish(self, generation, game, ticker, timestamp):
+        """Real path: 60Hz retries, 400ms radio service, lost first native ACK.
+
+        Only console/frontend inputs and the console's scheduling are modeled.
+        A Netplay receipt cannot trigger the native END_ACK/NULL transitions.
+        """
+        game.output.clear()
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        end = native.child_ni_llsf(native.LCOM_NI_END, 0, 0, 0, 0)
+        null = native.child_ni_llsf(native.LCOM_NULL, 1, 0, 0, 0)
+        end_ack = ni.parent_recv_ack_slot(native.LCOM_NI_END, 0, 0)
+        old_ack = ni.parent_recv_ack_slot(native.LCOM_NI, 1, 2)
+        got_end_ack = asyncio.Event()
+        null_arrived = asyncio.Event()
+        parent_sent = parent_received = 0
+        end_deliveries = 0
+        first_timestamp = timestamp
+
+        async def console():
+            nonlocal timestamp, parent_sent, end_deliveries
+            cursor = 0
+            while not null_arrived.is_set():
+                for payload, _ in game.output[cursor:]:
+                    if payload.startswith(b"WT"):
+                        slot = payload[12:12 + payload[9]]
+                        end_deliveries += slot == end
+                        if slot == null:
+                            null_arrived.set()
+                cursor = len(game.output)
+                if null_arrived.is_set():
+                    break
+                # Drop the first native END reply. Only delivery of another
+                # actual END retry permits the physical input to acknowledge it.
+                game.press(parent_t(timestamp, end_ack if end_deliveries >= 2 else old_ack), 7)
+                timestamp += 1
+                parent_sent += 1
+                await asyncio.sleep(1 / 60)
+
+        async def frontend_receive():
+            nonlocal parent_received
+            while True:
+                packet = await self.peer.receive(r.RFU1_HOST_SEND)
+                await self.peer.send(r.RFU1_CLIENT_ACK, generation.child)
+                parent_received += 1
+                if packet[2][:len(end_ack)] == end_ack:
+                    got_end_ack.set()
+
+        async def frontend_send():
+            while not got_end_ack.is_set():
+                await self.peer.send(r.RFU1_CLIENT_SEND, len(end) << 24 | generation.child, end)
+                await asyncio.sleep(1 / 60)
+            await self.peer.send(r.RFU1_CLIENT_SEND, len(null) << 24 | generation.child, null)
+
+        tasks = [asyncio.create_task(fn()) for fn in (console, frontend_receive, frontend_send)]
+        try:
+            await eventually(null_arrived.is_set, tasks=(ticker, tasks[1]), timeout=4.5)
+            self.assertGreaterEqual(end_deliveries, 2)
+            self.assertLess(loop.time() - started, 4.5)
+            await tasks[0]
+            await tasks[2]
+            await eventually(lambda: parent_received == parent_sent, tasks=(ticker, tasks[1]))
+            await eventually(lambda: any(p.startswith(b"WK") and
+                int.from_bytes(p[12:16], "little") == timestamp - 1 for p, _ in game.output), tasks=(ticker,))
+            game.output.clear()
+            # A deferred/lost receipt can be requested again, without pushing
+            # the same timestamp into gpSP's game-facing buffer a second time.
+            game.press(parent_t(first_timestamp, old_ack), 7)
+            await eventually(lambda: any(p.startswith(b"WK") and
+                int.from_bytes(p[12:16], "little") == first_timestamp for p, _ in game.output), tasks=(ticker,))
+            self.assertEqual(parent_received, parent_sent)
+            self.assertGreater(generation.cadence.ni_paced, 0)
+            self.assertGreater(generation.cadence.receipts_coalesced, 0)
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+        return timestamp
+
+    async def ni_roundtrip(self, generation, game, ticker, set_period):
         """Drive native NI at the game boundary, not a replacement endpoint.
 
         Receiver ACKs are emitted only after the actual end-to-end delivery.
@@ -49,14 +128,20 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
 
         async def from_child(slot, repeats=1):
             game.output.clear()
+            paced_before = generation.cadence.ni_paced
+            received_before = generation._received
             for _ in range(repeats):
                 await self.peer.send(r.RFU1_CLIENT_SEND, len(slot) << 24 | generation.child, slot)
-            await eventually(lambda: sum(p.startswith(b"WT") for p, _ in game.output) == repeats,
+            await self.driver.local.barrier()
+            await eventually(lambda: generation._received >= received_before + repeats, tasks=(ticker,))
+            admitted = repeats - (generation.cadence.ni_paced - paced_before)
+            self.assertGreaterEqual(admitted, 1)
+            await eventually(lambda: sum(p.startswith(b"WT") for p, _ in game.output) == admitted,
                              tasks=(ticker,))
             frames = [p for p, _ in game.output if p.startswith(b"WT")]
-            self.assertEqual([p[12:12 + len(slot)] for p in frames], [slot] * repeats)
+            self.assertEqual([p[12:12 + len(slot)] for p in frames], [slot] * admitted)
             timestamps = [int.from_bytes(p[4:8], "little") for p in frames]
-            self.assertEqual(timestamps, list(range(timestamps[0], timestamps[0] + repeats)))
+            self.assertTrue(all(a < b for a, b in zip(timestamps, timestamps[1:])))
 
         async def from_parent(slot):
             nonlocal timestamp
@@ -68,14 +153,22 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
             timestamp += 1
 
         sender = ni.NISender(bytes(range(26)))
+        timed_finish = False
         while not sender.done:
             slot = sender.next_slot()
             header = native.parse_llsf_child(slot)
-            # Replay native retry pressure, not just one frame/one ACK. A burst
-            # stresses the actual queues without using polling as a game timer.
-            # This is delivery qualification, NOT a model of the game's timeout.
-            repeats = 185 if header["state"] == native.LCOM_NI_END else (
-                20 if header["state"] == native.LCOM_NI else 1)
+            if header["state"] == native.LCOM_NI_END:
+                set_period(.4)
+                try:
+                    timestamp = await self.timed_ni_finish(generation, game, ticker, timestamp)
+                finally:
+                    set_period(1 / 60)
+                timed_finish = True
+                continue
+            if header["state"] == native.LCOM_NULL and timed_finish:
+                continue  # Already sent in response to an actual native END_ACK.
+            # Changed NI data must pass; identical rapid copies may be paced.
+            repeats = 20 if header["state"] == native.LCOM_NI else 1
             await from_child(slot, repeats)
             if header["state"] != native.LCOM_NULL:
                 await from_parent(ni.parent_recv_ack_slot(header["state"], header["n"], header["phase"]))
@@ -135,6 +228,9 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
                         # default. The first room also crosses the 16-bit wrap.
                         sim.rel.out_seq = sim.rel.window_lo = 0xFFFE if number == 1 else 0x2345
                         period = 1 / 60
+                        def set_period(value):
+                            nonlocal period
+                            period = value
                         async def tick():
                             while True:
                                 sim.tick()
@@ -153,7 +249,7 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
                         generation.child.to_bytes(2, "little") + b"\0\0"), 15)
                     await self.peer.receive(r.RFU1_CONNECT_ACK)
                     game.output.clear()
-                    parent_timestamp = await self.ni_roundtrip(generation, game, ticker)
+                    parent_timestamp = await self.ni_roundtrip(generation, game, ticker, set_period)
                     # A progressing 100 ms console cadence slows local ACKs;
                     # no production scheduler, admission, or wire queue is mocked.
                     period = .1
@@ -185,7 +281,9 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
                         game.press(parent_t(parent_timestamp + index, slot), 7)
                         self.assertEqual((await self.peer.receive(r.RFU1_HOST_SEND))[2][:8], slot)
                         await self.peer.send(r.RFU1_CLIENT_ACK, generation.child)
-                    await eventually(lambda: sum(p.startswith(b"WK") for p, _ in game.output) == 8,
+                    await eventually(lambda: any(p.startswith(b"WK") and
+                        int.from_bytes(p[12:16], "little") == parent_timestamp + 8
+                        for p, _ in game.output),
                                      tasks=(ticker,))
                     status = origin._generation.simulation.flow_status()
                     self.assertGreater(status["reliable_tx_new"], count)

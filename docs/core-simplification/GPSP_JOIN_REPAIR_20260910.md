@@ -1,5 +1,9 @@
 # Trial09: NI completion stall and secondary retirement race
 
+Follow-up: [trial10 cadence repair](GPSP_JOIN_CADENCE_REPAIR_20260910.md) uses
+new correlated evidence and deadline regressions. The burst-delivery policy
+and open hypotheses below describe the trial09 repair, not current acceptance.
+
 Branch: `codex/gpsp-endpoint`; clean local/remote repair base:
 `db3975058e7a76c8e1e5f4099ee55b4c89141fb9`.
 Scope: unattended software diagnosis and repair. No physical retry, radio/USB

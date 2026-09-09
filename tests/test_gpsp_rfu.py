@@ -313,6 +313,22 @@ class RfuTranslatorFailureTests(unittest.TestCase):
         self.assert_code("TRANSLATOR_TIMESTAMP_REORDERED", lambda: reordered.from_switch(
             parent_t(99, b"\x01\x02"), flags=FLAGS_GBA, generation=1, sequence=4))
 
+    def test_parent_retry_recovers_receipt_without_redelivering_to_game(self):
+        translator = TranslatorFixture.connected()
+        frame = parent_t(100, b"\x01\x02")
+        translator.from_switch(frame, flags=FLAGS_GBA, generation=1, sequence=3)
+        self.assertEqual(translator.from_switch(frame, flags=FLAGS_GBA, generation=1, sequence=4), ())
+        self.assertEqual(translator.snapshot()["pending_core_acks"], 1)
+        first = translator.from_core(rfu1(RFU1_CLIENT_ACK, ASSIGNMENT), peer_id=1, sequence=2)[0]
+        retry = translator.from_switch(frame, flags=FLAGS_GBA, generation=1, sequence=5)
+        self.assertEqual(len(retry), 1)
+        self.assertEqual(retry[0].classification, "parent_ack")
+        self.assertEqual(retry[0].payload[8:], first.payload[8:])
+        self.assertEqual(int.from_bytes(retry[0].payload[4:8], "little"), 2)
+        self.assertEqual(translator.snapshot()["pending_core_acks"], 0)
+        self.assert_code("TRANSLATOR_TIMESTAMP_CHANGED", lambda: translator.from_switch(
+            parent_t(100, b"\x02\x03"), flags=FLAGS_GBA, generation=1, sequence=6))
+
     def test_unknown_direction_length_flags_metadata_and_ack_fail_closed(self):
         invalid_core_types = (
             (RFU1_BROADCAST, 36), (RFU1_CONNECT_ACK, 16),

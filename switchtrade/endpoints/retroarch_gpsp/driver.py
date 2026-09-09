@@ -16,6 +16,7 @@ from switchtrade.core.contracts import (
     GenerationRole, LinkPacket, RuntimeKind,
 )
 from .errors import GpspError
+from .cadence import RfuCadence
 from .netplay import LocalNetplay, MAX_QUEUE
 from .process import ProcessObserver
 from .rfu import (
@@ -240,6 +241,7 @@ class GpspGeneration:
         self.translator = RfuTranslator(attempt_id=offer.generation_id, tunnel_epoch=host,
             child_connection_id=child.to_bytes(2, "little"), gpsp_device_id=child, gpsp_host_id=host)
         self._broadcast = self.translator.accept_advertisement(offer.setup_payload, generation=host)
+        self.cadence = RfuCadence()
         self._out = asyncio.Queue(MAX_QUEUE)
         self._wake = asyncio.Event()
         self._space = asyncio.Event()
@@ -273,6 +275,7 @@ class GpspGeneration:
             "core_queue": self._out.qsize(),
             "disconnected_by": self.translator.disconnected_by,
             "llsf": self.translator.progress.snapshot(),
+            "cadence": self.cadence.snapshot(),
         }, sort_keys=True))
 
     def activate(self):
@@ -294,7 +297,9 @@ class GpspGeneration:
         except asyncio.QueueFull as error:
             raise GpspError("EMULATOR_QUEUE_FULL", "RFU 송신 대기열이 가득 찼습니다.") from error
 
-    async def _actions(self, actions):
+    async def _actions(self, actions, *, paced=True):
+        if paced:
+            actions = self.cadence.admit(actions)
         for action in actions:
             if action.destination == "tunnel":
                 while self._out.full() and self._closing is None:
@@ -318,6 +323,7 @@ class GpspGeneration:
                 async with self._lock:
                     if self.translator.state == "searching":
                         await self._actions(self._broadcast)
+                    await self._actions(self.cadence.poll(), paced=False)
                     self._diagnose("periodic")
                 await asyncio.sleep(.1)  # Beacon cadence, never a discovery timeout.
         except asyncio.CancelledError:
@@ -413,6 +419,7 @@ class GpspGeneration:
             await asyncio.gather(self._advertiser, return_exceptions=True)
         errors = []
         async with self._lock:
+            self.cadence.close()
             try:
                 # NACK retires a CONNECTING core; DISCONNECT retires a CLIENT.
                 # A stream loss cannot prove callback delivery: fail closed.

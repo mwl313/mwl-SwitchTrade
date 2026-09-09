@@ -421,7 +421,10 @@ class RfuTranslator:
         if previous is not None:
             if previous != raw:
                 self._fail("TRANSLATOR_TIMESTAMP_CHANGED", "Switch timestamp payload changed")
-            return ()
+            # Do not deliver a repeated timestamp to the game's four-slot RFU
+            # buffer again. Once its local receipt exists (or it was idle), a
+            # repeated WT can recover an unsent/lost WK. This is not an NI ACK.
+            return () if timestamp in self._pending_parent_timestamps else (self._switch_ack(timestamp),)
         if self._parent_timestamps:
             last = next(reversed(self._parent_timestamps))
             delta = (timestamp - last) & 0xFFFFFFFF

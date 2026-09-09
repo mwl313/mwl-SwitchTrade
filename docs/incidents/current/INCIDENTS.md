@@ -2313,3 +2313,28 @@ archive list and regenerate the index.
   pending, and checks the exact terminal failure identity. See
   `GPSP_JOIN_REPAIR_20260910.md`. This later lifecycle defect is not proof of
   the cause of the physical game's earlier NI_END stall.
+
+### MTA-GPSP-006 — Native completion queued behind redundant RFU traffic
+
+- Trial10 at `f3f3627` did receive native NI_END_ACK after 3,138 ms, unlike
+  trial09. Its NULL was Core enqueue ordinal 429 while the Host's final local
+  Reliable new-send count was only 75. Pending RFU reached 256/256. The
+  completion transition could not reach local scheduling before Switch WD.
+  First-generation cleanup was clean; peer-close occurred later after owned
+  Host Ctrl+C. Neither successful cleanup nor Bridge active is game success.
+- Preserve the private correlated logs/hashes and first failure. The trial's
+  Host cleanup/process/VIF absence and return of only its acquired USB lease
+  were already proved; this repair performs no physical retry or recovery.
+  VM evidence remains a user-supplied transcript, not independently inspected
+  process or residue state. The old Pair is retired.
+- Pace only exact single native NI retries in the gpSP endpoint; retain one
+  unsent WK and permit a known-timestamp WT to recover its receipt only after
+  local receipt completion. Do not replay game data or synthesize native ACKs.
+  Distinct/UNI/opaque input, strict validation and bounded backpressure remain.
+  Keep timing policy out of Core/Relay and preserve the six-frame radio window.
+- Eventual FIFO delivery is insufficient qualification. Require a timed native
+  completion regression with a lost native reply, actual relay/Direct A+B/
+  StageSession/LDN/TunnelSim, receipt recovery, later bidirectional NI/UNI/data,
+  and same-Pair second-generation cleanup. Hardware/frontend input is modeled;
+  the cadence and commercial game still require an authorized physical test.
+  See `GPSP_JOIN_CADENCE_REPAIR_20260910.md` for proof and limitations.

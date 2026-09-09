@@ -209,6 +209,10 @@ as a completed Pokemon trade.
 For the later connected-but-unavailable trial, see
 [trial08 NI/Reliable diagnosis](GPSP_JOIN_DIAGNOSIS_20260909.md). It separates
 native NI ACKs from gpSP socket ACKs and records the remaining causal uncertainty.
+The current repair is documented in
+[trial10 NI cadence and receipt recovery](GPSP_JOIN_CADENCE_REPAIR_20260910.md).
+Its timed software model passed; commercial trade and native tolerance of the
+new retry/receipt cadence still require a separately authorized physical trial.
 When copying VM commands, copy only the command inside its code block, never
 the PowerShell `PS ...>` prompt or previous error output. Run commands separately.
 

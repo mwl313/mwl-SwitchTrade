@@ -302,3 +302,4 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-DEV-038` | Growing source manifest exceeded Windows WSL command length | Current ledger | 2260 |
 | `MTA-GPSP-005` | In-flight DATA revived an already-retired RFU translator | Current ledger | 2279 |
 | `MTA-CORE-025` | Late generation-end waiter escaped terminal cleanup | Current ledger | 2298 |
+| `MTA-GPSP-006` | Native completion queued behind redundant RFU traffic | Current ledger | 2317 |
