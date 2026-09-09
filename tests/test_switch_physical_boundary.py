@@ -255,6 +255,7 @@ async def qualify_two_generations(interruption=None):
                 parent_resources = await asyncio.to_thread(leader.wait_ready)
                 parent_game = PhysicalGameInput()
                 parent = build_tunnelsim(parent_resources, parent_game, True)
+                parent.rel.out_seq = parent.rel.window_lo = 0xFFFE if generation == 0 else 0x2345
                 simulations.append(parent)
 
                 tickers.append(asyncio.create_task(tick(parent)))
@@ -282,6 +283,7 @@ async def qualify_two_generations(interruption=None):
                 child_resources = await asyncio.to_thread(joining.wait_ready)
                 child_game = PhysicalGameInput()
                 child = build_tunnelsim(child_resources, child_game, False)
+                child.rel.out_seq = child.rel.window_lo = 0x4567 if generation == 0 else 0xFFFF
                 simulations.append(child)
                 tickers.append(asyncio.create_task(tick(child)))
                 await eventually(lambda: all(messages[s].count("Bridge active.") > generation for s in messages),
@@ -298,7 +300,8 @@ async def qualify_two_generations(interruption=None):
                 parent_bytes = b"WT" + bytes([generation]) + bytes(range(64))
                 count = 64 if interruption == "burst" else 1
                 child_packets = [(child_bytes + bytes([i]), 0x7F) for i in range(count)]
-                parent_packets = [(parent_bytes + bytes([i]), 1) for i in range(count)]
+                # Every independent Reliable stream starts with Initialized.
+                parent_packets = [(parent_bytes + bytes([i]), 15 if i == 0 else 1) for i in range(count)]
                 for payload, flags in child_packets:
                     child_game.press(payload, flags)
                 for payload, flags in parent_packets:

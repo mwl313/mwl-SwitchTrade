@@ -74,6 +74,9 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
                         resources = await asyncio.to_thread(session.wait_ready)
                         game = PhysicalGameInput()
                         sim = build_tunnelsim(resources, game, True)
+                        # An independent local sender, not our endpoint's FFF0
+                        # default. The first room also crosses the 16-bit wrap.
+                        sim.rel.out_seq = sim.rel.window_lo = 0xFFFE if number == 1 else 0x2345
                         period = 1 / 60
                         async def tick():
                             while True:

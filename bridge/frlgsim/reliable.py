@@ -405,6 +405,8 @@ def parse_reliable(payload):
     if len(payload) < 8:
         return None
     ln = int.from_bytes(payload[1:3], "big")
+    if len(payload) < 8 + ln:
+        return None
     return Reliable(flagsA=payload[0],
                     seq=int.from_bytes(payload[3:5], "big"),
                     ack=int.from_bytes(payload[5:7], "big"),

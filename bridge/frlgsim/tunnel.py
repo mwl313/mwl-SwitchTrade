@@ -30,6 +30,8 @@ class TunnelSim(Sim):
         self.tunnel = tunnel
         self._pending_remote = deque()
         self._rx_deferrals = 0
+        self._rx_first = self._rx_last = None
+        self._rx_init_waits = 0
         self._tunnel_generation = getattr(tunnel, "connection_generation", None)
         self.parent = bool(parent)
         self.observer = observer
@@ -43,6 +45,25 @@ class TunnelSim(Sim):
         )
 
     def _admit_reliable_app(self, frame):
+        # Receive and send sequence spaces are independent. Only an authenticated
+        # Initialized frame can open this local receive stream, and only after
+        # its bytes are owned by the bounded Core queue. Later Initialized bits
+        # must not reset a live stream or skip a missing/backpressured frame.
+        header = (frame.seq, frame.flagsA, frame.ack)
+        self._rx_last = header
+        if self._rx_first is None:
+            self._rx_first = header
+        if not self._in_seq_initialized:
+            if not frame.flagsA & 8:
+                self._rx_init_waits += 1
+            elif self._on_reliable_app(frame.flagsA, frame.payload):
+                self.rel.recv_next = frame.seq
+                return True
+            # Sim scheduled an ACK before asking for admission. Before receiving
+            # an opener there is no peer baseline to acknowledge (not even FFF0).
+            self._ack_owed = False
+            self._rx_deferrals += 1
+            return False
         # Unlike the legacy game's fragment engine, an opaque stream cannot
         # repair reordered RFU timestamps. A declined frame stays unacknowledged;
         # let Reliable retransmit the gap before admitting subsequent data.
@@ -56,7 +77,12 @@ class TunnelSim(Sim):
                   "reliable_inflight": self.rel.inflight(),
                   "reliable_next_out": self.rel.out_seq, "reliable_next_in": self.rel.recv_next,
                   "reliable_rx_deferrals": self._rx_deferrals,
+                  "reliable_rx_initialized": int(self._in_seq_initialized),
+                  "reliable_rx_init_waits": self._rx_init_waits,
                   "pia_rx": self.rx_count, "pia_rx_failed": self.rx_fail}
+        for label, header in (("first", self._rx_first), ("last", self._rx_last)):
+            for field, value in zip(("seq", "flags", "window"), header or (-1, -1, -1)):
+                status[f"reliable_rx_{label}_{field}"] = value
         snapshot = getattr(self.tunnel, "flow_status", None)
         if callable(snapshot):
             status.update(snapshot())

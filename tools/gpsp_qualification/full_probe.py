@@ -203,6 +203,9 @@ class FullStackProbe:
         self.game = PhysicalGameInput()
         self.game.output = deque()  # Consume continuously; no harness history leak.
         sim = build_tunnelsim(resources, self.game, True)
+        # Model an independent console send stream. Never let both test ends'
+        # identical constructor defaults mask receive-bootstrap assumptions.
+        sim.rel.out_seq = sim.rel.window_lo = 0xFFFE if number == 1 else 0x2345
         self.simulations.append(sim)
         async def tick():
             while True:

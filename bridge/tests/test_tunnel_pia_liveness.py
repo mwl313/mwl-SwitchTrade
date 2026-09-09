@@ -48,7 +48,7 @@ def test_real_reliable_receive_releases_child_finalize_without_rtt():
     sim = TunnelSim(SimpleNamespace(), crypto, "169.254.1.2", "169.254.1.1", tunnel,
                     conn=child, our_var=0x5678)
     packet = pia_reliable_datagram(crypto, "169.254.1.1", 0x5678, 0x1234, 1,
-                                   0xFFF0, 0xFFF0, reliable.FLAGSA_GBA, b"opaque")
+                                   0xFFF0, 0xFFF0, reliable.FLAGSA_INIT, b"opaque")
     assert sim.process_datagram(packet, "169.254.1.1")
     assert child.connected
-    assert delivered == [(b"opaque", reliable.FLAGSA_GBA)]
+    assert delivered == [(b"opaque", reliable.FLAGSA_INIT)]

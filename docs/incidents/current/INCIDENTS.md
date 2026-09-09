@@ -2211,3 +2211,25 @@ archive list and regenerate the index.
   Reliable window progress and deferrals without raw payload/device material.
   Regression scope and test results: `RFU_BACKPRESSURE_REPAIR_20260909.md`.
   Software tests do not prove commercial trade, save results or battle support.
+
+### MTA-CORE-024 — Strict receive ordering assumed the local send seed
+
+- At `29ca8b2`, the failed physical join had no returned RFU at the Guest,
+  while Host Pia RX/decryption continued and the strict receive guard deferred
+  thousands of AppData frames with next-expected stuck at its local default.
+  This is not the previous queue overflow. The exact received header was not
+  logged; do not invent the missing physical sequence or opener flags.
+- The stream's first Initialized frame was not allowed to establish its own
+  receive baseline. Independent-start encrypted software peers reproduce the
+  defect; matching-start peers hide it. Initial admission failure also scheduled
+  an ACK with an unproven receive base. Truncated Reliable payloads were accepted.
+- Recovery was verified before repair: both endpoint cleanup logs were clean,
+  owned Host processes/interfaces were absent, and only the run-acquired USB
+  attachment was returned. Later peer-close is not the first functional failure.
+- Seed receive state only from an admitted Initialized frame, without changing
+  send state. Never rebase an open stream or ACK/dedupe unowned bytes. Preserve
+  bounded backpressure, ordering, retransmission and ACK/control liveness.
+  Reject truncated payloads and log numeric receive headers, never game bytes.
+- Actual CLI and stock qualification must use independent peer sequence seeds.
+  Gold sniffer gaps are not live retransmission evidence or permission to drop
+  data. See `RELIABLE_BOOTSTRAP_REPAIR_20260909.md` for coverage and causal limits.

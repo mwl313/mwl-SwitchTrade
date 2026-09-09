@@ -297,3 +297,4 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-GPSP-003` | Native WA INIT flags rejected as metadata | Current ledger | 2138 |
 | `MTA-CORE-022` | DATA bursts fail before drain; recovery masks first failure | Current ledger | 2157 |
 | `MTA-CORE-023` | RFU read-ahead overflowed a progressing Reliable window | Current ledger | 2185 |
+| `MTA-CORE-024` | Strict receive ordering assumed the local send seed | Current ledger | 2215 |
