@@ -264,6 +264,99 @@ $module = Import-Module '{module_path}' -Force -PassThru
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "MODE_CONTRACT_PASS")
 
+    def test_large_manifest_batches_preserve_all_evidence_and_stop_on_failure(self):
+        powershell = shutil.which("pwsh")
+        if powershell is None:
+            self.skipTest("PowerShell 7 is unavailable")
+        module_path = str(MODULE).replace("'", "''")
+        python_path = sys.executable.replace("'", "''")
+        script = f"""
+$ErrorActionPreference = 'Stop'
+$module = Import-Module '{module_path}' -Force -PassThru
+& $module {{
+    $script:root = '/opt/switchtrade-dev/.staging-' + ('a' * 64) + '-' + ('b' * 32)
+    $script:manifest = [pscustomobject]@{{ Files = [ordered]@{{}}; Modes = @{{}} }}
+    1..240 | ForEach-Object {{
+        $path = 'switchtrade/' + ('long path-' * 9) + "/file-$_.py"
+        $manifest.Files[$path] = '1' * 64
+        $manifest.Modes[$path] = if ($_ % 2) {{ '644' }} else {{ '755' }}
+    }}
+    $script:lastPath = @($manifest.Files.Keys)[-1]
+    $unsplit = @($manifest.Files.Keys | ForEach-Object {{ "$script:root/$_" }}) -join ' '
+    if ($unsplit.Length -le 32768) {{ throw 'fixture did not exceed Windows launch size' }}
+    $script:captured = ${{function:Invoke-DevCapturedProcess}}
+    $script:failure = ''
+    $script:counts = @{{}}
+    $script:seen = @{{}}
+    function Invoke-DevCapturedProcess {{
+        param($FilePath, [string[]]$ArgumentList)
+        if ($FilePath -ne 'wsl.exe' -or $ArgumentList[0] -ne '--distribution' -or
+            $ArgumentList[1] -ne 'mock' -or $ArgumentList[4] -ne '--cd' -or
+            $ArgumentList[5] -ne '/opt/switchtrade') {{ throw 'lost explicit WSL identity' }}
+        $command = $ArgumentList[7]
+        $script:counts[$command]++
+        $budget = ($ArgumentList | ForEach-Object {{ 2 * $_.Length + 3 }} | Measure-Object -Sum).Sum
+        if ($budget -gt 9000) {{ throw 'unbounded command' }}
+        if (-not $script:failure) {{
+            # Real Windows Process.Start with every quoted path argument, but
+            # Python instead of WSL: no live runtime/radio needed by this test.
+            $probe = & $script:captured -FilePath '{python_path}' -ArgumentList (
+                @('-c', 'import sys; print(len(sys.argv)-1)') + $ArgumentList)
+            if ($probe.ExitCode -ne 0 -or [int]$probe.Stdout -ne $ArgumentList.Count) {{ throw 'real argv launch failed' }}
+        }}
+        $skip = switch ($command) {{ '/usr/bin/sha256sum' {{ 8 }} '/usr/bin/stat' {{ 11 }} '/bin/chmod' {{ 10 }} default {{ throw 'unexpected command' }} }}
+        $output = [System.Collections.Generic.List[string]]::new()
+        foreach ($target in @($ArgumentList | Select-Object -Skip $skip)) {{
+            if (-not $target.StartsWith("$script:root/")) {{ throw 'unowned path' }}
+            $path = $target.Substring($script:root.Length + 1)
+            if (-not $manifest.Files.Contains($path)) {{ throw 'unknown source path' }}
+            $key = "$command/$path"
+            $script:seen[$key]++
+            $bad = $path -eq $script:lastPath
+            if ($command -eq '/usr/bin/sha256sum') {{
+                if ($bad -and $script:failure -eq 'missing') {{ continue }}
+                $hash = if ($bad -and $script:failure -eq 'hash') {{ '2' * 64 }} else {{ $manifest.Files[$path] }}
+                $output.Add("$hash  $target")
+                if ($bad -and $script:failure -eq 'duplicate') {{ $output.Add("$hash  $target") }}
+            }} elseif ($command -eq '/usr/bin/stat') {{
+                $mode = if ($bad -and $script:failure -eq 'mode') {{ '666' }} else {{ $manifest.Modes[$path] }}
+                $output.Add("${{mode}}:$target")
+            }} elseif ($ArgumentList[8] -ne $manifest.Modes[$path]) {{ throw 'wrong chmod mode' }}
+        }}
+        $failed = $script:failure -eq $command -and $script:counts[$command] -eq 2
+        [pscustomobject]@{{ ExitCode = [int]$failed; Stdout = $output -join "`n"; Stderr = $(if ($failed) {{ 'first batch failure' }} else {{ '' }}) }}
+    }}
+    Set-StagingFileModes 'mock' $manifest $script:root
+    Assert-RemoteManifest 'mock' $manifest $script:root
+    foreach ($command in @('/bin/chmod', '/usr/bin/sha256sum', '/usr/bin/stat')) {{
+        if ($script:counts[$command] -lt 2) {{ throw 'did not split command' }}
+        foreach ($path in $manifest.Files.Keys) {{
+            if ($script:seen["$command/$path"] -ne 1) {{ throw 'file omitted or repeated across batches' }}
+        }}
+    }}
+    foreach ($failure in @('hash', 'missing', 'duplicate', 'mode', '/usr/bin/sha256sum', '/usr/bin/stat', '/bin/chmod')) {{
+        $script:failure = $failure
+        $script:counts = @{{}}
+        try {{
+            if ($failure -eq '/bin/chmod') {{ Set-StagingFileModes 'mock' $manifest $script:root }}
+            else {{ Assert-RemoteManifest 'mock' $manifest $script:root }}
+            throw "accepted $failure"
+        }} catch [DevOverlayException] {{
+            $expected = if ($failure -eq '/bin/chmod') {{ 'DEV_EXTRACT_FAILED' }} else {{ 'DEV_MANIFEST_MISMATCH' }}
+            if ($_.Exception.Code -ne $expected) {{ throw }}
+        }}
+        if ($failure.StartsWith('/') -and $script:counts[$failure] -ne 2) {{ throw 'continued after failed batch' }}
+    }}
+    'BATCH_CONTRACT_PASS'
+}}
+"""
+        result = subprocess.run(
+            [powershell, "-NoProfile", "-Command", script], cwd=ROOT,
+            capture_output=True, text=True, check=False, timeout=90,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "BATCH_CONTRACT_PASS")
+
     def test_interactive_process_forwards_output_before_exit(self) -> None:
         powershell = shutil.which("pwsh") or shutil.which("powershell")
         if powershell is None:

@@ -405,6 +405,38 @@ function Assert-DependencyCompatibility {
     }
 }
 
+function Invoke-DevWslFileBatches {
+    param(
+        [string]$Distro,
+        [string]$Command,
+        [string[]]$Paths,
+        [string[]]$Arguments = @()
+    )
+    $stdout = [System.Text.StringBuilder]::new()
+    $stderr = [System.Text.StringBuilder]::new()
+    $exitCode = 0
+    for ($offset = 0; $offset -lt $Paths.Count;) {
+        $batch = [System.Collections.Generic.List[string]]::new()
+        $length = 0
+        while ($offset -lt $Paths.Count) {
+            # Upper bound for Windows quoting (UTF-16), with ample room for
+            # wsl.exe's distro/cwd/options. File count alone is not a bound.
+            $cost = 2 * $Paths[$offset].Length + 3
+            if ($cost -gt 8000) { Stop-DevOverlay 'DEV_SOURCE_FORBIDDEN' 'An overlay path exceeds the command argument budget.' }
+            if ($length + $cost -gt 8000) { break }
+            [void]$batch.Add($Paths[$offset])
+            $length += $cost
+            $offset++
+        }
+        $result = Invoke-DevWsl -Distro $Distro -Command $Command -Arguments ($Arguments + $batch.ToArray())
+        [void]$stdout.AppendLine($result.Stdout)
+        [void]$stderr.AppendLine($result.Stderr)
+        $exitCode = $result.ExitCode
+        if ($exitCode -ne 0) { break }
+    }
+    [pscustomobject]@{ ExitCode = $exitCode; Stdout = $stdout.ToString(); Stderr = $stderr.ToString() }
+}
+
 function Assert-RemoteManifest {
     param(
         [Parameter(Mandatory)][string]$Distro,
@@ -413,7 +445,7 @@ function Assert-RemoteManifest {
     )
 
     $verifyArguments = @($Manifest.Files.Keys | ForEach-Object { "$RemoteRoot/$_" })
-    $verifyResult = Invoke-DevWsl -Distro $Distro -Command '/usr/bin/sha256sum' -Arguments $verifyArguments
+    $verifyResult = Invoke-DevWslFileBatches -Distro $Distro -Command '/usr/bin/sha256sum' -Paths $verifyArguments
     if ($verifyResult.ExitCode -ne 0) {
         Stop-DevOverlay 'DEV_MANIFEST_MISMATCH' 'The WSL overlay hash check failed.'
     }
@@ -437,7 +469,7 @@ function Assert-RemoteManifest {
             Stop-DevOverlay 'DEV_MANIFEST_MISMATCH' 'The copied source does not match the local manifest.'
         }
     }
-    $modeResult = Invoke-DevWsl -Distro $Distro -Command '/usr/bin/stat' -Arguments (@('-c', '%a:%n', '--') + $verifyArguments)
+    $modeResult = Invoke-DevWslFileBatches -Distro $Distro -Command '/usr/bin/stat' -Arguments @('-c', '%a:%n', '--') -Paths $verifyArguments
     if ($modeResult.ExitCode -ne 0) { Stop-DevOverlay 'DEV_MANIFEST_MISMATCH' 'Could not verify overlay file modes.' }
     $actualModes = @{}
     foreach ($line in ($modeResult.Stdout -split "`r?`n" | Where-Object { $_ })) {
@@ -464,7 +496,7 @@ function Set-StagingFileModes {
     foreach ($mode in @('644', '755')) {
         $paths = @($Manifest.Files.Keys | Where-Object { $Manifest.Modes[$_] -eq $mode } | ForEach-Object { "$StagingPath/$_" })
         if ($paths.Count -eq 0) { continue }
-        $result = Invoke-DevWsl -Distro $Distro -Command '/bin/chmod' -Arguments (@($mode, '--') + $paths)
+        $result = Invoke-DevWslFileBatches -Distro $Distro -Command '/bin/chmod' -Arguments @($mode, '--') -Paths $paths
         if ($result.ExitCode -ne 0) { Stop-DevOverlay 'DEV_EXTRACT_FAILED' 'Could not restore source file permissions.' }
     }
 }

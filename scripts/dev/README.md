@@ -23,6 +23,11 @@ release below `/opt/switchtrade-dev/releases/`, and atomically switches
 `/opt/switchtrade-dev/current`. Repeating `sync`, `run`, or `test` with unchanged source verifies and
 reuses that release; it does not treat the existing content ID as an error.
 
+Hash checks, mode checks and staging permission restoration use length-bounded
+path batches to stay within Windows process argument limits as source grows.
+Every batch must succeed and the complete path/hash/mode mapping must match;
+splitting commands does not weaken validation or publish a partial release.
+
 Every WSL process uses the discovered distro, root user, explicit Linux cwd, installed Python at
 `/opt/switchtrade/bridge/.venv/bin/python`, and the overlay environment variables. The production
 root `/opt/switchtrade` is read-only to this workflow. `run` and `test` forward child stdout and

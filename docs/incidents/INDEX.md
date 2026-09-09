@@ -299,3 +299,4 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-CORE-023` | RFU read-ahead overflowed a progressing Reliable window | Current ledger | 2185 |
 | `MTA-CORE-024` | Strict receive ordering assumed the local send seed | Current ledger | 2215 |
 | `MTA-GPSP-004` | RFU traffic counts concealed the native game join phase | Current ledger | 2237 |
+| `MTA-DEV-038` | Growing source manifest exceeded Windows WSL command length | Current ledger | 2260 |

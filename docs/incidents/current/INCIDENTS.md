@@ -2256,3 +2256,22 @@ archive list and regenerate the index.
   so it does not reproduce or close the commercial-game failure. The failing
   Ubuntu loopback fixture gets separate port owners and actual readiness checks.
   See `GPSP_JOIN_DIAGNOSIS_20260909.md`; gameplay root cause remains unresolved.
+
+### MTA-DEV-038 — Growing source manifest exceeded Windows WSL command length
+
+- At clean `c00d770`, Host preparation failed in `Process.Start(wsl.exe)` with
+  `DEV_RUN_FAILED` before radio ownership or Pair creation. The 204-file manifest
+  supplied 32,749 characters of absolute staging paths to one hash command,
+  excluding WSL options and quoting. Earlier smaller manifests fit; runtime,
+  permissions and game communication were not the cause of this failure.
+- Existing sync recovery removed its own staging and lock. The previous
+  `current` overlay remained unchanged; no Core process, new VIF or USB lease
+  was created. Do not run that previous overlay as a workaround for failed sync.
+- Hash, stat and staging chmod now share length-bounded file batches. Preserve
+  absolute path/hash/mode binding across all batches; any failed batch stops
+  processing and prevents release publication. Staging-only mutation, runtime
+  identity, source allowlist and immutable-release checks are unchanged.
+- Regression covers a manifest larger than the Windows launch limit, real
+  process argument forwarding, exact-once coverage, late hash/mode mismatch,
+  missing/duplicate evidence and failed batches. This preparation repair makes
+  no claim about the unresolved commercial gpSP game join or trade outcome.
