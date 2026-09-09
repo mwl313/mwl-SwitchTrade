@@ -89,12 +89,13 @@ class CoreTunnelAdapterTests(unittest.IsolatedAsyncioTestCase):
         await adapter.deliver_from_core(
             LinkPacket("generation-1", SWITCH_LDN_PROTOCOL, b"first-remote", 0x01)
         )
-        with self.assertRaises(SwitchLdnEndpointError) as raised:
-            await adapter.deliver_from_core(
-                LinkPacket("generation-1", SWITCH_LDN_PROTOCOL, b"overflow-remote", 0x01)
-            )
-        self.assertEqual(raised.exception.code, "SWITCH_ENDPOINT_BACKPRESSURE")
+        pending = asyncio.create_task(adapter.deliver_from_core(
+            LinkPacket("generation-1", SWITCH_LDN_PROTOCOL, b"next-remote", 0x01)))
+        await asyncio.sleep(0)
+        self.assertFalse(pending.done())
         self.assertEqual([frame.payload for frame in adapter.poll()], [b"first-remote"])
+        await asyncio.wait_for(pending, 1)
+        self.assertEqual([frame.payload for frame in adapter.poll()], [b"next-remote"])
 
     async def test_tunnelsim_thread_can_signal_the_core_event_loop(self) -> None:
         adapter = CoreTunnelAdapter("generation-1", SWITCH_LDN_PROTOCOL)

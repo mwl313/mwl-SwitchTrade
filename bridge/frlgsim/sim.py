@@ -476,8 +476,13 @@ class Sim:
                     # the contiguous recv_next + the out-of-order set, and ack_payload carries a selective
                     # MASK so the peer fast-retransmits exactly its drops.
                     self._ack_owed = True
-                    if self._note_in_seq(rl.seq):
-                        self._on_reliable_app(rl.flagsA, rl.payload)
+                    if self._note_in_seq(rl.seq, remember=False):
+                        # A bounded tunnel may decline admission. Do not ACK
+                        # or dedupe bytes it never owned; the local sender can
+                        # retransmit them while control/ACK RX stays live.
+                        if self._admit_reliable_app(rl) is False:
+                            continue
+                        self._note_in_seq(rl.seq)
                     self.rel.note_received(rl.seq)       # contiguous recv_next + recv_ooo for the selective ack
                 else:                                 # live FLAGSA_CTRL: peer's bulk-ack of OUR sends
                     ackid, mask = reliable.parse_bulk_ack(rl.payload)
@@ -495,6 +500,10 @@ class Sim:
                 self.conn.on_message(m.proto, m.payload, tick=self._tick)
         self.rx_count += 1
         return True
+
+    def _admit_reliable_app(self, frame):
+        """An explicit False withholds ACK/deduplication until admission."""
+        return self._on_reliable_app(frame.flagsA, frame.payload)
 
     def _on_reliable_app(self, flags_a, payload):
         """Dispatch one Reliable application frame.
@@ -674,7 +683,7 @@ class Sim:
         # UNI slots, so feed_in_frame is a no-op for it (it still got K-acked + counted as a tick).
         self.engine.feed_in_frame(rec)
 
-    def _note_in_seq(self, seq):
+    def _note_in_seq(self, seq, *, remember=True):
         if seq in self._seen_in:
             return False
         if self._in_seq_initialized:
@@ -683,6 +692,9 @@ class Sim:
                 return False
         else:
             forward = 1
+        if not remember:
+            return True
+        if not self._in_seq_initialized:
             self._in_seq_initialized = True
         _remember_recent(self._seen_in, seq, 4096)
         if forward < 0x8000:

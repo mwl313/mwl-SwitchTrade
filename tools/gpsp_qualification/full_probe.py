@@ -259,7 +259,8 @@ class FullStackProbe:
                 self.game.press(_gba(GBA_TRANSFER, count.to_bytes(4, "little") + b"\x0c\0\0\0" +
                     struct.pack("<III", 0x53544832, number, count)), 7)
                 await self.expect(b"WK")
-                await asyncio.sleep(.5)
+                # The game's real RFU request/reply already paces this loop.
+                # An extra half-second hides throughput/queue regressions.
             elapsed = time.monotonic() - started
             samples.append({"seconds": elapsed, **{name: resources(identity) for name, identity in self.identities.items()}})
             if elapsed >= 1800:

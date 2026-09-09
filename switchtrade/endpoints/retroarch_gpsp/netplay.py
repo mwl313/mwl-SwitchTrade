@@ -218,10 +218,13 @@ class LocalNetplay:
                         raise GpspError("EMULATOR_PACKET_PEER", "gpSP 통신 상대가 잘못됐습니다.")
                     payload = await self._read(size)
                     self._sequence += 1
-                    try:
-                        self._packets.put_nowait(CorePacket(payload, 1, self._sequence))
-                    except asyncio.QueueFull as error:
-                        raise GpspError("EMULATOR_QUEUE_FULL", "gpSP 수신 대기열이 가득 찼습니다. 연결을 다시 시작하세요.") from error
+                    packet = CorePacket(payload, 1, self._sequence)
+                    if self._packets.full():
+                        # Backpressure reaches TCP; process death/close still
+                        # interrupts this wait through the independent observer.
+                        await self._race(self._packets.put(packet))
+                    else:
+                        self._packets.put_nowait(packet)
                 elif kind == PING and size == 0:
                     await self._command(PONG, b"")
                 elif kind == PONG and size == 0 and self._pongs:
@@ -249,6 +252,8 @@ class LocalNetplay:
 
     async def receive(self):
         self._check()
+        if not self._packets.empty():
+            return self._packets.get_nowait()
         return await self._race(self._packets.get())
 
     async def barrier(self):

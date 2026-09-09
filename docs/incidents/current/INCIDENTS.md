@@ -2181,3 +2181,33 @@ archive list and regenerate the index.
   See CORE_TRANSPORT_BURST_REPAIR_20260909.md for scope and evidence boundaries.
   Pushed-SHA Windows/Ubuntu and actual-stock process CI remain mandatory; no
   physical/commercial-game pass is asserted by these software results.
+
+### MTA-CORE-023 — RFU read-ahead overflowed a progressing Reliable window
+
+- At base `865eb54`, the physical Host's first failure was
+  `RFU receive backlog overflow` in `TunnelSim._drain_tunnel`, surfaced as
+  `SWITCH_ENDPOINT_TICK_FAILED` / `S_PUMP_FAILED`. The Guest's later
+  `T_PEER_CLOSED` / `S_PEER_CLOSED` was consequential, not the original cause.
+  The trial reached discovery, WA acceptance and initial RFU traffic, not a
+  completed trade. Private logs remain outside tracked files.
+- Recovery state: the physical trial had already ended, owned resources were
+  reported released and the exact test USB lease detached. This repair acquired
+  no physical radio, WSL or VM resources and does not authorize a physical retry.
+- A software-only reproduction with real TunnelSim/CoreTunnelAdapter/Reliable
+  overflows while ACKs still progress: poll drained all upstream frames before
+  consuming available Reliable send slots. The 256-frame pending limit was
+  enforced as an error rather than downstream demand. Actual physical ACK
+  latency/window history was not recorded; the timing model is not an RF trace.
+- Repair: demand-limited poll; bounded, cancellable Core admission; gpSP and
+  local Netplay producer backpressure; no ACK/deduplication of locally declined
+  Reliable bytes. The opaque tunnel admits contiguous data so a later frame
+  cannot overtake a declined frame. The legacy game engine's receive policy is
+  unchanged. Queue/window sizes and wire formats are unchanged.
+- Pressure also exposed a cleanup dependency: a generation barrier needs the
+  Netplay reader to drain retired traffic. Closing wakes the blocked producer
+  and lets retired frames pass the generation lock without conversion. Cleanup
+  results remain sticky and unproven cleanup still blocks a new generation.
+- Counts-only `switch_rfu_progress` diagnostics identify local queue depth,
+  Reliable window progress and deferrals without raw payload/device material.
+  Regression scope and test results: `RFU_BACKPRESSURE_REPAIR_20260909.md`.
+  Software tests do not prove commercial trade, save results or battle support.

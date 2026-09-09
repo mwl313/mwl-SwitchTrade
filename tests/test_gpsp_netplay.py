@@ -165,15 +165,41 @@ class NetplayTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_queue_saturation_stays_bounded(self):
         _, writer = await self.connect()
-        writer.write(core_packet() * (n.MAX_QUEUE + 1))
+        payloads = [i.to_bytes(16, "big") for i in range(n.MAX_QUEUE + 5)]
+        writer.write(b"".join(core_packet(p) for p in payloads))
         await writer.drain()
-        with self.assertRaises(GpspError) as result:
-            await asyncio.wait_for(self.session.wait_ended(), 2)
-        self.assertEqual(result.exception.code, "EMULATOR_QUEUE_FULL")
+        async with asyncio.timeout(2):
+            while not self.session._packets.full():
+                await asyncio.sleep(0)
         self.assertEqual(self.session._packets.qsize(), n.MAX_QUEUE)
-        with self.assertRaises(GpspError) as repeated:
-            await self.session.receive()
-        self.assertIs(repeated.exception, result.exception)
+        self.assertIsNone(self.session.failure)
+        async with asyncio.timeout(2):
+            packets = [await self.session.receive() for _ in payloads]
+        self.assertEqual([p.payload for p in packets], payloads)
+        self.assertEqual([p.sequence for p in packets], list(range(1, len(payloads) + 1)))
+
+    async def test_full_queue_close_or_process_failure_releases_reader(self):
+        for ending in ("close", "process"):
+            with self.subTest(ending=ending):
+                if ending == "process":
+                    self.session = n.LocalNetplay(self.observer, self.port, handshake_timeout=3)
+                _, writer = await self.connect()
+                writer.write(core_packet() * (n.MAX_QUEUE + 5))
+                await writer.drain()
+                async with asyncio.timeout(2):
+                    while not self.session._packets.full():
+                        await asyncio.sleep(0)
+                if ending == "process":
+                    first = GpspError("EMULATOR_EXITED", "synthetic process exit")
+                    self.observer.failure = first
+                    with self.assertRaises(GpspError) as failure:
+                        await asyncio.wait_for(self.session.wait_ended(), 2)
+                    self.assertIs(failure.exception, first)
+                report = await asyncio.wait_for(self.session.close(), 2)
+                self.assertTrue(report.local_resources_released)
+                writer.close()
+                with suppress(ConnectionError):
+                    await writer.wait_closed()
 
     async def test_ordered_barrier_and_uncorrelated_pong(self):
         reader, writer = await self.connect()

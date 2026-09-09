@@ -198,7 +198,57 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             occupied.listen()
             with self.assertRaises(GpspError) as failure:
                 await self.driver.prepare()
-            self.assertEqual(failure.exception.code, "EMULATOR_PORT_UNAVAILABLE")
+        self.assertEqual(failure.exception.code, "EMULATOR_PORT_UNAVAILABLE")
+
+    async def connected_generation(self):
+        await self.ready()
+        generation = await self.driver.accept(self.offer(), asyncio.Event())
+        generation.activate()
+        await generation.receive()
+        await self.peer.receive(r.RFU1_BROADCAST)
+        await self.peer.send(r.RFU1_CONNECT_REQ, generation.host)
+        await generation.receive()
+        accept = gba(r.GBA_ACCEPT, HOST_SESSION.to_bytes(2, "little") +
+            generation.child.to_bytes(2, "little") + b"\0\0")
+        await generation.send(LinkPacket(generation.offer.generation_id, PROTOCOL, accept, 15))
+        await self.peer.receive(r.RFU1_CONNECT_ACK)
+        return generation
+
+    async def test_core_queue_pressure_resumes_without_reordering(self):
+        generation = await self.connected_generation()
+        count = generation._out.maxsize + n.MAX_QUEUE + 20
+        for index in range(count):
+            await self.peer.send(r.RFU1_CLIENT_SEND, 8 << 24 | generation.child,
+                                 index.to_bytes(8, "little"))
+        async with asyncio.timeout(3):
+            while not (generation._out.full() and self.driver.local._packets.full()):
+                await asyncio.sleep(0)
+        self.assertTrue(generation._out.full())
+        self.assertIsNone(self.driver.failure)
+        async with asyncio.timeout(5):
+            packets = [await generation.receive() for _ in range(count)]
+        # WT contains the translator timestamp and slot lengths before the slot.
+        self.assertEqual([p.payload[-8:] for p in packets],
+                         [i.to_bytes(8, "little") for i in range(count)])
+        self.assertTrue(clean(await generation.close("test_end")))
+
+    async def test_full_queues_can_close_generation_and_reuse_same_netplay(self):
+        generation = await self.connected_generation()
+        for _ in range(generation._out.maxsize + n.MAX_QUEUE + 20):
+            await self.peer.send(r.RFU1_CLIENT_SEND, 8 << 24 | generation.child, b"old-data")
+        async with asyncio.timeout(3):
+            while not (generation._out.full() and self.driver.local._packets.full()):
+                await asyncio.sleep(0)
+        first = await asyncio.wait_for(generation.close("test_end"), 3)
+        self.assertTrue(clean(first), first)
+        self.assertIs(first, await generation.close("retry"))
+        self.assertTrue(self.driver.local.connected)
+        second = await self.driver.accept(self.offer(2), asyncio.Event())
+        second.activate()
+        self.assertEqual((await second.receive()).payload, r.METADATA_FRAME)
+        await self.driver.local.barrier()
+        self.assertEqual(second._out.qsize(), 0)
+        self.assertTrue(clean(await second.close("test_end")))
 
     async def test_waiting_for_peer_observes_long_lived_endpoint_failure(self):
         await self.ready()

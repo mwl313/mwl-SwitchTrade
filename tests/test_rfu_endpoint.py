@@ -29,8 +29,8 @@ class FakeTunnel:
     def send(self, payload, **fields):
         self.sent.append((bytes(payload), fields))
 
-    def poll(self):
-        inbound, self.inbound = self.inbound, []
+    def poll(self, limit=64):
+        inbound, self.inbound = self.inbound[:limit], self.inbound[limit:]
         return inbound
 
 
@@ -154,7 +154,7 @@ class RfuEndpointTest(unittest.TestCase):
         self.assertEqual(batches, [])
         self.assertEqual(list(sim._pending_remote), [])
 
-    def test_stalled_reliable_window_fails_at_bounded_remote_backlog(self):
+    def test_stalled_reliable_window_retains_upstream_at_bounded_remote_backlog(self):
         sim, tunnel, _ = self._sim()
         sim.rel.max_inflight = 0
         tunnel.inbound.extend(
@@ -163,9 +163,11 @@ class RfuEndpointTest(unittest.TestCase):
             for sequence in range(MAX_PENDING_REMOTE + 1)
         )
 
-        with self.assertRaisesRegex(RuntimeError, "backlog overflow"):
-            sim._drive_tunnel_reliable()
+        sim._drive_tunnel_reliable()
         self.assertEqual(len(sim._pending_remote), MAX_PENDING_REMOTE)
+        self.assertEqual(len(tunnel.inbound), 1)
+        sim._drive_tunnel_reliable()
+        self.assertEqual(len(tunnel.inbound), 1)
 
     def test_bridge_rejects_payload_above_downstream_wire_limit(self):
         sim, tunnel, batches = self._sim()

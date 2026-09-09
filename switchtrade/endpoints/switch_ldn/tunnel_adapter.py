@@ -36,11 +36,14 @@ class CoreTunnelAdapter:
         self._local_to_core: Deque[LinkPacket] = deque()
         self._core_to_local: Deque[CoreRfuFrame] = deque()
         self._local_ready = asyncio.Event()
+        self._remote_space = asyncio.Event()
+        self._deliver_lock = asyncio.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._sealed = False
         self._failure: BaseException | None = None
         self._closed = False
         self._connection_generation = 1
+        self._remote_waits = self._local_deferrals = 0
         self.connected = threading.Event()
         self.connected.set()
 
@@ -51,18 +54,25 @@ class CoreTunnelAdapter:
 
     def send_rfu(self, payload: bytes, *, flags: int) -> None:
         """Admit local Reliable bytes for Core delivery, or fail before dropping state."""
+        if not self.try_send_rfu(payload, flags=flags):
+            raise SwitchLdnEndpointError(
+                "SWITCH_ENDPOINT_BACKPRESSURE", "Core tunnel outbound queue is full"
+            )
+
+    def try_send_rfu(self, payload: bytes, *, flags: int) -> bool:
+        """False leaves the local Reliable sender responsible for retransmission."""
         payload = self._validated_payload(payload)
         self._validated_flags(flags)
         with self._lock:
             self._admit_open()
             if len(self._local_to_core) >= self._capacity:
-                raise SwitchLdnEndpointError(
-                    "SWITCH_ENDPOINT_BACKPRESSURE", "Core tunnel outbound queue is full"
-                )
+                self._local_deferrals += 1
+                return False
             self._local_to_core.append(
                 LinkPacket(self._generation_id, self._protocol_id, payload, flags)
             )
         self._signal_local_ready()
+        return True
 
     async def receive_for_core(self) -> LinkPacket:
         """Wait for one local RFU frame without creating orphan helper tasks."""
@@ -83,25 +93,57 @@ class CoreTunnelAdapter:
             await self._local_ready.wait()
 
     async def deliver_from_core(self, packet: LinkPacket) -> None:
-        """Admit Core DATA for the next synchronous ``TunnelSim.poll`` call."""
-        self._validate_packet(packet)
+        """Wait for bounded local capacity without blocking the radio/ACK thread."""
+        # Copy before waiting: admission cannot later observe caller mutations.
+        packet = LinkPacket(packet.generation_id, packet.protocol_id,
+                            self._validated_payload(packet.payload), packet.flags)
         with self._lock:
+            self._validate_packet(packet)
             self._admit_open()
-            if len(self._core_to_local) >= self._capacity:
-                raise SwitchLdnEndpointError(
-                    "SWITCH_ENDPOINT_BACKPRESSURE", "Core tunnel inbound queue is full"
-                )
-            self._core_to_local.append(CoreRfuFrame(bytes(packet.payload), packet.flags))
+            epoch = self._connection_generation
+            loop = asyncio.get_running_loop()
+            if self._loop is None:
+                self._loop = loop
+            elif self._loop is not loop:
+                raise RuntimeError("Core tunnel was bound to another event loop")
+        # Serialize waiting producers so cancellation cannot reorder survivors.
+        async with self._deliver_lock:
+            while True:
+                with self._lock:
+                    self._admit_open()
+                    self._validate_packet(packet)
+                    if epoch != self._connection_generation:
+                        raise SwitchLdnEndpointError(
+                            "SWITCH_ENDPOINT_GENERATION_MISMATCH", "Core connection was replaced"
+                        )
+                    if len(self._core_to_local) < self._capacity:
+                        self._core_to_local.append(CoreRfuFrame(packet.payload, packet.flags))
+                        return
+                    self._remote_space.clear()
+                    self._remote_waits += 1
+                await self._remote_space.wait()
 
-    def poll(self) -> list[CoreRfuFrame]:
-        """Return the current Core DATA batch to TunnelSim in insertion order."""
+    def flow_status(self) -> dict[str, int]:
+        """Counts only, safe for diagnostic logs; no game or device identity."""
+        with self._lock:
+            return {"core_to_local_queue": len(self._core_to_local),
+                    "local_to_core_queue": len(self._local_to_core),
+                    "queue_capacity": self._capacity, "remote_waits": self._remote_waits,
+                    "local_deferrals": self._local_deferrals}
+
+    def poll(self, limit: int | None = None) -> list[CoreRfuFrame]:
+        """Take only downstream demand, retaining the rest in insertion order."""
+        if limit is not None and (type(limit) is not int or limit < 0):
+            raise ValueError("poll limit must be a non-negative integer")
         with self._lock:
             if self._sealed or self._closed or not self.connected.is_set():
                 self._core_to_local.clear()
                 return []
-            frames = list(self._core_to_local)
-            self._core_to_local.clear()
-            return frames
+            count = len(self._core_to_local) if limit is None else min(limit, len(self._core_to_local))
+            frames = [self._core_to_local.popleft() for _ in range(count)]
+        if frames:
+            self._signal_local_ready()
+        return frames
 
     def reset(self, generation_id: str) -> None:
         """Drop both queues before admitting a new Core connection generation."""
@@ -120,6 +162,7 @@ class CoreTunnelAdapter:
             self._local_to_core.clear()
             self._core_to_local.clear()
             self._connection_generation += 1
+            self._remote_waits = self._local_deferrals = 0
             self.connected.set()
         self._signal_local_ready()
 
@@ -198,6 +241,7 @@ class CoreTunnelAdapter:
             loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(self._local_ready.set)
+            loop.call_soon_threadsafe(self._remote_space.set)
 
 
 __all__ = ("CoreRfuFrame", "CoreTunnelAdapter")

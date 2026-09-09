@@ -78,9 +78,9 @@ class PhysicalGameInput:
         self.input = queue.Queue()
         self.output = []
 
-    def poll(self):
+    def poll(self, limit=64):
         result = []
-        while not self.input.empty():
+        while not self.input.empty() and len(result) < limit:
             result.append(self.input.get_nowait())
         return result
 

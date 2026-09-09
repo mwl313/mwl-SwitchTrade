@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from pathlib import Path
@@ -201,6 +202,7 @@ class SwitchLdnGeneration:
 
     def _drive_simulation(self) -> None:
         deadline = time.monotonic()
+        diagnostic_due = deadline
         while not self._runner_stop.is_set():
             if getattr(self._session, "end_reason", None) is not None:
                 return
@@ -208,6 +210,13 @@ class SwitchLdnGeneration:
                 return
             try:
                 self.simulation.tick()
+                if time.monotonic() >= diagnostic_due:
+                    snapshot = getattr(self.simulation, "flow_status", None)
+                    if callable(snapshot):
+                        logging.getLogger(__name__).info(
+                            "switch_rfu_progress id=%s %s", self.offer.generation_id,
+                            json.dumps(snapshot(), sort_keys=True))
+                    diagnostic_due = time.monotonic() + 5
             except BaseException as error:
                 if getattr(self._session, "end_reason", None) is not None:
                     return

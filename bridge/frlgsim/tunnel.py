@@ -29,6 +29,7 @@ class TunnelSim(Sim):
                  observer=None, local_seat="member_a", log=lambda *args: None):
         self.tunnel = tunnel
         self._pending_remote = deque()
+        self._rx_deferrals = 0
         self._tunnel_generation = getattr(tunnel, "connection_generation", None)
         self.parent = bool(parent)
         self.observer = observer
@@ -41,16 +42,41 @@ class TunnelSim(Sim):
             capture_path=capture_path, log=log,
         )
 
+    def _admit_reliable_app(self, frame):
+        # Unlike the legacy game's fragment engine, an opaque stream cannot
+        # repair reordered RFU timestamps. A declined frame stays unacknowledged;
+        # let Reliable retransmit the gap before admitting subsequent data.
+        if frame.seq != self.rel.recv_next:
+            self._rx_deferrals += 1
+            return False
+        return self._on_reliable_app(frame.flagsA, frame.payload)
+
+    def flow_status(self):
+        status = {"pending_remote": len(self._pending_remote),
+                  "reliable_inflight": self.rel.inflight(),
+                  "reliable_next_out": self.rel.out_seq, "reliable_next_in": self.rel.recv_next,
+                  "reliable_rx_deferrals": self._rx_deferrals,
+                  "pia_rx": self.rx_count, "pia_rx_failed": self.rx_fail}
+        snapshot = getattr(self.tunnel, "flow_status", None)
+        if callable(snapshot):
+            status.update(snapshot())
+        return status
+
     def _on_reliable_app(self, flags_a, payload):
         """Forward exact application bytes; no RFU opcode or activity knowledge."""
+        try_send = getattr(self.tunnel, "try_send_rfu", None)
         send_rfu = getattr(self.tunnel, "send_rfu", None)
-        if callable(send_rfu):
+        if callable(try_send):
+            if not try_send(payload, flags=flags_a):
+                return False
+        elif callable(send_rfu):
             send_rfu(payload, flags=flags_a)
         else:
             self.tunnel.send(payload, kind=Kind.RFU, flags=flags_a)
         if self.observer is not None:
             sender_role = "child" if self.parent else "parent"
             self.observer.submit(self.local_seat, sender_role, payload)
+        return True
 
     def _drain_tunnel(self):
         connected = getattr(self.tunnel, "connected", None)
@@ -61,7 +87,7 @@ class TunnelSim(Sim):
         if generation != self._tunnel_generation:
             self._pending_remote.clear()
             self._tunnel_generation = generation
-        for envelope in self.tunnel.poll():
+        for envelope in self.tunnel.poll(limit=MAX_PENDING_REMOTE - len(self._pending_remote)):
             if envelope.kind == Kind.PEER_CLOSE:
                 self.host_disconnected = True
             elif getattr(envelope.kind, "name", None) == "RFU":

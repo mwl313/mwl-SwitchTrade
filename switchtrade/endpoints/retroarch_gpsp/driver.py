@@ -242,6 +242,7 @@ class GpspGeneration:
         self._broadcast = self.translator.accept_advertisement(offer.setup_payload, generation=host)
         self._out = asyncio.Queue(MAX_QUEUE)
         self._wake = asyncio.Event()
+        self._space = asyncio.Event()
         self._lock = asyncio.Lock()
         self._advertiser = self._closing = None
         self._active = False
@@ -294,6 +295,12 @@ class GpspGeneration:
     async def _actions(self, actions):
         for action in actions:
             if action.destination == "tunnel":
+                while self._out.full() and self._closing is None:
+                    self._space.clear()
+                    await self.driver._wait(self._space.wait())
+                if self._closing is not None:
+                    return
+                self.driver._check()
                 self._enqueue(action)
             else:
                 await self.driver.local.send(action.payload, peer_id=action.peer_id)
@@ -318,6 +325,10 @@ class GpspGeneration:
             self.driver._fail(error)
 
     async def feed(self, packet):
+        # Cleanup holds _lock while awaiting the ordered Netplay barrier.
+        # Keep draining retired traffic so a full reader cannot hide its PONG.
+        if self._closing is not None:
+            return
         async with self._lock:
             if self._closing is not None:
                 return
@@ -330,6 +341,8 @@ class GpspGeneration:
             try:
                 actions = self.translator.from_core(packet.payload, peer_id=packet.peer_id, sequence=self._received)
                 await self._actions(actions)
+                if self._closing is not None:
+                    return
                 if any(action.classification == "child_transfer" for action in actions):
                     self._link_ready.set()
                 self._finish_if_closed()
@@ -365,7 +378,9 @@ class GpspGeneration:
             self.driver._check()
             if not self._out.empty():
                 self._core_dequeued += 1
-                return self._out.get_nowait()
+                packet = self._out.get_nowait()
+                self._space.set()
+                return packet
             if self._finished:
                 raise GenerationEnded()
             self._wake.clear()
@@ -382,6 +397,8 @@ class GpspGeneration:
     async def close(self, outcome):
         if self._closing is None:
             self._closing = asyncio.create_task(self._close(outcome), name="gpsp-generation-cleanup")
+            # Wake a producer holding _lock before cleanup needs that lock.
+            self._space.set()
         return await sticky_close(self._closing)
 
     async def _close(self, outcome):
