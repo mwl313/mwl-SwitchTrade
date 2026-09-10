@@ -2359,3 +2359,9 @@ archive list and regenerate the index.
   missing/duplicate/stale/invalid packets, and retain bounded waits and cleanup.
   Real stock two-generation/soak evidence remains required; modeled tests alone
   cannot close this incident's qualification gap.
+- Follow-up: run `34435836707` at `2a505b4` exposed 20 Ubuntu oracle import
+  errors: the Windows-only `_kernel` binding was imported at module scope.
+  Move that lookup into the actual Windows resource query, without skipping
+  shared oracle tests or changing product code. A fresh-process regression
+  with the binding absent reproduces the original ImportError before repair.
+  Preserve this failed run; no device recovery applies to import-only errors.

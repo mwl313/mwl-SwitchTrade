@@ -31,7 +31,7 @@ from switchtrade.connection.b_stage import DirectBStage
 from switchtrade.connection.stage_session import StageSession
 from switchtrade.endpoints.switch_ldn.generation import build_tunnelsim
 from switchtrade.endpoints.retroarch_gpsp.rfu import _gba, GBA_ACCEPT, GBA_TRANSFER
-from switchtrade.endpoints.retroarch_gpsp.process import _identity, _tcp_owners, _handle, _kernel
+from switchtrade.endpoints.retroarch_gpsp.process import _identity, _tcp_owners, _handle
 from tests.test_switch_physical_boundary import PhysicalGameInput
 from tests.virtual_ldn_os import VirtualLdnOS
 from stock_reference import StockNetplayLaunch
@@ -45,6 +45,7 @@ def resources(identity):
     """Read-only counters on an exact live process, not game-memory inspection."""
     import ctypes
     from ctypes import wintypes
+    from switchtrade.endpoints.retroarch_gpsp.process import _kernel
     assert _identity(identity.pid) == identity, "P4_PROCESS_IDENTITY_CHANGED"
     class Counters(ctypes.Structure):
         _fields_ = [("size", wintypes.DWORD), ("faults", wintypes.DWORD),

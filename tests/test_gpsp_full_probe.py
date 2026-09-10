@@ -3,9 +3,24 @@ import asyncio
 from collections import deque
 from pathlib import Path
 import struct
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
+
+
+def test_oracle_import_does_not_require_windows_handle_binding():
+    root = Path(__file__).resolve().parents[1]
+    checked = subprocess.run([sys.executable, "-c", "\n".join((
+        "import sys",
+        "sys.path.insert(0, 'tools/gpsp_qualification')",
+        "from switchtrade.endpoints.retroarch_gpsp import process",
+        "if hasattr(process, '_kernel'): del process._kernel",
+        "from tools.gpsp_qualification.full_probe import FullStackProbe",
+        "assert callable(FullStackProbe.expect_reply)",
+    ))], cwd=root, capture_output=True, text=True, timeout=15)
+    assert checked.returncode == 0, checked.stderr
 
 
 @pytest.fixture

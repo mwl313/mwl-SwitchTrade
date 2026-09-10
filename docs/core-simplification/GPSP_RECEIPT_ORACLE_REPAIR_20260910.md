@@ -55,6 +55,21 @@ nor a missing receipt can establish completed qualification.
 
 ## Completion and physical handoff
 
+### Ubuntu follow-up
+
+Run `34435836707` at `2a505b4` exposed an import portability issue in the new
+oracle checks: the full-stack harness imported Windows-only `_kernel` at
+module scope. Its lookup now occurs only inside the Windows resource query.
+A fresh-process test removes that binding, reproduces the original failure,
+then passes after the change. The shared tests stay enabled on Ubuntu; no
+product behavior, RFU cadence, cleanup or qualification threshold changes.
+
+The local soak already running from `2a505b4` is intermediate evidence only:
+its loaded implementation predates this import-only follow-up, and its final
+source-unchanged check cannot pass after the follow-up commit. Do not relabel
+that report as exact-final-SHA qualification. Fresh final-commit CI performs
+the full real-process/long-wait/soak validation on both native Python versions.
+
 Final source identity is the commit containing this record. Only generated
 `GPSP_ACCEPTANCE.final.json` / `ABC_SOFTWARE_PREFLIGHT_CLOSURE.final.json`
 artifacts after successful exact-SHA jobs attest their respective software
