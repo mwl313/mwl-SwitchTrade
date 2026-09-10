@@ -213,7 +213,7 @@ class FullStackProbe:
                 await asyncio.sleep(1 / 60)
         self.tickers.append(asyncio.create_task(tick()))
 
-    async def expect(self, prefix):
+    async def expect(self, *prefixes):
         try:
             await self.until(lambda: bool(self.game.output), timeout=15)
         except TimeoutError:
@@ -222,11 +222,32 @@ class FullStackProbe:
                 "rx": sim.rx_count, "rx_failed": sim.rx_fail, "tx": sim.tx_count,
                 "protocols": sim.rx_protos, "log": list(sim.test_log)} for sim in self.observed_sims]
             (self.launch.output / "timeout.json").write_text(json.dumps(diagnostics, indent=2), encoding="utf-8")
-            raise TimeoutError("P4_EXPECT_" + prefix.hex()) from None
+            raise TimeoutError("P4_EXPECT_" + "_OR_".join(p.hex() for p in prefixes)) from None
         payload, flags = self.game.output.popleft()
-        assert payload.startswith(prefix), (prefix, payload[:4])
-        assert flags == (15 if prefix == b"J\0" else 7)
+        assert payload.startswith(prefixes), (prefixes, payload[:4])
+        assert flags == (15 if payload.startswith(b"J\0") else 7), "P4_FRAME_FLAGS"
         return payload
+
+    async def expect_reply(self, count):
+        # WK is an independently paced transport receipt, not a gate on the
+        # game's next WT. Require BOTH; retain the early WT instead of dropping
+        # it or buffering an unbounded stream while searching for a receipt.
+        first = await self.expect(b"WK", b"WT")
+        second = await self.expect(b"WT" if first.startswith(b"WK") else b"WK")
+        receipt, data = (first, second) if first.startswith(b"WK") else (second, first)
+        # This stop-and-wait fixture sends exactly one parent WT per exchange:
+        # no idle transfers/retries, so receipt sequence and timestamp == count.
+        assert receipt == b"WK\x0c\0" + struct.pack("<III", count, 1, count), "P4_RECEIPT_MISMATCH"
+        self.receipt_verified += 1
+        self.data_before_receipt += first.startswith(b"WT")
+        return data
+
+    @staticmethod
+    def check_data(data, number, count):
+        assert (len(data) == 24 and data[:4] == b"WT\x14\0"
+                and data[8:12] == b"\0\x0c\0\0"
+                and int.from_bytes(data[4:8], "little") != 0
+                and data[12:] == struct.pack("<III", 0x53544632, number, count)), "P4_RAM_COUNTER_OR_DATA_MISMATCH"
 
     def exchange(self, number):
         async def exercise():
@@ -245,13 +266,14 @@ class FullStackProbe:
             request = await self.expect(b"WC")
             self.game.press(_gba(GBA_ACCEPT, b"\x34\x12" + request[4:6] + b"\0\0"), 15)
             started, count = time.monotonic(), 0
+            self.receipt_verified = self.data_before_receipt = 0
             samples = []
             sampled_at = -60
             minimum = self.launch.soak_seconds if number == 1 else 2
+            data = await self.expect(b"WT")
             while True:
-                data = await self.expect(b"WT")
                 count += 1
-                assert data[12:24] == struct.pack("<III", 0x53544632, number, count), "P4_RAM_COUNTER_OR_DATA_MISMATCH"
+                self.check_data(data, number, count)
                 elapsed = time.monotonic() - started
                 if elapsed - sampled_at >= 60:
                     samples.append({"seconds": elapsed, **{name: resources(identity) for name, identity in self.identities.items()}})
@@ -261,7 +283,7 @@ class FullStackProbe:
                     break  # Leave the game awaiting RFU; real radio loss ends it.
                 self.game.press(_gba(GBA_TRANSFER, count.to_bytes(4, "little") + b"\x0c\0\0\0" +
                     struct.pack("<III", 0x53544832, number, count)), 7)
-                await self.expect(b"WK")
+                data = await self.expect_reply(count)
                 # The game's real RFU request/reply already paces this loop.
                 # An extra half-second hides throughput/queue regressions.
             elapsed = time.monotonic() - started
@@ -283,6 +305,8 @@ class FullStackProbe:
             return {"round": number, "in_ram_counter": number, "same_pair": True,
                 "local_netplay_retained": True, "native_discovery_gate": True,
                 "bidirectional_exchanges": count - 1,
+                "receipt_verified_exchanges": self.receipt_verified,
+                "data_before_receipt": self.data_before_receipt,
                 "real_traffic_seconds": elapsed, "game_wait_seconds": game_wait,
                 "local_netplay_wait_seconds": self.local_wait, "radio_room_end": True,
                 "encrypted_ldn_frames": self.os.decrypted_frames, "resource_samples": samples}

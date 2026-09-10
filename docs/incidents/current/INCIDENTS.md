@@ -2338,3 +2338,24 @@ archive list and regenerate the index.
   and same-Pair second-generation cleanup. Hardware/frontend input is modeled;
   the cadence and commercial game still require an authorized physical test.
   See `GPSP_JOIN_CADENCE_REPAIR_20260910.md` for proof and limitations.
+
+### MTA-QA-027 — Stock qualification assumed receipt-before-data ordering
+
+- First failure: CI run `34396624238`, source `42f973427b8adc29e60fa3bf5f0012dcd8902a2d`,
+  both native Windows Python 3.12/3.14 full-stack probes failed. The 3.14 job
+  `102617834646` reports `AssertionError: (b'WK', b'WT\\x14\\x00')` in
+  `FullStackProbe.expect()` after its first exchange. Ubuntu passed. Neither
+  two-room nor 30-minute actual-process qualification completed.
+- The endpoint now defers WK receipts independently of distinct WT game data.
+  The harness still assumed WK must be the next packet after each parent WT.
+  Do not remove receipt verification, discard early data, or label the result
+  a harmless CI failure without testing the corrected transaction oracle.
+- Remote failure evidence reports connection cleanup, test process exit zero,
+  process-handle/private-desktop cleanup and unchanged stock/source trees. No
+  local physical trial was started; remote residue is report evidence, not a
+  claim of independently inspecting a retired runner. Preserve the CI failure.
+- Retry only with fresh isolated homebrew outputs. Require the exact correlated
+  receipt and the next unmodified round/counter payload in either order, reject
+  missing/duplicate/stale/invalid packets, and retain bounded waits and cleanup.
+  Real stock two-generation/soak evidence remains required; modeled tests alone
+  cannot close this incident's qualification gap.

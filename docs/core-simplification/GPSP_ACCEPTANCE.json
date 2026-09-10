@@ -7,6 +7,7 @@
   "verdict": "NOT_ATTESTED",
   "software_gaps": [],
   "latest_repair_evidence": "docs/core-simplification/GPSP_JOIN_CADENCE_REPAIR_20260910.md",
+  "latest_qualification_evidence": "docs/core-simplification/GPSP_RECEIPT_ORACLE_REPAIR_20260910.md",
   "latest_repair_boundary": "Trial10 NI/WK head-of-line repair: modeled deadline, lost native reply, timestamp receipt recovery and same-Pair two-generation regression. Native retry/receipt cadence and commercial game trade remain physically unverified. No new final-SHA CI or actual-stock-process result is implied by this source manifest.",
   "scope": "Switch origin to native RetroArch/gpSP mirror, qualified empty English FR/LG Direct Corner Trade profile only. Search-record conversion and native INIT WA are repaired; unsupported nonzero/other-activity discovery fields fail closed. New discovery-checking homebrew and exact-SHA full qualification are mandatory. See GPSP_ADVERTISEMENT_REPAIR_20260909.md. Commercial Pokemon discovery/trade and broader game states are not attested by homebrew evidence.",
   "acceptance": [

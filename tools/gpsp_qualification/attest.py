@@ -51,6 +51,10 @@ def validate_report(report, kind, sha, python_version="3.12"):
         if (not all(row.get(k) is True for k in ("same_pair", "local_netplay_retained", "radio_room_end", "native_discovery_gate"))
                 or row.get("bidirectional_exchanges", 0) < 2 or row.get("encrypted_ldn_frames", 0) < 5):
             raise ValueError("full data/lifecycle path not proven")
+        if (row.get("receipt_verified_exchanges") != row["bidirectional_exchanges"]
+                or type(row.get("data_before_receipt")) is not int
+                or not 0 <= row["data_before_receipt"] <= row["receipt_verified_exchanges"]):
+            raise ValueError("correlated receipts not proven")
     samples = first.get("resource_samples", [])
     if len(samples) < 30 or samples[-1]["seconds"] < 1800:
         raise ValueError("resource soak missing")
