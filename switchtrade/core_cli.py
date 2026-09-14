@@ -414,6 +414,7 @@ async def _wait_gpsp_bridge(supervisor, generation):
             return
         await ready
         print("Bridge active.", flush=True)
+        print("RFU link established; game-room entry and trade are not yet confirmed.", flush=True)
         await ended
     finally:
         for task in (ended, ready):

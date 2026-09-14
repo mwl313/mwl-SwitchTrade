@@ -111,6 +111,44 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
     def offer(self, index=1):
         return GenerationOffer(f"room-{index}", PROTOCOL, EndpointKind.SWITCH_LDN, advertisement())
 
+    async def test_pending_uni_cleanup_and_next_generation_keep_only_local_connection(self):
+        from bridge.frlgsim.rfu import parent_uni_slot
+        await self.ready()
+        local = self.driver.local
+        for number in (1, 2):
+            generation = await self.driver.accept(self.offer(number), asyncio.Event())
+            generation.activate()
+            await generation.receive()
+            await self.peer.receive(r.RFU1_BROADCAST)
+            await self.peer.send(r.RFU1_CONNECT_REQ, generation.host)
+            await generation.receive()
+            accept = gba(r.GBA_ACCEPT, HOST_SESSION.to_bytes(2, "little") +
+                         generation.child.to_bytes(2, "little") + b"\0\0")
+            await generation.send(LinkPacket(generation.offer.generation_id, PROTOCOL, accept, 15))
+            await self.peer.receive(r.RFU1_CONNECT_ACK)
+            for timestamp in (1, 2):
+                await generation.send(LinkPacket(generation.offer.generation_id, PROTOCOL,
+                    parent_t(timestamp, parent_uni_slot([bytes(14)])), 7))
+            await self.peer.receive(r.RFU1_HOST_SEND)
+            await self.peer.send(r.RFU1_CLIENT_ACK, generation.child)
+            self.assertEqual((await generation.receive()).payload[:2], b"WK")
+            self.assertEqual(generation.translator.snapshot()["uni_waiting"], 1)
+            closing = asyncio.create_task(generation.close("cancelled"))
+            await asyncio.sleep(0)
+            closing.cancel()
+            report = await closing
+            self.assertTrue(clean(report))
+            self.assertIs(report, await generation.close("again"))
+            self.assertIs(self.driver.local, local)
+            self.assertTrue(local.connected)
+            self.assertTrue(generation._out.empty())
+            self.assertEqual(generation.translator.snapshot()["uni_waiting"], 0)
+            self.assertIsNone(generation.translator.snapshot()["uni_inflight"])
+            with self.assertRaises(GpspError) as stale:
+                await generation.send(LinkPacket(generation.offer.generation_id, PROTOCOL,
+                                                parent_t(3, b"late"), 7))
+            self.assertEqual(stale.exception.code, "EMULATOR_GENERATION_STALE")
+
     async def test_search_diagnostics_are_bounded_private_and_generation_scoped(self):
         await self.ready()
         with self.assertLogs("switchtrade.endpoints.retroarch_gpsp.driver", level="INFO") as logs:

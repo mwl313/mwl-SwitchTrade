@@ -31,6 +31,17 @@ environment details. Do not commit screenshots or frontend logs. A P0 pass only
 proves this stock attach/exchange/detach/reattach flow; it does not qualify the
 new Core endpoint, full integration, soak or physical interoperability.
 
+`clock.cpp` reuses `qualification.cpp` startup/discovery and tests real inverted
+RFU clock (`wait` / `sendDataAndWait`), causal NI followed by sustained UNI,
+two all-zero idle frames, command-shaped test counters, five parent rows and
+child tag wrap. A 90-frame delayed consumer receives a twelve-UNI burst without
+loss. Build using `--source-name clock.cpp`; run `p0_attach.py --full-stack
+--clock-change --wait-seconds 1 --soak-seconds 60` with `clock.gba`.
+The opposite oracle checks each exact WK timestamp and child payload, then
+repeats on the same process/Pair/Netplay. It is mandatory in Windows CI in
+addition to (not instead of) the original continuity and 30-minute polling tests.
+The native-shaped commands are not a commercial game/trade implementation.
+
 `host_probe.cpp` reuses these runtime helpers for a test-only RFU Host. Build it
 with `--source-name host_probe.cpp`. The `--production-local --host-role-probe`
 harness scenario creates/removes one RFU slot twice on a retained connection.

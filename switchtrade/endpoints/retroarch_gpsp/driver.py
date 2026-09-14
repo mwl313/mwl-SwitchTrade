@@ -6,7 +6,7 @@ control belongs here; only our loopback stream and RFU peer are owned.
 from __future__ import annotations
 
 import asyncio
-from collections import Counter
+from collections import Counter, deque
 import json
 import logging
 import time
@@ -256,6 +256,8 @@ class GpspGeneration:
         self._gpsp_kinds = Counter()
         self._diagnostic_state = None
         self._diagnostic_due = 0.0
+        self._uni_wire_start = []
+        self._wire_recent = deque(maxlen=24)
 
     def _diagnose(self, event, *, force=False):
         # Counts/types only: no advertisement, RFU bytes, names, RFU IDs or saves.
@@ -276,6 +278,11 @@ class GpspGeneration:
             "disconnected_by": self.translator.disconnected_by,
             "llsf": self.translator.progress.snapshot(),
             "cadence": self.cadence.snapshot(),
+            "transfer": {key: value for key, value in self.translator.snapshot().items()
+                         if key in ("group_state", "pending_core_acks", "uni", "uni_inflight",
+                                    "uni_waiting", "recent_transfers")},
+            "uni_wire_start": self._uni_wire_start,
+            "wire_recent": list(self._wire_recent),
         }, sort_keys=True))
 
     def activate(self):
@@ -293,6 +300,13 @@ class GpspGeneration:
         try:
             self._out.put_nowait(LinkPacket(self.offer.generation_id, PROTOCOL, action.payload, action.flags))
             self._core_enqueued += 1
+            if action.classification in ("parent_ack", "child_transfer"):
+                entry = {"ordinal": self._core_enqueued, "kind": action.classification,
+                         "timestamp": int.from_bytes(action.payload[12:16] if action.classification == "parent_ack"
+                                                     else action.payload[4:8], "little")}
+                self._wire_recent.append(entry)
+                if self.cadence.snapshot()["ordered_receipts"] and len(self._uni_wire_start) < 24:
+                    self._uni_wire_start.append(entry)
             self._wake.set()
         except asyncio.QueueFull as error:
             raise GpspError("EMULATOR_QUEUE_FULL", "RFU 송신 대기열이 가득 찼습니다.") from error
@@ -420,6 +434,7 @@ class GpspGeneration:
         errors = []
         async with self._lock:
             self.cadence.close()
+            self.translator.retire()
             try:
                 # NACK retires a CONNECTING core; DISCONNECT retires a CLIENT.
                 # A stream loss cannot prove callback delivery: fail closed.

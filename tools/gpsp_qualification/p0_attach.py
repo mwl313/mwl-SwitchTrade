@@ -97,7 +97,10 @@ def host_probe(connection, round_number):
 def run(root: Path, fixture: Path, output: Path, production_local: bool = False,
         rfu_mode: str = "rfu", rfu_probe: bool = False, core_endpoint: bool = False,
         host_role_probe: bool = False, native_doctor: bool = False,
-        full_stack: bool = False, wait_seconds: float = 181, soak_seconds: float = 1800):
+        full_stack: bool = False, wait_seconds: float = 181, soak_seconds: float = 1800,
+        clock_change: bool = False):
+    if clock_change and not full_stack:
+        raise ValueError("clock-change requires the full production path")
     if full_stack and (core_endpoint or host_role_probe or rfu_probe or native_doctor):
         raise ValueError("full-stack is a separate qualification mode")
     if core_endpoint and (rfu_probe or not production_local):
@@ -137,6 +140,9 @@ def run(root: Path, fixture: Path, output: Path, production_local: bool = False,
     if full_stack:
         from full_probe import FullStackLaunch
         launch_type = FullStackLaunch
+        if clock_change:
+            from clock_probe import ClockLaunch
+            launch_type = ClockLaunch
     launch = launch_type(content_path=fixture, handshake_timeout=20)
     # Test profile only: leave Quick Menu and Netplay as the first two main items.
     isolated_config = config.read_text().replace('video_driver = "null"', 'video_driver = "sdl2"')
@@ -184,6 +190,7 @@ def run(root: Path, fixture: Path, output: Path, production_local: bool = False,
     if core_endpoint:
         report["scope"] = "P2 real Core/relay/gpSP; modeled Switch boundary, not P4 or physical qualification"
     report["full_stack"] = full_stack
+    report["clock_change"] = clock_change
     if full_stack:
         report["scope"] = "P4 native dev/CLI + real Core/relay/DirectA/StageSession/LDN/TunnelSim + stock gpSP; only OS/physical game input substituted"
     report["test_rfu_mode"] = rfu_mode
@@ -329,6 +336,7 @@ if __name__ == "__main__":
     parser.add_argument("--host-role-probe", action="store_true")
     parser.add_argument("--native-doctor", action="store_true")
     parser.add_argument("--full-stack", action="store_true")
+    parser.add_argument("--clock-change", action="store_true")
     parser.add_argument("--wait-seconds", type=float, default=181)
     parser.add_argument("--soak-seconds", type=float, default=1800)
     run(**vars(parser.parse_args()))

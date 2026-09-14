@@ -12,7 +12,8 @@ MANIFEST = ROOT / "docs/core-simplification/GPSP_ACCEPTANCE.json"
 RA = "81c11b6f24932bf7918f05eee8928035bff3887335fd2a081507c75e9d94d06a"
 CORE = "c84f619c1077a7fbae84c385df752fbeb867d301880400add7cce6a380dbd516"
 FIXTURES = {"continuity": "cfb0a21e1504931d7589a30b125ff3bbdf9211116a7bea690cfecadf031a2720",
-    "full": "8dc38db4b62b1fd66ce2ee390db66b22e040b5da7f4138470f7c318e9fe1c9ea"}
+    "full": "8dc38db4b62b1fd66ce2ee390db66b22e040b5da7f4138470f7c318e9fe1c9ea",
+    "clock": "2240ef62642e5eb8e2e2a967532b5926a09a2cd7fe19eb87cec4e175fdfa5a25"}
 
 
 def validate_report(report, kind, sha, python_version="3.12"):
@@ -31,7 +32,7 @@ def validate_report(report, kind, sha, python_version="3.12"):
         raise ValueError("source/runtime/fixture identity mismatch")
     if report.get("test_process_forced_exit") or report.get("test_process_exit") != 0 or report.get("stock_tree_delta") != []:
         raise ValueError("cleanup or isolation not proven")
-    expected = 1 if kind == "full" else 2
+    expected = 2 if kind == "continuity" else 1
     if report.get("socket_cleanup") != [True] * expected or report.get("netplay_handshakes") != expected:
         raise ValueError("connection lifetime/cleanup not proven")
     rows = report.get("rounds", [])
@@ -44,7 +45,7 @@ def validate_report(report, kind, sha, python_version="3.12"):
     if not report.get("full_stack"):
         raise ValueError("modeled P2 is not full qualification")
     first = rows[0]
-    if (first.get("real_traffic_seconds", 0) < 1800 or first.get("game_wait_seconds", 0) <= 180
+    if kind == "full" and (first.get("real_traffic_seconds", 0) < 1800 or first.get("game_wait_seconds", 0) <= 180
             or first.get("local_netplay_wait_seconds", 0) <= 180):
         raise ValueError("real human waiting/30-minute traffic not proven")
     for row in rows:
@@ -55,6 +56,15 @@ def validate_report(report, kind, sha, python_version="3.12"):
                 or type(row.get("data_before_receipt")) is not int
                 or not 0 <= row["data_before_receipt"] <= row["receipt_verified_exchanges"]):
             raise ValueError("correlated receipts not proven")
+    if kind == "clock":
+        if not report.get("clock_change") or first.get("real_traffic_seconds", 0) < 60:
+            raise ValueError("real clock-change traffic missing")
+        for row in rows:
+            if (row.get("clock_change") is not True or row.get("causal_ni") is not True
+                    or row.get("burst_uni_exchanges", 0) < 12 or row.get("parent_rows") != 5
+                    or row.get("child_tag_wrap") is not True):
+                raise ValueError("causal NI/UNI burst and tag progression missing")
+        return
     samples = first.get("resource_samples", [])
     if len(samples) < 30 or samples[-1]["seconds"] < 1800:
         raise ValueError("resource soak missing")

@@ -13,7 +13,7 @@ import struct
 from typing import Final
 
 from .errors import GpspError
-from .progress import RfuProgress
+from .progress import RfuProgress, uni_slot
 
 
 RFU1_MAGIC: Final = 0x52465531
@@ -198,6 +198,10 @@ class RfuTranslator:
         self._k_sequence = 0
         self._pending_parent_timestamps: deque[int] = deque()
         self._parent_timestamps: OrderedDict[int, bytes] = OrderedDict()
+        self._uni_active = False
+        self._uni_inflight: int | None = None
+        self._uni_waiting: deque[tuple[int, bytes]] = deque()
+        self._trace: deque[dict] = deque(maxlen=24)
         self._sequence_last = {"core": 0, "remote": 0}
         self._sequence_cache: dict[str, OrderedDict[int, tuple[bytes, tuple[TranslatorAction, ...]]]] = {
             "core": OrderedDict(), "remote": OrderedDict(),
@@ -206,6 +210,17 @@ class RfuTranslator:
     @property
     def assignment(self) -> int:
         return self.gpsp_device_id | (self.gpsp_slot << 16)
+
+    def retire(self):
+        """Erase generation-owned queued data; never revive failed state."""
+        self._uni_waiting.clear()
+        self._uni_inflight = None
+        self._pending_parent_timestamps.clear()
+        self._parent_timestamps.clear()
+        for cache in self._sequence_cache.values():
+            cache.clear()
+        if self._failure is None:
+            self.state = "closed"
 
     def snapshot(self) -> dict:
         return {
@@ -218,6 +233,10 @@ class RfuTranslator:
             "pending_core_acks": len(self._pending_parent_timestamps),
             "disconnected_by": self.disconnected_by,
             "llsf": self.progress.snapshot(),
+            "uni": self.progress.uni_snapshot(),
+            "uni_inflight": self._uni_inflight,
+            "uni_waiting": len(self._uni_waiting),
+            "recent_transfers": list(self._trace),
         }
 
     def _fail(self, code: str, message: str):
@@ -326,15 +345,30 @@ class RfuTranslator:
                 self._child_timestamp = 1
             padded = slot + b"\0" * ((-len(slot)) & 3)
             frame_body = timestamp.to_bytes(4, "little") + bytes((0, len(slot), 0, 0)) + padded
-            return (TranslatorAction(
+            action = TranslatorAction(
                 "tunnel", _gba(GBA_TRANSFER, frame_body),
-                "child_transfer", flags=FLAGS_GBA),)
+                "child_transfer", flags=FLAGS_GBA)
+            self._trace.append({"event": "child_transfer", "timestamp": timestamp,
+                                "uni": uni_slot(slot, parent=False)})
+            # In the qualified FRLG child MSC path, a UNI reply follows a
+            # receiveData read. CLIENT_ACK alone precedes buffer admission and
+            # is NOT consumption credit. Keep only one recognized UNI in gpSP
+            # until that causal reply, including across arbitrary user waits.
+            if (self._uni_inflight is not None and uni_slot(slot, parent=False)
+                    and self._uni_inflight not in self._pending_parent_timestamps):
+                self._uni_inflight = None
+                delivery = []
+                while self._uni_waiting and self._uni_inflight is None:
+                    delivery.append(self._deliver_parent(*self._uni_waiting.popleft()))
+                return (action, *delivery)
+            return (action,)
         if packet_type == RFU1_CLIENT_ACK:
             if self.state != "connected" or header != self.assignment:
                 self._fail("TRANSLATOR_CLIENT_ACK", "gpSP acknowledgement is invalid")
             if not self._pending_parent_timestamps:
                 self._fail("TRANSLATOR_ACK_UNCORRELATED", "gpSP acknowledgement is uncorrelated")
             timestamp = self._pending_parent_timestamps.popleft()
+            self._trace.append({"event": "local_receipt", "timestamp": timestamp})
             return (self._switch_ack(timestamp),)
         if packet_type == RFU1_DISCONNECT:
             if self.state not in ("connecting", "connected") or header not in (
@@ -424,12 +458,16 @@ class RfuTranslator:
             # Do not deliver a repeated timestamp to the game's four-slot RFU
             # buffer again. Once its local receipt exists (or it was idle), a
             # repeated WT can recover an unsent/lost WK. This is not an NI ACK.
-            return () if timestamp in self._pending_parent_timestamps else (self._switch_ack(timestamp),)
+            waiting = timestamp in self._pending_parent_timestamps or any(t == timestamp for t, _ in self._uni_waiting)
+            self._trace.append({"event": "parent_repeat", "timestamp": timestamp, "waiting": waiting})
+            return () if waiting else (self._switch_ack(timestamp),)
         if self._parent_timestamps:
             last = next(reversed(self._parent_timestamps))
             delta = (timestamp - last) & 0xFFFFFFFF
             if delta == 0 or delta >= 0x80000000:
                 self._fail("TRANSLATOR_TIMESTAMP_REORDERED", "Switch timestamp is not monotonic")
+        if self._uni_active and len(self._uni_waiting) >= MAX_PENDING - 1:
+            self._fail("TRANSLATOR_QUEUE_FULL", "The emulator is not consuming RFU data; forwarding stopped safely")
         self._parent_timestamps[timestamp] = raw
         while len(self._parent_timestamps) > MAX_PENDING:
             self._parent_timestamps.popitem(last=False)
@@ -441,10 +479,21 @@ class RfuTranslator:
         if any(body[8 + slot_length:]):
             self._fail("TRANSLATOR_PARENT_PADDING", "Switch parent transfer padding is invalid")
         self.progress.observe(slot, parent=True)
+        self._trace.append({"event": "parent_transfer", "timestamp": timestamp,
+                            "uni": uni_slot(slot, parent=True)})
+        self._uni_active |= uni_slot(slot, parent=True)
+        if self._uni_inflight is not None:
+            self._uni_waiting.append((timestamp, slot))
+            return ()
+        return (self._deliver_parent(timestamp, slot),)
+
+    def _deliver_parent(self, timestamp: int, slot: bytes) -> TranslatorAction:
+        if uni_slot(slot, parent=True):
+            self._uni_inflight = timestamp
         self._pending_parent_timestamps.append(timestamp)
-        return (TranslatorAction(
-            "core", _rfu1(RFU1_HOST_SEND, slot_length, slot),
-            "parent_transfer", peer_id=0),)
+        self._trace.append({"event": "local_delivery", "timestamp": timestamp})
+        return TranslatorAction("core", _rfu1(RFU1_HOST_SEND, len(slot), slot),
+                                "parent_transfer", peer_id=0)
 
     def _switch_ack(self, timestamp: int) -> TranslatorAction:
         self._k_sequence = (self._k_sequence + 1) & 0xFFFFFFFF

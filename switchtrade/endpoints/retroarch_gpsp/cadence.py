@@ -1,4 +1,4 @@
-"""Bound the gpSP RFU radio's repeated NI / unsent receipt traffic.
+"""Bound NI retries and NI-phase receipts; keep UNI-phase receipts lossless.
 
 This is endpoint conversion policy, not Core packet loss or game ACK synthesis.
 Only a single, recognized NI subframe may be paced; distinct data, UNI, mixed
@@ -7,6 +7,7 @@ every retry. A paced copy never allocates a Core sequence or a Reliable slot.
 """
 from dataclasses import replace
 import time
+from .progress import uni_slot
 
 
 # Radio retry cadence, NOT a human-wait or game timeout. Trial10 accumulated
@@ -26,21 +27,33 @@ class RfuCadence:
         self._receipt_sequence = 0
         self._closed = False
         self.ni_paced = self.receipts_coalesced = 0
+        self._ordered_receipts = False
+        self._last_receipt_timestamp = None
 
     def admit(self, actions):
         output = []
         for action in actions:
             if self._closed:
                 break
+            if action.classification == "parent_transfer":
+                size = int.from_bytes(action.payload[8:12], "big")
+                if uni_slot(action.payload[12:12 + size], parent=True):
+                    # Clock-driven UNI is not the free-running NI retry phase.
+                    # Retire its predecessor's deferred receipt before entering
+                    # lossless receipt mode; every later callback keeps its WK.
+                    self._ordered_receipts = True
+                    output.extend(self.poll(force=True))
             if action.classification == "parent_ack":
-                # Keep one unsent receipt, not a growing history. This does NOT
+                # During NI keep one unsent receipt, not a growing history.
+                # After the first UNI, emit each receipt without replacement.
+                # This does NOT
                 # acknowledge a game NI transaction or earlier timestamps.
                 # The translator can reissue a WK when the Switch repeats a
                 # known WT whose local receipt has already completed.
                 if self._receipt is not None:
                     self.receipts_coalesced += 1
                 self._receipt = action
-                output.extend(self.poll())
+                output.extend(self.poll(force=self._ordered_receipts))
                 continue
             if action.classification == "child_transfer":
                 payload = action.payload
@@ -83,13 +96,14 @@ class RfuCadence:
         self._lanes[lane] = (bytes(slot), now + NI_RETRY_SECONDS)
         return True
 
-    def poll(self):
-        if self._closed or self._receipt is None or self.clock() < self._receipt_due:
+    def poll(self, *, force=False):
+        if self._closed or self._receipt is None or (not force and self.clock() < self._receipt_due):
             return ()
         action, self._receipt = self._receipt, None
         self._receipt_due = self.clock() + RECEIPT_SECONDS
         # Number receipts when actually admitted, not when replaced while local.
         self._receipt_sequence = self._receipt_sequence % 0xFFFFFFFF + 1
+        self._last_receipt_timestamp = int.from_bytes(action.payload[12:16], "little")
         return (replace(action, payload=action.payload[:4] +
                         self._receipt_sequence.to_bytes(4, "little") + action.payload[8:]),)
 
@@ -101,4 +115,7 @@ class RfuCadence:
 
     def snapshot(self):
         return {"ni_paced": self.ni_paced, "receipts_coalesced": self.receipts_coalesced,
-                "receipt_pending": int(self._receipt is not None), "ni_lanes": len(self._lanes)}
+                "receipt_pending": int(self._receipt is not None), "ni_lanes": len(self._lanes),
+                "ordered_receipts": self._ordered_receipts,
+                "receipt_sequence": self._receipt_sequence,
+                "last_receipt_timestamp": self._last_receipt_timestamp}

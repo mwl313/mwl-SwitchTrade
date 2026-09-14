@@ -2365,3 +2365,24 @@ archive list and regenerate the index.
   shared oracle tests or changing product code. A fresh-process regression
   with the binding absent reproduces the original ImportError before repair.
   Preserve this failed run; no device recovery applies to import-only errors.
+
+### MTA-GPSP-007 — Accepted native room stalled at the first UNI exchange
+
+- Trial11 at `1c28aa2` completed both directions of NI and displayed native
+  trainer acceptance, then stopped after one parent-70/child-14 UNI exchange.
+  Lower transport remained live; an empty Core queue was not game progress.
+  Prior logs lacked correlated WT/WK identities, so the exact cause is unproven.
+- Preserve private logs/screens/source identities and prior owner-bound Host
+  shutdown, absent processes/VIFs and returned acquired USB lease. VM cleanup
+  remains user evidence, not independently observed. No physical retry, WSL,
+  USB or user-emulator recovery occurs in this software packet.
+- Source review found latest-only receipts still applied after UNI, and stock
+  gpSP callback ACK precedes four-slot buffer admission. Preserve each UNI-phase
+  receipt and bound qualified single-UNI delivery by the FRLG child's causal
+  reply, never callback ACK alone. Unknown formats stay opaque; first failure
+  and cleanup failure remain distinct, and unknown cleanup blocks readmission.
+- Require actual stock inverted-clock homebrew, causal NI, delayed-consumer
+  burst beyond four frames, sustained UNI and same-Pair/process two generations.
+  New bounded diagnostics preserve numeric correlation without game payloads.
+  Keep native integration closure open: neither this homebrew nor Bridge active
+  proves commercial room entry/trade. See `GPSP_UNI_TRANSITION_REPAIR_20260914.md`.

@@ -177,8 +177,8 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
             word = int.from_bytes(slot[:3], "little")
             if (word >> 14) & 15 != native.LCOM_NULL:
                 await from_child(ni.recv_ack_slot((word >> 14) & 15, (word >> 11) & 3, (word >> 9) & 3))
-        await from_child(native.uni_slot(bytes(14)))
         await from_parent(native.parent_uni_slot([bytes(14)]))
+        await from_child(native.uni_slot(bytes(14)))
         progress = generation.translator.progress.snapshot()
         for side in ("child", "parent"):
             self.assertEqual(progress[side]["unknown_slots"], 0)

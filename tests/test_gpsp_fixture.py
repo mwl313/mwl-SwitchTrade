@@ -18,6 +18,9 @@ def test_gpsp_attach_fixture_provenance():
     assert hashlib.sha256((FIXTURE / "qualification.gba").read_bytes()).hexdigest() == qualification["binary_sha256"]
     source = (FIXTURE / "qualification.cpp").read_text(encoding="utf-8").encode()
     assert hashlib.sha256(source).hexdigest() == qualification["source_sha256"]
+    clock = provenance["clock"]
+    assert hashlib.sha256((FIXTURE / "clock.gba").read_bytes()).hexdigest() == clock["binary_sha256"]
+    assert hashlib.sha256((FIXTURE / "clock.cpp").read_text(encoding="utf-8").encode()).hexdigest() == clock["source_sha256"]
 
 
 def test_test_process_launcher_is_not_in_the_product():

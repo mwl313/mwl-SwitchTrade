@@ -64,6 +64,7 @@ def resources(identity):
 
 
 class FullStackLaunch(StockNetplayLaunch):
+    probe_type = None
     def configure(self, controls, output, wait_seconds, soak_seconds):
         self.controls, self.output = controls, output
         self.wait_seconds, self.soak_seconds = wait_seconds, soak_seconds
@@ -82,7 +83,7 @@ class FullStackLaunch(StockNetplayLaunch):
 
     def open(self, *, process):
         self.listener.close()
-        value = FullStackProbe(self, process)
+        value = (self.probe_type or FullStackProbe)(self, process)
         try:
             value.call(value.open(), timeout=self.wait_seconds + 100)
             return value
@@ -250,6 +251,13 @@ class FullStackProbe:
                 and int.from_bytes(data[4:8], "little") != 0
                 and data[12:] == struct.pack("<III", 0x53544632, number, count)), "P4_RAM_COUNTER_OR_DATA_MISMATCH"
 
+    async def begin_data(self, number):
+        return await self.expect(b"WT")
+
+    def parent_frame(self, number, count):
+        return _gba(GBA_TRANSFER, count.to_bytes(4, "little") + b"\x0c\0\0\0" +
+                    struct.pack("<III", 0x53544832, number, count))
+
     def exchange(self, number):
         async def exercise():
             if number == 2:
@@ -271,7 +279,8 @@ class FullStackProbe:
             samples = []
             sampled_at = -60
             minimum = self.launch.soak_seconds if number == 1 else 2
-            data = await self.expect(b"WT")
+            data = await self.begin_data(number)
+            started = time.monotonic()  # setup/NI waiting is not sustained traffic
             while True:
                 count += 1
                 self.check_data(data, number, count)
@@ -282,8 +291,7 @@ class FullStackProbe:
                     print(f"P4 round={number} exchanges={count} elapsed={elapsed:.1f}s", flush=True)
                 if count > 1 and time.monotonic() - started >= minimum:
                     break  # Leave the game awaiting RFU; real radio loss ends it.
-                self.game.press(_gba(GBA_TRANSFER, count.to_bytes(4, "little") + b"\x0c\0\0\0" +
-                    struct.pack("<III", 0x53544832, number, count)), 7)
+                self.game.press(self.parent_frame(number, count), 7)
                 data = await self.expect_reply(count)
                 # The game's real RFU request/reply already paces this loop.
                 # An extra half-second hides throughput/queue regressions.

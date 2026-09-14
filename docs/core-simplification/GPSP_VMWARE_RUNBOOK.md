@@ -1,15 +1,84 @@
 # Switch ↔ RetroArch/gpSP: VMware Windows 11 physical test
 
-**2026-09-09: advertisement/native WA repair; final qualification is still required.**
-See [repair evidence and support limits](GPSP_ADVERTISEMENT_REPAIR_20260909.md).
+**2026-09-14: trial11 NI-to-UNI test candidate; native integration remains open.**
+See [current repair and qualification limits](GPSP_UNI_TRANSITION_REPAIR_20260914.md).
 Use an empty English FR/LG Direct Corner **Trade** Group Leader room. Other
 activities and unqualified nonzero discovery fields fail closed; do not test
 battle/Mystery Gift as if they were supported by this repair.
 
-Execute only after `GPSP_ACCEPTANCE.final.json` and both platform jobs for the
+For qualified use, execute only after `GPSP_ACCEPTANCE.final.json` and both platform jobs for the
 same literal SHA are successful. This document is preparation, not a Pokémon
 trade result. Keep `main` and existing work intact; use the qualified feature
 branch SHA in all three checkouts. Do not merge unqualified changes.
+The current candidate is for a separately authorized diagnostic trial, not
+qualified use. Its acceptance intentionally remains blocked by the unresolved
+native UNI stall; successful software jobs must not relabel that as completion.
+
+## Next diagnostic trial: update, then stop at the first failure
+
+No new RetroArch/core/Python install or relay deployment is needed for this
+endpoint-only repair. Stop the prior SwitchTrade clients normally; preserve
+their logs and prove owned cleanup first. Keep the user's emulator/content
+independent. No reset/reload or settings overwrite is part of the update.
+
+In the VM, run each block separately (copy commands only, no `PS ...>` prompt).
+Replace `C:/path/to/switchtrade-gpsp` with the existing VM checkout path:
+
+```powershell
+Set-Location -LiteralPath 'C:/path/to/switchtrade-gpsp'
+```
+
+```powershell
+git status --short
+```
+
+If user changes are present, preserve them; do not reset or overwrite them.
+
+```powershell
+git pull --ff-only origin codex/gpsp-endpoint
+```
+
+```powershell
+git log -1 --oneline
+```
+
+```powershell
+.\dev.ps1 doctor --emulator gpsp
+```
+
+The Host checkout must use the same exact commit, with its normal verified
+`dev.ps1 sync` and source-bound WSL/radio gates. Do not run an old overlay if
+sync fails. Host starts `dev.ps1 run host` with the common relay and a fresh
+opt-in log directory. Obtain a **new** Pair code; none in an earlier chat is
+valid evidence for this attempt.
+
+In the VM, replace `NEW_CODE` below with that actual six-digit code before
+executing. Use a fresh directory if trial12 already exists.
+
+```powershell
+.\dev.ps1 run join NEW_CODE --emulator gpsp --relay https://relay.pangyostonefist.org --log-dir .qualification/physical-gpsp-12
+```
+
+Manually connect RetroArch Netplay to `127.0.0.1:55435`; wait for `Choose Join
+Group in the emulator.` before choosing the game action. Confirm the intended
+trainer, select it once and accept on Switch. Keep game foreground and menus
+closed. `Bridge active.` means RFU data, not game room success. First require
+both games to leave the acceptance/member-wait screens; only then follow the
+normal trade flow with user-backed-up test saves. Never interrupt a save.
+
+If it stalls, do not reconnect or reselect repeatedly. Capture both screens,
+action times and both complete opt-in logs. In a second VM PowerShell window:
+
+```powershell
+Get-Content -LiteralPath (Join-Path 'C:/path/to/switchtrade-gpsp' '.qualification/physical-gpsp-12/switchtrade-core.log') -Tail 100
+```
+
+`transfer.uni`, `uni_inflight`, `uni_waiting`, `recent_transfers`,
+`uni_wire_start` and `wire_recent` now distinguish first UNI, local callback
+receipt, child response and actual Core admission. Capture the entire log if
+the early transition has scrolled out. Share only redacted copies, not private
+keys, credentials or raw game captures. The same-Pair second-room and Ctrl+C
+checks below still apply; do not call the first accepted request a trade pass.
 
 ## Topology and prerequisites
 
@@ -160,6 +229,7 @@ Waiting for the host's room and local Netplay connection...
 Local Netplay connected. GBA Wireless Adapter verified.
 Choose Join Group in the emulator.
 Bridge active.
+RFU link established; game-room entry and trade are not yet confirmed.
 ```
 
 At the `Connect RetroArch...` instruction, manually select **Netplay → Connect**
@@ -209,10 +279,12 @@ as a completed Pokemon trade.
 For the later connected-but-unavailable trial, see
 [trial08 NI/Reliable diagnosis](GPSP_JOIN_DIAGNOSIS_20260909.md). It separates
 native NI ACKs from gpSP socket ACKs and records the remaining causal uncertainty.
-The current repair is documented in
+The preceding repair is documented in
 [trial10 NI cadence and receipt recovery](GPSP_JOIN_CADENCE_REPAIR_20260910.md).
 Its timed software model passed; commercial trade and native tolerance of the
 new retry/receipt cadence still require a separately authorized physical trial.
+The current [trial11 UNI candidate](GPSP_UNI_TRANSITION_REPAIR_20260914.md)
+adds actual clock-change/burst qualification and leaves native closure open.
 When copying VM commands, copy only the command inside its code block, never
 the PowerShell `PS ...>` prompt or previous error output. Run commands separately.
 

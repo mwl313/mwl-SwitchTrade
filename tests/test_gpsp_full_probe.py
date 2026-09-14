@@ -18,7 +18,9 @@ def test_oracle_import_does_not_require_windows_handle_binding():
         "from switchtrade.endpoints.retroarch_gpsp import process",
         "if hasattr(process, '_kernel'): del process._kernel",
         "from tools.gpsp_qualification.full_probe import FullStackProbe",
+        "from tools.gpsp_qualification.clock_probe import ClockProbe",
         "assert callable(FullStackProbe.expect_reply)",
+        "assert callable(ClockProbe.expect_reply)",
     ))], cwd=root, capture_output=True, text=True, timeout=15)
     assert checked.returncode == 0, checked.stderr
 
@@ -91,3 +93,33 @@ def test_reply_never_hides_missing_duplicate_stale_or_invalid_packets(probe, fau
     with pytest.raises((AssertionError, TimeoutError)):
         result = asyncio.run(probe.expect_reply(1))
         probe.check_data(result, 1, 2)
+
+
+@pytest.mark.parametrize("fault", ["no_data", "no_receipt", "duplicate_data", "wrong_receipt",
+    "wrong_tag", "wrong_command", "wrong_timestamp", "zero_timestamp"])
+def test_clock_oracle_rejects_missing_or_changed_uni_and_receipts(probe, fault):
+    from tools.gpsp_qualification.clock_probe import ClockProbe, command
+    from bridge.frlgsim.rfu import uni_slot
+    clock = ClockProbe.__new__(ClockProbe)
+    clock.__dict__.update(probe.__dict__)
+    clock.timestamp = 1
+    clock.receipt_sequence = clock.offset = 0
+    payload = bytearray(command(1, 4))
+    payload[0] |= 1 << 5  # Sequence 3 has tag 0; sequence 4 has tag 1.
+    slot = uni_slot(bytes(payload))
+    packet = b"WT\x18\0" + struct.pack("<I", 4) + b"\0\x10\0\0" + slot
+    clock.check_data(packet, 1, 4)
+    ack = receipt()
+    if fault == "wrong_tag": packet = packet[:14] + bytes([packet[14] ^ 0x20]) + packet[15:]
+    elif fault == "wrong_command": packet = packet[:15] + bytes([packet[15] ^ 1]) + packet[16:]
+    elif fault == "wrong_timestamp": ack = ack[:12] + struct.pack("<I", 2)
+    elif fault == "zero_timestamp": packet = packet[:4] + bytes(4) + packet[8:]
+    elif fault == "wrong_receipt": ack = ack[:4] + struct.pack("<I", 2) + ack[8:]
+    frames = [(ack, 7), (packet, 7)]
+    if fault == "no_data": frames = frames[:1]
+    elif fault == "no_receipt": frames = frames[1:]
+    elif fault == "duplicate_data": frames = [frames[1], frames[1], frames[0]]
+    clock.game.output.extend(frames)
+    with pytest.raises((AssertionError, TimeoutError)):
+        response = asyncio.run(clock.expect_reply(1))
+        clock.check_data(response, 1, 4)

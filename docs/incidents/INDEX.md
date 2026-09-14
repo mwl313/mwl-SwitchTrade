@@ -304,3 +304,4 @@ Current ledger: `docs/incidents/current/INCIDENTS.md`
 | `MTA-CORE-025` | Late generation-end waiter escaped terminal cleanup | Current ledger | 2298 |
 | `MTA-GPSP-006` | Native completion queued behind redundant RFU traffic | Current ledger | 2317 |
 | `MTA-QA-027` | Stock qualification assumed receipt-before-data ordering | Current ledger | 2342 |
+| `MTA-GPSP-007` | Accepted native room stalled at the first UNI exchange | Current ledger | 2369 |

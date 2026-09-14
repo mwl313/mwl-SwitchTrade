@@ -13,9 +13,15 @@
   "binary_sha256": "cfb0a21e1504931d7589a30b125ff3bbdf9211116a7bea690cfecadf031a2720",
   "independent_builds_equal": true,
   "qualification": {
-    "source_sha256": "c3f75801b8710a0c46414a5205443cabe5e2c24f5781de9fc5a080eb83382c80",
+    "source_sha256": "46fc6b116889ddd1b1fb270d5a2a4473d1dc2bd11baa7807c977cdabf7f2d2c2",
     "binary_sha256": "8dc38db4b62b1fd66ce2ee390db66b22e040b5da7f4138470f7c318e9fe1c9ea",
     "independent_builds_equal": true,
     "purpose": "Native serial/checksum/English FRLG empty Trade discovery gate, manual Start input, sustained bidirectional RFU, radio-driven room end, two in-RAM generations"
+  },
+  "clock": {
+    "source_sha256": "8e6ed2ff45ee5db25e6dad485281906166f8721b262332f32f43d88c61c5aff9",
+    "binary_sha256": "2240ef62642e5eb8e2e2a967532b5926a09a2cd7fe19eb87cec4e175fdfa5a25",
+    "independent_builds_equal": true,
+    "purpose": "Causal NI then real SEND_DATA_AND_WAIT/WAIT, 12-frame delayed-consumer burst, idle UNI, rolling tags, parent reflection, same-process second room; not commercial trade"
   }
 }

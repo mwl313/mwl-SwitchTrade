@@ -20,7 +20,7 @@ def reports():
     sample = {"handles": 100, "private_bytes": 32 * 1024 * 1024}
     result = {}
     for kind in FIXTURES:
-        count = 1 if kind == "full" else 2
+        count = 2 if kind == "continuity" else 1
         result[kind] = {**{key: True for key in ("passed", "source_clean", "source_unchanged", "stock_tree_unchanged",
             "started_before_netplay", "same_process_two_rounds", "process_handle_cleanup", "desktop_cleanup")},
             "source_sha": "1" * 40, "retroarch_sha256": RA, "gpsp_sha256": CORE,
@@ -28,13 +28,16 @@ def reports():
                               "implementation": "cpython", "free_threaded": False},
             "fixture_sha256": FIXTURES[kind], "test_process_exit": 0, "stock_tree_delta": [],
             "socket_cleanup": [True] * count, "netplay_handshakes": count,
-            "production_local": kind == "continuity", "native_doctor_exit": 0, "full_stack": kind == "full",
+            "production_local": kind == "continuity", "native_doctor_exit": 0, "full_stack": kind != "continuity",
+            "clock_change": kind == "clock",
             "rounds": [{"in_ram_counter": number, "real_traffic_seconds": 1801,
                 "game_wait_seconds": 181, "local_netplay_wait_seconds": 181,
                 "same_pair": True, "local_netplay_retained": True, "radio_room_end": True,
                 "native_discovery_gate": True,
                 "bidirectional_exchanges": 3000, "encrypted_ldn_frames": 6000,
                 "receipt_verified_exchanges": 3000, "data_before_receipt": 2999,
+                "clock_change": True, "causal_ni": True, "burst_uni_exchanges": 12,
+                "parent_rows": 5, "child_tag_wrap": True,
                 "resource_samples": [{"seconds": n * 60, "native": dict(sample), "retroarch": dict(sample)}
                                      for n in range(31)]} for number in (1, 2)]}
     return result
@@ -87,6 +90,25 @@ def test_failed_ci_or_open_acceptance_cannot_close():
     manifest["acceptance"][0]["status"] = "PARTIAL"
     with pytest.raises(ValueError):
         attest(manifest, reports(), "1" * 40, {"windows": "success", "ubuntu": "success"}, "test://modeled")
+
+
+@pytest.mark.parametrize("key,value", [("clock_change", False), ("causal_ni", False),
+    ("burst_uni_exchanges", 1), ("parent_rows", 1), ("child_tag_wrap", False),
+    ("real_traffic_seconds", 59), ("bidirectional_exchanges", 1),
+    ("receipt_verified_exchanges", 0)])
+def test_clock_proof_cannot_be_replaced_by_one_uni_or_polling(key, value):
+    report = reports()["clock"]
+    report["rounds"][0][key] = value
+    with pytest.raises(ValueError):
+        validate_report(report, "clock", "1" * 40)
+
+
+def test_clock_report_is_mandatory_not_optional():
+    evidence = reports()
+    del evidence["clock"]
+    with pytest.raises((KeyError, ValueError)):
+        attest(modeled_ready_manifest(), evidence, "1" * 40,
+               {"windows": "success", "ubuntu": "success"}, "test://modeled")
 
 
 def test_current_known_software_defect_blocks_even_green_ci():

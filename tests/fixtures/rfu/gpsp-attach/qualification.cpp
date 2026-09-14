@@ -30,7 +30,10 @@ static bool trade_candidate(const unsigned* server) {
       name[0] != 0xFF && terminated;
 }
 
-extern "C" int main() {
+#ifndef QUALIFICATION_MAIN
+#define QUALIFICATION_MAIN main
+#endif
+extern "C" int QUALIFICATION_MAIN() {
   LinkRawWireless wireless;
   for (unsigned round = 1; round <= 2; ++round) {
     // Test-only substitute for the human choosing Join Group, not an emulator
