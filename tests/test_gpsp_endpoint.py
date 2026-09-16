@@ -302,6 +302,46 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
                          [i.to_bytes(8, "little") for i in range(count)])
         self.assertTrue(clean(await generation.close("test_end")))
 
+    async def test_closing_diagnostic_preserves_pending_uni_before_retirement(self):
+        from bridge.frlgsim import rfu as native
+        generation = await self.connected_generation()
+        slot = native.parent_uni_slot([bytes(14)])
+        for timestamp in (1, 2):
+            await generation.send(LinkPacket(generation.offer.generation_id, PROTOCOL,
+                                            parent_t(timestamp, slot), 7))
+        await self.peer.receive(r.RFU1_HOST_SEND)
+        with self.assertLogs("switchtrade.endpoints.retroarch_gpsp.driver", level="INFO") as logs:
+            self.assertTrue(clean(await generation.close("cancelled")))
+        snapshots = [json.loads(line.split(" ", 2)[2]) for line in logs.output if "gpsp_rfu_progress" in line]
+        before, after = snapshots[0], snapshots[-1]
+        self.assertEqual(before["event"], "closing")
+        self.assertEqual(before["transfer"]["uni_inflight"], 1)
+        self.assertEqual(before["transfer"]["uni_waiting"], 1)
+        self.assertEqual(before["transfer"]["pending_core_acks"], 1)
+        self.assertEqual(after["event"], "closed")
+        self.assertIsNone(after["transfer"]["uni_inflight"])
+        self.assertEqual(after["transfer"]["uni_waiting"], 0)
+        self.assertEqual(after["transfer"]["uni"]["parent"]["count"], 2)
+
+    async def test_uni_diagnostic_correlates_core_admission_without_rewriting_bad_tags(self):
+        from bridge.frlgsim import rfu as native
+        generation = await self.connected_generation()
+        # An observed anomaly must not synthesize a replacement command, close
+        # the link, or change either game's stream in this diagnostic packet.
+        for tag in (3, 3, 4):
+            slot = native.uni_slot(native.serialize([0xBE00 | tag << 5]))
+            await self.peer.send(r.RFU1_CLIENT_SEND, len(slot) << 24 | generation.child, slot)
+            packet = await asyncio.wait_for(generation.receive(), 1)
+            self.assertEqual(packet.payload[12:], slot)
+            entry = generation._wire_recent[-1]
+            self.assertEqual(entry["timestamp"], int.from_bytes(packet.payload[4:8], "little"))
+            self.assertEqual(entry["uni"], {"commands": [0xBE00], "fragments": [0], "tag": tag})
+            recent = generation.translator.progress.uni_snapshot()["child"]["recent"][-1]
+            self.assertEqual(entry["timestamp"], recent["timestamp"])
+        self.assertIsNone(self.driver.failure)
+        self.assertEqual(generation.translator.progress.uni_snapshot()["child"]["tag_discontinuities"], 1)
+        self.assertTrue(clean(await generation.close("test_end")))
+
     async def test_quiet_receipt_flush_and_pending_cleanup_do_not_leak_to_next_room(self):
         generation = await self.connected_generation()
         clock = [0.0]

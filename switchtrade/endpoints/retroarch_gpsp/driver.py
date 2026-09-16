@@ -19,6 +19,7 @@ from .errors import GpspError
 from .cadence import RfuCadence
 from .netplay import LocalNetplay, MAX_QUEUE
 from .process import ProcessObserver
+from .progress import uni_command_metadata
 from .rfu import (
     RfuTranslator, _parse_rfu1, _rfu1, RFU1_CONNECT_REQ, RFU1_CONNECT_ACK,
     RFU1_CONNECT_NACK, RFU1_DISCONNECT, RFU1_CLIENT_SEND, RFU1_CLIENT_ACK,
@@ -304,6 +305,10 @@ class GpspGeneration:
                 entry = {"ordinal": self._core_enqueued, "kind": action.classification,
                          "timestamp": int.from_bytes(action.payload[12:16] if action.classification == "parent_ack"
                                                      else action.payload[4:8], "little")}
+                if action.classification == "child_transfer":
+                    metadata = uni_command_metadata(action.payload[12:12 + action.payload[9]], parent=False)
+                    if metadata is not None:
+                        entry["uni"] = metadata
                 self._wire_recent.append(entry)
                 if self.cadence.snapshot()["ordered_receipts"] and len(self._uni_wire_start) < 24:
                     self._uni_wire_start.append(entry)
@@ -433,6 +438,10 @@ class GpspGeneration:
             await asyncio.gather(self._advertiser, return_exceptions=True)
         errors = []
         async with self._lock:
+            # Retirement clears queues and inflight identities. Preserve the
+            # pre-cleanup state; an empty post-cleanup queue cannot explain a
+            # preceding stall or prove that queued data reached either game.
+            self._diagnose("closing", force=True)
             self.cadence.close()
             self.translator.retire()
             try:

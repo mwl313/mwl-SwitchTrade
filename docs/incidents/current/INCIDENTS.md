@@ -2386,3 +2386,20 @@ archive list and regenerate the index.
   New bounded diagnostics preserve numeric correlation without game payloads.
   Keep native integration closure open: neither this homebrew nor Bridge active
   proves commercial room entry/trade. See `GPSP_UNI_TRANSITION_REPAIR_20260914.md`.
+- Trial12 full VM/Host correlation supersedes the permanent-first-UNI-stall
+  hypothesis for that run: first child response observed, converter credit
+  cleared, then roughly four minutes without application progress. Traffic
+  resumed to 337 UNI frames each way, followed by user-reported in-room error.
+  Final pre-close queues drained. Later intentional peer close is secondary.
+  Exact native clock/game failure remains unproven; do not force synthetic
+  ACKs, enlarge queues or claim a buffer-overflow fix from this evidence.
+- First-twelve/last-only command diagnostics cannot prove middle-session tag
+  continuity; retirement also erased pending state before final logging.
+  Add bounded timestamp-correlated recent metadata, whole-generation tag
+  discontinuity counters/sticky first event, and pre-retirement `closing`
+  evidence. Diagnostic anomalies are not game verdicts or new timeout gates.
+  See `GPSP_TRIAL12_ANALYSIS_20260917.md`; acceptance remains blocked.
+- Prior identity-bound Host cleanup and owned USB return are preserved in
+  private evidence; this software packet performs no new physical recovery.
+  VM residue is not independently verified. No retry before separately
+  authorized source/owner-bound setup; never use game/session restarts as proof.

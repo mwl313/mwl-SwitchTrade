@@ -1,6 +1,8 @@
 # Switch ↔ RetroArch/gpSP: VMware Windows 11 physical test
 
-**2026-09-14: trial11 NI-to-UNI test candidate; native integration remains open.**
+**2026-09-17: trial12 reached the room after a long wait, then a communication
+error. Native integration remains open; the latest packet improves diagnostics,
+not the protocol.** See [full-log analysis and next gates](GPSP_TRIAL12_ANALYSIS_20260917.md).
 See [current repair and qualification limits](GPSP_UNI_TRANSITION_REPAIR_20260914.md).
 Use an empty English FR/LG Direct Corner **Trade** Group Leader room. Other
 activities and unqualified nonzero discovery fields fail closed; do not test
@@ -79,6 +81,14 @@ receipt, child response and actual Core admission. Capture the entire log if
 the early transition has scrolled out. Share only redacted copies, not private
 keys, credentials or raw game captures. The same-Pair second-room and Ctrl+C
 checks below still apply; do not call the first accepted request a trade pass.
+
+The latest diagnostic adds per-direction `recent`, `command_counts`,
+`last_age_ms`/`max_gap_ms`, and child `tag_discontinuities` with a sticky first
+event. These are output-boundary observations, not a game's error code or a
+timeout. `closing` retains pending state before `closed` reports cleanup.
+Do not use an empty post-cleanup queue as proof that no backlog existed before.
+Before any next trial, copy the actual `git log -1 --oneline` output from both
+machines; a successful pull alone is not an exact-source measurement.
 
 ## Topology and prerequisites
 

@@ -93,3 +93,68 @@ def test_invalid_translator_input_cannot_publish_ni_progress():
         translator.from_core(r._rfu1(r.RFU1_CLIENT_SEND,
             len(slot) << 24 | GPSP_DEVICE, slot + b"\x01"), peer_id=1, sequence=2)
     assert translator.progress.snapshot()["child"]["slots"] == 0
+
+
+def test_uni_tags_ignore_idle_wrap_and_keep_middle_failure_after_tail_rolls():
+    clock = [0.0]
+    progress = RfuProgress(lambda: clock[0])
+    builder = native.SlotBuilder()
+    for index in range(337):
+        # Original synthetic bytes, not a captured Pokemon command stream.
+        slot = native.uni_slot(builder.build(native.held_keys_words()))
+        if index == 150:
+            # A mid-session command lost before this observation boundary.
+            continue
+        clock[0] += .02
+        progress.observe(native.uni_slot(bytes(14)), parent=False, timestamp=index * 2)
+        progress.observe(slot, parent=False, timestamp=index * 2 + 1)
+    child = progress.uni_snapshot()["child"]
+    assert child["tag_discontinuities"] == 1
+    assert child["tag_checks"] == 335
+    assert child["tag_coverage_breaks"] == 0
+    assert child["first_tag_discontinuity"]["timestamp"] == 303
+    assert child["first_tag_discontinuity"]["expected_tag"] == 6
+    assert child["first_tag_discontinuity"]["tag"] == 7
+    assert len(child["recent"]) == 24 and len(child["first"]) == 12
+    assert child["recent"][0]["timestamp"] > 303
+    assert child["command_counts"] == {0: 336, 0xBE00: 336}
+    assert child["last_age_ms"] == 0
+    clock[0] += 240  # Arbitrary waiting remains observation, not a timeout.
+    assert progress.uni_snapshot()["child"]["last_age_ms"] == 240000
+    progress.observe(native.uni_slot(builder.build(native.held_keys_words())), parent=False)
+    assert progress.uni_snapshot()["child"]["max_gap_ms"] == 240000
+    assert progress.uni_snapshot()["child"]["tag_discontinuities"] == 1
+
+
+@pytest.mark.parametrize("interruption", [b"\xff", b"\0\0", ni.recv_ack_slot(1, 1, 0)])
+def test_unqualified_interval_is_not_a_claim_of_missing_game_commands(interruption):
+    progress = RfuProgress()
+    slot = native.uni_slot(native.serialize([0xBE00 | 3 << 5]))
+    progress.observe(slot, parent=False)
+    progress.observe(interruption, parent=False)
+    progress.observe(slot, parent=False)
+    child = progress.uni_snapshot()["child"]
+    assert child["tag_discontinuities"] == 0 and child["tag_checks"] == 0
+    assert child["tag_coverage_breaks"] == 1
+
+
+def test_uni_diagnostics_keep_metadata_only_and_do_not_share_mutable_snapshots():
+    progress = RfuProgress()
+    secret = b"PRIVATE-DATA"
+    command = b"\xe1\x89" + secret
+    for index in range(1000):
+        progress.observe(native.uni_slot(command), parent=False, timestamp=index)
+        progress.observe(native.parent_uni_slot([command]), parent=True, timestamp=index + 10)
+    report = progress.uni_snapshot()
+    assert len(report["parent"]["recent"]) == 24
+    assert report["child"]["tag_discontinuities"] == 999  # Same non-idle tag repeated.
+    assert report["child"]["first_tag_discontinuity"]["timestamp"] == 1
+    assert "PRIVATE" not in json.dumps(report) and secret.hex() not in json.dumps(report)
+    assert len(json.dumps(report)) < 14000
+    report["child"]["recent"][0]["commands"][0] = -1
+    report["child"]["first_tag_discontinuity"]["commands"][0] = -1
+    assert progress.uni_snapshot()["child"]["recent"][0]["commands"] == [0x8900]
+    assert progress.uni_snapshot()["child"]["first_tag_discontinuity"]["commands"] == [0x8900]
+    fresh = RfuProgress().uni_snapshot()["child"]
+    assert fresh["recent"] == [] and fresh["first_tag_discontinuity"] is None
+    assert fresh["last_age_ms"] is None  # Unknown is not zero-age progress.

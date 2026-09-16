@@ -338,8 +338,8 @@ class RfuTranslator:
                     or header & 0x00FC0000 or any(body[size:])):
                 self._fail("TRANSLATOR_CLIENT_DATA", "gpSP child data is invalid")
             slot = body[:size]
-            self.progress.observe(slot, parent=False)
             timestamp = self._child_timestamp
+            self.progress.observe(slot, parent=False, timestamp=timestamp)
             self._child_timestamp = (timestamp + 1) & 0xFFFFFFFF
             if self._child_timestamp == 0:
                 self._child_timestamp = 1
@@ -478,7 +478,7 @@ class RfuTranslator:
         slot = body[8:8 + slot_length]
         if any(body[8 + slot_length:]):
             self._fail("TRANSLATOR_PARENT_PADDING", "Switch parent transfer padding is invalid")
-        self.progress.observe(slot, parent=True)
+        self.progress.observe(slot, parent=True, timestamp=timestamp)
         self._trace.append({"event": "parent_transfer", "timestamp": timestamp,
                             "uni": uni_slot(slot, parent=True)})
         self._uni_active |= uni_slot(slot, parent=True)
