@@ -101,16 +101,23 @@ def test_numeric_diagnostics_distinguish_new_send_retransmit_and_window_progress
             assert status["reliable_tx_new"] == 1
             assert status["reliable_tx_retransmits"] == 0
             assert status["reliable_rto_ms"] > 0
+            boundary = status["rfu_boundary"]["tx_queued"]
+            assert boundary["count"] == 1
+            assert boundary["recent"][0]["reliable_seq"] in sim.rel.unacked
             oldest = status["reliable_send_window"]
             sim._tick += 120  # Virtual elapsed time only, no physical retry.
             sim._drive_tunnel_reliable()
             status = sim.flow_status()
             assert status["reliable_tx_new"] == 1
             assert status["reliable_tx_retransmits"] == 1
+            assert status["rfu_boundary"]["tx_queued"] == boundary
             assert status["reliable_send_window"] == oldest
             sim.rel.on_ack(sim.rel.out_seq, now_ms=sim._now_ms)
             assert sim.flow_status()["reliable_send_window"] == (oldest + 1) & 0xFFFF
             assert len(sent) == 1
+            adapter.reset("next")
+            sim._drive_tunnel_reliable()
+            assert sim.flow_status()["rfu_boundary"]["tx_queued"]["count"] == 0
         finally:
             adapter.close()
             sim.close()
@@ -165,6 +172,7 @@ def test_full_local_queue_does_not_ack_or_dedupe_unaccepted_reliable_data():
             sim.process_datagram(incoming(0xFFF0, b"first", 15), "169.254.1.1")
             sim.process_datagram(incoming(0xFFF1, b"second"), "169.254.1.1")
             assert sim.rel.recv_next == 0xFFF1
+            assert sim.flow_status()["rfu_boundary"]["rx_admitted"]["count"] == 1
             assert 0xFFF1 not in sim._seen_in
             outgoing = sim.rel.queue(b"opposite direction", 7, sim._now_ms)
             ack = reliable.build_bulk_ack((outgoing + 1) & 0xFFFF)
@@ -182,6 +190,9 @@ def test_full_local_queue_does_not_ack_or_dedupe_unaccepted_reliable_data():
             assert not adapter._local_to_core
             sim.process_datagram(incoming(0xFFF2, b"third"), "169.254.1.1")
             assert (await adapter.receive_for_core()).payload == b"third"
+            boundary = sim.flow_status()["rfu_boundary"]["rx_admitted"]
+            assert boundary["count"] == 3  # No blocked, out-of-order, ACK or duplicate data.
+            assert [entry["reliable_seq"] for entry in boundary["recent"]] == [0xFFF0, 0xFFF1, 0xFFF2]
         finally:
             adapter.close()
             sim.close()

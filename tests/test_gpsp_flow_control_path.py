@@ -324,6 +324,19 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
                     self.assertGreater(status["reliable_tx_new"], count)
                     self.assertGreaterEqual(status["reliable_tx_retransmits"], 0)
                     self.assertGreater(status["reliable_rto_ms"], 0)
+                    if uni:
+                        # Compare the gpSP output observation to the actual
+                        # Host TunnelSim scheduling boundary, not an adapter shortcut.
+                        native_progress = status["rfu_boundary"]["uni"]
+                        gpsp_progress = generation.translator.progress.uni_snapshot()
+                        for side in ("parent", "child"):
+                            self.assertEqual(native_progress[side]["count"], gpsp_progress[side]["count"])
+                            self.assertEqual([x["timestamp"] for x in native_progress[side]["recent"]],
+                                             [x["timestamp"] for x in gpsp_progress[side]["recent"]])
+                            self.assertTrue(all("reliable_seq" in x for x in native_progress[side]["recent"]))
+                        self.assertEqual(native_progress["child"]["tag_checks"], 316)
+                        self.assertEqual(native_progress["child"]["tag_discontinuities"], 0)
+                        self.assertGreaterEqual(status["rfu_boundary"]["wk_scheduled"]["attempts"], count)
                     ticker.cancel()
                     await asyncio.gather(ticker, return_exceptions=True)
                     with self.assertLogs("switchtrade.endpoints.switch_ldn.generation", level="INFO") as logs:
@@ -334,6 +347,8 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
                                if '"event": "stopped"' in line]
                     self.assertEqual(len(stopped), 1, logs.output)
                     self.assertGreater(stopped[0]["reliable_tx_new"], count)
+                    self.assertEqual(stopped[0]["rfu_boundary"]["uni"]["child"]["count"],
+                                     status["rfu_boundary"]["uni"]["child"]["count"])
                     self.assertIs(self.driver.local, local)
                     self.assertTrue(local.connected)
                     self.assertEqual(host.credentials.pair_id, guest.credentials.pair_id)

@@ -7,6 +7,7 @@ from collections import deque
 from . import reliable
 from .sim import (ACK_PERIOD, PARENT_RTX_LIMIT, RELIABLE_BATCH_MAX,
                   RTX_GAP_LIMIT, Sim)
+from .tunnel_progress import NativeRfuProgress
 from switchtrade.rfu_tunnel import Envelope, Kind, MAX_PAYLOAD_BYTES
 
 
@@ -35,6 +36,7 @@ class TunnelSim(Sim):
         self._tx_new = self._tx_retransmits = 0  # Scheduled attempts, not peer delivery.
         self._tunnel_generation = getattr(tunnel, "connection_generation", None)
         self.parent = bool(parent)
+        self._rfu_progress = NativeRfuProgress(parent=self.parent)
         self.observer = observer
         self.local_seat = local_seat
         self.remote_seat = "member_b" if local_seat == "member_a" else "member_a"
@@ -59,6 +61,7 @@ class TunnelSim(Sim):
                 self._rx_init_waits += 1
             elif self._on_reliable_app(frame.flagsA, frame.payload):
                 self.rel.recv_next = frame.seq
+                self._rfu_progress.observe(frame.payload, frame.seq, frame.flagsA, received=True)
                 return True
             # Sim scheduled an ACK before asking for admission. Before receiving
             # an opener there is no peer baseline to acknowledge (not even FFF0).
@@ -71,7 +74,10 @@ class TunnelSim(Sim):
         if frame.seq != self.rel.recv_next:
             self._rx_deferrals += 1
             return False
-        return self._on_reliable_app(frame.flagsA, frame.payload)
+        accepted = self._on_reliable_app(frame.flagsA, frame.payload)
+        if accepted:
+            self._rfu_progress.observe(frame.payload, frame.seq, frame.flagsA, received=True)
+        return accepted
 
     def flow_status(self):
         status = {"pending_remote": len(self._pending_remote),
@@ -91,6 +97,7 @@ class TunnelSim(Sim):
         snapshot = getattr(self.tunnel, "flow_status", None)
         if callable(snapshot):
             status.update(snapshot())
+        status["rfu_boundary"] = self._rfu_progress.snapshot()
         return status
 
     def _on_reliable_app(self, flags_a, payload):
@@ -118,6 +125,7 @@ class TunnelSim(Sim):
         if generation != self._tunnel_generation:
             self._pending_remote.clear()
             self._tunnel_generation = generation
+            self._rfu_progress = NativeRfuProgress(parent=self.parent)
         for envelope in self.tunnel.poll(limit=MAX_PENDING_REMOTE - len(self._pending_remote)):
             if envelope.kind == Kind.PEER_CLOSE:
                 self.host_disconnected = True
@@ -147,6 +155,7 @@ class TunnelSim(Sim):
                 sender_role = "parent" if self.parent else "child"
                 self.observer.submit(self.remote_seat, sender_role, envelope.payload)
             seq = self.rel.queue(envelope.payload, flags, now_ms)
+            self._rfu_progress.observe(envelope.payload, seq, flags, received=False)
             self._tx_new += 1
             batch.append((seq, flags, envelope.payload))
 
@@ -155,6 +164,7 @@ class TunnelSim(Sim):
             batch.append((None, reliable.FLAGSA_CTRL, self.rel.ack_payload()))
             self._ack_owed = False
             self._last_ack_tick = self._tick
+        self._rfu_progress.scheduled(batch, RELIABLE_BATCH_MAX)
         self._tx_reliable_batch(batch)
 
     def _drive_reliable(self):

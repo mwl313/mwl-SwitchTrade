@@ -2411,3 +2411,13 @@ archive list and regenerate the index.
   This closes a regression gap, not either native failure. Callback ACK remains
   distinct from buffer/game consumption; receipt grouping and NI-tail overflow
   remain unproven causes. No physical retry/recovery or speculative ACK change.
+- Trial12 clarification: Host-originated movement reached both screens slowly;
+  Guest movement attempt preceded the error, without proving causality. Keep
+  initial idle-UNI delay separate from later in-room state/clock/tag failure.
+  Parent tag checks, game queue overflow and particular overworld keepalive
+  callbacks are distinct source-backed failure paths, not a diagnosed cause.
+- Extend bounded metadata to native Reliable admission/new-send scheduling and
+  WK datagram positions; do not count retransmission as a new game command or
+  scheduling/transport ACK as game consumption. Reuse the dependency-free RFU
+  observer without importing gpSP into Switch/Core/Relay. Exact-SHA and both
+  logs remain required for a separately authorized, direction-separated trial.

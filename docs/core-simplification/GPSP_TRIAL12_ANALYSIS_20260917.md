@@ -224,3 +224,132 @@ investigation boundary; another converter-output log alone cannot prove it.
 No Switch/VM operation, new actual-process soak, deployment, full pytest or
 same-final-SHA CI attestation is implied. Acceptance stays
 `BLOCKED_NATIVE_UNI_VALIDATION` / `NOT_ATTESTED`.
+
+## Directional movement clarification and native-boundary packet
+
+Base: clean `codex/gpsp-endpoint` at
+`53aac652fecf45377d65fc3da785e6b067021a6a`, matching the checked remote HEAD.
+The user clarified that **Switch-originated movement was slow/stuttering but
+visible on both screens**, then a **Guest movement attempt preceded the error**.
+The latter is correlation, not an independently timestamped causal trigger.
+This establishes actual host-originated in-room game-state delivery, not a
+successful trade or a completely broken Guest-to-Switch direction. The earlier
+NI, room entry and child UNI already required traffic in that direction.
+
+### What the four-minute wait means
+
+The first qualified parent/child UNI appeared at VM 01:31:07.168/07.188. Through
+01:34:59 the counts stayed 1/1 with no pending callback ACK, UNI credit or Core
+queue. By 01:35:04.651 the counts were 11/10. The first two parent UNI native
+timestamps were 27800 and 41881. Their 14081-tick separation is approximately
+236 seconds at 59.727 Hz, consistent with the observed pause; this arithmetic
+is **not** a decoded wait condition or evidence that either game clock stopped.
+
+No converter four-minute countdown or accumulated Core queue explains it. The
+next application frame from the native parent was not observed during this
+interval, although lower-layer traffic remained live. A completed native
+receipt/clock transaction, a game state wait and radio-side application delivery
+are still distinct possibilities. Do not tell users that waiting four minutes
+is normal initialization or a reliable workaround.
+
+After progress resumed, counts grew from 11/10 to 337/337 in about 55 seconds:
+roughly six UNI exchanges per second on average, not measured 60-Hz game input.
+This agrees with slow movement but does not locate the latency by itself.
+
+### Source-based failure paths, not a diagnosis by elimination
+
+The pinned [FRLG RFU implementation](https://github.com/pret/pokefirered/blob/c75f352304d529f6ba92d4f74b9cf8b5c3810788/src/link_rfu_2.c)
+checks the child's three-bit non-idle command tag at the parent, and can raise
+an error after repeated discontinuities. Its child callback can send the
+previously prepared game command when a new parent window is received. Thus
+an emitted child packet is not proof of the native game's consumption, nor
+necessarily the new key pressed at that wall-clock instant. Game send/receive
+queue overflow is another error path even if SwitchTrade queues stay empty.
+
+The pinned [overworld state machine](https://github.com/pret/pokefirered/blob/c75f352304d529f6ba92d4f74b9cf8b5c3810788/src/overworld.c)
+also calls `LinkRfu_FatalError` after more than 60 keepalive-check invocations
+without `SetKeyInterceptCallback` resetting its timer. Only particular waiting
+callbacks perform that check; ordinary directional input does not directly
+call the fatal-error function. At one invocation per VBlank this is about one
+second, **not** a universal one-second network timeout. Queue-pressure and
+event-tile transitions can enter these waiting callbacks. Whether trial12
+entered one, or instead hit command-tag/native-clock failure, is not recorded.
+The public source and its revision branches are reference contracts, not proof
+of the exact Switch binary's behavior.
+
+An additional authenticated gold audit compared each WK's `message_index` to
+its AppData position in the captured outgoing datagram. All 8101 unique
+first-observed receipts matched: 7125 at position 1 and 976 at position 2;
+18 repeat observations also matched. This strengthens the receipt-grouping
+question but does not prove the receiver requires that field to equal the
+current position on retransmission or explain trial12. Raw data stays private.
+Do not rewrite opaque native frames on this correlation alone.
+
+### Implemented diagnostic correction
+
+The previous observer ended at gpSP output/Core enqueue, leaving no comparable
+native application boundary on Host. The shared dependency-free RFU observer
+now also runs at TunnelSim's **accepted local Reliable input** and **new remote
+frame queued for local Reliable send**. Old gpSP imports remain compatible.
+
+- Correlate native timestamps, command headers/tags and local Reliable sequence
+  numbers. Retain bounded first/recent header records and sticky tag failures.
+- Declined, out-of-order and duplicate input is not counted as admitted. Local
+  retransmission is not counted as a new game command.
+- Record scheduled WK attempts with original receipt identity and datagram
+  position, including retries. Scheduled is not sent/received/game-consumed.
+  Existing send-window/inflight fields remain the separate Reliable evidence.
+- Preserve both periodic and stopped snapshots, reset observer state for a new
+  generation, and retain unknown-format coverage breaks. No payload arguments,
+  held buttons, player/save data or fingerprints are exported.
+
+There is no change to payloads, ACK construction, sequencing, pacing, timeouts,
+emulator ownership or cleanup. Core/Relay remain opaque, and the native endpoint
+does not import the gpSP implementation. This fixes an **observability gap**,
+not the unresolved native communication defect. It intentionally does not add
+game-specific ACK generation or a workaround that fabricates held-key echoes.
+
+### Next diagnostic decision
+
+For a separately authorized trial, record room entry, then Host-only movement,
+then Guest-only movement as separate actions on open floor (not a chair/exit
+tile), waiting for both screens after each. Preserve the first stall/error;
+do not continue into interaction, a trade or a save on an unstable link.
+
+1. Compare gpSP child timestamp/tag history with Host `rfu_boundary.uni.child`
+   and `tx_queued`. A difference locates a missing/reordered interval upstream
+   of native transmission; compare whole-generation counters, not only tails.
+2. If they match, compare local Reliable progress and native parent responses
+   in `rx_admitted`/`uni.parent`. An acknowledged frame is still not proof of
+   game processing. Compare WK scheduling separately; do not call a grouping
+   difference a confirmed protocol error without receiver evidence.
+3. If delivery is intact but game progression fails, reproduce the game-clock,
+   tag-consumption and link-state wait paths before changing timing policy.
+   Neither command-header logs nor empty queues reveal the exact game error.
+
+Remaining acceptance blockers are prompt/reliable entry and stable bidirectional
+in-room behavior, followed by actual trade/save/normal exit and reuse. The
+NI-tail four-slot counterexample remains a separate stock-core reproduction
+task. No physical retry, VM/emulator operation, WSL/USB recovery or deployment
+has been performed in this packet.
+
+### Packet verification
+
+Final combined local CPython 3.12.14 check: **191 passed**, eight existing
+WebSocket dependency deprecation warnings, 152.63 seconds. This covers native
+boundary parsing/privacy/role mapping/unknown coverage, sticky middle-session
+tag failure, long-wait observation, WK attempt grouping, admission/backpressure,
+duplicate/retransmission accounting, fresh-generation state, bootstrap, endpoint,
+converter/cadence/UNI, lazy CLI imports and repository policy. The two full-path
+tests include the real local WebSocket relay, Direct A, StageSession, LDN and
+TunnelSim with hardware/OS and game inputs modeled. Across two Generations,
+the qualified UNI case compares Guest and Host timestamps/counts and verifies
+316 non-idle tag comparisons at each boundary without a discontinuity.
+
+The earlier 45-test and 117-test runs overlap this final run; do not add them
+to its distinct-test total. Repository policy was rechecked after the final
+documentation edit (five passing tests). `git diff --check` is clean. No new
+full pytest, stock-process/soak, Windows/Ubuntu final-SHA CI or commercial-game
+pass is asserted. The qualification ledger remains blocked, not CI-pending
+complete. This is a pushed diagnostic candidate for the next authorized test,
+not a claimed communication repair.

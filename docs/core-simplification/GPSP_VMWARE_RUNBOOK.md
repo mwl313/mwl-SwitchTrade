@@ -298,6 +298,16 @@ adds actual clock-change/burst qualification and leaves native closure open.
 When copying VM commands, copy only the command inside its code block, never
 the PowerShell `PS ...>` prompt or previous error output. Run commands separately.
 
+For the current [trial12 investigation](GPSP_TRIAL12_ANALYSIS_20260917.md),
+record the exact time of acceptance, actual room entry, Host-only movement,
+then Guest-only movement. Move on open floor, away from chairs/exit tiles;
+wait for both screens after each separate action. Stop progression at the
+first stall/error: do not retry, interact, or proceed to a trade/save. A
+four-minute wait is an unresolved symptom, not normal initialization.
+Host `rfu_boundary` now correlates admitted/queued native timestamps, UNI tags,
+Reliable sequences and scheduled WK positions with the Guest progress log.
+These fields never claim game consumption; preserve both complete logs.
+
 Preserve the **first** error and cleanup status separately. Collect exact branch
 SHA, overlay content-id on Host, frontend/core hashes, selected process start
 identity, VM networking mode, sanitized commands, both opt-in
