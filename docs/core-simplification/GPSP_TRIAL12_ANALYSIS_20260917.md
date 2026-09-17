@@ -130,3 +130,97 @@ Neither the full pytest suite nor a new actual-process/30-minute soak or final-S
 CI is implied by these focused checks. The previous baseline's green platform
 jobs and stock clock probe do not close its failed final acceptance gate.
 `GPSP_ACCEPTANCE.json` intentionally remains blocked, not CI-pending complete.
+
+## Approved unattended follow-up (2026-09-17)
+
+The diagnostic packet was pushed to `codex/gpsp-endpoint` at
+`7c8344ef397b7cd28cdc7e2b47d766fba7ab6d4e`; remote identity was checked after
+push. This follow-up starts from that clean commit and changes regression
+coverage and evidence only. No RFU byte, pacing, ACK, timeout or runtime policy
+is changed on an unproven explanation of trial12.
+
+### Native gold cross-check
+
+An offline, authenticated decode of the existing native Switch-to-Switch gold
+capture was used to check the diagnostic rule independently of the synthetic
+tag builder. Capture SHA256:
+`e6df7e03b2d33c11aaec112306f4605706a11afd9fd35fc9dd97ad768257d0b5`.
+Raw capture, keys and decoded game data remain private and are not new repository
+artifacts. The audit forbids sockets; no radio, emulator or game is run.
+
+- 18,258 Wi-Fi records inspected; 18,257 protected frames and 18,252 Pia records
+  decoded with zero recorded Wi-Fi/Pia authentication/decode failures.
+- Deduplicate by direction and Reliable sequence, then order within the observed
+  sequence span. No duplicate sequence had a changed payload.
+- 8,062 qualified child UNI observations; 6,450 adjacent non-idle tag comparisons,
+  **zero discontinuities within that coverage**.
+- There are 262 parent and 314 child Reliable sequence gaps in this capture.
+  Missing/unknown intervals break tag coverage (291 breaks after a known tag).
+  This is not a lossless capture or a proof that every callback/receipt arrived.
+- Native WK `message_index` values include both 1 and 2. This is a remaining
+  receipt-identity comparison point, not proof that the converter's value is
+  wrong: transport grouping and timestamp identities must be correlated before
+  a change. A missing WK in this incomplete capture is not evidence that the
+  native protocol allows its omission.
+
+This supports the new tag observer on normal native traffic. It cannot fill
+the missing middle-command history in trial12 or prove the Switch game's
+consumption of that trial's child output.
+
+### Qualified UNI regression through the production stack
+
+The previous full-path pressure case deliberately used opaque eight-byte
+payloads. Those do not activate the qualified 70-byte parent / 14-byte child
+UNI consumption gate. The follow-up reuses that harness and adds
+`test_native_sized_uni_bursts_tags_and_two_generations`:
+
+- Real endpoint, converter/cadence, Netplay sockets, CoreSupervisor, WireClient,
+  WebSocket relay, Direct A, StageSession, LDN, Pia/Reliable, TunnelSim and
+  CoreTunnelAdapter. Linux/radio primitives and console/frontend game input and
+  consumption are modeled; this is **not** dev/CLI or stock-process qualification.
+- Causal NI completion with delayed radio service/lost first NI response, then
+  337 original synthetic qualified UNI exchanges per Generation. Bursts of
+  eight exceed gpSP's four-slot capacity while the modeled consumer is paused;
+  seven stay in the endpoint's waiting queue until causal child replies.
+- A callback receipt alone cannot release the next qualified UNI. Every child
+  slot and native WK timestamp remains ordered and unmodified; all 316 non-idle
+  adjacent tag comparisons per Generation pass, including idle and modulo-eight
+  wrap. The final callback/UNI queues are empty.
+- Two Generations retain the same Pair and local Netplay connection, use fresh
+  generation state, and end through actual StageSession room teardown. The
+  modeled owned OS resources are checked clean. There is no actual emulator
+  process in this regression to claim preserved.
+
+The first new-case run passed (56.56 seconds). The final combined focused rerun
+passed **43 tests**, with six existing WebSocket dependency deprecation warnings,
+in 135.43 seconds on local CPython 3.12.14. It includes both full-path cases,
+progress, UNI transition, cadence and repository-context policy tests:
+
+```powershell
+& .\.audit-venv\Scripts\python.exe -m pytest -q tests/test_gpsp_flow_control_path.py tests/test_gpsp_rfu_progress.py tests/test_gpsp_uni_transition.py tests/test_gpsp_cadence.py tests/test_agent_context_policy.py
+```
+
+These results belong to the working candidate based on `7c8344ef397b7cd28cdc7e2b47d766fba7ab6d4e`,
+not a final-SHA CI attestation. This closes a **test coverage gap**, not the native integration
+failure. It neither simulates gpSP's pre-UNI receive-buffer overflow nor proves
+commercial game scheduling/clock completion.
+
+### What remains before another physical attempt
+
+Keep the two native failures separate: first-idle-UNI completion/delay and later
+in-room command delivery. The four-slot NI-tail counterexample is still a latent
+risk needing stock-core reproduction, not trial12's established cause. Green
+synthetic traffic is not a reason to remove admission guards or manufacture
+native acknowledgments.
+
+The pushed observer is ready for a separately authorized diagnostic trial with
+exact Host/VM SHAs and both full logs. Capture the first visible stall/error and
+action time; do not reconnect or continue into a save after a failure. Recent
+headers and sticky whole-generation tag checks can now separate an upstream
+command discontinuity from apparently intact output that the native side did
+not consume. If output is intact, native receipt/clock delivery remains the next
+investigation boundary; another converter-output log alone cannot prove it.
+
+No Switch/VM operation, new actual-process soak, deployment, full pytest or
+same-final-SHA CI attestation is implied. Acceptance stays
+`BLOCKED_NATIVE_UNI_VALIDATION` / `NOT_ATTESTED`.

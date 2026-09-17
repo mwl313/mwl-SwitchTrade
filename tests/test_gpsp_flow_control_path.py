@@ -188,6 +188,71 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
         return timestamp
 
     async def test_slow_radio_ack_two_generations_real_endpoint_path(self):
+        await self.exercise_path(uni=False)
+
+    async def test_native_sized_uni_bursts_tags_and_two_generations(self):
+        await self.exercise_path(uni=True)
+
+    async def uni_bursts(self, generation, game, ticker, timestamp, number):
+        """Model input/consumption only; all endpoint/relay/Switch layers are real.
+
+        Unlike the old opaque 8-byte pressure input, these slots activate the
+        production UNI consumption gate. This is not an actual gpSP/game test.
+        """
+        count = 337
+        builder = native.SlotBuilder()
+        previous = bytes(14)
+        parents, children = [], []
+        for index in range(count):
+            # Original synthetic arguments; no trainer, party, save or capture.
+            command = (bytes(14) if index % 17 == 0 else
+                       native.serialize([0x8900 | (index & 31) if index < 300 else 0xBE00,
+                                         number, index, 0, 0, 0, 0]))
+            parents.append(native.parent_uni_slot([command, previous]))
+            children.append(native.uni_slot(builder.build(
+                [int.from_bytes(command[i:i + 2], "little") for i in range(0, 14, 2)])))
+            previous = command
+        start_parent_count = generation.translator.progress.uni_snapshot()["parent"]["count"]
+        consumed = []
+        for start in range(0, count, 8):
+            stop = min(start + 8, count)
+            for index in range(start, stop):
+                game.press(parent_t(timestamp + index + 1, parents[index]), 7)
+            # Pause the modeled game reads, not the product's timers. All eight
+            # parent frames must reach the endpoint before it can release two.
+            await eventually(lambda: generation.translator.progress.uni_snapshot()["parent"]["count"]
+                             == start_parent_count + stop, tasks=(ticker,))
+            self.assertEqual(generation.translator.snapshot()["uni_waiting"], stop - start - 1)
+            for index in range(start, stop):
+                packet = await self.peer.receive(r.RFU1_HOST_SEND)
+                self.assertEqual(packet[2][:len(parents[index])], parents[index])
+                await self.peer.send(r.RFU1_CLIENT_ACK, generation.child)
+                await self.driver.local.barrier()
+                # Callback receipt by itself cannot release the next UNI.
+                self.assertEqual(generation.translator.snapshot()["uni_inflight"], timestamp + index + 1)
+                await self.peer.send(r.RFU1_CLIENT_SEND, len(children[index]) << 24 | generation.child,
+                                     children[index])
+                consumed.append(children[index])
+            await eventually(lambda: sum(p.startswith(b"WT") for p, _ in game.output) == stop
+                             and sum(p.startswith(b"WK") for p, _ in game.output) == stop, tasks=(ticker,))
+        child_frames = [p for p, _ in game.output if p.startswith(b"WT")]
+        self.assertEqual([p[12:12 + p[9]] for p in child_frames], consumed)
+        self.assertEqual([int.from_bytes(p[12:16], "little") for p, _ in game.output if p.startswith(b"WK")],
+                         list(range(timestamp + 1, timestamp + count + 1)))
+        child_timestamps = [int.from_bytes(p[4:8], "little") for p in child_frames]
+        self.assertEqual(child_timestamps, list(range(child_timestamps[0], child_timestamps[0] + count)))
+        state = generation.translator.snapshot()
+        self.assertEqual(state["uni"]["parent"]["count"], start_parent_count + count)
+        self.assertEqual(state["uni"]["child"]["tag_checks"], 316)
+        self.assertEqual(state["uni"]["child"]["tag_discontinuities"], 0)
+        self.assertEqual(state["uni"]["child"]["tag_coverage_breaks"], 0)
+        self.assertTrue(all(flags == 7 for _, flags in game.output))
+        self.assertIsNone(state["uni_inflight"])
+        self.assertEqual(state["uni_waiting"], 0)
+        self.assertEqual(state["pending_core_acks"], 0)
+        return count
+
+    async def exercise_path(self, *, uni):
         # Use the production event-loop mode: debug task stack capture can
         # throttle the synthetic producer below the intended radio ACK rate.
         asyncio.get_running_loop().set_debug(False)
@@ -250,41 +315,11 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
                     await self.peer.receive(r.RFU1_CONNECT_ACK)
                     game.output.clear()
                     parent_timestamp = await self.ni_roundtrip(generation, game, ticker, set_period)
-                    # A progressing 100 ms console cadence slows local ACKs;
-                    # no production scheduler, admission, or wire queue is mocked.
-                    period = .1
-                    count = 1024
-                    for index in range(count):
-                        await self.peer.send(r.RFU1_CLIENT_SEND, 8 << 24 | generation.child,
-                            number.to_bytes(4, "little") + index.to_bytes(4, "little"))
-                    high_water = 0
-                    waited = False
-                    async with asyncio.timeout(60):
-                        while len(game.output) < count:
-                            self.assertIsNone(host.failure)
-                            self.assertIsNone(guest.failure)
-                            pending = len(origin._generation.simulation._pending_remote)
-                            status = origin._generation.tunnel.flow_status()
-                            waited |= status["remote_waits"] > 0
-                            self.assertLessEqual(status["core_to_local_queue"], 256)
-                            self.assertLessEqual(status["local_to_core_queue"], 256)
-                            high_water = max(high_water, pending)
-                            self.assertLessEqual(pending, 256)
-                            await asyncio.sleep(.01)
-                    self.assertEqual(high_water, 256, "fixture did not exercise full RFU pressure")
-                    self.assertTrue(waited, "fixture did not exercise waiting Core admission")
-                    self.assertEqual([p[-8:] for p, _ in game.output],
-                        [number.to_bytes(4, "little") + i.to_bytes(4, "little") for i in range(count)])
-                    self.assertTrue(all(flags == 7 for _, flags in game.output))
-                    for index in range(1, 9):
-                        slot = number.to_bytes(4, "little") + index.to_bytes(4, "little")
-                        game.press(parent_t(parent_timestamp + index, slot), 7)
-                        self.assertEqual((await self.peer.receive(r.RFU1_HOST_SEND))[2][:8], slot)
-                        await self.peer.send(r.RFU1_CLIENT_ACK, generation.child)
-                    await eventually(lambda: any(p.startswith(b"WK") and
-                        int.from_bytes(p[12:16], "little") == parent_timestamp + 8
-                        for p, _ in game.output),
-                                     tasks=(ticker,))
+                    if uni:
+                        count = await self.uni_bursts(generation, game, ticker, parent_timestamp, number)
+                    else:
+                        count = await self.opaque_pressure(origin, host, guest, generation, game, ticker,
+                                                           set_period, parent_timestamp, number)
                     status = origin._generation.simulation.flow_status()
                     self.assertGreater(status["reliable_tx_new"], count)
                     self.assertGreaterEqual(status["reliable_tx_retransmits"], 0)
@@ -321,3 +356,42 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
                 os.assert_clean()
                 if not failed:
                     self.assertEqual(cleanup, [None, None])
+
+    async def opaque_pressure(self, origin, host, guest, generation, game, ticker,
+                              set_period, parent_timestamp, number):
+        # A progressing 100 ms console cadence slows local ACKs;
+        # no production scheduler, admission, or wire queue is mocked.
+        set_period(.1)
+        count = 1024
+        for index in range(count):
+            await self.peer.send(r.RFU1_CLIENT_SEND, 8 << 24 | generation.child,
+                number.to_bytes(4, "little") + index.to_bytes(4, "little"))
+        high_water = 0
+        waited = False
+        async with asyncio.timeout(60):
+            while len(game.output) < count:
+                self.assertIsNone(host.failure)
+                self.assertIsNone(guest.failure)
+                pending = len(origin._generation.simulation._pending_remote)
+                status = origin._generation.tunnel.flow_status()
+                waited |= status["remote_waits"] > 0
+                self.assertLessEqual(status["core_to_local_queue"], 256)
+                self.assertLessEqual(status["local_to_core_queue"], 256)
+                high_water = max(high_water, pending)
+                self.assertLessEqual(pending, 256)
+                await asyncio.sleep(.01)
+        self.assertEqual(high_water, 256, "fixture did not exercise full RFU pressure")
+        self.assertTrue(waited, "fixture did not exercise waiting Core admission")
+        self.assertEqual([p[-8:] for p, _ in game.output],
+            [number.to_bytes(4, "little") + i.to_bytes(4, "little") for i in range(count)])
+        self.assertTrue(all(flags == 7 for _, flags in game.output))
+        for index in range(1, 9):
+            slot = number.to_bytes(4, "little") + index.to_bytes(4, "little")
+            game.press(parent_t(parent_timestamp + index, slot), 7)
+            self.assertEqual((await self.peer.receive(r.RFU1_HOST_SEND))[2][:8], slot)
+            await self.peer.send(r.RFU1_CLIENT_ACK, generation.child)
+        await eventually(lambda: any(p.startswith(b"WK") and
+            int.from_bytes(p[12:16], "little") == parent_timestamp + 8
+            for p, _ in game.output),
+                         tasks=(ticker,))
+        return count

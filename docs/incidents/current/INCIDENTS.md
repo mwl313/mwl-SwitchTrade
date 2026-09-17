@@ -2403,3 +2403,11 @@ archive list and regenerate the index.
   private evidence; this software packet performs no new physical recovery.
   VM residue is not independently verified. No retry before separately
   authorized source/owner-bound setup; never use game/session restarts as proof.
+- Approved unattended follow-up cross-checked the observer against native gold:
+  6,450 covered child tag comparisons, zero discontinuities, with capture gaps
+  explicitly breaking coverage. Existing opaque pressure inputs did not exercise
+  qualified UNI pacing; add 337 qualified UNI exchanges in each of two real-stack
+  Generations with modeled game consumption and eight-frame parent bursts.
+  This closes a regression gap, not either native failure. Callback ACK remains
+  distinct from buffer/game consumption; receipt grouping and NI-tail overflow
+  remain unproven causes. No physical retry/recovery or speculative ACK change.
