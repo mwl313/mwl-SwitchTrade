@@ -44,6 +44,7 @@ class CoreTunnelAdapter:
         self._closed = False
         self._connection_generation = 1
         self._remote_waits = self._local_deferrals = 0
+        self._pre_clear = None
         self.connected = threading.Event()
         self.connected.set()
 
@@ -123,13 +124,21 @@ class CoreTunnelAdapter:
                     self._remote_waits += 1
                 await self._remote_space.wait()
 
-    def flow_status(self) -> dict[str, int]:
+    def flow_status(self) -> dict[str, object]:
         """Counts only, safe for diagnostic logs; no game or device identity."""
         with self._lock:
             return {"core_to_local_queue": len(self._core_to_local),
                     "local_to_core_queue": len(self._local_to_core),
                     "queue_capacity": self._capacity, "remote_waits": self._remote_waits,
-                    "local_deferrals": self._local_deferrals}
+                    "local_deferrals": self._local_deferrals,
+                    "pre_clear": None if self._pre_clear is None else dict(self._pre_clear)}
+
+    def _record_pre_clear(self, reason):
+        # Caller owns _lock. Cleanup must not erase the first queue evidence.
+        if self._pre_clear is None:
+            self._pre_clear = {"reason": reason,
+                               "core_to_local_queue": len(self._core_to_local),
+                               "local_to_core_queue": len(self._local_to_core)}
 
     def poll(self, limit: int | None = None) -> list[CoreRfuFrame]:
         """Take only downstream demand, retaining the rest in insertion order."""
@@ -137,6 +146,7 @@ class CoreTunnelAdapter:
             raise ValueError("poll limit must be a non-negative integer")
         with self._lock:
             if self._sealed or self._closed or not self.connected.is_set():
+                self._record_pre_clear("poll_closed")
                 self._core_to_local.clear()
                 return []
             count = len(self._core_to_local) if limit is None else min(limit, len(self._core_to_local))
@@ -163,6 +173,7 @@ class CoreTunnelAdapter:
             self._core_to_local.clear()
             self._connection_generation += 1
             self._remote_waits = self._local_deferrals = 0
+            self._pre_clear = None
             self.connected.set()
         self._signal_local_ready()
 
@@ -170,6 +181,7 @@ class CoreTunnelAdapter:
         with self._lock:
             if self._closed:
                 return
+            self._record_pre_clear("close")
             self._sealed = True
             self._closed = True
             self._local_to_core.clear()
@@ -181,6 +193,7 @@ class CoreTunnelAdapter:
     def seal(self) -> None:
         """Stop DATA admission before local simulation teardown."""
         with self._lock:
+            self._record_pre_clear("seal")
             self._sealed = True
             self._local_to_core.clear()
             self._core_to_local.clear()
@@ -189,6 +202,7 @@ class CoreTunnelAdapter:
     def fail(self, error: BaseException) -> None:
         """Wake Core receive with the first local simulation failure."""
         with self._lock:
+            self._record_pre_clear("fail")
             if self._failure is None:
                 self._failure = error
             self._sealed = True

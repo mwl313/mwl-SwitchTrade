@@ -102,6 +102,8 @@ class SwitchLdnGeneration:
         self._started = False
         self._report: CleanupReport | None = None
         self._close_task: asyncio.Task[CleanupReport] | None = None
+        self._timing = {"ticks": 0, "max_tick_gap_ms": 0, "max_tick_work_ms": 0,
+                        "max_diagnostic_work_ms": 0}
 
     @property
     def runner_alive(self) -> bool:
@@ -211,24 +213,46 @@ class SwitchLdnGeneration:
         return self._report
 
     def _log_flow(self, event: str) -> None:
+        started = time.monotonic()
         snapshot = getattr(self.simulation, "flow_status", None)
         if callable(snapshot):
             logging.getLogger(__name__).info(
                 "switch_rfu_progress id=%s %s", self.offer.generation_id,
-                json.dumps({**snapshot(), "event": event}, sort_keys=True))
+                json.dumps({**snapshot(), "event": event, "scheduler": dict(self._timing)}, sort_keys=True))
+        drain = getattr(self.simulation, "drain_diagnostics", None)
+        if callable(drain):
+            logging.getLogger(__name__).info(
+                "rfu_trace id=%s side=switch %s", self.offer.generation_id,
+                json.dumps(drain(final=event == "stopped"), sort_keys=True))
+        self._timing["max_diagnostic_work_ms"] = max(
+            self._timing["max_diagnostic_work_ms"], round((time.monotonic() - started) * 1000, 3))
 
     def _drive_simulation(self) -> None:
         deadline = time.monotonic()
         diagnostic_due = deadline
+        previous_tick = None
         while not self._runner_stop.is_set():
             if getattr(self._session, "end_reason", None) is not None:
                 return
             if getattr(self._session, "ended", False):
                 return
             try:
+                started = time.monotonic()
+                if previous_tick is not None:
+                    self._timing["max_tick_gap_ms"] = max(
+                        self._timing["max_tick_gap_ms"], round((started - previous_tick) * 1000, 3))
+                previous_tick = started
                 self.simulation.tick()
+                self._timing["ticks"] += 1
+                self._timing["max_tick_work_ms"] = max(
+                    self._timing["max_tick_work_ms"], round((time.monotonic() - started) * 1000, 3))
                 if time.monotonic() >= diagnostic_due:
-                    self._log_flow("periodic")
+                    try:
+                        self._log_flow("periodic")
+                    except Exception as error:
+                        logging.getLogger(__name__).warning(
+                            "switch_rfu_progress_unavailable id=%s error=%s",
+                            self.offer.generation_id, type(error).__name__)
                     diagnostic_due = time.monotonic() + 5
             except BaseException as error:
                 if getattr(self._session, "end_reason", None) is not None:
@@ -238,6 +262,13 @@ class SwitchLdnGeneration:
                 )
                 failure.__cause__ = error
                 self._tick_failure = failure
+                # Capture before fail() clears queues. Diagnostic failure must
+                # not replace the original functional failure.
+                try:
+                    self._log_flow("tick_failed")
+                except Exception:
+                    logging.getLogger(__name__).warning("switch_rfu_progress_unavailable id=%s",
+                                                        self.offer.generation_id)
                 self.tunnel.fail(failure)
                 return
             deadline += _VBLANK_SECONDS

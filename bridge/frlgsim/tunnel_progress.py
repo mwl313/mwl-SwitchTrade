@@ -8,6 +8,7 @@ from copy import deepcopy
 import time
 
 from switchtrade.rfu_progress import RfuProgress
+from switchtrade.rfu_trace import MetadataTrace, native_metadata
 
 
 class NativeRfuProgress:
@@ -16,6 +17,7 @@ class NativeRfuProgress:
         self._clock = clock
         self._started = clock()
         self.progress = RfuProgress(clock)
+        self.trace = MetadataTrace(clock=clock)
         self._counts = Counter()
         self._kinds = {side: Counter() for side in ("rx_admitted", "tx_queued")}
         self._recent = {side: deque(maxlen=24) for side in self._kinds}
@@ -23,35 +25,33 @@ class NativeRfuProgress:
         self._receipt_attempts = 0
         self._receipt_first = []
         self._receipt_recent = deque(maxlen=24)
+        self._window = None
+
+    def window(self, send_low, next_out, inflight):
+        current = (send_low, next_out, inflight)
+        if current != self._window:
+            self._window = current
+            self.trace.record("native_window", send_low=send_low,
+                              next_out=next_out, inflight=inflight)
 
     def observe(self, payload, seq, flags, *, received):
         side = "rx_admitted" if received else "tx_queued"
         parent = not self.parent if received else self.parent
         self._counts[side] += 1
+        metadata = native_metadata(payload, parent=parent)
         entry = {"ordinal": self._counts[side], "reliable_seq": seq,
-                 "flags": flags, "bytes": len(payload), "kind": "other",
+                 "flags": flags, **metadata,
                  "elapsed_ms": round((self._clock() - self._started) * 1000)}
         # Recognize only a complete single native wrapper. Malformed/unknown
         # payloads remain forwarded by TunnelSim without exposing their bytes.
-        if (len(payload) >= 4 and payload[0] == 0x57
-                and int.from_bytes(payload[2:4], "little") == len(payload) - 4):
-            if payload[1] == 0x54 and len(payload) >= 12:
-                timestamp = int.from_bytes(payload[4:8], "little")
-                size = payload[8 if parent else 9]
-                slot = payload[12:12 + size]
-                # Native parent idle encodes size=1 without any slot bytes.
-                if len(slot) == size or (parent and size == 1 and len(payload) == 12):
-                    entry.update(kind="WT", timestamp=timestamp, slot_len=size)
-                    self.progress.observe(slot, parent=parent, timestamp=timestamp, reliable_seq=seq)
-            elif payload[1] == 0x4B and len(payload) == 16:
-                entry.update(kind="WK", receipt_seq=int.from_bytes(payload[4:8], "little"),
-                             message_index=int.from_bytes(payload[8:12], "little"),
-                             timestamp=int.from_bytes(payload[12:16], "little"))
-            elif payload[1] == 0x47 and len(payload) == 8:
-                entry.update(kind="WG", state=int.from_bytes(payload[4:8], "little"))
+        if entry["kind"] == "WT":
+            self.progress.observe(payload[12:12 + entry["slot_len"]], parent=parent,
+                                  timestamp=entry["timestamp"], reliable_seq=seq)
         if entry["kind"] == "other":
             self.progress.observe(b"\xff", parent=parent)
         self._kinds[side][entry["kind"]] += 1
+        self.trace.record("native_" + side, reliable_seq=seq, flags=flags,
+                          **metadata)
         self._recent[side].append(entry)
         if len(self._first[side]) < 12:
             self._first[side].append(entry)
@@ -68,11 +68,15 @@ class NativeRfuProgress:
                 if not flags & 1:
                     continue
                 app_position += 1
+                self.trace.record("native_tx_attempt", reliable_seq=seq, flags=flags,
+                                  app_position=app_position,
+                                  **native_metadata(payload, parent=self.parent))
                 if len(payload) != 16 or payload[:4] != b"WK\x0c\0":
                     continue
                 receipt_position += 1
                 self._receipt_attempts += 1
                 record = {"attempt": self._receipt_attempts, "reliable_seq": seq,
+                          "elapsed_ms": round((self._clock() - self._started) * 1000),
                           "app_position": app_position, "receipt_position": receipt_position,
                           "message_index": int.from_bytes(payload[8:12], "little"),
                           "timestamp": int.from_bytes(payload[12:16], "little")}

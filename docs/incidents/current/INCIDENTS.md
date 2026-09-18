@@ -2421,3 +2421,13 @@ archive list and regenerate the index.
   scheduling/transport ACK as game consumption. Reuse the dependency-free RFU
   observer without importing gpSP into Switch/Core/Relay. Exact-SHA and both
   logs remain required for a separately authorized, direction-separated trial.
+- Diagnostic audit found recent-24 snapshots still discard intervening events,
+  and Host seal/fail clears queue evidence before stopped logging. Retain bounded
+  sequenced metadata batches with sticky overflow, source hashes and final-flush
+  coverage; preserve first pre-clear queue counts and first tick failure even if
+  diagnostic flush fails. Compare complete same-generation boundary histories,
+  not PC wall clocks or three-bit tags alone (eight missed commands can alias).
+  The offline audit reports incomplete evidence as inconclusive; complete
+  metadata never attests game consumption. No timing/ACK workaround or physical
+  retry/recovery occurs. Trial13 separates entry/Host/Guest movement and stops
+  before trade/save, preserving first symptom and owned cleanup independently.

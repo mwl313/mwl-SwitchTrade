@@ -14,6 +14,8 @@ from typing import Final
 
 from .errors import GpspError
 from .progress import RfuProgress, uni_slot
+from switchtrade.rfu_trace import MetadataTrace
+from switchtrade.rfu_progress import uni_command_metadata
 
 
 RFU1_MAGIC: Final = 0x52465531
@@ -202,6 +204,7 @@ class RfuTranslator:
         self._uni_inflight: int | None = None
         self._uni_waiting: deque[tuple[int, bytes]] = deque()
         self._trace: deque[dict] = deque(maxlen=24)
+        self.trace = MetadataTrace()
         self._sequence_last = {"core": 0, "remote": 0}
         self._sequence_cache: dict[str, OrderedDict[int, tuple[bytes, tuple[TranslatorAction, ...]]]] = {
             "core": OrderedDict(), "remote": OrderedDict(),
@@ -244,6 +247,10 @@ class RfuTranslator:
         if self._failure is None:
             self._failure = TranslatorError(code, message)
         raise self._failure
+
+    def _record(self, entry):
+        self._trace.append(entry)
+        self.trace.record(**entry)
 
     def _active(self) -> None:
         if self.state in ("failed", "closed"):
@@ -348,8 +355,9 @@ class RfuTranslator:
             action = TranslatorAction(
                 "tunnel", _gba(GBA_TRANSFER, frame_body),
                 "child_transfer", flags=FLAGS_GBA)
-            self._trace.append({"event": "child_transfer", "timestamp": timestamp,
-                                "uni": uni_slot(slot, parent=False)})
+            self._record({"event": "child_transfer", "timestamp": timestamp,
+                          "uni": uni_slot(slot, parent=False),
+                          **(uni_command_metadata(slot, parent=False) or {})})
             # In the qualified FRLG child MSC path, a UNI reply follows a
             # receiveData read. CLIENT_ACK alone precedes buffer admission and
             # is NOT consumption credit. Keep only one recognized UNI in gpSP
@@ -368,7 +376,7 @@ class RfuTranslator:
             if not self._pending_parent_timestamps:
                 self._fail("TRANSLATOR_ACK_UNCORRELATED", "gpSP acknowledgement is uncorrelated")
             timestamp = self._pending_parent_timestamps.popleft()
-            self._trace.append({"event": "local_receipt", "timestamp": timestamp})
+            self._record({"event": "local_receipt", "timestamp": timestamp})
             return (self._switch_ack(timestamp),)
         if packet_type == RFU1_DISCONNECT:
             if self.state not in ("connecting", "connected") or header not in (
@@ -459,7 +467,7 @@ class RfuTranslator:
             # buffer again. Once its local receipt exists (or it was idle), a
             # repeated WT can recover an unsent/lost WK. This is not an NI ACK.
             waiting = timestamp in self._pending_parent_timestamps or any(t == timestamp for t, _ in self._uni_waiting)
-            self._trace.append({"event": "parent_repeat", "timestamp": timestamp, "waiting": waiting})
+            self._record({"event": "parent_repeat", "timestamp": timestamp, "waiting": waiting})
             return () if waiting else (self._switch_ack(timestamp),)
         if self._parent_timestamps:
             last = next(reversed(self._parent_timestamps))
@@ -479,8 +487,9 @@ class RfuTranslator:
         if any(body[8 + slot_length:]):
             self._fail("TRANSLATOR_PARENT_PADDING", "Switch parent transfer padding is invalid")
         self.progress.observe(slot, parent=True, timestamp=timestamp)
-        self._trace.append({"event": "parent_transfer", "timestamp": timestamp,
-                            "uni": uni_slot(slot, parent=True)})
+        self._record({"event": "parent_transfer", "timestamp": timestamp,
+                      "uni": uni_slot(slot, parent=True),
+                      **(uni_command_metadata(slot, parent=True) or {})})
         self._uni_active |= uni_slot(slot, parent=True)
         if self._uni_inflight is not None:
             self._uni_waiting.append((timestamp, slot))
@@ -491,7 +500,7 @@ class RfuTranslator:
         if uni_slot(slot, parent=True):
             self._uni_inflight = timestamp
         self._pending_parent_timestamps.append(timestamp)
-        self._trace.append({"event": "local_delivery", "timestamp": timestamp})
+        self._record({"event": "local_delivery", "timestamp": timestamp})
         return TranslatorAction("core", _rfu1(RFU1_HOST_SEND, len(slot), slot),
                                 "parent_transfer", peer_id=0)
 

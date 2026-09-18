@@ -100,6 +100,9 @@ class TunnelSim(Sim):
         status["rfu_boundary"] = self._rfu_progress.snapshot()
         return status
 
+    def drain_diagnostics(self, *, final=False):
+        return self._rfu_progress.trace.drain(final=final)
+
     def _on_reliable_app(self, flags_a, payload):
         """Forward exact application bytes; no RFU opcode or activity knowledge."""
         try_send = getattr(self.tunnel, "try_send_rfu", None)
@@ -138,6 +141,7 @@ class TunnelSim(Sim):
 
     def _drive_tunnel_reliable(self):
         self._drain_tunnel()
+        self._rfu_progress.window(self.rel.send_low(), self.rel.out_seq, self.rel.inflight())
         now_ms = self._now_ms
         limit = PARENT_RTX_LIMIT if self.parent else RTX_GAP_LIMIT
         batch = list(self.rel.due_retransmits(now_ms, limit=limit))[:RELIABLE_BATCH_MAX]
@@ -166,6 +170,9 @@ class TunnelSim(Sim):
             self._last_ack_tick = self._tick
         self._rfu_progress.scheduled(batch, RELIABLE_BATCH_MAX)
         self._tx_reliable_batch(batch)
+        if batch:
+            # Return from the local transmit call, NOT native game receipt.
+            self._rfu_progress.trace.record("native_send_returned", batch_frames=len(batch))
 
     def _drive_reliable(self):
         self._drive_tunnel_reliable()

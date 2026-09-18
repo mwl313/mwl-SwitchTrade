@@ -163,17 +163,19 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             for _ in range(100):
                 generation._diagnose("periodic")
             self.assertEqual(len(logs.output), before)
-            snapshot = json.loads(logs.output[-1].split(" ", 2)[2])
+            snapshot = json.loads([line for line in logs.output if "gpsp_rfu_progress" in line][-1].split(" ", 2)[2])
             self.assertEqual(snapshot["state"], "searching")
             self.assertGreaterEqual(snapshot["advertisement_writes"], 1)
             self.assertEqual(snapshot["gpsp_kinds"], {})
             self.assertEqual(snapshot["gpsp_packets"], 0)
             self.assertEqual(snapshot["core_dequeued"], 1)
             self.assertFalse(snapshot["link_ready"])
+            self.assertIn("max_diagnostic_work_ms", snapshot["loop"])
+            self.assertGreaterEqual(snapshot["loop"]["advertiser_iterations"], 1)
             self.assertTrue(clean(await generation.close("test_end")))
             next_generation = await self.driver.accept(self.offer(2), asyncio.Event())
             next_generation.activate()
-            fresh = json.loads(logs.output[-1].split(" ", 2)[2])
+            fresh = json.loads([line for line in logs.output if "gpsp_rfu_progress" in line][-1].split(" ", 2)[2])
             self.assertEqual(fresh["advertisement_writes"], 0)
             self.assertEqual(fresh["core_dequeued"], 0)
             self.assertEqual(fresh["gpsp_kinds"], {})
@@ -185,6 +187,19 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("ProcessIdentity", combined)
         progress = [line for line in logs.output if "gpsp_rfu_progress" in line]
         self.assertEqual(sum('"event": "closed"' in line for line in progress), 2)
+
+    async def test_diagnostic_failure_does_not_mask_translator_error_or_block_cleanup(self):
+        await self.ready()
+        generation = await self.driver.accept(self.offer(), asyncio.Event())
+        generation.activate()
+        with patch.object(generation.translator.trace, "drain", side_effect=OSError("private detail")), \
+             self.assertLogs("switchtrade.endpoints.retroarch_gpsp.driver", level="INFO") as logs:
+            with self.assertRaises(r.TranslatorError) as failed:
+                await generation.send(LinkPacket(generation.offer.generation_id, PROTOCOL, b"bad", 7))
+            self.assertTrue(failed.exception.code.startswith("TRANSLATOR_"))
+            self.assertTrue(clean(await generation.close("failed")))
+        self.assertIn("gpsp_rfu_progress_unavailable", "\n".join(logs.output))
+        self.assertNotIn("private detail", "\n".join(logs.output))
 
     async def test_rfu_diagnostics_show_handshake_data_and_failure_without_payloads(self):
         await self.ready()

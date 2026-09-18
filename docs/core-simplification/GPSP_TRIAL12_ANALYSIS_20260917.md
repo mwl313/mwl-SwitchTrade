@@ -353,3 +353,99 @@ full pytest, stock-process/soak, Windows/Ubuntu final-SHA CI or commercial-game
 pass is asserted. The qualification ledger remains blocked, not CI-pending
 complete. This is a pushed diagnostic candidate for the next authorized test,
 not a claimed communication repair.
+
+## Diagnostic coverage audit — 2026-09-18
+
+Packet base: `f369648cc6a81391a2f32b1e6be2418508d62ab9`, clean feature
+worktree and matching remote checked before work. Scope is making the next
+authorized test discriminating, not starting a physical retry or claiming
+that the unresolved game/clock defect is repaired.
+
+### Gaps found and corrected
+
+- The recent-24 rings plus five-second summaries can lose the middle of an
+  active session. Three-bit tag continuity alone can also miss multiples of
+  eight lost commands. Add sequenced, bounded metadata batches at the existing
+  log flush points, with a unique observer stream and same-process monotonic
+  times. Whole-file collection is mandatory; a tail is only a status glance.
+- Retain WT/WK identities through native admission, Guest receipt, translator
+  delivery intent/callback receipt, Core enqueue/dequeue and native queue/
+  transmit attempts. Trace local send intent/return separately and native
+  Reliable window movement. Repeated transmission is not a new command, and
+  neither socket return nor Reliable/RFU callback ACK attests game consumption.
+- Diagnostic capacity is bounded at 4096 entries per observer. Overwriting
+  records sets sticky loss counters/first lost ordinal; batch/event gaps,
+  missing final flush, unknown source or mixed Generations cannot become a
+  complete-evidence verdict. Source hashes are normalized for Windows/WSL
+  newlines and cover nine relevant source files. They supplement, not replace,
+  exact Git/overlay and actual frontend/core identities.
+- Host `seal()`/`fail()` previously cleared queue counts before the stopped
+  snapshot. Preserve the first pre-clear counts through repeated cleanup.
+  Capture tick-failure evidence before clearing, and do not replace the first
+  functional cause if diagnostic flushing also fails.
+- Observe Host tick-work/gap maxima and diagnostic logging work; Guest records
+  advertiser iteration gaps and diagnostic work. These are local boundary
+  timings, not game FPS, one-way Internet latency, or a new timeout policy.
+- The runbook's early section still suggested proceeding to trade while its
+  later diagnostic section required stopping after movement checks. Make the
+  next trial explicitly entry, Host-only movement, then Guest-only movement;
+  no trade/save on this unresolved link. Fixed observation checkpoints are
+  test procedure, never automatic product teardown or a protocol deadline.
+
+`tools/audit_rfu_trace.py` reads copies of both complete logs without network,
+device or process access. It checks coverage/source/Generation before comparing
+the ordered WT/WK metadata at three forwarding boundaries plus qualified child
+UNI before/after Core enqueue (NI retry coalescing is intentionally excluded), and reports local
+queue/write/callback intervals without subtracting different PC clocks. Empty
+histories are unknown, not a matching-data success. Missing boundary records
+can be cancellation following an earlier game error, so the first symptom and
+pre-clear state must still be read alongside the report.
+
+Replaying the retained trial12 Host/VM files through this tool correctly yields
+`TRACE_INCOMPLETE / INCONCLUSIVE`: those old snapshots do not contain the new
+event history. This is not a new error in that trial or a reason to discard its
+existing NI/UNI evidence; missing historical events cannot be reconstructed.
+
+### Verification scope and residual blockers
+
+The regression includes metadata privacy/unknown frames, repeated attempts,
+337 events spanning ring rollover, four-minute idle observation, overflow,
+missing/duplicate batches, truncated final history, malformed records, source
+and Generation mismatch, eight-command tag alias, empty evidence, real CLI
+exit codes and immutable input files. First queue evidence survives seal/fail/
+close; an unavailable diagnostic flush cannot mask a native tick failure.
+
+The real local WebSocket relay + Core + gpSP endpoint + Direct A + StageSession
++ LDN/Pia/Reliable/TunnelSim regression now passes its actual emitted Host and
+Guest log files through the audit across **two Generations and 337 qualified
+UNI exchanges per Generation**. Hardware/OS and game/frontend inputs remain
+modeled; this is not a stock-process or commercial-game qualification.
+
+There is no payload, ACK construction, pacing, timeout, Core/Relay or emulator
+ownership change. The endpoint-shared observer/parser is reused rather than
+adding an emulator manager or a game-aware Core. Remaining blind spots are
+actual native game consumption/clock, gpSP FIFO admission and emulated game
+queue/error state. Logs can narrow those boundaries but cannot identify an
+internal game error code. The earlier NI-tail/FIFO counterexample still needs
+its separately scoped stock-core reproduction; it is not established as
+trial12's cause. Entry latency, stable bidirectional movement, trade/save/exit
+and same-Pair physical reuse remain open acceptance gates. Do not claim PASS
+or FUNCTIONALLY COMPLETE / CI PENDING on the strength of this packet.
+
+No real Switch, VM, user RetroArch, WSL, USB or relay deployment was operated.
+The previous identity-bound Host cleanup is not repeated; VM residue remains
+unverified user-side state until the next authorized setup. No private logs,
+captures, process paths or game payloads are added to Git.
+
+Final combined local verification on CPython 3.12.14: **275 passed**, eight
+existing WebSocket dependency deprecation warnings, 197.23 seconds. In addition
+to the RFU/UNI/endpoint/real-stack tests, this includes dev-overlay source and
+identity contracts, gpSP qualification/attestation guards, both endpoint CLI
+regressions and repository incident policy. Earlier overlapping runs are not
+added to this total. The read-only audit CLI rejects the legacy trial12 logs as
+incomplete; synthetic full-path emitted logs have complete, matched metadata
+at all four inspected boundaries in each of two Generations.
+
+No full pytest, new stock-process/soak run or final-SHA Windows/Ubuntu CI result
+is asserted for this diagnostic packet. CI is not waited on and the gpSP
+acceptance ledger stays `BLOCKED_NATIVE_UNI_VALIDATION` / `NOT_ATTESTED`.

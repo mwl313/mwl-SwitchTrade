@@ -466,11 +466,67 @@ class SwitchLdnDriverBoundaryTests(unittest.IsolatedAsyncioTestCase):
         entries = [line for line in logs.output if '"event": "stopped"' in line]
         self.assertEqual(len(entries), 1)
         self.assertEqual(observations[-1], (False, False))
-        self.assertEqual(json.loads(entries[0].split(" ", 2)[2]), {
+        result = json.loads(entries[0].split(" ", 2)[2])
+        self.assertIn("max_tick_gap_ms", result.pop("scheduler"))
+        self.assertEqual(result, {
             "event": "stopped", "reliable_tx_new": 130, "reliable_inflight": 6})
         self.assertTrue(first.local_resources_released)
         self.assertTrue(simulation.closed)
         self.assertTrue(session.stopped)
+
+    async def test_tick_failure_preserves_queue_evidence_even_if_trace_flush_fails(self) -> None:
+        session = FakeSession(StageResources(object(), object(), b"advertisement"))
+        simulation = FakeSimulation()
+        driver = SwitchLdnEndpointDriver(
+            policy(), stage_factory=lambda _policy: object(),
+            session_factory=lambda *_args, **_kwargs: session,
+            simulation_factory=lambda *_args: simulation,
+        )
+        await driver.prepare()
+        generation = await driver.discover(asyncio.Event())
+        simulation.flow_status = generation.tunnel.flow_status
+        await generation.send(LinkPacket(generation.offer.generation_id,
+                                         generation.offer.protocol_id, b"private", 7))
+        def unavailable(**_kwargs):
+            if simulation.failure is not None:
+                raise ValueError("private diagnostic failure")
+            return {}
+        original = RuntimeError("first functional failure")
+        with self.assertLogs("switchtrade.endpoints.switch_ldn.generation", level="INFO") as logs:
+            simulation.drain_diagnostics = unavailable
+            simulation.failure = original
+            with self.assertRaises(SwitchLdnEndpointError) as failed:
+                await asyncio.wait_for(generation.receive(), 1)
+            self.assertIs(failed.exception.__cause__, original)
+            report = await generation.close("failed")
+        snapshot = json.loads(next(line.split(" ", 2)[2] for line in logs.output
+                                   if '"event": "tick_failed"' in line))
+        self.assertEqual(snapshot["core_to_local_queue"], 1)
+        self.assertEqual(generation.tunnel.flow_status()["pre_clear"]["core_to_local_queue"], 1)
+        self.assertNotIn("private diagnostic failure", "\n".join(logs.output))
+        self.assertEqual(report.details["primary_failure_code"], "SWITCH_ENDPOINT_TICK_FAILED")
+
+    async def test_periodic_diagnostic_failure_is_not_a_functional_tick_failure(self) -> None:
+        session = FakeSession(StageResources(object(), object(), b"advertisement"))
+        simulation = FakeSimulation()
+        attempted = threading.Event()
+        def unavailable():
+            attempted.set()
+            raise OSError("private logging failure")
+        simulation.flow_status = unavailable
+        driver = SwitchLdnEndpointDriver(
+            policy(), stage_factory=lambda _policy: object(),
+            session_factory=lambda *_args, **_kwargs: session,
+            simulation_factory=lambda *_args: simulation,
+        )
+        await driver.prepare()
+        with self.assertLogs("switchtrade.endpoints.switch_ldn.generation", level="WARNING") as logs:
+            generation = await driver.discover(asyncio.Event())
+            self.assertTrue(await asyncio.to_thread(attempted.wait, 1))
+            report = await generation.close("stopped")
+        self.assertIsNone(report.details["primary_failure_code"])
+        self.assertTrue(report.local_resources_released)
+        self.assertNotIn("private logging failure", "\n".join(logs.output))
 
     async def test_unavailable_final_diagnostics_do_not_prevent_cleanup(self) -> None:
         session = FakeSession(StageResources(object(), object(), b"advertisement"))

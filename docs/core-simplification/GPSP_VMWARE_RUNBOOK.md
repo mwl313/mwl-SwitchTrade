@@ -1,6 +1,6 @@
 # Switch ↔ RetroArch/gpSP: VMware Windows 11 physical test
 
-**2026-09-17: trial12 reached the room after a long wait, then a communication
+**2026-09-18: trial12 reached the room after a long wait, then a communication
 error. Native integration remains open; the latest packet improves diagnostics,
 not the protocol.** See [full-log analysis and next gates](GPSP_TRIAL12_ANALYSIS_20260917.md).
 See [current repair and qualification limits](GPSP_UNI_TRANSITION_REPAIR_20260914.md).
@@ -44,6 +44,15 @@ git pull --ff-only origin codex/gpsp-endpoint
 git log -1 --oneline
 ```
 
+Also preserve `git rev-parse HEAD` from both checkouts, and the Host overlay
+content-id from its normal verified sync. A pull is not runtime evidence.
+If this PowerShell session refuses scripts, allow only this session before
+running the trusted checkout's command (do not change machine-wide policy):
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
 ```powershell
 .\dev.ps1 doctor --emulator gpsp
 ```
@@ -55,30 +64,34 @@ opt-in log directory. Obtain a **new** Pair code; none in an earlier chat is
 valid evidence for this attempt.
 
 In the VM, replace `NEW_CODE` below with that actual six-digit code before
-executing. Use a fresh directory if trial12 already exists.
+executing. Use trial13 or another **unused** directory; never append a retry
+to the first failure's files.
 
 ```powershell
-.\dev.ps1 run join NEW_CODE --emulator gpsp --relay https://relay.pangyostonefist.org --log-dir .qualification/physical-gpsp-12
+.\dev.ps1 run join NEW_CODE --emulator gpsp --relay https://relay.pangyostonefist.org --log-dir .qualification/physical-gpsp-13
 ```
 
 Manually connect RetroArch Netplay to `127.0.0.1:55435`; wait for `Choose Join
 Group in the emulator.` before choosing the game action. Confirm the intended
 trainer, select it once and accept on Switch. Keep game foreground and menus
 closed. `Bridge active.` means RFU data, not game room success. First require
-both games to leave the acceptance/member-wait screens; only then follow the
-normal trade flow with user-backed-up test saves. Never interrupt a save.
+both games to leave the acceptance/member-wait screens. For this diagnostic
+trial, do **not** proceed to trade/save: perform the separate movement checks
+below first. Never interrupt a save.
 
 If it stalls, do not reconnect or reselect repeatedly. Capture both screens,
 action times and both complete opt-in logs. In a second VM PowerShell window:
 
 ```powershell
-Get-Content -LiteralPath (Join-Path 'C:/path/to/switchtrade-gpsp' '.qualification/physical-gpsp-12/switchtrade-core.log') -Tail 100
+Get-Content -LiteralPath (Join-Path 'C:/path/to/switchtrade-gpsp' '.qualification/physical-gpsp-13/switchtrade-core.log') -Tail 20
 ```
 
 `transfer.uni`, `uni_inflight`, `uni_waiting`, `recent_transfers`,
-`uni_wire_start` and `wire_recent` now distinguish first UNI, local callback
-receipt, child response and actual Core admission. Capture the entire log if
-the early transition has scrolled out. Share only redacted copies, not private
+`uni_wire_start` and `wire_recent` distinguish first UNI, local callback
+receipt, child response and actual Core admission. The tail command is only a
+live status glance. **Always collect both entire log files**, including their
+initial identity/trace header and final cleanup; tails are not diagnostic
+evidence coverage. Share only redacted copies, not private
 keys, credentials or raw game captures. The same-Pair second-room and Ctrl+C
 checks below still apply; do not call the first accepted request a trade pass.
 
@@ -89,6 +102,71 @@ timeout. `closing` retains pending state before `closed` reports cleanup.
 Do not use an empty post-cleanup queue as proof that no backlog existed before.
 Before any next trial, copy the actual `git log -1 --oneline` output from both
 machines; a successful pull alone is not an exact-source measurement.
+
+### Trial13 checkpoints and evidence gate
+
+Record action times and both screens at each checkpoint. Do not treat PC clocks
+as synchronized. One video showing both screens is useful but remains private;
+do not commit screen recordings, logs, ROMs or saves to the repository.
+
+1. Confirm both exact SHAs, clean worktrees, Host overlay/radio ownership and
+   VM doctor. Preserve the Host startup output and VM process/core identity.
+2. Connect Netplay, select the trainer once, and accept on Switch. Record those
+   actions separately. Observe both screens for room entry without moving.
+3. If still waiting after 30 seconds, mark `entry_wait_30s` and preserve evidence;
+   do not advance to movement or repeatedly rejoin. This is a **test checkpoint**,
+   not a product timeout or a claim about the normal game's exact time limit.
+   Preserve another 30 seconds of untouched logs, then coordinate normal stop.
+4. If both entered, record `both_in_room`. Move **Host only** one tile on open
+   floor, away from chairs/exit tiles. Record whether/when both screens respond.
+   If they do not settle within 10 seconds, stop progression and collect logs.
+5. Only after that succeeds, move **Guest only** one tile on open floor and
+   record both responses. Do not press further buttons after the first error.
+6. Keep 10 seconds of post-symptom logging without retrying. Then stop the VM
+   SwitchTrade client with Ctrl+C, followed by the identity-bound Host shutdown.
+   Do not terminate RetroArch, force a game reload, or perform blanket process/
+   WSL/USB cleanup. Record shutdown order and prove owned residue separately.
+
+New `rfu_trace` batches retain observation sequence, same-process monotonic
+elapsed time, WT/WK timestamps, UNI command headers/tags and Reliable attempts/
+window movement. `local_delivery` is converter intent; `local_write_returned`
+is socket-send return; `local_receipt` is the gpSP callback ACK, **not** game
+consumption. No game arguments or payload fingerprints are recorded.
+
+Each observer buffers at most 4096 metadata entries between existing diagnostic
+flushes. Overflow is sticky (`dropped`/`first_dropped`); missing batches or final
+flushes invalidate complete coverage. Logging/Host scheduling overhead is
+observable through `scheduler.max_diagnostic_work_ms`, `max_tick_work_ms` and
+`max_tick_gap_ms`. Guest `loop` reports diagnostic work and advertiser iteration
+gaps (sleep, scheduling, lock waits and I/O combined, not pure CPU latency).
+Emulated game clocks and internal queues remain outside those measurements.
+Normalized hashes of nine diagnostic/data-path source files detect stale
+Host/VM copies, but do not replace exact Git/overlay or ROM identity evidence.
+
+After both stopped, bring **copies** of the complete Host and Guest logs into
+a new private `.qualification/physical-gpsp-13-evidence` directory on this PC,
+named `host.log` and `guest.log`. Preserve originals and record their SHA256.
+From the repository's existing audit environment, run this read-only tool:
+
+```powershell
+.\.audit-venv\Scripts\python.exe tools/audit_rfu_trace.py .qualification/physical-gpsp-13-evidence/host.log .qualification/physical-gpsp-13-evidence/guest.log
+```
+
+If there are multiple Generations, rerun with `--generation` and the **actual**
+common generation ID in those logs; never combine two rooms. Exit 2 means
+incomplete/insufficient evidence, exit 1 means a recorded boundary mismatch,
+and exit 0 means only matched captured metadata boundaries. `TRACE_COMPLETE`
+is **not** communication success; `functional_verdict` remains `NOT_ASSESSED`.
+A mismatch may be cancellation/cleanup after the initiating fault; correlate
+it with the first symptom and pre-clear queue snapshot, not the last exception.
+
+Decision after the trial: missing source/coverage => repair evidence collection;
+boundary mismatch => inspect the first differing boundary; matching boundaries
+with a stalled game => investigate native clock/game consumption and gpSP FIFO
+admission using a separately scoped reproduction. Do not fabricate ACKs or
+declare a radio fault merely because all recorded queues are empty. Only after
+stable entry and both movement directions should a later authorized trial
+attempt trade/save, normal exit and a same-Pair second room.
 
 ## Topology and prerequisites
 

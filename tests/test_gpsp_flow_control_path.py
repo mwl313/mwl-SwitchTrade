@@ -6,7 +6,12 @@ is not stock-process qualification or evidence of a commercial Pokemon trade.
 import asyncio
 from contextlib import ExitStack
 import json
+import logging
+from pathlib import Path
+import tempfile
 import unittest
+
+from tools.audit_rfu_trace import audit
 
 from switchtrade.connection.b_stage import DirectBStage
 from switchtrade.connection.stage_session import StageSession
@@ -259,6 +264,18 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
         os = VirtualLdnOS()
         with ExitStack() as stack:
             os.install(stack)
+            trace_root = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+            handlers = {}
+            for side, name in (("switch", "switchtrade.endpoints.switch_ldn.generation"),
+                               ("gpsp", "switchtrade.endpoints.retroarch_gpsp.driver")):
+                logger = logging.getLogger(name)
+                handler = logging.FileHandler(trace_root / side, encoding="utf-8")
+                handlers[side] = handler
+                stack.callback(handler.close)
+                stack.callback(logger.removeHandler, handler)
+                stack.callback(logger.setLevel, logger.level)
+                logger.setLevel(logging.INFO)
+                logger.addHandler(handler)
             origin = SwitchLdnEndpointDriver(SwitchLdnPolicy(
                 run_id="pressure-test", release="test", usb_id="0bda:818b",
                 hardware_profile="test", phy="phy0", ifname="test-sta",
@@ -343,6 +360,18 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
                         sim.close()
                         await asyncio.to_thread(session.stop)  # Physical room ends, not a Core shortcut.
                         await asyncio.wait_for(asyncio.gather(host.wait_generation_end(), guest.wait_generation_end()), 20)
+                    # assertLogs temporarily replaces handlers; retain that
+                    # final real endpoint output in the same evidence stream.
+                    for record in logs.records:
+                        handlers["switch"].handle(record)
+                    if uni:
+                        for handler in handlers.values():
+                            handler.flush()
+                        evidence = audit(trace_root / "switch", trace_root / "gpsp",
+                                         generation.offer.generation_id)
+                        self.assertEqual(evidence["coverage"], "TRACE_COMPLETE", evidence)
+                        self.assertTrue(all(x["identical"] for x in evidence["comparisons"]), evidence)
+                        self.assertEqual(evidence["functional_verdict"], "NOT_ASSESSED")
                     stopped = [json.loads(line.split(" ", 2)[2]) for line in logs.output
                                if '"event": "stopped"' in line]
                     self.assertEqual(len(stopped), 1, logs.output)

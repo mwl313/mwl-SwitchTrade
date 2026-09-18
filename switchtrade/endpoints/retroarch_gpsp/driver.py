@@ -20,6 +20,7 @@ from .cadence import RfuCadence
 from .netplay import LocalNetplay, MAX_QUEUE
 from .process import ProcessObserver
 from .progress import uni_command_metadata
+from switchtrade.rfu_trace import native_metadata
 from .rfu import (
     RfuTranslator, _parse_rfu1, _rfu1, RFU1_CONNECT_REQ, RFU1_CONNECT_ACK,
     RFU1_CONNECT_NACK, RFU1_DISCONNECT, RFU1_CLIENT_SEND, RFU1_CLIENT_ACK,
@@ -259,8 +260,19 @@ class GpspGeneration:
         self._diagnostic_due = 0.0
         self._uni_wire_start = []
         self._wire_recent = deque(maxlen=24)
+        self._timing = {"max_diagnostic_work_ms": 0, "advertiser_iterations": 0,
+                        "max_advertiser_gap_ms": 0}
 
     def _diagnose(self, event, *, force=False):
+        try:
+            self._emit_diagnostics(event, force=force)
+        except Exception as error:
+            # In particular, a finally-block log must not replace the first
+            # translator failure. Missing evidence is detected by the audit.
+            LOG.warning("gpsp_rfu_progress_unavailable id=%s error=%s",
+                        self.offer.generation_id, type(error).__name__)
+
+    def _emit_diagnostics(self, event, *, force=False):
         # Counts/types only: no advertisement, RFU bytes, names, RFU IDs or saves.
         # A completed socket write is NOT proof of gpSP/game consumption.
         state = (self.translator.state, self._link_ready.is_set(), self.translator.progress.milestone)
@@ -284,7 +296,12 @@ class GpspGeneration:
                                     "uni_waiting", "recent_transfers")},
             "uni_wire_start": self._uni_wire_start,
             "wire_recent": list(self._wire_recent),
+            "loop": dict(self._timing),
         }, sort_keys=True))
+        LOG.info("rfu_trace id=%s side=gpsp %s", self.offer.generation_id,
+                 json.dumps(self.translator.trace.drain(final=event == "closed"), sort_keys=True))
+        self._timing["max_diagnostic_work_ms"] = max(
+            self._timing["max_diagnostic_work_ms"], round((time.monotonic() - now) * 1000, 3))
 
     def activate(self):
         self.driver._check()
@@ -301,6 +318,8 @@ class GpspGeneration:
         try:
             self._out.put_nowait(LinkPacket(self.offer.generation_id, PROTOCOL, action.payload, action.flags))
             self._core_enqueued += 1
+            self.translator.trace.record("core_enqueued", ordinal=self._core_enqueued,
+                **native_metadata(action.payload, parent=False))
             if action.classification in ("parent_ack", "child_transfer"):
                 entry = {"ordinal": self._core_enqueued, "kind": action.classification,
                          "timestamp": int.from_bytes(action.payload[12:16] if action.classification == "parent_ack"
@@ -329,16 +348,29 @@ class GpspGeneration:
                 self.driver._check()
                 self._enqueue(action)
             else:
+                # Pair this intent/completion by ordinal, not by wall clocks.
+                # No RFU device identity or packet contents enter the trace.
+                ordinal = self._local_writes + 1
+                self.translator.trace.record("local_write_begin", ordinal=ordinal,
+                                             classification=action.classification)
                 await self.driver.local.send(action.payload, peer_id=action.peer_id)
                 self._local_writes += 1
+                self.translator.trace.record("local_write_returned", ordinal=ordinal)
                 if action.classification == "broadcast":
                     self._advertisements += 1
                     if self._advertisements == 1:
                         self._diagnose("first_advertisement_write", force=True)
 
     async def _advertise(self):
+        previous = None
         try:
             while not self._finished:
+                now = time.monotonic()
+                if previous is not None:
+                    self._timing["max_advertiser_gap_ms"] = max(
+                        self._timing["max_advertiser_gap_ms"], round((now - previous) * 1000, 3))
+                previous = now
+                self._timing["advertiser_iterations"] += 1
                 async with self._lock:
                     if self.translator.state == "searching":
                         await self._actions(self._broadcast)
@@ -365,6 +397,7 @@ class GpspGeneration:
             kind = int.from_bytes(packet.payload[4:8], "big")
             name = _RFU_KIND_NAMES[kind] if kind < len(_RFU_KIND_NAMES) else "invalid"
             self._gpsp_kinds[name] += 1
+            self.translator.trace.record("local_received", ordinal=self._received, kind=name)
             try:
                 actions = self.translator.from_core(packet.payload, peer_id=packet.peer_id, sequence=self._received)
                 await self._actions(actions)
@@ -387,6 +420,8 @@ class GpspGeneration:
                 # receive() still drains our final disconnect before Core CLOSE.
                 return
             self._sent += 1
+            self.translator.trace.record("core_received", ordinal=self._sent,
+                                         **native_metadata(packet.payload, parent=True))
             try:
                 actions = self.translator.from_switch(packet.payload, flags=packet.flags,
                     generation=self.host, sequence=self._sent)
@@ -410,6 +445,8 @@ class GpspGeneration:
             if not self._out.empty():
                 self._core_dequeued += 1
                 packet = self._out.get_nowait()
+                self.translator.trace.record("core_dequeued", ordinal=self._core_dequeued,
+                                             **native_metadata(packet.payload, parent=False))
                 self._space.set()
                 return packet
             if self._finished:
