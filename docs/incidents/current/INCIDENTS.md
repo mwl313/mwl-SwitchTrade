@@ -2431,3 +2431,89 @@ archive list and regenerate the index.
   metadata never attests game consumption. No timing/ACK workaround or physical
   retry/recovery occurs. Trial13 separates entry/Host/Guest movement and stops
   before trade/save, preserving first symptom and owned cleanup independently.
+- Trial13 on `f427535` confirms game-visible approval, then one idle UNI each
+  way and no further progression before the instructed stop. Both complete
+  traces have matched ordered metadata, no observer loss, matching source
+  hashes and drained pre-stop queues. This closes a forwarding-evidence gap,
+  not the native clock/game-consumption question. Post-stop unavailable/peer
+  close is secondary; prior identity-bound Host cleanup remains preserved.
+- Offline native-gold comparison reaches player-ID exchange shortly after its
+  first UNI. Trial13 differs in WK/WT timing/grouping, with one pre-UNI WK
+  index/position mismatch and NI receipt replacement requiring independent
+  receiver validation. None is a confirmed cause. Existing stock echo/clock
+  qualification supplies the next parent frame itself; do not use it as proof
+  that the closed native parent advances. See `GPSP_TRIAL13_ANALYSIS_20260918.md`.
+  No speculative ACK/timer change, physical retry or recovery in this packet.
+- Approved envelope-reproduction follow-up uses real local serialization/crypto
+  with synthetic input to reproduce old-frame/new-WK regrouping and NI receipt
+  replacement. Lost/selective ACK and sequence wrap preserve opaque bytes.
+  The offline audit now reports positions, uncovered receipt timestamps and
+  first-UNI progress independently from its matched-boundary verdict. A drained
+  window still cannot establish native completion; the tests never advance a
+  parent from a guessed ACK rule. No production policy or physical recovery
+  changes; native-controlled validation remains required (analysis section 8).
+  Final focused regression: 131 passed; no native receiver/trade attestation.
+- Trial14 diagnostic control, same endpoint source `f427535`, uses a temporary
+  host-local relay reachable by both peers without Internet routing. User screens
+  and Host metadata again show native approval followed by one idle UNI each
+  direction and no next parent for over 59 seconds, with no pending Reliable
+  frames or Pia decrypt failures at that snapshot. No movement/trade attempted.
+  This rejects neither timing sensitivity nor receipt/clock semantics, but the
+  external relay path alone no longer explains the reproduced stall. Full
+  two-log timing/coverage comparison remains pending; do not claim root cause.
+  Normal VM-first stop requested. Preserve owned local relay, radio and service
+  identities through cleanup; do not retry until cleanup and evidence are closed.
+- Trial14 complete Host trace has no observer gaps/drops: first parent-to-child
+  send attempt fell from trial13's 200.920ms to 16.566ms and the first WK/WT
+  now share a scheduled datagram, but no next parent UNI appeared for 90.873s
+  before final flush. Internet delay or separated first-UNI packets alone are
+  insufficient explanations. Native completion is still unobserved; two-peer
+  audit awaits the complete Guest log. Do not turn earlier WK position/NI
+  receipt differences into a diagnosed receiver rule without independent proof.
+  Requested VM stop preceded Host peer-close. Host-owned processes/local relay
+  port/WSL/USB cleanup verified and VMware USB service restored; user VM prompt
+  returned, independent VM socket verification pending. No automatic retry.
+- Trial14 Guest whole log subsequently arrived: complete two-sided trace,
+  identical runtime-file hashes, no observer loss, ordered metadata boundaries
+  matched 116/116 inbound and 41/41 outbound, child UNI admission 1/1. Guest
+  pre-cleanup queues/credit empty and stopped/clean report retained. This closes
+  the evidence-collection gap, not native acceptance. First17ms/co-packing
+  describes scheduled attempts; later WK/WT retries mean actual first radio
+  reception is unproven. See analysis section 9. No speculative production fix
+  or additional physical retry; independent VM socket result still pending.
+- Post-trial14 offline audit finds a recovery-test blind spot: a WK replaced
+  after native Reliable admission cannot be recovered by an ordinary retry of
+  that same Reliable identity, which is correctly deduplicated before the
+  translator. The old direct-translator recovery test required another app
+  delivery/new Reliable identity; native gold's 18 parent repeats use the same
+  identity. Preserve dedup and byte identity, do not manufacture recovery.
+- Add pre-cadence receipt accounting: trial13 has 202 eligible / 55 admitted
+  (147 omitted), trial14 116 / 28 (88 omitted), all omissions pre-UNI; no unknown
+  or unpaired receipts. Boundary match and consecutive WK numbers alone cannot
+  validate this policy. Gold has no intervening WT in 7,314 adjacent-number
+  receipt intervals (38 pre-UNI), but capture gaps/closed receiver still forbid
+  claiming the stall's root cause. See analysis section 10.
+- Do not remove receipt coalescing blindly: preserving receipts while retaining
+  NI pacing fails the existing 400ms-service NULL deadline model (backlog 212),
+  whereas 50ms scripted service progresses. Retain this counterfactual and the
+  encrypted receive/dedup regression. Any candidate needs lossless receipt
+  identity AND bounded prompt NI progress; no speculative production fix, new
+  hardware test or cleanup action occurs in this software packet.
+- Next approved software packet distinguishes unthrottled direct converter
+  input from the full native Reliable path. A test-only lossless candidate
+  retains all 201 NI receipts and delivers NULL at 3.141s in each of two
+  generations under the existing 400ms modeled peer schedule. Retain the
+  direct-input overload counterexample; neither model attests real timing.
+- Apply only the endpoint cadence repair: preserve every translator-authorized
+  WK's original bytes/number/order, with no NI-phase replacement. Keep identical
+  NI retry pacing, bounded FIFO backpressure, native dedup, UNI credit and shared
+  Core/Relay/Switch forwarding unchanged. The 88 trial14 omissions have a code
+  repair, but their causal role in the native first-UNI stall remains unproven.
+- Four receipt-specific 256-slot saturation/resume/cancel cases pass, plus full
+  two-generation delayed-END/NULL and 337-frame UNI tests, including a synthetic
+  peer with a wider send window. 172 distinct selected tests pass (171 + 1
+  separately); virtual resources cleaned and test processes exited. Preserve
+  the ordinary debug-mode fixture setup timeout in analysis section 11; no
+  product timer/capacity was enlarged to fix it. No stock/CI/physical pass,
+  commit, push, deployment or new hardware operation. Prior physical cleanup
+  and pending independent VM socket check are unchanged.

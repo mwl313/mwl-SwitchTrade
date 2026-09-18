@@ -1,11 +1,10 @@
-"""Bound NI retries and NI-phase receipts; keep UNI-phase receipts lossless.
+"""Bound identical NI retries; preserve every translator-authorized receipt.
 
 This is endpoint conversion policy, not Core packet loss or game ACK synthesis.
 Only a single, recognized NI subframe may be paced; distinct data, UNI, mixed
 slots and unknown layouts remain byte-for-byte FIFO. The game still originates
 every retry. A paced copy never allocates a Core sequence or a Reliable slot.
 """
-from dataclasses import replace
 import time
 from .progress import uni_slot
 
@@ -14,7 +13,6 @@ from .progress import uni_slot
 # 189 END copies behind a ~15 application-frame/s local path. Four retries/s
 # per NI lane leave space for transitions and receipts without enlarging Pia.
 NI_RETRY_SECONDS = .25
-RECEIPT_SECONDS = .25
 
 
 class RfuCadence:
@@ -22,8 +20,6 @@ class RfuCadence:
         self.clock = clock or time.monotonic
         self._lanes = {}
         self._states = {}
-        self._receipt = None
-        self._receipt_due = 0.0
         self._receipt_sequence = 0
         self._closed = False
         self.ni_paced = self.receipts_coalesced = 0
@@ -38,23 +34,17 @@ class RfuCadence:
             if action.classification == "parent_transfer":
                 size = int.from_bytes(action.payload[8:12], "big")
                 if uni_slot(action.payload[12:12 + size], parent=True):
-                    # Clock-driven UNI is not the free-running NI retry phase.
-                    # Retire its predecessor's deferred receipt before entering
-                    # lossless receipt mode; every later callback keeps its WK.
+                    # Retain the diagnostic first-UNI marker. Receipts are
+                    # already lossless during NI, not just after this boundary.
                     self._ordered_receipts = True
-                    output.extend(self.poll(force=True))
             if action.classification == "parent_ack":
-                # During NI keep one unsent receipt, not a growing history.
-                # After the first UNI, emit each receipt without replacement.
-                # This does NOT
-                # acknowledge a game NI transaction or earlier timestamps.
-                # The translator can reissue a WK when the Switch repeats a
-                # known WT whose local receipt has already completed.
-                if self._receipt is not None:
-                    self.receipts_coalesced += 1
-                self._receipt = action
-                output.extend(self.poll(force=self._ordered_receipts))
-                continue
+                # WK is timestamp-specific, not a cumulative NI ACK. Replacing
+                # it here loses an already-admitted native obligation; ordinary
+                # Reliable retries are deduplicated before reaching us again.
+                # Preserve the translator's bytes/number/order. The driver's
+                # bounded FIFO owns backpressure, not a latest-only side queue.
+                self._receipt_sequence = int.from_bytes(action.payload[4:8], "little")
+                self._last_receipt_timestamp = int.from_bytes(action.payload[12:16], "little")
             if action.classification == "child_transfer":
                 payload = action.payload
                 slot = payload[12:12 + payload[9]]
@@ -97,25 +87,17 @@ class RfuCadence:
         return True
 
     def poll(self, *, force=False):
-        if self._closed or self._receipt is None or (not force and self.clock() < self._receipt_due):
-            return ()
-        action, self._receipt = self._receipt, None
-        self._receipt_due = self.clock() + RECEIPT_SECONDS
-        # Number receipts when actually admitted, not when replaced while local.
-        self._receipt_sequence = self._receipt_sequence % 0xFFFFFFFF + 1
-        self._last_receipt_timestamp = int.from_bytes(action.payload[12:16], "little")
-        return (replace(action, payload=action.payload[:4] +
-                        self._receipt_sequence.to_bytes(4, "little") + action.payload[8:]),)
+        # Keep the generation's polling surface; time never manufactures ACKs.
+        return ()
 
     def close(self):
         self._closed = True
-        self._receipt = None
         self._lanes.clear()
         self._states.clear()
 
     def snapshot(self):
         return {"ni_paced": self.ni_paced, "receipts_coalesced": self.receipts_coalesced,
-                "receipt_pending": int(self._receipt is not None), "ni_lanes": len(self._lanes),
+                "receipt_pending": 0, "ni_lanes": len(self._lanes),
                 "ordered_receipts": self._ordered_receipts,
                 "receipt_sequence": self._receipt_sequence,
                 "last_receipt_timestamp": self._last_receipt_timestamp}

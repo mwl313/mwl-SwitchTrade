@@ -103,20 +103,28 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
             await eventually(null_arrived.is_set, tasks=(ticker, tasks[1]), timeout=4.5)
             self.assertGreaterEqual(end_deliveries, 2)
             self.assertLess(loop.time() - started, 4.5)
+            null_seconds = loop.time() - started
             await tasks[0]
             await tasks[2]
             await eventually(lambda: parent_received == parent_sent, tasks=(ticker, tasks[1]))
             await eventually(lambda: any(p.startswith(b"WK") and
                 int.from_bytes(p[12:16], "little") == timestamp - 1 for p, _ in game.output), tasks=(ticker,))
+            receipts = [p for p, _ in game.output if p.startswith(b"WK")]
+            self.assertEqual([int.from_bytes(p[12:16], "little") for p in receipts],
+                             list(range(first_timestamp, timestamp)))
+            numbers = [int.from_bytes(p[4:8], "little") for p in receipts]
+            self.assertEqual(numbers, list(range(numbers[0], numbers[0] + parent_sent)))
+            self.assertEqual(generation.cadence.receipts_coalesced, 0)
+            self.pressure_results.append({"null_seconds": round(null_seconds, 3),
+                                          "parent_sent": parent_sent, "receipts": len(receipts)})
             game.output.clear()
-            # A deferred/lost receipt can be requested again, without pushing
-            # the same timestamp into gpSP's game-facing buffer a second time.
+            # This is a NEW Reliable delivery with an old timestamp, not a
+            # same-sequence transport retry (which is deduplicated earlier).
             game.press(parent_t(first_timestamp, old_ack), 7)
             await eventually(lambda: any(p.startswith(b"WK") and
                 int.from_bytes(p[12:16], "little") == first_timestamp for p, _ in game.output), tasks=(ticker,))
             self.assertEqual(parent_received, parent_sent)
             self.assertGreater(generation.cadence.ni_paced, 0)
-            self.assertGreater(generation.cadence.receipts_coalesced, 0)
         finally:
             for task in tasks:
                 task.cancel()
@@ -197,6 +205,13 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_native_sized_uni_bursts_tags_and_two_generations(self):
         await self.exercise_path(uni=True)
+        print(json.dumps(self.pressure_results, sort_keys=True))
+
+    async def test_wide_peer_window_lossless_receipts_and_two_generations(self):
+        # Adversarial peer, not a production window change or a claim about
+        # the closed console's actual send window. Avoid testing only against
+        # a copy of our own six-frame sender.
+        await self.exercise_path(uni=True, peer_window=128)
 
     async def uni_bursts(self, generation, game, ticker, timestamp, number):
         """Model input/consumption only; all endpoint/relay/Switch layers are real.
@@ -257,10 +272,11 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state["pending_core_acks"], 0)
         return count
 
-    async def exercise_path(self, *, uni):
+    async def exercise_path(self, *, uni, peer_window=None):
         # Use the production event-loop mode: debug task stack capture can
         # throttle the synthetic producer below the intended radio ACK rate.
         asyncio.get_running_loop().set_debug(False)
+        self.pressure_results = []
         os = VirtualLdnOS()
         with ExitStack() as stack:
             os.install(stack)
@@ -306,6 +322,8 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
                         resources = await asyncio.to_thread(session.wait_ready)
                         game = PhysicalGameInput()
                         sim = build_tunnelsim(resources, game, True)
+                        if peer_window is not None:
+                            sim.rel.max_inflight = peer_window
                         # An independent local sender, not our endpoint's FFF0
                         # default. The first room also crosses the 16-bit wrap.
                         sim.rel.out_seq = sim.rel.window_lo = 0xFFFE if number == 1 else 0x2345
@@ -372,6 +390,8 @@ class RfuPressurePathTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(evidence["coverage"], "TRACE_COMPLETE", evidence)
                         self.assertTrue(all(x["identical"] for x in evidence["comparisons"]), evidence)
                         self.assertEqual(evidence["functional_verdict"], "NOT_ASSESSED")
+                        self.assertEqual(evidence["receipt_accounting"]["status"],
+                                         "ALL_OBSERVED_RECEIPTS_ENQUEUED", evidence["receipt_accounting"])
                     stopped = [json.loads(line.split(" ", 2)[2]) for line in logs.output
                                if '"event": "stopped"' in line]
                     self.assertEqual(len(stopped), 1, logs.output)

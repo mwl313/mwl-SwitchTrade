@@ -8,7 +8,6 @@ from bridge.frlgsim import rfu as native
 from switchtrade.endpoints.retroarch_gpsp import rfu as r
 from switchtrade.endpoints.retroarch_gpsp.cadence import RfuCadence
 from tests.test_gpsp_rfu import TranslatorFixture, GPSP_DEVICE, parent_t, rfu1
-from tests.test_gpsp_cadence import receipt
 
 
 class Link:
@@ -33,15 +32,16 @@ class Link:
             size=104 if kind == r.RFU1_CLIENT_SEND else 16), peer_id=1, sequence=self.cs))
 
 
-def test_uni_transition_flushes_old_receipt_then_keeps_each_new_identity():
+def test_uni_transition_preserves_each_receipt_on_both_sides_of_boundary():
     link = Link()
-    link.admit([receipt(1), receipt(2), receipt(3)])
+    for i in range(1, 4):
+        link.parent(i, None)  # real translator owns receipt numbering
     link.parent(4, native.parent_uni_slot([bytes(14)]))
     link.core(r.RFU1_CLIENT_ACK)
     for i in range(5, 15):
-        link.admit([receipt(i)])
+        link.parent(i, None)
     receipts = [int.from_bytes(a.payload[12:16], "little") for a in link.remote]
-    assert receipts == [1, 3, *range(4, 15)]
+    assert receipts == list(range(1, 15))
     assert [int.from_bytes(a.payload[4:8], "little") for a in link.remote] == list(range(1, len(receipts) + 1))
     assert link.cadence.snapshot()["ordered_receipts"]
     assert not link.cadence.snapshot()["receipt_pending"]

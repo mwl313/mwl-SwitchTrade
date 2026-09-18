@@ -1,8 +1,11 @@
 # Switch ↔ RetroArch/gpSP: VMware Windows 11 physical test
 
-**2026-09-18: trial12 reached the room after a long wait, then a communication
-error. Native integration remains open; the latest packet improves diagnostics,
-not the protocol.** See [full-log analysis and next gates](GPSP_TRIAL12_ANALYSIS_20260917.md).
+**2026-09-18: the next diagnostic candidate preserves every translator-authorized
+WK receipt, including the NI phase. Trials13/14 stalled after approval; the
+native cause and trade acceptance remain open.** See
+[receipt repair, evidence and next gates](GPSP_TRIAL13_ANALYSIS_20260918.md#11-lossless-receipt-repair-and-service-bound-checks-2026-09-18).
+Trial12's delayed room entry and later communication error remain separate
+[full-log evidence](GPSP_TRIAL12_ANALYSIS_20260917.md).
 See [current repair and qualification limits](GPSP_UNI_TRANSITION_REPAIR_20260914.md).
 Use an empty English FR/LG Direct Corner **Trade** Group Leader room. Other
 activities and unqualified nonzero discovery fields fail closed; do not test
@@ -18,12 +21,26 @@ native UNI stall; successful software jobs must not relabel that as completion.
 
 ## Next diagnostic trial: update, then stop at the first failure
 
+This tests the new Simplified Architecture application. The pre-simplification
+desktop is legacy preservation, not a GUI/Room compatibility gate for this
+candidate. Switch-to-Switch and endpoint/driver ownership boundaries remain
+regression requirements.
+
+Do not repeat the unchanged `f427535` VM build. Both endpoints must identify
+the new committed receipt-repair candidate. Close the previous independent VM
+socket/residue check before a new connection. Reuse the host-local relay route
+from trial14 for this comparison when freshly verified reachable; do not change
+receipt policy and Internet routing together. Its exact URL is a per-run fact,
+not a permanent address or authorization to widen a firewall.
+
 No new RetroArch/core/Python install or relay deployment is needed for this
 endpoint-only repair. Stop the prior SwitchTrade clients normally; preserve
 their logs and prove owned cleanup first. Keep the user's emulator/content
 independent. No reset/reload or settings overwrite is part of the update.
 
-In the VM, run each block separately (copy commands only, no `PS ...>` prompt).
+Use PowerShell **7** (`pwsh.exe`), not Windows PowerShell 5 (`powershell.exe`):
+the launcher uses `ProcessStartInfo.ArgumentList`. In the VM, run each block
+separately (copy commands only, no `PS ...>` prompt).
 Replace `C:/path/to/switchtrade-gpsp` with the existing VM checkout path:
 
 ```powershell

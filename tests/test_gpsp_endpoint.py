@@ -357,7 +357,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(generation.translator.progress.uni_snapshot()["child"]["tag_discontinuities"], 1)
         self.assertTrue(clean(await generation.close("test_end")))
 
-    async def test_quiet_receipt_flush_and_pending_cleanup_do_not_leak_to_next_room(self):
+    async def test_receipts_are_immediate_and_cleanup_does_not_leak_to_next_room(self):
         generation = await self.connected_generation()
         clock = [0.0]
         generation.cadence.clock = lambda: clock[0]
@@ -372,16 +372,15 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
                     await asyncio.sleep(.001)
         first = await asyncio.wait_for(generation.receive(), 1)
         self.assertEqual(int.from_bytes(first.payload[12:16], "little"), 1)
-        self.assertEqual(generation.cadence.snapshot()["receipt_pending"], 1)
-        clock[0] = .3
-        last = await asyncio.wait_for(generation.receive(), 1)  # no further game input
+        self.assertEqual(generation.cadence.snapshot()["receipt_pending"], 0)
+        last = await asyncio.wait_for(generation.receive(), 1)  # no clock or further input
         self.assertEqual(int.from_bytes(last.payload[4:8], "little"), 2)
         self.assertEqual(int.from_bytes(last.payload[12:16], "little"), 2)
         await generation.send(LinkPacket(generation.offer.generation_id, PROTOCOL,
             parent_t(3, b"parent12"), 7))
         await self.peer.receive(r.RFU1_HOST_SEND)
         await generation.feed(n.CorePacket(r._rfu1(r.RFU1_CLIENT_ACK, generation.child), 1, 1))
-        self.assertEqual(generation.cadence.snapshot()["receipt_pending"], 1)
+        self.assertEqual(generation._out.qsize(), 1)
         self.assertTrue(clean(await generation.close("test_end")))
         self.assertTrue(generation._advertiser.done())
         clock[0] = 100
@@ -395,6 +394,75 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second.cadence.snapshot()["ni_lanes"], 0)
         self.assertTrue(self.driver.local.connected)
         self.assertTrue(clean(await second.close("test_end")))
+
+    async def receipt_pressure(self, *, callback, cancel):
+        # Like the full-path pressure test, use production event-loop mode.
+        # Debug stack capture can throttle the producer before FIFO saturation.
+        asyncio.get_running_loop().set_debug(False)
+        generation = await self.connected_generation()
+        count = generation._out.maxsize + 1
+        received_before = generation._received
+
+        async def produce():
+            for timestamp in range(1, count + 1):
+                await generation.send(LinkPacket(generation.offer.generation_id, PROTOCOL,
+                    parent_t(timestamp, b"parent12" if callback else None), 7))
+                if callback:
+                    await self.peer.receive(r.RFU1_HOST_SEND)
+                    await self.peer.send(r.RFU1_CLIENT_ACK, generation.child)
+
+        producer = asyncio.create_task(produce())
+        try:
+            async with asyncio.timeout(5):
+                while not (generation._out.full() and generation._lock.locked() and
+                           (not callback or generation._received == received_before + count)):
+                    if producer.done():
+                        producer.result()
+                    await asyncio.sleep(.001)
+            self.assertEqual(generation._out.qsize(), generation._out.maxsize)
+            self.assertEqual(generation.cadence.receipts_coalesced, 0)
+            self.assertIsNone(self.driver.failure)
+            if not cancel:
+                async with asyncio.timeout(5):
+                    packets = [await generation.receive() for _ in range(count)]
+                    await producer
+                self.assertEqual([int.from_bytes(p.payload[12:16], "little") for p in packets],
+                                 list(range(1, count + 1)))
+                self.assertEqual([int.from_bytes(p.payload[4:8], "little") for p in packets],
+                                 list(range(1, count + 1)))
+                self.assertTrue(all(p.flags == 7 for p in packets))
+            self.assertTrue(clean(await asyncio.wait_for(generation.close("pressure_end"), 3)))
+            await asyncio.wait_for(producer, 1)
+            self.assertTrue(generation._out.empty())
+            self.assertTrue(self.driver.local.connected)
+            second = await self.driver.accept(self.offer(2), asyncio.Event())
+            second.activate()
+            self.assertEqual((await second.receive()).payload, r.METADATA_FRAME)
+            self.assertTrue(second._out.empty())
+            self.assertEqual(second.cadence.snapshot()["receipt_sequence"], 0)
+            self.assertTrue(clean(await second.close("test_end")))
+        except BaseException as error:
+            error.add_note(str({"callback": callback, "cancel": cancel,
+                "queue": generation._out.qsize(), "capacity": generation._out.maxsize,
+                "local_received": generation._received - received_before,
+                "remote_received": generation._sent, "producer_done": producer.done(),
+                "lock": generation._lock.locked()}))
+            raise
+        finally:
+            producer.cancel()
+            await asyncio.gather(producer, return_exceptions=True)
+
+    async def test_idle_receipt_full_queue_resumes_in_order(self):
+        await self.receipt_pressure(callback=False, cancel=False)
+
+    async def test_callback_receipt_full_queue_resumes_in_order(self):
+        await self.receipt_pressure(callback=True, cancel=False)
+
+    async def test_idle_receipt_full_queue_cancels_without_next_generation_leak(self):
+        await self.receipt_pressure(callback=False, cancel=True)
+
+    async def test_callback_receipt_full_queue_cancels_without_next_generation_leak(self):
+        await self.receipt_pressure(callback=True, cancel=True)
 
     async def test_full_queues_can_close_generation_and_reuse_same_netplay(self):
         generation = await self.connected_generation()
