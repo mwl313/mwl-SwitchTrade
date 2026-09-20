@@ -8,7 +8,7 @@ from . import reliable
 from .sim import (ACK_PERIOD, PARENT_RTX_LIMIT, RELIABLE_BATCH_MAX,
                   RTX_GAP_LIMIT, Sim)
 from .tunnel_progress import NativeRfuProgress
-from switchtrade.rfu_tunnel import Envelope, Kind, MAX_PAYLOAD_BYTES
+from switchtrade.rfu_tunnel import Kind, MAX_PAYLOAD_BYTES
 
 
 MAX_PENDING_REMOTE = 256
@@ -81,6 +81,7 @@ class TunnelSim(Sim):
 
     def flow_status(self):
         status = {"pending_remote": len(self._pending_remote),
+                  "native_backlog": self._rfu_progress.backlog(self._pending_remote),
                   "reliable_inflight": self.rel.inflight(),
                   "reliable_next_out": self.rel.out_seq, "reliable_next_in": self.rel.recv_next,
                   "reliable_rx_deferrals": self._rx_deferrals,
@@ -101,7 +102,15 @@ class TunnelSim(Sim):
         return status
 
     def drain_diagnostics(self, *, final=False):
+        if final:
+            self._rfu_progress.backlog(self._pending_remote, clear_reason="final_snapshot")
         return self._rfu_progress.trace.drain(final=final)
+
+    def _on_reliable_ack(self, ackid, mask):
+        before = self.rel.send_low(), self.rel.inflight()
+        super()._on_reliable_ack(ackid, mask)
+        after = self.rel.send_low(), self.rel.inflight()
+        self._rfu_progress.ack(ackid, mask, before, after)
 
     def _on_reliable_app(self, flags_a, payload):
         """Forward exact application bytes; no RFU opcode or activity knowledge."""
@@ -122,6 +131,7 @@ class TunnelSim(Sim):
     def _drain_tunnel(self):
         connected = getattr(self.tunnel, "connected", None)
         if connected is not None and not connected.is_set():
+            self._rfu_progress.backlog(self._pending_remote, clear_reason="disconnected")
             self._pending_remote.clear()
             return
         generation = getattr(self.tunnel, "connection_generation", None)
@@ -137,7 +147,8 @@ class TunnelSim(Sim):
                     raise RuntimeError("RFU payload exceeds the Pia Reliable wire limit")
                 if len(self._pending_remote) >= MAX_PENDING_REMOTE:
                     raise RuntimeError("RFU receive backlog overflow")
-                self._pending_remote.append(envelope)
+                ordinal, started = self._rfu_progress.pending(envelope, len(self._pending_remote) + 1)
+                self._pending_remote.append((envelope, ordinal, started))
 
     def _drive_tunnel_reliable(self):
         self._drain_tunnel()
@@ -150,7 +161,7 @@ class TunnelSim(Sim):
         while self._pending_remote and len(batch) < RELIABLE_BATCH_MAX:
             if self.rel.inflight() >= self.rel.max_inflight:
                 break
-            envelope: Envelope = self._pending_remote.popleft()
+            envelope, ordinal, started = self._pending_remote.popleft()
             flags = envelope.flags & 0xFF
             if not flags & 0x01:
                 self.log(f"[tunnel] rejected non-AppData RFU flags=0x{flags:02x}")
@@ -159,7 +170,8 @@ class TunnelSim(Sim):
                 sender_role = "parent" if self.parent else "child"
                 self.observer.submit(self.remote_seat, sender_role, envelope.payload)
             seq = self.rel.queue(envelope.payload, flags, now_ms)
-            self._rfu_progress.observe(envelope.payload, seq, flags, received=False)
+            self._rfu_progress.observe(envelope.payload, seq, flags, received=False,
+                                       pending=(ordinal, started))
             self._tx_new += 1
             batch.append((seq, flags, envelope.payload))
 

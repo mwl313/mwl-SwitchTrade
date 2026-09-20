@@ -26,6 +26,40 @@ class NativeRfuProgress:
         self._receipt_first = []
         self._receipt_recent = deque(maxlen=24)
         self._window = None
+        self._pending_count = self._pending_peak = 0
+        self._pending_max_ms = 0.0
+        self._pre_clear = None
+
+    def pending(self, envelope, depth):
+        """One host clock across Core admission and the bounded native FIFO."""
+        now = self._clock()
+        self._pending_count += 1
+        self._pending_peak = max(self._pending_peak, depth)
+        received = getattr(envelope, "core_received_at", None)
+        enqueued = getattr(envelope, "core_enqueued_at", None)
+        known = received is not None and enqueued is not None and received <= enqueued <= now
+        self.trace.record("native_pending", pending_ordinal=self._pending_count, depth=depth,
+                          core_wait_ms=round((enqueued - received) * 1000, 3) if known else None,
+                          core_queue_ms=round((now - enqueued) * 1000, 3) if known else None,
+                          **native_metadata(envelope.payload, parent=self.parent))
+        return self._pending_count, now
+
+    def backlog(self, pending, *, clear_reason=None):
+        oldest_ms = round((self._clock() - pending[0][2]) * 1000, 3) if pending else 0.0
+        result = {"count": len(pending), "oldest_ms": oldest_ms,
+                  "peak": self._pending_peak, "max_residence_ms": self._pending_max_ms}
+        if clear_reason is not None and self._pre_clear is None:
+            self._pre_clear = {"reason": clear_reason, **result}
+            self.trace.record("native_pending_clear", **self._pre_clear)
+        return {**result, "pre_clear": deepcopy(self._pre_clear)}
+
+    def ack(self, ackid, mask, before, after):
+        # Only authenticated parsed ACK metadata, not packet bytes or RFU ACKs.
+        self.trace.record("native_ack", ack_id=ackid,
+                          selective_bits=int.from_bytes(mask or b"", "little").bit_count(),
+                          before_low=before[0], after_low=after[0],
+                          before_inflight=before[1], after_inflight=after[1],
+                          released=before[1] - after[1])
 
     def window(self, send_low, next_out, inflight):
         current = (send_low, next_out, inflight)
@@ -34,7 +68,7 @@ class NativeRfuProgress:
             self.trace.record("native_window", send_low=send_low,
                               next_out=next_out, inflight=inflight)
 
-    def observe(self, payload, seq, flags, *, received):
+    def observe(self, payload, seq, flags, *, received, pending=None):
         side = "rx_admitted" if received else "tx_queued"
         parent = not self.parent if received else self.parent
         self._counts[side] += 1
@@ -50,8 +84,14 @@ class NativeRfuProgress:
         if entry["kind"] == "other":
             self.progress.observe(b"\xff", parent=parent)
         self._kinds[side][entry["kind"]] += 1
+        timing = {}
+        if pending is not None:
+            ordinal, started = pending
+            residence_ms = round((self._clock() - started) * 1000, 3)
+            self._pending_max_ms = max(self._pending_max_ms, residence_ms)
+            timing = {"pending_ordinal": ordinal, "pending_ms": residence_ms}
         self.trace.record("native_" + side, reliable_seq=seq, flags=flags,
-                          **metadata)
+                          **metadata, **timing)
         self._recent[side].append(entry)
         if len(self._first[side]) < 12:
             self._first[side].append(entry)

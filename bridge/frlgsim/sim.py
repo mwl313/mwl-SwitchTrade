@@ -488,7 +488,7 @@ class Sim:
                     ackid, mask = reliable.parse_bulk_ack(rl.payload)
                     # frees acked frames (cumulative + selective mask); now_ms lets it sample the
                     # reliable round-trip (un-retransmitted frames) to drive the RTO.
-                    self.rel.on_ack(ackid, mask, now_ms=self._now_ms)
+                    self._on_reliable_ack(ackid, mask)
                     if (self._parent_accept_seq is not None
                             and self._parent_accept_seq not in self.rel.unacked
                             and not self._parent_accept_acked):
@@ -500,6 +500,10 @@ class Sim:
                 self.conn.on_message(m.proto, m.payload, tick=self._tick)
         self.rx_count += 1
         return True
+
+    def _on_reliable_ack(self, ackid, mask):
+        """Default ACK policy; tunnel diagnostics may observe, never replace it."""
+        self.rel.on_ack(ackid, mask, now_ms=self._now_ms)
 
     def _admit_reliable_app(self, frame):
         """An explicit False withholds ACK/deduplication until admission."""

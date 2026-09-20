@@ -13,6 +13,15 @@ import re
 
 
 LINE = re.compile(r"rfu_trace id=([a-zA-Z0-9_-]+) side=(switch|gpsp) (\{.*\})$")
+LEGACY_SOURCE_FILES = frozenset((
+    "switchtrade/rfu_trace.py", "switchtrade/rfu_progress.py",
+    "switchtrade/endpoints/retroarch_gpsp/driver.py",
+    "switchtrade/endpoints/retroarch_gpsp/rfu.py",
+    "switchtrade/endpoints/retroarch_gpsp/cadence.py",
+    "switchtrade/endpoints/switch_ldn/generation.py",
+    "switchtrade/endpoints/switch_ldn/tunnel_adapter.py",
+    "bridge/frlgsim/tunnel.py", "bridge/frlgsim/tunnel_progress.py"))
+SERVICE_SOURCE_FILES = LEGACY_SOURCE_FILES | {"bridge/frlgsim/sim.py", "bridge/frlgsim/reliable.py"}
 
 
 def valid_time(value):
@@ -84,7 +93,8 @@ def read_trace(path, side, generation=None):
     if not isinstance(source, dict) or not isinstance(source.get("files"), dict):
         source = None
     files = (source or {}).get("files", {})
-    if len(files) != 9 or any(not isinstance(v, str) or not re.fullmatch(r"[a-f0-9]{64}", v) for v in files.values()):
+    if (files.keys() not in (LEGACY_SOURCE_FILES, SERVICE_SOURCE_FILES)
+            or any(not isinstance(v, str) or not re.fullmatch(r"[a-f0-9]{64}", v) for v in files.values())):
         issues.append("source_identity_unavailable")
     return {"issues": sorted(set(issues)), "generations": sorted(generations),
             "entries": entries, "source": source, "observed": observed, "dropped": dropped,
@@ -132,6 +142,64 @@ def local_delays(entries):
         result[first + "_to_" + last] = {"pairs": len(delays), "unmatched": sum(map(len, pending.values())),
                                          "max_ms": round(max(delays), 3) if delays else None}
     return result
+
+
+def native_service_observations(entries):
+    """Host-only residence measurements; missing old instrumentation is unknown."""
+    pending, delays, unknown = {}, defaultdict(list), 0
+    peak = 0
+    acks, releases, selective, no_release = 0, 0, 0, 0
+    clears = []
+    for entry in entries:
+        event = entry.get("event")
+        if event == "native_pending":
+            ordinal = entry.get("pending_ordinal")
+            if type(ordinal) is not int or ordinal < 1 or ordinal in pending:
+                unknown += 1
+                continue
+            pending[ordinal] = entry
+            depth = entry.get("depth")
+            if type(depth) is int and depth >= 0:
+                peak = max(peak, depth)
+        elif event == "native_tx_queued" and "pending_ordinal" in entry:
+            ordinal = entry["pending_ordinal"]
+            first = pending.pop(ordinal, None) if type(ordinal) is int else None
+            if first is None:
+                unknown += 1
+                continue
+            values = (first.get("core_wait_ms"), first.get("core_queue_ms"), entry.get("pending_ms"))
+            for key, value in zip(("core_wait", "core_queue", "pending"), values):
+                if valid_time(value):
+                    delays[key].append(value)
+                else:
+                    unknown += 1
+            if all(valid_time(value) for value in values):
+                delays["core_to_reliable"].append(sum(values))
+        elif event == "native_ack":
+            acks += 1
+            released, bits = entry.get("released"), entry.get("selective_bits")
+            ack_id = entry.get("ack_id")
+            if (type(released) is int and released >= 0 and type(bits) is int and 0 <= bits <= 128
+                    and type(ack_id) is int and 0 <= ack_id <= 65535):
+                releases += released
+                selective += bool(bits)
+                no_release += released == 0
+            else:
+                unknown += 1
+        elif event == "native_pending_clear":
+            # Numeric whitelist only; never echo caller-provided arbitrary data.
+            clears.append({k: entry[k] for k in ("count", "oldest_ms", "peak", "max_residence_ms")
+                           if valid_time(entry.get(k))})
+    if not pending and not delays and not acks and not clears and not unknown:
+        return {"status": "NO_NATIVE_SERVICE_EVIDENCE"}
+    return {"status": "INCONCLUSIVE" if unknown else "OBSERVED_NOT_NATIVE_VALIDATED",
+            "peak_pending": peak, "pending_without_native_admission": len(pending),
+            "unknown_timings": unknown,
+            "delays": {k: {"pairs": len(delays[k]), "max_ms": round(max(delays[k]), 3) if delays[k] else None}
+                       for k in ("core_wait", "core_queue", "pending", "core_to_reliable")},
+            "acks": acks, "selective_acks": selective, "acks_without_release": no_release,
+            "released_frames": releases, "pre_clear": clears[:1],
+            "native_completion": "NOT_OBSERVED"}
 
 
 def native_envelope_observations(trace):
@@ -301,6 +369,7 @@ def audit(host, guest, generation=None):
             "issues": issues, "functional_verdict": "NOT_ASSESSED",
             "comparisons": comparisons, "gpsp_local_delays": local_delays(g["entries"]),
             "native_envelope": ({"status": "INCONCLUSIVE"} if issues else native_envelope_observations(h)),
+            "native_service": ({"status": "INCONCLUSIVE"} if issues else native_service_observations(h["entries"])),
             "receipt_accounting": ({"status": "INCONCLUSIVE"} if issues else receipt_accounting(g["entries"])),
             "event_counts": {side: dict(Counter(x.get("event") for x in data["entries"]))
                              for side, data in (("switch", h), ("gpsp", g))},

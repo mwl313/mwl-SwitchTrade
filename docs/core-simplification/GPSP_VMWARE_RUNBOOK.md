@@ -1,5 +1,43 @@
 # Switch ↔ RetroArch/gpSP: VMware Windows 11 physical test
 
+## 2026-09-20 diagnostic: native send service, one generation
+
+This supersedes the older trial13 movement/second-room checkpoints for the next
+diagnostic run. See [trial15 service analysis](GPSP_TRIAL15_ANALYSIS_20260918.md).
+The candidate adds observations, not a new transmission policy: keep receipt
+identity/order, the six-frame window, retry timers and queue capacities unchanged.
+Publish and verify the new literal source SHA on both endpoints before connecting;
+`f7e9126` does not contain these service observations. Record fresh Host overlay
+identity and all eleven diagnostic source hashes, not only a successful pull.
+
+Reuse the freshly verified host-local relay route. The user selected a FireRed
+host instead of the preceding LeafGreen host; record this changed condition and
+do not attribute differences in entry speed solely to the diagnostic candidate.
+The VM socket/residue query must succeed with no prior live owner before launch.
+
+1. Use a new Pair and unused opt-in log directories. Record trainer selection,
+   approval, entry and first-error times. Keep one room; do not recreate it.
+2. After approval, leave both games foreground, menus closed and controls alone.
+   If entry is still pending at 30s, record that checkpoint, retain another 30s
+   untouched, then coordinate normal stop. These are observation limits, not
+   changes to game timeouts.
+3. If both games enter, first observe **60s stationary idle**. Stop progression
+   at the first error; keep 10s post-symptom logging, then coordinate normal stop.
+   Only after the stationary checkpoint passes, separately test Host then Guest
+   one-tile movement with both-screen confirmation. No trade/save or second room
+   in this diagnostic run.
+4. Collect both entire logs through final flush and independently verify owned
+   cleanup. Require complete same-generation coverage and matching source hashes.
+   Inspect `native_pending` Core wait/queue times, `native_tx_queued.pending_ms`,
+   `native_ack` arrival/window release, and sticky `native_backlog` before cleanup.
+   Missing service evidence is unknown, never zero delay or a functional pass.
+
+Prompt Core admission with growing native residence and sparse ACKs points to
+native send/ACK service; frequent ACKs with no released slots requires sequence/
+hole/retry analysis. Slow Core admission/poll points upstream in the local pump.
+Prompt delivery with a game error leaves RFU/game consumption unresolved. These
+outcomes guide a narrow follow-up; none alone proves the game's fatal branch.
+
 **2026-09-18: the next diagnostic candidate preserves every translator-authorized
 WK receipt, including the NI phase. Trials13/14 stalled after approval; the
 native cause and trade acceptance remain open.** See

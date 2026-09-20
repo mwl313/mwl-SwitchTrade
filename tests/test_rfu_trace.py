@@ -13,7 +13,9 @@ from bridge.frlgsim.tunnel_progress import NativeRfuProgress
 from switchtrade.core.contracts import LinkPacket
 from switchtrade.endpoints.switch_ldn.tunnel_adapter import CoreTunnelAdapter
 from switchtrade.rfu_trace import MetadataTrace, native_metadata
-from tools.audit_rfu_trace import audit, read_trace, native_envelope_observations, receipt_accounting
+from tools.audit_rfu_trace import (audit, read_trace, native_envelope_observations,
+                                   native_service_observations, receipt_accounting,
+                                   LEGACY_SOURCE_FILES)
 
 
 def save(path, batches, side, generation="test"):
@@ -109,6 +111,45 @@ def test_no_traffic_is_not_boundary_success_and_generation_selection_is_required
     assert audit(host, guest, "test")["coverage"] == "TRACE_COMPLETE"
 
 
+def test_service_source_identity_accepts_old_evidence_but_not_arbitrary_same_count(tmp_path):
+    batch = MetadataTrace().drain(final=True)
+    path = tmp_path / "host"
+    save(path, [batch], "switch")
+    assert read_trace(path, "switch")["issues"] == []
+    batch["source"]["files"] = {k: v for k, v in batch["source"]["files"].items()
+                               if k in LEGACY_SOURCE_FILES}
+    save(path, [batch], "switch")
+    assert read_trace(path, "switch")["issues"] == []
+    batch["source"]["files"]["unknown.py"] = batch["source"]["files"].pop("switchtrade/rfu_trace.py")
+    save(path, [batch], "switch")
+    assert "source_identity_unavailable" in read_trace(path, "switch")["issues"]
+
+
+def test_native_service_missing_old_timing_is_not_zero_delay_or_a_game_pass():
+    assert native_service_observations([dict(event="native_tx_queued")]) == {
+        "status": "NO_NATIVE_SERVICE_EVIDENCE"}
+    entries = [dict(event="native_pending", pending_ordinal=1, depth=1,
+                    core_wait_ms=5, core_queue_ms=10, payload="PRIVATE"),
+               dict(event="native_tx_queued", pending_ordinal=1, pending_ms=1000),
+               dict(event="native_ack", ack_id=0, selective_bits=5, released=0),
+               dict(event="native_ack", ack_id=6, selective_bits=0, released=6),
+               dict(event="native_pending", pending_ordinal=2, depth=2),
+               dict(event="native_pending_clear", count=1, oldest_ms=5000, reason="PRIVATE")]
+    result = native_service_observations(entries)
+    assert result["delays"]["core_to_reliable"] == {"pairs": 1, "max_ms": 1015}
+    assert result["pending_without_native_admission"] == 1
+    assert result["acks_without_release"] == result["selective_acks"] == 1
+    assert result["native_completion"] == "NOT_OBSERVED"
+    assert "PRIVATE" not in json.dumps(result)
+    entries += [dict(event="native_tx_queued", pending_ordinal=2, pending_ms=6000)]
+    result = native_service_observations(entries)
+    assert result["status"] == "INCONCLUSIVE" and result["unknown_timings"] == 2
+    assert result["delays"]["core_to_reliable"]["pairs"] == 1
+    entries += [dict(event="native_tx_queued", pending_ordinal=[])]
+    assert native_service_observations(entries)["status"] == "INCONCLUSIVE"
+    assert native_service_observations([dict(event="native_pending", pending_ordinal=None)])["status"] == "INCONCLUSIVE"
+
+
 def test_complete_forwarding_and_drained_window_do_not_attest_native_progress(tmp_path):
     clock = [100.0]
     h, g = MetadataTrace(clock=lambda: clock[0]), MetadataTrace(clock=lambda: 999999)
@@ -165,6 +206,7 @@ def test_complete_forwarding_and_drained_window_do_not_attest_native_progress(tm
     save(host, [hb], "switch")
     assert audit(host, guest)["native_envelope"] == {"status": "INCONCLUSIVE"}
     assert audit(host, guest)["receipt_accounting"] == {"status": "INCONCLUSIVE"}
+    assert audit(host, guest)["native_service"] == {"status": "INCONCLUSIVE"}
 
 
 def test_receipt_accounting_distinguishes_policy_omissions_from_missing_callbacks_and_repeats():

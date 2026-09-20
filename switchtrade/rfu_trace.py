@@ -25,7 +25,8 @@ def source_identity():
              "switchtrade/endpoints/retroarch_gpsp/cadence.py",
              "switchtrade/endpoints/switch_ldn/generation.py",
              "switchtrade/endpoints/switch_ldn/tunnel_adapter.py",
-             "bridge/frlgsim/tunnel.py", "bridge/frlgsim/tunnel_progress.py")
+             "bridge/frlgsim/tunnel.py", "bridge/frlgsim/tunnel_progress.py",
+             "bridge/frlgsim/sim.py", "bridge/frlgsim/reliable.py")
     hashes = {}
     for name in paths:
         try:

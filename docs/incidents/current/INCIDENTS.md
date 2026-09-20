@@ -2517,3 +2517,41 @@ archive list and regenerate the index.
   product timer/capacity was enlarged to fix it. No stock/CI/physical pass,
   commit, push, deployment or new hardware operation. Prior physical cleanup
   and pending independent VM socket check are unchanged.
+- Trial15 on `f7e9126` reaches user-reported room entry, then both games fail
+  within seconds while stationary. Four room generations must remain separate;
+  the final one has complete matched metadata boundaries and all623 authorized
+  receipts preserved. Earlier retirement has263 not-yet-native-admitted frames,
+  accounted for by256 pending native plus7 pre-clear Core frames; it is not a
+  forwarding pass. Middle generations have insufficient RFU evidence.
+- The final run exposes native-send backlog: periodic pending_remote201 with
+  six frames inflight, first-UNI response round-boundary16.123s despite local
+  Guest callback8.140ms, and later native window-release delays. Empty final
+  queues do not erase this latency. No child tag discontinuity was recorded;
+  native game fatal-error cause remains unobserved. Investigate same-clock
+  FIFO residence and ACK/window service with the existing closed-loop model,
+  not speculative receipt loss, enlarged windows or timeout changes. See
+  `GPSP_TRIAL15_ANALYSIS_20260918.md`.
+- Preserve both original logs and hashes. Requested VM stop and later Host
+  S_PEER_CLOSED are secondary to the game error. Host/relay owners and ports
+  absent, WSL stopped, acquired USB automatically returned, VMware USB service
+  restored; no forced process/interface/device reset. Independent post-stop VM
+  socket check remains pending. No production edit or physical retry in this
+  diagnostic analysis packet.
+- Trial15 unattended follow-up reproduces lossless but late NI-to-UNI service
+  with encrypted native ingress/egress: 362/362 frames preserved, peak182
+  pending and first UNI response12s late under scripted400ms window service;
+  50ms control has peak2 and immediate modeled response. This is a coverage
+  counterexample, not a replay of the closed native receiver or a game fix.
+- Add same-Host-clock Core wait/queue/pending residence and parsed native ACK
+  window-release observations, bounded metadata and sticky pre-clear backlog.
+  Keep six-frame policy, retry timers, receipt identity and opaque ordering.
+  Native gold's observed ACK intervals are typically tens of milliseconds;
+  they do not establish why trial15's service was slow. Old logs explicitly
+  lack new timing evidence. Preserve all original hashes, no hardware retry;
+  independent post-stop VM socket check still pending. See trial15 follow-up.
+- Follow-up verification:554 selected software tests pass plus one separate
+  real-CLI/virtual-LDN two-generation Switch-to-Switch case. Final46 focused
+  tests pass after five-second trace-flush/malformed-record refinements; do
+  not double-count overlaps. An earlier broad invocation was interrupted in
+  the deliberately long boundary selection and is not a pass; its identified
+  processes exited. No timing/window policy fix or native functional pass.

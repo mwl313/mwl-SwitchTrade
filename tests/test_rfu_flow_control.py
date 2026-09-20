@@ -13,7 +13,7 @@ from frlgsim.tunnel import TunnelSim, MAX_PENDING_REMOTE
 from bridge.tests.test_pia_host import pia_reliable_datagram
 from switchtrade.core.contracts import LinkPacket
 from switchtrade.endpoints.switch_ldn.errors import SwitchLdnEndpointError
-from switchtrade.endpoints.switch_ldn.tunnel_adapter import CoreTunnelAdapter, CoreRfuFrame
+from switchtrade.endpoints.switch_ldn.tunnel_adapter import CoreTunnelAdapter
 
 PROTOCOL = "switchtrade.gba-frame.v1"
 
@@ -76,7 +76,9 @@ def test_drain_respects_remaining_capacity_before_send_slots_are_consumed():
     async def exercise():
         adapter = CoreTunnelAdapter("test", PROTOCOL)
         sim, sent = simulation(adapter)
-        sim._pending_remote.extend(CoreRfuFrame(packet(i).payload, 7) for i in range(255))
+        for i in range(255):
+            await adapter.deliver_from_core(packet(i))
+        sim._drain_tunnel()
         await adapter.deliver_from_core(packet(255))
         await adapter.deliver_from_core(packet(256))
         try:

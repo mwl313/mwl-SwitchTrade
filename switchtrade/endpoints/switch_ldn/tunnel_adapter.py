@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import threading
+import time
 from typing import Deque
 
 from switchtrade.core.contracts import LinkPacket
@@ -21,17 +22,22 @@ class CoreRfuFrame:
     payload: bytes
     flags: int
     kind: Kind = Kind.RFU
+    # Local process monotonic time only; never serialized onto Core or RFU wire.
+    core_received_at: float | None = field(default=None, compare=False, repr=False)
+    core_enqueued_at: float | None = field(default=None, compare=False, repr=False)
 
 
 class CoreTunnelAdapter:
     """Bridge one Core generation to a local RFU tunnel without decoding RFU bytes."""
 
-    def __init__(self, generation_id: str, protocol_id: str, *, capacity: int = 256) -> None:
+    def __init__(self, generation_id: str, protocol_id: str, *, capacity: int = 256,
+                 clock=time.monotonic) -> None:
         if not generation_id or capacity < 1:
             raise ValueError("Core tunnel identity and capacity are required")
         self._generation_id = generation_id
         self._protocol_id = protocol_id
         self._capacity = capacity
+        self._clock = clock
         self._lock = threading.Lock()
         self._local_to_core: Deque[LinkPacket] = deque()
         self._core_to_local: Deque[CoreRfuFrame] = deque()
@@ -95,6 +101,7 @@ class CoreTunnelAdapter:
 
     async def deliver_from_core(self, packet: LinkPacket) -> None:
         """Wait for bounded local capacity without blocking the radio/ACK thread."""
+        received_at = self._clock()
         # Copy before waiting: admission cannot later observe caller mutations.
         packet = LinkPacket(packet.generation_id, packet.protocol_id,
                             self._validated_payload(packet.payload), packet.flags)
@@ -118,7 +125,9 @@ class CoreTunnelAdapter:
                             "SWITCH_ENDPOINT_GENERATION_MISMATCH", "Core connection was replaced"
                         )
                     if len(self._core_to_local) < self._capacity:
-                        self._core_to_local.append(CoreRfuFrame(packet.payload, packet.flags))
+                        self._core_to_local.append(CoreRfuFrame(
+                            packet.payload, packet.flags, core_received_at=received_at,
+                            core_enqueued_at=self._clock()))
                         return
                     self._remote_space.clear()
                     self._remote_waits += 1

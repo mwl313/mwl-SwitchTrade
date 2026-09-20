@@ -130,10 +130,11 @@ class RfuEndpointTest(unittest.TestCase):
 
     def test_reconnect_discards_remote_frames_from_the_old_link(self):
         sim, tunnel, batches = self._sim()
-        sim._pending_remote.append(Envelope(
+        tunnel.inbound.append(Envelope(
             "ABC123", Direction.HOST_TO_GUEST, 0, 1, 0, 1,
             b"stale", kind=Kind.RFU, flags=0x01,
         ))
+        sim._drain_tunnel()
         tunnel.connection_generation += 1
 
         sim._drive_tunnel_reliable()
